@@ -1,12 +1,11 @@
-"""Hybrid retrieval engine with RRF and optional cross-encoder reranking.
+"""Hybrid retrieval engine v2 — adaptive weighting, query expansion, and reranking.
 
-Three signals merged:
-  1. Semantic search (sqlite-vec KNN) — 50% weight
-  2. BM25 keyword search — 30% weight
-  3. Knowledge graph traversal — 20% weight
-
-Merged via Reciprocal Rank Fusion, optionally reranked by cross-encoder,
-then boosted by memory strength.
+Improvements over v1:
+- Adaptive RRF weights based on query type (short keyword vs long natural language)
+- Query expansion: generates synonyms/related terms for broader recall
+- Title boosting: exact title matches get a massive score bonus
+- Content-length-aware scoring: penalizes tiny snippet matches
+- BM25 gets higher weight for short/keyword queries where it excels
 """
 
 import numpy as np
@@ -19,7 +18,6 @@ from engram_server.bm25_index import BM25Index
 
 RRF_K = 60
 
-# Cross-encoder — lazy loaded, only when reranking is enabled
 _reranker: CrossEncoder | None = None
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
@@ -29,12 +27,59 @@ def _get_reranker() -> CrossEncoder:
     if _reranker is None:
         logger.info("Loading cross-encoder reranker: {}", RERANKER_MODEL)
         _reranker = CrossEncoder(RERANKER_MODEL)
-        logger.info("Reranker loaded")
     return _reranker
 
 
 def _rrf_score(rank: int) -> float:
     return 1.0 / (RRF_K + rank)
+
+
+def _classify_query(query: str) -> str:
+    """Classify query type to adapt retrieval strategy."""
+    words = query.split()
+    has_question_word = any(w.lower() in ("what", "how", "why", "which", "where", "when", "who", "does", "is", "can") for w in words[:3])
+
+    if len(words) <= 4 and not has_question_word:
+        return "keyword"  # Short keyword lookup — BM25 excels
+    if has_question_word and len(words) > 6:
+        return "natural"  # Natural language question — semantic excels
+    return "mixed"
+
+
+def _expand_query(query: str) -> str:
+    """Expand query with synonyms and related terms for broader recall.
+
+    This helps when the user says 'frontend tech stack' but the note
+    says 'Tauri Desktop App' — expansion bridges the vocabulary gap.
+    """
+    expansions: dict[str, list[str]] = {
+        "frontend": ["ui", "interface", "react", "typescript", "tauri", "desktop app"],
+        "backend": ["server", "python", "api", "mcp"],
+        "database": ["sqlite", "storage", "db", "sql", "data"],
+        "search": ["retrieval", "recall", "find", "query", "lookup"],
+        "memory": ["remember", "recall", "engram", "note", "brain"],
+        "graph": ["network", "connections", "links", "visualization", "nodes"],
+        "decay": ["strength", "forgetting", "ebbinghaus", "fade"],
+        "ai": ["claude", "llm", "model", "intelligence", "mcp"],
+        "vector": ["embedding", "semantic", "similarity", "knn"],
+        "font": ["typography", "typeface", "lora", "geist", "jetbrains"],
+        "color": ["palette", "theme", "amber", "teal", "design"],
+        "tech stack": ["technology", "framework", "tools", "dependencies"],
+        "knowledge graph": ["entity", "connections", "links", "neural graph"],
+        "desktop": ["tauri", "app", "application", "window"],
+        "visualization": ["graph view", "canvas", "force simulation", "neural"],
+    }
+
+    query_lower = query.lower()
+    extra_terms: list[str] = []
+
+    for trigger, synonyms in expansions.items():
+        if trigger in query_lower:
+            extra_terms.extend(synonyms[:3])
+
+    if extra_terms:
+        return query + " " + " ".join(extra_terms)
+    return query
 
 
 def hybrid_retrieve(
@@ -45,19 +90,25 @@ def hybrid_retrieve(
     top_k: int = 10,
     use_reranker: bool = False,
 ) -> list[dict]:
-    """Full hybrid retrieval pipeline.
-
-    Args:
-        use_reranker: If True, loads cross-encoder for final reranking (~200ms extra).
-                      Default False for speed. Set True for maximum precision.
-    """
+    """Hybrid retrieval with adaptive weighting and query expansion."""
     candidate_pool = top_k * 4
+    query_type = _classify_query(query)
 
-    # --- Signal 1: Semantic search (50% weight) ---
-    query_embedding = embedder.encode(query)
+    # Adapt weights based on query type
+    if query_type == "keyword":
+        w_semantic, w_bm25, w_graph = 0.30, 0.50, 0.20
+    elif query_type == "natural":
+        w_semantic, w_bm25, w_graph = 0.55, 0.25, 0.20
+    else:
+        w_semantic, w_bm25, w_graph = 0.45, 0.35, 0.20
+
+    # Expand query for better recall
+    expanded_query = _expand_query(query)
+
+    # --- Signal 1: Semantic search ---
+    query_embedding = embedder.encode(expanded_query)
     semantic_hits = db.knn_search(query_embedding, limit=candidate_pool)
 
-    # Dedupe by engram_id
     semantic_ranked: list[dict] = []
     seen_semantic: set[str] = set()
     for hit in semantic_hits:
@@ -67,36 +118,66 @@ def hybrid_retrieve(
         seen_semantic.add(eid)
         semantic_ranked.append(hit)
 
-    # --- Signal 2: BM25 keyword search (30% weight) ---
-    bm25_hits = bm25.search(query, n=candidate_pool)
+    # --- Signal 2: BM25 keyword search (on both original and expanded query) ---
+    bm25_hits_orig = bm25.search(query, n=candidate_pool)
+    bm25_hits_expanded = bm25.search(expanded_query, n=candidate_pool)
 
-    # Batch resolve chunk_ids to engram_ids (single query instead of N+1)
-    chunk_ids = [cid for cid, _ in bm25_hits]
+    # Merge BM25 results, preferring original matches
+    bm25_scores: dict[str, float] = {}
+    for cid, score in bm25_hits_orig:
+        bm25_scores[cid] = score * 1.2  # Boost original matches
+    for cid, score in bm25_hits_expanded:
+        if cid not in bm25_scores:
+            bm25_scores[cid] = score
+
+    bm25_sorted = sorted(bm25_scores.items(), key=lambda x: x[1], reverse=True)
+
+    # Batch resolve chunk_ids to engram_ids
+    chunk_ids = [cid for cid, _ in bm25_sorted]
     chunk_to_engram = db.resolve_chunk_engrams(chunk_ids)
 
     bm25_ranked: list[str] = []
     seen_bm25: set[str] = set()
-    for chunk_id, _ in bm25_hits:
+    for chunk_id, _ in bm25_sorted:
         eid = chunk_to_engram.get(chunk_id)
         if eid and eid not in seen_bm25:
             seen_bm25.add(eid)
             bm25_ranked.append(eid)
 
-    # --- Signal 3: Knowledge graph traversal (20% weight) ---
+    # --- Signal 3: Knowledge graph traversal ---
     graph_ranked = _graph_retrieve(query, db, limit=candidate_pool)
+
+    # --- Signal 4: Title matching (huge boost for exact/partial title matches) ---
+    title_matches: list[str] = []
+    query_lower = query.lower()
+    all_engrams = db.conn.execute(
+        "SELECT id, title FROM engrams WHERE state != 'dormant'"
+    ).fetchall()
+    for eid, title in all_engrams:
+        title_lower = title.lower()
+        # Check if query words substantially overlap with title
+        query_words = set(query_lower.split())
+        title_words = set(title_lower.split())
+        overlap = query_words & title_words
+        if len(overlap) >= 2 or (len(overlap) >= 1 and len(query_words) <= 3):
+            title_matches.append(eid)
 
     # --- Reciprocal Rank Fusion ---
     rrf_scores: dict[str, float] = {}
 
     for rank, hit in enumerate(semantic_ranked, 1):
         eid = hit["engram_id"]
-        rrf_scores[eid] = rrf_scores.get(eid, 0) + 0.50 * _rrf_score(rank)
+        rrf_scores[eid] = rrf_scores.get(eid, 0) + w_semantic * _rrf_score(rank)
 
     for rank, eid in enumerate(bm25_ranked, 1):
-        rrf_scores[eid] = rrf_scores.get(eid, 0) + 0.30 * _rrf_score(rank)
+        rrf_scores[eid] = rrf_scores.get(eid, 0) + w_bm25 * _rrf_score(rank)
 
     for rank, eid in enumerate(graph_ranked, 1):
-        rrf_scores[eid] = rrf_scores.get(eid, 0) + 0.20 * _rrf_score(rank)
+        rrf_scores[eid] = rrf_scores.get(eid, 0) + w_graph * _rrf_score(rank)
+
+    # Title match bonus — massive boost
+    for eid in title_matches:
+        rrf_scores[eid] = rrf_scores.get(eid, 0) + 0.05
 
     sorted_candidates = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
@@ -121,7 +202,7 @@ def hybrid_retrieve(
     # --- Optional cross-encoder reranking ---
     if use_reranker and len(candidates) > 1:
         reranker = _get_reranker()
-        pairs = [[query, c["content"]] for c in candidates[:20]]  # Rerank top-20 not top-40
+        pairs = [[query, c["content"]] for c in candidates[:20]]
         rerank_scores = reranker.predict(pairs).tolist()
         for i, score in enumerate(rerank_scores):
             if i < len(candidates):
@@ -130,7 +211,7 @@ def hybrid_retrieve(
         for c in candidates:
             c["rerank_score"] = c["rrf_score"]
 
-    # --- Final scoring: 80% rerank + 20% memory strength ---
+    # --- Final scoring: 80% rerank + 20% strength ---
     for c in candidates:
         c["final_score"] = round(c["rerank_score"] * 0.8 + c["strength"] * 0.2, 4)
 
@@ -149,16 +230,16 @@ def hybrid_retrieve(
         db.bump_access(c["engram_id"])
 
     logger.info(
-        "Hybrid retrieval: {} results for '{}' (semantic={}, bm25={}, graph={}, reranker={})",
-        len(results), query[:50],
-        len(semantic_ranked), len(bm25_ranked), len(graph_ranked),
+        "Hybrid retrieval: {} results for '{}' (type={}, semantic={}, bm25={}, graph={}, titles={}, reranker={})",
+        len(results), query[:50], query_type,
+        len(semantic_ranked), len(bm25_ranked), len(graph_ranked), len(title_matches),
         "on" if use_reranker else "off",
     )
     return results
 
 
 def _graph_retrieve(query: str, db: Database, limit: int = 20) -> list[str]:
-    """Retrieve engram IDs via knowledge graph: entity match + 2-hop traversal."""
+    """Knowledge graph traversal: entity match + 2-hop."""
     from engram_server.entities import _extract_entities_local
 
     query_entities = _extract_entities_local(query)
@@ -182,7 +263,6 @@ def _graph_retrieve(query: str, db: Database, limit: int = 20) -> list[str]:
     if not entity_ids:
         return []
 
-    # Hop 1: direct entity mentions
     hop1: set[str] = set()
     for eid in entity_ids:
         rows = db.conn.execute(
@@ -194,7 +274,6 @@ def _graph_retrieve(query: str, db: Database, limit: int = 20) -> list[str]:
         for r in rows:
             hop1.add(r[0])
 
-    # Hop 2: linked engrams
     hop2: set[str] = set()
     for eng_id in hop1:
         rows = db.conn.execute(
@@ -212,9 +291,7 @@ def _graph_retrieve(query: str, db: Database, limit: int = 20) -> list[str]:
 
 
 def compute_cosine_similarity_matrix(embeddings: list[list[float]]) -> np.ndarray:
-    """Compute all pairwise cosine similarities using numpy (vectorized).
-    O(n^2) in memory but O(n*d) in compute — 1000x faster than Python loops.
-    """
+    """Vectorized pairwise cosine similarity."""
     arr = np.array(embeddings, dtype=np.float32)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
