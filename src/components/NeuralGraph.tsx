@@ -39,22 +39,45 @@ function tick(
   edges: GraphEdge[],
   nodeMap: Map<string, number>
 ): void {
-  // Repulsion between all pairs
+  // Spatial grid optimization: only compute repulsion between nearby nodes
+  // Reduces O(n²) to ~O(n) for sparse layouts
+  const CELL_SIZE = 0.15;
+  const grid = new Map<string, number[]>();
+
+  // Build spatial grid
   for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i]!;
-      const b = nodes[j]!;
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
-      const force = REPULSION / (dist * dist);
-      if (!a.pinned) {
-        a.vx += dx * force;
-        a.vy += dy * force;
+    const n = nodes[i]!;
+    const cx = Math.floor(n.x / CELL_SIZE);
+    const cy = Math.floor(n.y / CELL_SIZE);
+    // Check this cell and 8 neighbors
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const key = `${cx + dx},${cy + dy}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key)!.push(i);
       }
-      if (!b.pinned) {
-        b.vx -= dx * force;
-        b.vy -= dy * force;
+    }
+  }
+
+  // Repulsion only between nodes in nearby cells
+  const processed = new Set<string>();
+  for (const indices of grid.values()) {
+    for (let ii = 0; ii < indices.length; ii++) {
+      for (let jj = ii + 1; jj < indices.length; jj++) {
+        const i = indices[ii]!;
+        const j = indices[jj]!;
+        const pairKey = i < j ? `${i},${j}` : `${j},${i}`;
+        if (processed.has(pairKey)) continue;
+        processed.add(pairKey);
+
+        const a = nodes[i]!;
+        const b = nodes[j]!;
+        const ddx = a.x - b.x;
+        const ddy = a.y - b.y;
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy) || 0.001;
+        const force = REPULSION / (dist * dist);
+        if (!a.pinned) { a.vx += ddx * force; a.vy += ddy * force; }
+        if (!b.pinned) { b.vx -= ddx * force; b.vy -= ddy * force; }
       }
     }
   }

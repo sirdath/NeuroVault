@@ -75,8 +75,9 @@ def ingest_file(
     chunks = hierarchical_chunk(content, engram_id)
 
     # 4. Embed all chunks and store
+    # Use embed_text (title-prefixed) for embeddings, raw content for display/BM25
     if chunks:
-        texts = [c["content"] for c in chunks]
+        texts = [c.get("embed_text", c["content"]) for c in chunks]
         embeddings = embedder.encode_batch(texts)
 
         for chunk, embedding in zip(chunks, embeddings):

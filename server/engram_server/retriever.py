@@ -147,20 +147,37 @@ def hybrid_retrieve(
     # --- Signal 3: Knowledge graph traversal ---
     graph_ranked = _graph_retrieve(query, db, limit=candidate_pool)
 
-    # --- Signal 4: Title matching (huge boost for exact/partial title matches) ---
-    title_matches: list[str] = []
-    query_lower = query.lower()
-    all_engrams = db.conn.execute(
+    # --- Signal 4: Title matching (semantic + keyword) ---
+    # Embed all titles and compare to query for semantic title relevance
+    title_scores: dict[str, float] = {}
+    all_engrams_list = db.conn.execute(
         "SELECT id, title FROM engrams WHERE state != 'dormant'"
     ).fetchall()
-    for eid, title in all_engrams:
-        title_lower = title.lower()
-        # Check if query words substantially overlap with title
-        query_words = set(query_lower.split())
-        title_words = set(title_lower.split())
-        overlap = query_words & title_words
-        if len(overlap) >= 2 or (len(overlap) >= 1 and len(query_words) <= 3):
-            title_matches.append(eid)
+
+    if all_engrams_list:
+        titles_text = [t[1] for t in all_engrams_list]
+        title_embeddings = embedder.encode_batch(titles_text)
+        query_emb_np = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(query_emb_np)
+        if q_norm > 0:
+            query_emb_np = query_emb_np / q_norm
+
+        for i, (eid, title) in enumerate(all_engrams_list):
+            t_emb = np.array(title_embeddings[i], dtype=np.float32)
+            t_norm = np.linalg.norm(t_emb)
+            if t_norm > 0:
+                sim = float(np.dot(query_emb_np, t_emb / t_norm))
+                if sim > 0.45:  # Moderate threshold — titles are short
+                    title_scores[eid] = sim
+
+            # Also check keyword overlap (for exact matches)
+            query_words = set(expanded_query.lower().split())
+            title_words = set(title.lower().split())
+            overlap = query_words & title_words
+            if len(overlap) >= 2:
+                title_scores[eid] = max(title_scores.get(eid, 0), 0.6)
+
+    title_matches = sorted(title_scores.keys(), key=lambda x: title_scores.get(x, 0), reverse=True)
 
     # --- Reciprocal Rank Fusion ---
     rrf_scores: dict[str, float] = {}
@@ -175,9 +192,10 @@ def hybrid_retrieve(
     for rank, eid in enumerate(graph_ranked, 1):
         rrf_scores[eid] = rrf_scores.get(eid, 0) + w_graph * _rrf_score(rank)
 
-    # Title match bonus — massive boost
-    for eid in title_matches:
-        rrf_scores[eid] = rrf_scores.get(eid, 0) + 0.05
+    # Title match bonus — scaled by semantic similarity to query
+    for eid in title_matches[:5]:  # Top 5 most relevant titles
+        boost = title_scores.get(eid, 0.3) * 0.08  # Higher similarity = bigger boost
+        rrf_scores[eid] = rrf_scores.get(eid, 0) + boost
 
     sorted_candidates = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
