@@ -1,0 +1,207 @@
+"""HTTP API for the Tauri frontend and external clients.
+
+Exposes vault data, brain management, indexing status, and graph data.
+"""
+
+import threading
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+from loguru import logger
+
+from engram_server.config import SERVER_PORT
+
+
+class CreateBrainRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+def create_api(manager) -> FastAPI:
+    """Create the FastAPI app with BrainManager."""
+
+    app = FastAPI(title="Engram API", version="0.4.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    def _db():
+        return manager.get_active().db
+
+    def _ctx():
+        return manager.get_active()
+
+    # --- Brain Management ---
+
+    @app.get("/api/brains")
+    def list_brains():
+        return manager.list_brains()
+
+    @app.get("/api/brains/active")
+    def get_active_brain():
+        ctx = _ctx()
+        return {"brain_id": ctx.brain_id, "name": ctx.name, "description": ctx.description}
+
+    @app.post("/api/brains")
+    def create_brain(body: CreateBrainRequest):
+        ctx = manager.create_brain(body.name, body.description)
+        return {"brain_id": ctx.brain_id, "name": ctx.name, "status": "created"}
+
+    @app.post("/api/brains/{brain_id}/activate")
+    def activate_brain(brain_id: str):
+        ctx = manager.switch_brain(brain_id)
+        return {"status": "switched", "brain_id": ctx.brain_id, "name": ctx.name}
+
+    @app.delete("/api/brains/{brain_id}")
+    def delete_brain(brain_id: str):
+        success = manager.delete_brain(brain_id)
+        if success:
+            return {"status": "deleted"}
+        return {"status": "error", "message": "Cannot delete active brain"}
+
+    # --- Status ---
+
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok", "service": "engram"}
+
+    @app.get("/api/status")
+    def status():
+        db = _db()
+        ctx = _ctx()
+        total = db.conn.execute("SELECT COUNT(*) FROM engrams WHERE state != 'dormant'").fetchone()[0]
+        chunks = db.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        entities = db.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        links = db.conn.execute("SELECT COUNT(*) FROM engram_links").fetchone()[0]
+        return {
+            "brain": ctx.brain_id,
+            "brain_name": ctx.name,
+            "memories": total,
+            "chunks": chunks,
+            "entities": entities,
+            "connections": links,
+            "indexing": [],
+        }
+
+    # --- Notes ---
+
+    @app.get("/api/notes")
+    def list_notes():
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT id, filename, title, state, strength, access_count, updated_at
+               FROM engrams WHERE state != 'dormant'
+               ORDER BY updated_at DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/notes/{engram_id}")
+    def get_note(engram_id: str):
+        db = _db()
+        engram = db.get_engram(engram_id)
+        if not engram:
+            return {"error": "not found"}
+
+        links = db.conn.execute(
+            """SELECT e.id, e.title, l.similarity, l.link_type
+               FROM engram_links l
+               JOIN engrams e ON e.id = l.to_engram
+               WHERE l.from_engram = ? AND e.state != 'dormant'
+               ORDER BY l.similarity DESC""",
+            (engram_id,),
+        ).fetchall()
+        engram["connections"] = [
+            {"engram_id": r[0], "title": r[1], "similarity": round(r[2], 3), "link_type": r[3]}
+            for r in links
+        ]
+
+        entities = db.conn.execute(
+            """SELECT ent.name, ent.entity_type
+               FROM entity_mentions em
+               JOIN entities ent ON ent.id = em.entity_id
+               WHERE em.engram_id = ?""",
+            (engram_id,),
+        ).fetchall()
+        engram["entities"] = [{"name": r[0], "type": r[1]} for r in entities]
+
+        return engram
+
+    # --- Graph ---
+
+    @app.get("/api/graph")
+    def get_graph():
+        db = _db()
+        nodes = db.conn.execute(
+            "SELECT id, title, state, strength, access_count FROM engrams WHERE state != 'dormant'"
+        ).fetchall()
+
+        edges = db.conn.execute(
+            """SELECT l.from_engram, l.to_engram, l.similarity, l.link_type
+               FROM engram_links l
+               JOIN engrams e1 ON e1.id = l.from_engram AND e1.state != 'dormant'
+               JOIN engrams e2 ON e2.id = l.to_engram AND e2.state != 'dormant'
+               WHERE l.from_engram < l.to_engram"""
+        ).fetchall()
+
+        return {
+            "nodes": [{"id": r[0], "title": r[1], "state": r[2], "strength": r[3], "access_count": r[4]} for r in nodes],
+            "edges": [{"from": r[0], "to": r[1], "similarity": round(r[2], 3), "link_type": r[3]} for r in edges],
+        }
+
+    # --- Entities & Strength ---
+
+    @app.get("/api/entities")
+    def list_entities():
+        db = _db()
+        rows = db.conn.execute(
+            "SELECT id, name, entity_type, mention_count FROM entities ORDER BY mention_count DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.get("/api/strength")
+    def strength_stats():
+        db = _db()
+        rows = db.conn.execute(
+            "SELECT state, COUNT(*) as count FROM engrams WHERE state != 'dormant' GROUP BY state"
+        ).fetchall()
+        distribution = {r[0]: r[1] for r in rows}
+        avg = db.conn.execute("SELECT AVG(strength) FROM engrams WHERE state != 'dormant'").fetchone()[0]
+        return {"distribution": distribution, "average_strength": round(avg or 0, 3)}
+
+    @app.get("/api/backlinks/{engram_id}")
+    def get_backlinks(engram_id: str):
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT e.id, e.title, l.similarity, l.link_type
+               FROM engram_links l
+               JOIN engrams e ON e.id = l.from_engram
+               WHERE l.to_engram = ? AND e.state != 'dormant'
+               ORDER BY l.similarity DESC""",
+            (engram_id,),
+        ).fetchall()
+        return [{"engram_id": r[0], "title": r[1], "similarity": round(r[2], 3), "link_type": r[3]} for r in rows]
+
+    @app.get("/api/session-context")
+    def session_ctx():
+        from engram_server.write_back import build_session_context
+        return build_session_context(_db())
+
+    return app
+
+
+def start_api_server(manager, port: int = SERVER_PORT) -> threading.Thread:
+    """Start the HTTP API server in a background thread."""
+    app = create_api(manager)
+
+    def run():
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+    thread = threading.Thread(target=run, daemon=True, name="engram-api")
+    thread.start()
+    logger.info("HTTP API server started on http://127.0.0.1:{}", port)
+    return thread

@@ -1,0 +1,28 @@
+[project]
+name = "engram-server"
+version = "0.2.0"
+description = "Local AI memory MCP server for Engram"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]>=1.6.0",
+    "sentence-transformers>=4.0",
+    "sqlite-vec>=0.1.6",
+    "pydantic>=2.10",
+    "anthropic>=0.40.0",
+    "loguru>=0.7",
+    "watchdog>=6.0.0",
+    "rank-bm25>=0.2.2",
+    "fastapi>=0.135.3",
+    "uvicorn>=0.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.19.0",
+]
