@@ -14,6 +14,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "fastapi>=0.135.3",
     "uvicorn>=0.44.0",
+    "pymupdf>=1.27.2.2",
 ]
 
 [project.optional-dependencies]

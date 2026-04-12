@@ -4,72 +4,132 @@
 
 @import "tailwindcss";
 
-/* Engram Design Tokens */
+/* NeuroVault Design System — based on Obsidian's proven scale */
 @theme {
-  --color-bg: #07070e;
-  --color-surface: #0d0d1a;
-  --color-raised: #131325;
+  /* Background hierarchy: sidebars darker than editor (Obsidian inversion) */
+  --color-bg: #0f0f17;          /* editor background — slightly lighter */
+  --color-surface: #07070e;     /* sidebars darker — creates depth */
+  --color-raised: #131325;      /* cards, code blocks, hover states */
   --color-border: #1e1e38;
-  --color-amber: #f0a500;
+  --color-border-strong: #2a2a4a;
+
+  /* Accents */
+  --color-amber: #f0a500;       /* primary accent */
   --color-amber-dim: rgba(240, 165, 0, 0.1);
-  --color-teal: #00c9b1;
-  --color-purple: #8b7cf8;
-  --color-coral: #f06080;
-  --color-green: #4ade80;
-  --color-txt: #ddd9f0;
-  --color-sub: #7a779a;
-  --color-muted: #35335a;
+  --color-teal: #00c9b1;        /* AI elements */
+  --color-purple: #8b7cf8;      /* code, entities */
+  --color-coral: #f06080;       /* errors */
+  --color-green: #4ade80;       /* success */
+
+  /* Text hierarchy */
+  --color-txt: #ddd9f0;         /* primary text */
+  --color-sub: #9999b8;         /* secondary text */
+  --color-muted: #555570;       /* faint */
+  --color-faint: #35335a;       /* placeholder */
+
+  /* Obsidian's 4px spacing grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Typography scale */
+  --font-ui-small: 12px;
+  --font-ui: 13px;
+  --font-ui-medium: 14px;
+  --font-ui-large: 16px;
+  --font-body: 16px;            /* editor body — Obsidian standard */
+  --line-height-tight: 1.3;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.7;
+
+  /* Radii */
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
 }
 
-/* Base styles */
-html,
-body,
-#root {
+/* Base */
+html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #07070e;
+  background-color: #0f0f17;
   color: #ddd9f0;
-  font-family: "Geist", system-ui, sans-serif;
+  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;            /* UI default */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Prevent text selection on UI chrome, allow in editor */
+/* Editor: Lora serif at 16px with relaxed line-height — like reading a book */
+.cm-editor {
+  font-family: "Lora", Georgia, serif;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+/* Cap editor content width to ~700px for readability — Obsidian's most loved feature */
+.cm-editor .cm-scroller {
+  display: flex;
+  justify-content: center;
+}
 .cm-editor .cm-content {
+  max-width: 740px;
+  padding: 32px 32px 30vh 32px;
   font-family: "Lora", Georgia, serif;
 }
 
 .cm-editor .cm-line .tok-monospace,
 .cm-editor .cm-line code {
   font-family: "JetBrains Mono", monospace;
+  font-size: 0.875em;
 }
 
-/* Custom scrollbar — thin and unobtrusive */
+/* Custom scrollbars — thin and unobtrusive */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #35335a;
-  border-radius: 3px;
+  background: #2a2a4a;
+  border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #7a779a;
+  background: #3a3a5a;
 }
 
-/* Disable drag on the window */
+/* Disable text selection on UI chrome */
 body {
   user-select: none;
 }
 
-/* Re-enable text selection in the editor */
+/* Re-enable in editor */
 .cm-editor {
   user-select: text;
+}
+
+/* Smooth transitions everywhere */
+button, a, .transition {
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+/* Focus states */
+input:focus, textarea:focus, button:focus-visible {
+  outline: 2px solid rgba(240, 165, 0, 0.4);
+  outline-offset: 1px;
+}
+
+/* Animation: gentle fade in for modals */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 150ms ease-out;
 }

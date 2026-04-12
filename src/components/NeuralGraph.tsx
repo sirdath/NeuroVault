@@ -1,16 +1,19 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useGraphStore } from "../stores/graphStore";
 import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
+import { readNote } from "../lib/tauri";
+import { extractPreview } from "../lib/utils";
 
-const REPULSION = 0.0003;
-const SPRING = 0.003;
+const REPULSION = 0.0004;
+const SPRING = 0.004;
 const TARGET_DIST = 0.15;
-const DAMPING = 0.88;
+const DAMPING = 0.85;
 const CENTER_GRAVITY = 0.005;
-const MIN_NODE_RADIUS = 5;
-const MAX_NODE_RADIUS = 18;
+const MIN_NODE_RADIUS = 6;
+const MAX_NODE_RADIUS = 20;
+const SIMULATION_ITERATIONS = 300; // pre-simulate this many ticks then freeze
 
 const STATE_COLORS: Record<string, string> = {
   fresh: "#f0a500",
@@ -27,7 +30,7 @@ function nodeRadius(accessCount: number): number {
 function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>): void {
   if (nodes.length === 0) return;
 
-  // Build spatial grid: each node goes into ONE cell
+  // Spatial grid for repulsion
   const CELL = 0.12;
   const grid = new Map<string, number[]>();
   for (let i = 0; i < nodes.length; i++) {
@@ -37,19 +40,16 @@ function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>
     grid.get(key)!.push(i);
   }
 
-  // Repulsion: check node against all 9 neighboring cells
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i]!;
     const cx = Math.floor(a.x / CELL);
     const cy = Math.floor(a.y / CELL);
-
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         const neighbors = grid.get(`${cx + dx},${cy + dy}`);
         if (!neighbors) continue;
-
         for (const j of neighbors) {
-          if (j <= i) continue; // Avoid duplicate pairs
+          if (j <= i) continue;
           const b = nodes[j]!;
           const ddx = a.x - b.x;
           const ddy = a.y - b.y;
@@ -62,7 +62,6 @@ function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>
     }
   }
 
-  // Spring attraction for connected pairs
   for (const edge of edges) {
     const ai = nodeMap.get(edge.from);
     const bi = nodeMap.get(edge.to);
@@ -77,7 +76,6 @@ function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>
     if (!b.pinned) { b.vx -= ddx * force; b.vy -= ddy * force; }
   }
 
-  // Apply velocities
   for (const n of nodes) {
     if (n.pinned) continue;
     n.x += n.vx;
@@ -91,21 +89,32 @@ function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>
   }
 }
 
+interface HoverCard {
+  node: SimNode;
+  x: number;
+  y: number;
+  preview: string;
+}
+
 export function NeuralGraph() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const animRef = useRef<number>(0);
   const nodesRef = useRef<SimNode[]>([]);
   const edgesRef = useRef<GraphEdge[]>([]);
   const nodeMapRef = useRef<Map<string, number>>(new Map());
   const dragRef = useRef<{ id: string } | null>(null);
   const sizeRef = useRef({ w: 800, h: 600 });
+  const settledRef = useRef(false);
+  const animRef = useRef<number>(0);
 
-  const { nodes, edges, hoveredNode, loadGraph, setHovered, setSelected } = useGraphStore();
+  const [hoverCard, setHoverCard] = useState<HoverCard | null>(null);
+  const previewCacheRef = useRef<Record<string, string>>({});
+
+  const { nodes, edges, loadGraph, setSelected } = useGraphStore();
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
 
-  // Sync store into refs (only when data changes meaningfully)
+  // Sync store into refs and pre-simulate to settle
   useEffect(() => {
     if (nodes.length === 0) return;
     nodesRef.current = nodes.map((n) => ({ ...n }));
@@ -113,6 +122,18 @@ export function NeuralGraph() {
     const map = new Map<string, number>();
     nodes.forEach((n, i) => map.set(n.id, i));
     nodeMapRef.current = map;
+
+    // Pre-simulate the layout to a stable state
+    settledRef.current = false;
+    for (let i = 0; i < SIMULATION_ITERATIONS; i++) {
+      tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
+    }
+    // Freeze: zero out all velocities
+    for (const n of nodesRef.current) {
+      n.vx = 0;
+      n.vy = 0;
+    }
+    settledRef.current = true;
   }, [nodes, edges]);
 
   // Load graph on mount
@@ -120,7 +141,7 @@ export function NeuralGraph() {
     loadGraph();
   }, [loadGraph]);
 
-  // Resize canvas to fill container (no devicePixelRatio — keeps coordinates simple)
+  // Resize canvas
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
@@ -139,30 +160,39 @@ export function NeuralGraph() {
     return () => observer.disconnect();
   }, []);
 
-  const findNodeAt = useCallback(
-    (cx: number, cy: number): SimNode | null => {
-      const { w, h } = sizeRef.current;
-      for (let i = nodesRef.current.length - 1; i >= 0; i--) {
-        const n = nodesRef.current[i]!;
-        const nx = n.x * w;
-        const ny = n.y * h;
-        const r = nodeRadius(n.access_count) + 4;
-        if ((cx - nx) ** 2 + (cy - ny) ** 2 < r ** 2) return n;
-      }
-      return null;
-    },
-    []
-  );
+  const findNodeAt = useCallback((cx: number, cy: number): SimNode | null => {
+    const { w, h } = sizeRef.current;
+    for (let i = nodesRef.current.length - 1; i >= 0; i--) {
+      const n = nodesRef.current[i]!;
+      const nx = n.x * w;
+      const ny = n.y * h;
+      const r = nodeRadius(n.access_count) + 4;
+      if ((cx - nx) ** 2 + (cy - ny) ** 2 < r ** 2) return n;
+    }
+    return null;
+  }, []);
 
   const getCanvasPos = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return { cx: 0, cy: 0 };
     const rect = canvas.getBoundingClientRect();
-    return {
-      cx: e.clientX - rect.left,
-      cy: e.clientY - rect.top,
-    };
+    return { cx: e.clientX - rect.left, cy: e.clientY - rect.top };
   }, []);
+
+  // Load preview content for hover
+  const loadPreviewForNode = useCallback(async (node: SimNode): Promise<string> => {
+    if (previewCacheRef.current[node.id]) return previewCacheRef.current[node.id]!;
+    const match = allNotes.find((n) => n.title === node.title);
+    if (!match) return "";
+    try {
+      const content = await readNote(match.filename);
+      const preview = extractPreview(content);
+      previewCacheRef.current[node.id] = preview;
+      return preview;
+    } catch {
+      return "";
+    }
+  }, [allNotes]);
 
   const onMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -175,18 +205,33 @@ export function NeuralGraph() {
         if (idx !== undefined && nodesRef.current[idx]) {
           nodesRef.current[idx]!.x = cx / w;
           nodesRef.current[idx]!.y = cy / h;
-          nodesRef.current[idx]!.vx = 0;
-          nodesRef.current[idx]!.vy = 0;
           nodesRef.current[idx]!.pinned = true;
         }
         return;
       }
 
       const node = findNodeAt(cx, cy);
-      setHovered(node?.id ?? null);
       if (canvas) canvas.style.cursor = node ? "pointer" : "default";
+
+      if (node) {
+        // Position card next to node
+        const { w, h } = sizeRef.current;
+        const nx = node.x * w;
+        const ny = node.y * h;
+        // Show card to the right unless near right edge
+        const cardX = nx + 30 > w - 280 ? nx - 290 : nx + 30;
+        const cardY = Math.max(10, Math.min(h - 200, ny - 50));
+
+        if (!hoverCard || hoverCard.node.id !== node.id) {
+          loadPreviewForNode(node).then((preview) => {
+            setHoverCard({ node, x: cardX, y: cardY, preview });
+          });
+        }
+      } else {
+        if (hoverCard) setHoverCard(null);
+      }
     },
-    [findNodeAt, setHovered, getCanvasPos]
+    [findNodeAt, getCanvasPos, hoverCard, loadPreviewForNode]
   );
 
   const onMouseDown = useCallback(
@@ -202,20 +247,16 @@ export function NeuralGraph() {
     dragRef.current = null;
   }, []);
 
-  const onClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const { cx, cy } = getCanvasPos(e);
-      const node = findNodeAt(cx, cy);
-      if (node) {
-        setSelected(node.id);
-        const match = allNotes.find((n) => n.title === node.title);
-        if (match) selectNote(match.filename);
-      }
-    },
-    [findNodeAt, setSelected, selectNote, allNotes, getCanvasPos]
-  );
+  const handleViewNote = useCallback((node: SimNode) => {
+    setSelected(node.id);
+    const match = allNotes.find((n) => n.title === node.title);
+    if (match) {
+      selectNote(match.filename);
+      setHoverCard(null);
+    }
+  }, [setSelected, selectNote, allNotes]);
 
-  // Animation loop
+  // Render loop — only redraws on change/hover, not constantly
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -229,7 +270,10 @@ export function NeuralGraph() {
         return;
       }
 
-      tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
+      // Only run physics if not yet settled OR if user is dragging
+      if (!settledRef.current || dragRef.current) {
+        tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
+      }
 
       ctx.fillStyle = "#07070e";
       ctx.fillRect(0, 0, w, h);
@@ -242,8 +286,8 @@ export function NeuralGraph() {
         const a = nodesRef.current[ai]!;
         const b = nodesRef.current[bi]!;
 
-        const alpha = Math.max(0.08, edge.similarity * 0.4);
-        const isHov = hoveredNode === a.id || hoveredNode === b.id;
+        const alpha = Math.max(0.1, edge.similarity * 0.5);
+        const isHov = hoverCard && (hoverCard.node.id === a.id || hoverCard.node.id === b.id);
 
         ctx.beginPath();
         ctx.moveTo(a.x * w, a.y * h);
@@ -255,7 +299,7 @@ export function NeuralGraph() {
             : edge.link_type === "entity"
               ? `rgba(0, 201, 177, ${alpha})`
               : `rgba(122, 119, 154, ${alpha})`;
-        ctx.lineWidth = isHov ? 1.5 : 0.5;
+        ctx.lineWidth = isHov ? 2 : 0.7;
         ctx.stroke();
       }
 
@@ -265,12 +309,12 @@ export function NeuralGraph() {
         const ny = n.y * h;
         const r = nodeRadius(n.access_count);
         const color = STATE_COLORS[n.state] ?? "#35335a";
-        const isHov = hoveredNode === n.id;
+        const isHov = hoverCard?.node.id === n.id;
 
-        // Glow
+        // Glow for active/connected nodes
         if (n.state === "active" || n.state === "fresh" || n.state === "connected") {
           ctx.beginPath();
-          ctx.arc(nx, ny, r + (isHov ? 8 : 4), 0, Math.PI * 2);
+          ctx.arc(nx, ny, r + (isHov ? 10 : 5), 0, Math.PI * 2);
           ctx.fillStyle =
             n.state === "active" || n.state === "fresh"
               ? "rgba(240, 165, 0, 0.2)"
@@ -280,25 +324,17 @@ export function NeuralGraph() {
 
         // Circle
         ctx.beginPath();
-        ctx.arc(nx, ny, r, 0, Math.PI * 2);
+        ctx.arc(nx, ny, isHov ? r + 2 : r, 0, Math.PI * 2);
         ctx.fillStyle = isHov ? "#ffffff" : color;
         ctx.fill();
 
-        // Label on hover
-        if (isHov) {
-          ctx.font = '12px "Geist", system-ui, sans-serif';
-          ctx.fillStyle = "#ddd9f0";
-          ctx.textAlign = "center";
-          ctx.fillText(n.title, nx, ny - r - 10);
-
-          ctx.font = '10px "Geist", system-ui, sans-serif';
-          ctx.fillStyle = "#7a779a";
-          ctx.fillText(
-            `${Math.round(n.strength * 100)}% · ${n.access_count} hits`,
-            nx,
-            ny - r - 24
-          );
-        }
+        // Always show node title (so users can read them at a glance)
+        ctx.font = '11px "Geist", system-ui, sans-serif';
+        ctx.fillStyle = isHov ? "#ddd9f0" : "#7a779a";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        const truncated = n.title.length > 20 ? n.title.slice(0, 18) + "…" : n.title;
+        ctx.fillText(truncated, nx, ny + r + 4);
       }
 
       animRef.current = requestAnimationFrame(render);
@@ -306,7 +342,7 @@ export function NeuralGraph() {
 
     animRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animRef.current);
-  }, [hoveredNode]);
+  }, [hoverCard]);
 
   return (
     <div ref={containerRef} className="flex-1 relative bg-[#07070e] overflow-hidden">
@@ -315,12 +351,59 @@ export function NeuralGraph() {
         onMouseMove={onMouseMove}
         onMouseDown={onMouseDown}
         onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
-        onClick={onClick}
+        onMouseLeave={() => {
+          dragRef.current = null;
+          setHoverCard(null);
+        }}
         className="absolute inset-0 w-full h-full"
       />
+
+      {/* Hover preview card */}
+      {hoverCard && (
+        <div
+          className="absolute bg-[#0d0d1a] border border-[#1e1e38] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
+          style={{ left: hoverCard.x, top: hoverCard.y }}
+          onMouseEnter={() => { /* keep card open */ }}
+        >
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <h3 className="text-sm font-semibold text-[#ddd9f0] font-[Geist,sans-serif] leading-tight">
+              {hoverCard.node.title}
+            </h3>
+            <span
+              className={`text-[9px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                hoverCard.node.state === "active" || hoverCard.node.state === "fresh"
+                  ? "bg-[#f0a500]/15 text-[#f0a500]"
+                  : hoverCard.node.state === "connected"
+                    ? "bg-[#00c9b1]/15 text-[#00c9b1]"
+                    : "bg-[#35335a]/30 text-[#7a779a]"
+              }`}
+            >
+              {Math.round(hoverCard.node.strength * 100)}%
+            </span>
+          </div>
+
+          {hoverCard.preview && (
+            <p className="text-xs text-[#7a779a] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
+              {hoverCard.preview}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between text-[10px] text-[#35335a] font-[Geist,sans-serif] mb-3">
+            <span>{hoverCard.node.access_count} accesses</span>
+            <span className="capitalize">{hoverCard.node.state}</span>
+          </div>
+
+          <button
+            onClick={() => handleViewNote(hoverCard.node)}
+            className="w-full text-xs font-medium font-[Geist,sans-serif] bg-[#f0a500] text-[#07070e] py-1.5 rounded hover:bg-[#f0a500]/90 transition-colors"
+          >
+            View note
+          </button>
+        </div>
+      )}
+
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#7a779a]">
+      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#7a779a] pointer-events-none">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> active
         </span>
@@ -330,9 +413,13 @@ export function NeuralGraph() {
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#35335a]" /> dormant
         </span>
+        <span className="flex items-center gap-1 ml-2 text-[#35335a]">
+          drag nodes to reposition
+        </span>
       </div>
-      {nodesRef.current.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center">
+
+      {nodes.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <p className="text-[#35335a] text-sm font-[Geist,sans-serif]">
             Start the server to see the knowledge graph
           </p>

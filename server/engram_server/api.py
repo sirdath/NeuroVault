@@ -243,6 +243,51 @@ def create_api(manager) -> FastAPI:
             ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25,
         )
 
+    @app.post("/api/pdf")
+    def ingest_pdf_endpoint(body: dict):
+        """Ingest a PDF — extracts text and highlights as Source + Quote notes."""
+        from engram_server.pdf_ingest import ingest_pdf
+        from pathlib import Path
+        ctx = _ctx()
+        return ingest_pdf(
+            Path(body["pdf_path"]), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25
+        )
+
+    @app.post("/api/capture")
+    def quick_capture_endpoint(body: dict):
+        """Quick-capture text as a note."""
+        from engram_server.dissertation import quick_capture
+        ctx = _ctx()
+        return quick_capture(
+            body["text"], body.get("title"),
+            ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25,
+        )
+
+    @app.get("/api/tags")
+    def get_tags():
+        """List all tags with counts."""
+        from engram_server.dissertation import list_tags
+        return list_tags(_db())
+
+    @app.post("/api/tags/{engram_id}")
+    def add_tag_endpoint(engram_id: str, body: dict):
+        """Add a tag to a memory."""
+        from engram_server.dissertation import add_tag
+        success = add_tag(_db(), engram_id, body["tag"])
+        return {"status": "added" if success else "failed"}
+
+    @app.get("/api/tags/{tag}/notes")
+    def notes_by_tag(tag: str):
+        """Find notes with a tag."""
+        from engram_server.dissertation import find_by_tag
+        return find_by_tag(_db(), tag)
+
+    @app.get("/api/citations")
+    def export_citations_endpoint(tag: str | None = None):
+        """Export BibTeX citations."""
+        from engram_server.dissertation import export_bibtex
+        return {"bibtex": export_bibtex(_db(), tag)}
+
     @app.get("/api/session-context")
     def session_ctx():
         from engram_server.write_back import build_session_context

@@ -360,6 +360,98 @@ def get_timeline(brain: str | None = None) -> list[dict]:
     ]
 
 
+# --- Dissertation Tools ---
+
+
+@mcp.tool()
+def quick_capture(text: str, title: str | None = None, brain: str | None = None) -> dict:
+    """Quick-capture text as a note. Auto-extracts title if not provided.
+
+    Use this for fast note creation from pasted content (papers, articles, ideas).
+
+    Args:
+        text: The text to capture
+        title: Optional title (auto-extracted from first line if not provided)
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    from engram_server.dissertation import quick_capture as qc
+    ctx = _ctx(brain)
+    return qc(text, title, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+
+
+@mcp.tool()
+def add_tag(engram_id: str, tag: str, brain: str | None = None) -> dict:
+    """Add a tag to a memory for organization.
+
+    Args:
+        engram_id: The memory ID
+        tag: Tag name (e.g. "important", "to-read", "methodology")
+        brain: Target brain ID
+    """
+    from engram_server.dissertation import add_tag as add
+    ctx = _ctx(brain)
+    success = add(ctx.db, engram_id, tag)
+    return {"status": "added" if success else "failed", "tag": tag}
+
+
+@mcp.tool()
+def find_by_tag(tag: str, brain: str | None = None) -> list[dict]:
+    """Find all memories with a specific tag.
+
+    Args:
+        tag: The tag to search for
+        brain: Target brain ID
+    """
+    from engram_server.dissertation import find_by_tag as find
+    ctx = _ctx(brain)
+    return find(ctx.db, tag)
+
+
+@mcp.tool()
+def list_tags(brain: str | None = None) -> list[dict]:
+    """List all tags with usage counts.
+
+    Args:
+        brain: Target brain ID
+    """
+    from engram_server.dissertation import list_tags as lt
+    ctx = _ctx(brain)
+    return lt(ctx.db)
+
+
+@mcp.tool()
+def ingest_pdf(pdf_path: str, brain: str | None = None) -> dict:
+    """Ingest a PDF paper — extracts text, highlights, and metadata.
+
+    Creates a Source note for the paper and a Quote note for each highlight.
+    Use this to import academic papers into your dissertation memory.
+
+    Args:
+        pdf_path: Absolute path to the PDF file
+        brain: Target brain ID
+    """
+    from engram_server.pdf_ingest import ingest_pdf as ingest
+    from pathlib import Path
+    ctx = _ctx(brain)
+    return ingest(Path(pdf_path), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+
+
+@mcp.tool()
+def export_citations(tag: str | None = None, brain: str | None = None) -> str:
+    """Export notes as BibTeX citations.
+
+    Looks for **Author:** / **Year:** / **Journal:** metadata in note content.
+    Optionally filter by tag (e.g. "methodology", "background").
+
+    Args:
+        tag: Optional tag filter
+        brain: Target brain ID
+    """
+    from engram_server.dissertation import export_bibtex
+    ctx = _ctx(brain)
+    return export_bibtex(ctx.db, tag)
+
+
 # --- Session Context Resource ---
 
 
