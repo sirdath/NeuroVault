@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
 
-/// Metadata for a note displayed in the sidebar
 #[derive(Debug, Serialize, Clone)]
 pub struct NoteMeta {
     pub filename: String,
@@ -14,40 +13,67 @@ pub struct NoteMeta {
     pub size: u64,
 }
 
-/// Read brains.json to find the active brain directory
-fn active_brain_dir() -> PathBuf {
+/// Find the active vault directory. Checks (in order):
+/// 1. brains.json registry (multi-brain mode)
+/// 2. Legacy ~/.engram/vault/ (pre-migration)
+/// 3. Creates ~/.engram/brains/default/vault/ as fallback
+fn vault_dir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not determine home directory");
-    let registry_path = home.join(".engram").join("brains.json");
+    let engram_home = home.join(".engram");
 
+    // Try brains.json first (multi-brain mode)
+    let registry_path = engram_home.join("brains.json");
     if registry_path.exists() {
         if let Ok(data) = fs::read_to_string(&registry_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
-                    return home.join(".engram").join("brains").join(active_id);
+                    let vault = engram_home.join("brains").join(active_id).join("vault");
+                    fs::create_dir_all(&vault).ok();
+                    return vault;
                 }
             }
         }
     }
 
-    // Fallback: default brain
-    home.join(".engram").join("brains").join("default")
+    // Legacy single-brain mode: ~/.engram/vault/
+    let legacy_vault = engram_home.join("vault");
+    if legacy_vault.exists() {
+        return legacy_vault;
+    }
+
+    // Fresh install fallback: create default brain vault
+    let default_vault = engram_home.join("brains").join("default").join("vault");
+    fs::create_dir_all(&default_vault).expect("Could not create vault directory");
+    default_vault
 }
 
-/// Get the vault directory for the active brain
-fn vault_dir() -> PathBuf {
-    let vault = active_brain_dir().join("vault");
-    fs::create_dir_all(&vault).expect("Could not create vault directory");
-    vault
-}
-
-/// Get the trash directory for the active brain
 fn trash_dir() -> PathBuf {
-    let trash = active_brain_dir().join("trash");
-    fs::create_dir_all(&trash).expect("Could not create trash directory");
-    trash
+    let home = dirs::home_dir().expect("Could not determine home directory");
+    let engram_home = home.join(".engram");
+
+    let registry_path = engram_home.join("brains.json");
+    if registry_path.exists() {
+        if let Ok(data) = fs::read_to_string(&registry_path) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
+                if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
+                    let trash = engram_home.join("brains").join(active_id).join("trash");
+                    fs::create_dir_all(&trash).ok();
+                    return trash;
+                }
+            }
+        }
+    }
+
+    let legacy_trash = engram_home.join("trash");
+    if legacy_trash.exists() {
+        return legacy_trash;
+    }
+
+    let default_trash = engram_home.join("brains").join("default").join("trash");
+    fs::create_dir_all(&default_trash).expect("Could not create trash directory");
+    default_trash
 }
 
-/// Extract the title from markdown content (first # heading or first line)
 fn extract_title(content: &str, filename: &str) -> String {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -79,31 +105,19 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "md") {
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
+            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let metadata = fs::metadata(&path).map_err(|e| format!("Failed to read metadata: {e}"))?;
-
             let modified = metadata
                 .modified()
                 .unwrap_or(SystemTime::UNIX_EPOCH)
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-
             let size = metadata.len();
             let content = fs::read_to_string(&path).unwrap_or_default();
             let title = extract_title(&content, &filename);
 
-            notes.push(NoteMeta {
-                filename,
-                title,
-                modified,
-                size,
-            });
+            notes.push(NoteMeta { filename, title, modified, size });
         }
     }
 
@@ -113,14 +127,12 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
 
 #[tauri::command]
 fn read_note(filename: String) -> Result<String, String> {
-    let path = vault_dir().join(&filename);
-    fs::read_to_string(&path).map_err(|e| format!("Failed to read note: {e}"))
+    fs::read_to_string(vault_dir().join(&filename)).map_err(|e| format!("Failed to read note: {e}"))
 }
 
 #[tauri::command]
 fn save_note(filename: String, content: String) -> Result<(), String> {
-    let path = vault_dir().join(&filename);
-    fs::write(&path, &content).map_err(|e| format!("Failed to save note: {e}"))
+    fs::write(vault_dir().join(&filename), &content).map_err(|e| format!("Failed to save note: {e}"))
 }
 
 #[tauri::command]
@@ -129,21 +141,15 @@ fn create_note(title: String) -> Result<String, String> {
     let slug = slugify(&title);
     let id = &Uuid::new_v4().to_string()[..8];
     let filename = format!("{slug}-{id}.md");
-    let path = vault.join(&filename);
-
     let content = format!("# {title}\n\n");
-    fs::write(&path, &content).map_err(|e| format!("Failed to create note: {e}"))?;
-
+    fs::write(vault.join(&filename), &content).map_err(|e| format!("Failed to create note: {e}"))?;
     Ok(filename)
 }
 
 #[tauri::command]
 fn delete_note(filename: String) -> Result<(), String> {
-    let vault = vault_dir();
-    let trash = trash_dir();
-    let src = vault.join(&filename);
-    let dst = trash.join(&filename);
-
+    let src = vault_dir().join(&filename);
+    let dst = trash_dir().join(&filename);
     if src.exists() {
         fs::rename(&src, &dst).map_err(|e| format!("Failed to move note to trash: {e}"))
     } else {
@@ -160,29 +166,21 @@ pub fn run() {
             #[cfg(not(dev))]
             {
                 use tauri_plugin_shell::ShellExt;
-                let sidecar = app
-                    .shell()
-                    .sidecar("engram-server")
+                let sidecar = app.shell().sidecar("engram-server")
                     .expect("failed to create engram-server sidecar");
-                let (_rx, _child) = sidecar
-                    .spawn()
+                let (_rx, _child) = sidecar.spawn()
                     .expect("failed to spawn engram-server sidecar");
                 app.manage(_child);
             }
             #[cfg(dev)]
             {
                 let _ = app;
-                eprintln!("[engram] dev mode: start the server manually with `cd server && uv run python -m engram_server --http-only`");
+                eprintln!("[neurovault] dev mode: run server with `cd server && uv run python -m engram_server --http-only`");
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_vault_path,
-            list_notes,
-            read_note,
-            save_note,
-            create_note,
-            delete_note,
+            get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

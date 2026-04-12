@@ -39,8 +39,8 @@ export const useGraphStore = create<GraphStore>((set) => ({
       // Initialize positions randomly in 0..1 space
       const simNodes: SimNode[] = data.nodes.map((n) => ({
         ...n,
-        x: 0.3 + Math.random() * 0.4,
-        y: 0.3 + Math.random() * 0.4,
+        x: 0.1 + Math.random() * 0.8,
+        y: 0.1 + Math.random() * 0.8,
         vx: 0,
         vy: 0,
         pinned: false,

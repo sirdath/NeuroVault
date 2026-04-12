@@ -30,14 +30,23 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   searchQuery: "",
 
   initVault: async () => {
-    const vaultPath = await tauri.getVaultPath();
-    set({ vaultPath });
-    await get().loadNotes();
+    try {
+      const vaultPath = await tauri.getVaultPath();
+      set({ vaultPath });
+      await get().loadNotes();
+    } catch (e) {
+      console.error("[neurovault] Failed to init vault:", e);
+    }
   },
 
   loadNotes: async () => {
-    const notes = await tauri.listNotes();
-    set({ notes });
+    try {
+      const notes = await tauri.listNotes();
+      set({ notes });
+    } catch (e) {
+      console.error("[neurovault] Failed to load notes:", e);
+      set({ notes: [] });
+    }
   },
 
   selectNote: async (filename: string) => {
