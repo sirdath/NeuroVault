@@ -9,6 +9,13 @@ from engram_server.ingest import ingest_file
 from engram_server.retriever import hybrid_retrieve
 from engram_server.write_back import write_back as do_write_back, build_session_context
 from engram_server.api import start_api_server
+from engram_server.consolidation import (
+    consolidate as run_consolidation,
+    spread_activation,
+    get_working_memory as get_wm,
+    pin_to_working_memory as pin_wm,
+)
+from engram_server.conversation_log import log_exchange, search_conversations
 
 # --- Initialize ---
 
@@ -143,6 +150,14 @@ def recall(
     """
     ctx = _ctx(brain)
     raw_results = hybrid_retrieve(query, ctx.db, manager.embedder, ctx.bm25, top_k=limit)
+
+    # Spreading activation: boost neighbors of accessed memories
+    # (mimics how recalling one concept makes related concepts easier to recall)
+    if raw_results:
+        try:
+            spread_activation(ctx.db, [r["engram_id"] for r in raw_results])
+        except Exception as e:
+            logger.debug("Spreading activation skipped: {}", e)
 
     # Format results based on mode
     results: list[dict] = []
@@ -415,6 +430,92 @@ def get_timeline(brain: str | None = None) -> list[dict]:
          "is_current": bool(r[3]), "source": r[4]}
         for r in rows
     ]
+
+
+# --- Brain-Like Memory Tools ---
+
+
+@mcp.tool()
+def working_memory(brain: str | None = None) -> list[dict]:
+    """Get the current working memory — always-in-context memories.
+
+    Working memory is the brain's scratchpad: the 7-or-so most relevant
+    memories right now (recent + high-strength + manually pinned).
+    These should always be considered when answering questions.
+
+    Args:
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    return get_wm(ctx.db)
+
+
+@mcp.tool()
+def pin_memory(engram_id: str, brain: str | None = None) -> dict:
+    """Pin a memory to working memory so it's always in context.
+
+    Use this when the user emphasizes something important or when you
+    detect a memory will be repeatedly relevant.
+
+    Args:
+        engram_id: ID of the memory to pin
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    pin_wm(ctx.db, engram_id)
+    return {"status": "pinned", "engram_id": engram_id}
+
+
+@mcp.tool()
+def consolidate_now(brain: str | None = None) -> dict:
+    """Trigger a memory consolidation cycle (the brain's sleep cycle).
+
+    Clusters similar memories into themes, refreshes working memory,
+    strengthens co-activated links, and prunes stale unused edges.
+    Normally runs automatically every 4 hours — use this for manual sync.
+
+    Args:
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    return run_consolidation(ctx.db, manager.embedder, ctx.consolidated_dir)
+
+
+@mcp.tool()
+def log_conversation(
+    user_message: str,
+    assistant_response: str,
+    brain: str | None = None,
+) -> dict:
+    """Log a conversation exchange to the permanent record.
+
+    Saves to raw/conversations/. Call this after meaningful exchanges
+    so the user can later ask "what did Claude tell me about X?".
+
+    Args:
+        user_message: What the user said
+        assistant_response: What you (Claude) responded
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    filepath = log_exchange(user_message, assistant_response, ctx.raw_dir)
+    return {"status": "logged", "file": str(filepath.name)}
+
+
+@mcp.tool()
+def search_history(query: str, limit: int = 10, brain: str | None = None) -> list[dict]:
+    """Search conversation history for past exchanges with Claude.
+
+    USE WHEN: the user asks about something Claude said before.
+    Searches raw/conversations/ for matching turns.
+
+    Args:
+        query: What to search for
+        limit: Max results
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    return search_conversations(ctx.raw_dir, query, limit)
 
 
 # --- AI-Efficient Compound Tools ---

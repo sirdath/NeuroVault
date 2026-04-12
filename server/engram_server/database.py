@@ -84,6 +84,50 @@ CREATE TABLE IF NOT EXISTS temporal_facts (
     is_current  INTEGER DEFAULT 1
 );
 
+-- Working memory: pinned/recent memories that always appear in context
+-- Like the brain's prefrontal cortex scratchpad for active context
+CREATE TABLE IF NOT EXISTS working_memory (
+    engram_id  TEXT PRIMARY KEY REFERENCES engrams(id) ON DELETE CASCADE,
+    pinned_at  TEXT DEFAULT (datetime('now')),
+    priority   INTEGER DEFAULT 0,
+    pin_type   TEXT DEFAULT 'recent'  -- recent|manual|active
+);
+
+-- Episodic memory: events with timestamps (separate from semantic facts)
+-- "On April 5th, Sarah told me X" vs "I prefer Tauri" (semantic, no time)
+CREATE TABLE IF NOT EXISTS episodic_facts (
+    engram_id    TEXT PRIMARY KEY REFERENCES engrams(id) ON DELETE CASCADE,
+    occurred_at  TEXT,
+    event_type   TEXT DEFAULT 'event',  -- event|decision|meeting|insight
+    actors       TEXT  -- JSON array of people/entities involved
+);
+
+-- Edge access tracking for synaptic pruning
+-- Track how often each link is actually traversed during recall
+CREATE TABLE IF NOT EXISTS edge_activity (
+    from_engram TEXT NOT NULL,
+    to_engram   TEXT NOT NULL,
+    last_used   TEXT DEFAULT (datetime('now')),
+    use_count   INTEGER DEFAULT 0,
+    PRIMARY KEY (from_engram, to_engram)
+);
+
+-- Consolidation themes: clusters of related memories synthesized into wikis
+CREATE TABLE IF NOT EXISTS themes (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    summary         TEXT,
+    member_count    INTEGER DEFAULT 0,
+    last_consolidated TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS theme_members (
+    theme_id  TEXT NOT NULL REFERENCES themes(id) ON DELETE CASCADE,
+    engram_id TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    centrality REAL DEFAULT 0.5,
+    PRIMARY KEY (theme_id, engram_id)
+);
+
 -- Contradictions detected between memories (from Supermemory)
 CREATE TABLE IF NOT EXISTS contradictions (
     id          TEXT PRIMARY KEY,
@@ -114,6 +158,10 @@ CREATE INDEX IF NOT EXISTS idx_temporal_current ON temporal_facts(is_current);
 CREATE INDEX IF NOT EXISTS idx_contradictions_a ON contradictions(engram_a);
 CREATE INDEX IF NOT EXISTS idx_contradictions_b ON contradictions(engram_b);
 CREATE INDEX IF NOT EXISTS idx_memory_type      ON memory_types(memory_type);
+CREATE INDEX IF NOT EXISTS idx_working_priority ON working_memory(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_episodic_time    ON episodic_facts(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_edge_activity    ON edge_activity(last_used DESC);
+CREATE INDEX IF NOT EXISTS idx_theme_members    ON theme_members(theme_id);
 """
 
 

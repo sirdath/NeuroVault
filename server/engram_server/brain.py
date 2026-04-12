@@ -21,6 +21,7 @@ from engram_server.bm25_index import BM25Index
 from engram_server.ingest import ingest_vault
 from engram_server.watcher import VaultWatcher
 from engram_server.strength import DecayScheduler
+from engram_server.consolidation import ConsolidationScheduler
 
 
 @dataclass
@@ -52,6 +53,7 @@ class BrainContext:
     bm25: BM25Index = field(default=None, repr=False)  # type: ignore[assignment]
     watcher: VaultWatcher | None = field(default=None, repr=False)
     decay_scheduler: DecayScheduler | None = field(default=None, repr=False)
+    consolidation_scheduler: ConsolidationScheduler | None = field(default=None, repr=False)
     _active: bool = field(default=False, repr=False)
 
     def initialize(self, embedder: Embedder, activate: bool = False) -> None:
@@ -94,6 +96,11 @@ class BrainContext:
         self.watcher.start()
         self.decay_scheduler = DecayScheduler(self.db, interval_seconds=3600)
         self.decay_scheduler.start()
+        # Sleep cycle: consolidate every 4 hours
+        self.consolidation_scheduler = ConsolidationScheduler(
+            self.db, embedder, self.consolidated_dir, interval_seconds=14400
+        )
+        self.consolidation_scheduler.start()
         self._active = True
         logger.info("Brain activated: {} ({})", self.name, self.brain_id)
 
@@ -107,6 +114,9 @@ class BrainContext:
         if self.decay_scheduler:
             self.decay_scheduler.stop()
             self.decay_scheduler = None
+        if self.consolidation_scheduler:
+            self.consolidation_scheduler.stop()
+            self.consolidation_scheduler = None
         self._active = False
         logger.info("Brain deactivated: {} ({})", self.name, self.brain_id)
 
