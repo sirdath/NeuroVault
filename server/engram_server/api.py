@@ -250,8 +250,16 @@ def create_api(manager) -> FastAPI:
         from pathlib import Path
         ctx = _ctx()
         return ingest_pdf(
-            Path(body["pdf_path"]), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25
+            Path(body["pdf_path"]), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25,
+            raw_dir=ctx.raw_dir,
         )
+
+    @app.post("/api/proactive")
+    def proactive_context_endpoint(body: dict):
+        """Detect topics in a message and fetch relevant memories — no LLM call."""
+        from engram_server.proactive import proactive_context
+        ctx = _ctx()
+        return proactive_context(body["message"], ctx.db, manager.embedder)
 
     @app.post("/api/capture")
     def quick_capture_endpoint(body: dict):

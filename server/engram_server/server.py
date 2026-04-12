@@ -13,13 +13,23 @@ from engram_server.api import start_api_server
 # --- Initialize ---
 
 mcp = FastMCP(
-    "Engram Memory",
+    "NeuroVault",
     instructions=(
-        "Engram is a local AI memory system with multiple brains. "
-        "Use `remember` to save durable facts. Use `recall` to search memory. "
-        "Use `get_related` to explore connections. "
-        "Use `list_brains` / `switch_brain` / `create_brain` to manage separate memory spaces. "
-        "Memories persist across all sessions."
+        "NeuroVault is a local-first AI memory system. Read `engram://usage-guide` "
+        "on session start for the decision tree.\n\n"
+        "CORE WORKFLOW:\n"
+        "1. BEFORE answering questions: call `recall(query, mode='preview')` to check memory\n"
+        "2. WHEN user mentions a named thing: call `about(entity)` for targeted lookup\n"
+        "3. WHEN user shares a decision/learning: call `remember(title, content)` immediately\n"
+        "4. AFTER meaningful exchanges: call `save_conversation_insights(...)` to grow the brain\n"
+        "5. FOR broad topics: call `explore(topic, depth=2)` — one call, full context\n\n"
+        "TOKEN EFFICIENCY:\n"
+        "- `recall(q, mode='titles')` = ~20 tokens/result (quick scan)\n"
+        "- `recall(q, mode='preview')` = ~100 tokens/result (default, most uses)\n"
+        "- `recall(q, mode='full')` = ~400 tokens/result (only when deep content needed)\n"
+        "- `context_for(topic, token_budget=2000)` = smart budget-fitted pack\n\n"
+        "Every tool accepts optional `brain` param to target a specific memory space. "
+        "Memories persist across all sessions. The brain grows automatically."
     ),
 )
 
@@ -106,19 +116,66 @@ def remember(title: str, content: str, brain: str | None = None) -> dict:
 
 
 @mcp.tool()
-def recall(query: str, limit: int = 10, brain: str | None = None) -> list[dict]:
-    """Search memory using hybrid retrieval: semantic + BM25 + knowledge graph.
+def recall(
+    query: str,
+    limit: int = 10,
+    mode: str = "preview",
+    max_tokens: int | None = None,
+    brain: str | None = None,
+) -> list[dict]:
+    """Search memory with hybrid retrieval (semantic + BM25 + knowledge graph).
 
-    Results are reranked by a cross-encoder and boosted by memory strength.
-    Use this BEFORE answering questions.
+    USE WHEN: the user asks about past decisions, preferences, projects, learnings,
+    or anything they might have told you before. Call this BEFORE answering any
+    question that could benefit from context.
+
+    Token-efficient modes:
+      - "titles" (~20 tokens/result): just titles and strengths — for quick scans
+      - "preview" (~100 tokens/result): title + 200-char snippet — for most uses (DEFAULT)
+      - "full" (~400 tokens/result): full content — only when you need deep context
 
     Args:
-        query: Natural language search query
-        limit: Maximum results (default 10)
+        query: Natural language query (e.g. "what did I decide about testing?")
+        limit: Max results (default 10)
+        mode: "titles" | "preview" | "full" — trade precision for token cost
+        max_tokens: Optional budget — stops adding results once this is hit
         brain: Target brain ID (uses active brain if not specified)
     """
     ctx = _ctx(brain)
-    return hybrid_retrieve(query, ctx.db, manager.embedder, ctx.bm25, top_k=limit)
+    raw_results = hybrid_retrieve(query, ctx.db, manager.embedder, ctx.bm25, top_k=limit)
+
+    # Format results based on mode
+    results: list[dict] = []
+    tokens_used = 0
+    for r in raw_results:
+        if mode == "titles":
+            item = {
+                "engram_id": r["engram_id"],
+                "title": r["title"],
+                "score": r["score"],
+                "strength": r["strength"],
+            }
+            tokens_est = 20
+        elif mode == "full":
+            item = r
+            tokens_est = len(r["content"]) // 4
+        else:  # preview (default)
+            item = {
+                "engram_id": r["engram_id"],
+                "title": r["title"],
+                "preview": r["content"][:200],
+                "score": r["score"],
+                "strength": r["strength"],
+                "state": r["state"],
+            }
+            tokens_est = 100
+
+        if max_tokens and tokens_used + tokens_est > max_tokens:
+            break
+        tokens_used += tokens_est
+        results.append(item)
+
+    return results
 
 
 @mcp.tool()
@@ -360,6 +417,213 @@ def get_timeline(brain: str | None = None) -> list[dict]:
     ]
 
 
+# --- AI-Efficient Compound Tools ---
+
+
+@mcp.tool()
+def explore(query: str, depth: int = 2, brain: str | None = None) -> dict:
+    """Deep exploration in ONE call — replaces recall + get_related + backlinks.
+
+    USE WHEN: you need broad context about a topic, not just matching snippets.
+    Example: "explore('my authentication architecture')" returns matching notes,
+    their related notes, their backlinks, and shared entities — in one response.
+
+    Args:
+        query: Topic to explore
+        depth: 1=direct matches, 2=matches+related, 3=full graph neighborhood
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+
+    # Step 1: Find direct matches
+    matches = hybrid_retrieve(query, ctx.db, manager.embedder, ctx.bm25, top_k=5)
+    if not matches:
+        return {"matches": [], "related": [], "entities": [], "message": "No memories found for this query"}
+
+    match_ids = {m["engram_id"] for m in matches}
+    result: dict = {
+        "matches": [
+            {"engram_id": m["engram_id"], "title": m["title"], "preview": m["content"][:200], "score": m["score"]}
+            for m in matches
+        ],
+        "related": [],
+        "entities": [],
+    }
+
+    if depth >= 2:
+        # Step 2: For each match, get related notes via knowledge graph
+        related_ids: set[str] = set()
+        related_items: list[dict] = []
+        for m in matches[:3]:
+            rows = ctx.db.conn.execute(
+                """SELECT e.id, e.title, l.similarity, l.link_type
+                   FROM engram_links l
+                   JOIN engrams e ON e.id = l.to_engram
+                   WHERE l.from_engram = ? AND e.state != 'dormant'
+                   ORDER BY l.similarity DESC LIMIT 3""",
+                (m["engram_id"],),
+            ).fetchall()
+            for r in rows:
+                if r[0] not in match_ids and r[0] not in related_ids:
+                    related_ids.add(r[0])
+                    related_items.append({
+                        "engram_id": r[0], "title": r[1],
+                        "similarity": round(r[2], 3), "link_type": r[3],
+                        "via": m["title"],
+                    })
+        result["related"] = related_items[:10]
+
+    if depth >= 3:
+        # Step 3: Extract shared entities across all matches
+        all_ids = list(match_ids) + [r["engram_id"] for r in result["related"]]
+        if all_ids:
+            placeholders = ",".join("?" * len(all_ids))
+            entity_rows = ctx.db.conn.execute(
+                f"""SELECT DISTINCT ent.name, ent.entity_type, COUNT(*) as freq
+                   FROM entity_mentions em
+                   JOIN entities ent ON ent.id = em.entity_id
+                   WHERE em.engram_id IN ({placeholders})
+                   GROUP BY ent.name
+                   ORDER BY freq DESC LIMIT 10""",
+                all_ids,
+            ).fetchall()
+            result["entities"] = [{"name": r[0], "type": r[1], "mentions": r[2]} for r in entity_rows]
+
+    return result
+
+
+@mcp.tool()
+def proactive_context(message: str, brain: str | None = None) -> dict:
+    """Proactive context detection — NO LLM call, pure pattern + vector.
+
+    USE WHEN: you want to check if a user message touches on topics Engram has
+    stored memories about, BEFORE you decide how to respond. Fast, free, silent.
+
+    Example: user says "What do you think about my education?"
+    → This detects "education" topic and returns relevant notes WITHOUT any
+    Claude round-trip. You see the context in one call and can respond richly.
+
+    Args:
+        message: The user's message (any natural language)
+        brain: Target brain ID
+    """
+    from engram_server.proactive import proactive_context as pc
+    ctx = _ctx(brain)
+    return pc(message, ctx.db, manager.embedder)
+
+
+@mcp.tool()
+def about(entity: str, brain: str | None = None) -> dict:
+    """Entity-first lookup — everything NeuroVault knows about a person, concept, or project.
+
+    USE WHEN: the user mentions a specific named thing (person, project, technology,
+    concept) and you want ALL related context. More targeted than recall().
+
+    Example: about("Sarah") returns every memory mentioning Sarah + entity metadata.
+
+    Args:
+        entity: The name to look up (case-insensitive)
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+
+    # Find the entity
+    entity_row = ctx.db.conn.execute(
+        "SELECT id, name, entity_type, mention_count FROM entities WHERE name = ? COLLATE NOCASE",
+        (entity,),
+    ).fetchone()
+
+    if not entity_row:
+        # Fuzzy: partial match
+        entity_row = ctx.db.conn.execute(
+            "SELECT id, name, entity_type, mention_count FROM entities WHERE name LIKE ? COLLATE NOCASE LIMIT 1",
+            (f"%{entity}%",),
+        ).fetchone()
+
+    if not entity_row:
+        return {"found": False, "entity": entity, "message": f"No memories mention '{entity}'"}
+
+    eid, name, etype, mentions = entity_row
+
+    # Get all engrams that mention this entity
+    engrams = ctx.db.conn.execute(
+        """SELECT e.id, e.title, e.content, e.strength, e.state
+           FROM entity_mentions em
+           JOIN engrams e ON e.id = em.engram_id
+           WHERE em.entity_id = ? AND e.state != 'dormant'
+           ORDER BY e.strength DESC""",
+        (eid,),
+    ).fetchall()
+
+    return {
+        "found": True,
+        "entity": {"name": name, "type": etype, "mention_count": mentions},
+        "memories": [
+            {
+                "engram_id": e[0],
+                "title": e[1],
+                "preview": e[2][:300],
+                "strength": e[3],
+                "state": e[4],
+            }
+            for e in engrams[:10]
+        ],
+        "total_memories": len(engrams),
+    }
+
+
+@mcp.tool()
+def context_for(topic: str, token_budget: int = 2000, brain: str | None = None) -> dict:
+    """Build a context pack fitted to a token budget — for maximum-efficiency recall.
+
+    USE WHEN: you want the most relevant context for a topic in a specific token budget.
+    This is the smartest way to load memories without wasting Claude's context window.
+
+    Args:
+        topic: What to build context about
+        token_budget: Target token count (~200 chars per 50 tokens)
+        brain: Target brain ID
+    """
+    ctx = _ctx(brain)
+    results = hybrid_retrieve(topic, ctx.db, manager.embedder, ctx.bm25, top_k=20)
+
+    # Pack results greedily by token count
+    pack: list[dict] = []
+    tokens_used = 0
+    for r in results:
+        content_tokens = len(r["content"]) // 4
+        overhead = 30  # title + metadata
+        if tokens_used + content_tokens + overhead > token_budget:
+            # Try a truncated version
+            remaining = token_budget - tokens_used - overhead
+            if remaining > 50:
+                pack.append({
+                    "title": r["title"],
+                    "content": r["content"][:remaining * 4],
+                    "strength": r["strength"],
+                    "truncated": True,
+                })
+                tokens_used += remaining + overhead
+            break
+
+        pack.append({
+            "title": r["title"],
+            "content": r["content"],
+            "strength": r["strength"],
+            "score": r["score"],
+        })
+        tokens_used += content_tokens + overhead
+
+    return {
+        "topic": topic,
+        "memories": pack,
+        "tokens_estimated": tokens_used,
+        "tokens_budget": token_budget,
+        "memories_available": len(results),
+        "memories_included": len(pack),
+    }
+
+
 # --- Dissertation Tools ---
 
 
@@ -433,7 +697,10 @@ def ingest_pdf(pdf_path: str, brain: str | None = None) -> dict:
     from engram_server.pdf_ingest import ingest_pdf as ingest
     from pathlib import Path
     ctx = _ctx(brain)
-    return ingest(Path(pdf_path), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+    return ingest(
+        Path(pdf_path), ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25,
+        raw_dir=ctx.raw_dir,
+    )
 
 
 @mcp.tool()
@@ -457,21 +724,116 @@ def export_citations(tag: str | None = None, brain: str | None = None) -> str:
 
 @mcp.resource("engram://session-context")
 def session_context() -> str:
-    """Session wake-up context — what Engram knows right now."""
+    """Session wake-up context — what Engram knows right now.
+
+    Loaded automatically on session start. Gives Claude an at-a-glance view
+    of core identity facts (L0) and active memories (L1).
+    """
     ctx = manager.get_active()
     session = build_session_context(ctx.db)
     lines = [
-        f"## Brain: {ctx.name}",
+        f"## Active Brain: {ctx.name}",
         "",
-        "### Core Context (L0)",
+        "### Core Identity (L0)",
         session["l0"],
         "",
-        "### Active Memories (L1)",
+        "### Top Active Memories (L1)",
         session["l1"],
         "",
-        f"*{session['stats']['total_memories']} memories, "
-        f"{session['stats']['total_connections']} connections*",
+        f"*{session['stats']['total_memories']} memories · "
+        f"{session['stats']['total_connections']} connections · "
+        f"use `recall(query)` to dig deeper*",
     ]
+    return "\n".join(lines)
+
+
+@mcp.resource("engram://active-brain")
+def active_brain_resource() -> str:
+    """Current active brain metadata — name, ID, stats, recent activity."""
+    ctx = manager.get_active()
+    total = ctx.db.conn.execute(
+        "SELECT COUNT(*) FROM engrams WHERE state != 'dormant'"
+    ).fetchone()[0]
+    recent = ctx.db.conn.execute(
+        """SELECT title, updated_at FROM engrams
+           WHERE state != 'dormant' ORDER BY updated_at DESC LIMIT 5"""
+    ).fetchall()
+    lines = [
+        f"# Active Brain: {ctx.name}",
+        f"ID: `{ctx.brain_id}`",
+        f"Memories: {total}",
+        "",
+        "## Recently Updated",
+    ]
+    for title, updated in recent:
+        lines.append(f"- {title} *(last: {updated})*")
+    return "\n".join(lines)
+
+
+@mcp.resource("engram://usage-guide")
+def usage_guide() -> str:
+    """How to use NeuroVault efficiently — read this first in every session.
+
+    Provides decision trees for tool selection, token budgets, and common patterns.
+    """
+    return """# NeuroVault: AI Usage Guide
+
+## Decision tree — which tool should I use?
+
+**User asks a question?** → `recall(query, mode="preview")` first (before answering)
+**User mentions a specific name/thing?** → `about(entity)` — entity-first lookup
+**User wants deep context on a topic?** → `explore(query, depth=2)` — one call, full context
+**User wants to know across many topics?** → `context_for(topic, token_budget=2000)` — fit to budget
+**User shares a decision/learning?** → `remember(title, content)` right away
+**Meaningful exchange happened?** → `save_conversation_insights(...)` at end of turn
+**User says "X is no longer true"?** → `forget(engram_id)` for the old one, then `remember()` the new
+
+## Token efficiency
+
+Use `recall(query, mode="titles")` for quick scans (~20 tokens/result)
+Use `recall(query, mode="preview")` for most questions (~100 tokens/result) — DEFAULT
+Use `recall(query, mode="full")` only when you need deep content (~400 tokens/result)
+Use `recall(query, max_tokens=1500)` to cap total context spend
+
+## Patterns
+
+- "What did I decide about X?" → recall("decisions about X") then synthesize
+- "Tell me about Sarah" → about("Sarah")
+- "Find all my notes on authentication" → explore("authentication", depth=2)
+- "What's the latest on the project?" → recall("project status", mode="titles")
+
+## Multi-brain
+
+- `list_brains()` to see available memory spaces
+- `recall(query, brain="project-alpha")` to target a specific brain
+- `switch_brain(brain_id)` to change the default for subsequent calls
+"""
+
+
+@mcp.resource("engram://contradictions")
+def contradictions_resource() -> str:
+    """Unresolved contradictions in the active brain.
+
+    Loaded automatically so Claude can flag inconsistencies proactively.
+    """
+    ctx = manager.get_active()
+    rows = ctx.db.conn.execute(
+        """SELECT e1.title, e2.title, c.fact_a, c.fact_b
+           FROM contradictions c
+           JOIN engrams e1 ON e1.id = c.engram_a
+           JOIN engrams e2 ON e2.id = c.engram_b
+           WHERE c.resolved = 0
+           ORDER BY c.detected_at DESC LIMIT 5"""
+    ).fetchall()
+    if not rows:
+        return "# No unresolved contradictions\n\nYour memories are consistent."
+
+    lines = ["# Unresolved Contradictions", ""]
+    for a_title, b_title, fact_a, fact_b in rows:
+        lines.append(f"**{a_title}** vs **{b_title}**")
+        lines.append(f"- A: {fact_a[:150]}")
+        lines.append(f"- B: {fact_b[:150]}")
+        lines.append("")
     return "\n".join(lines)
 
 

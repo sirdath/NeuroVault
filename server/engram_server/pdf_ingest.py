@@ -14,7 +14,6 @@ and get answers from across their entire reading history.
 
 import re
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -41,10 +40,12 @@ def ingest_pdf(
     db: Database,
     embedder: Embedder,
     bm25,
+    raw_dir: Path | None = None,
 ) -> dict:
     """Ingest a PDF: create a Source note + extract all highlights as Quote notes.
 
-    Returns metadata about what was extracted.
+    The original PDF is copied to raw/pdfs/ so the processed vault can be
+    rebuilt from raw at any time. The vault is a projection of the raw data.
     """
     try:
         import fitz  # PyMuPDF
@@ -55,6 +56,20 @@ def ingest_pdf(
         return {"error": f"Not a PDF file: {pdf_path}"}
 
     from engram_server.ingest import ingest_file
+    import shutil
+
+    # Copy original to raw/pdfs/ if a raw_dir was provided and we're not already there
+    archived_path = None
+    if raw_dir is not None:
+        pdfs_dir = raw_dir / "pdfs"
+        pdfs_dir.mkdir(parents=True, exist_ok=True)
+        archived_path = pdfs_dir / pdf_path.name
+        if pdf_path.resolve() != archived_path.resolve() and not archived_path.exists():
+            try:
+                shutil.copy2(str(pdf_path), str(archived_path))
+                logger.info("Archived PDF to raw: {}", archived_path.name)
+            except Exception as e:
+                logger.warning("Could not archive PDF: {}", e)
 
     doc = fitz.open(str(pdf_path))
 

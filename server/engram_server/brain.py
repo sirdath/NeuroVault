@@ -25,13 +25,28 @@ from engram_server.strength import DecayScheduler
 
 @dataclass
 class BrainContext:
-    """All state for a single brain."""
+    """All state for a single brain — structured like a real brain.
+
+    Directory layout (raw → processed → consolidated):
+      raw/              Raw inputs before processing (PDFs, conversations, clips, pastes)
+        pdfs/
+        conversations/
+        clips/
+        pastes/
+        imports/
+      vault/            Processed, clean, searchable markdown notes (the "brain")
+      consolidated/     Higher-level synthesis (themes, summaries, wikis)
+      trash/            Soft-deleted notes
+      brain.db          Index over everything
+    """
 
     brain_id: str
     name: str
     description: str = ""
     vault_dir: Path = field(default_factory=Path)
     trash_dir: Path = field(default_factory=Path)
+    raw_dir: Path = field(default_factory=Path)
+    consolidated_dir: Path = field(default_factory=Path)
     db_path: Path = field(default_factory=Path)
     db: Database = field(default=None, repr=False)  # type: ignore[assignment]
     bm25: BM25Index = field(default=None, repr=False)  # type: ignore[assignment]
@@ -40,19 +55,32 @@ class BrainContext:
     _active: bool = field(default=False, repr=False)
 
     def initialize(self, embedder: Embedder, activate: bool = False) -> None:
-        """Set up paths, DB, BM25. Optionally start watcher + decay."""
+        """Set up the full brain directory structure."""
         brain_dir = BRAINS_DIR / self.brain_id
+
+        # Processed brain (what Claude sees)
         self.vault_dir = brain_dir / "vault"
         self.trash_dir = brain_dir / "trash"
+
+        # Raw inputs (never modified, permanent record)
+        self.raw_dir = brain_dir / "raw"
+
+        # Consolidated knowledge (synthesized from vault)
+        self.consolidated_dir = brain_dir / "consolidated"
+
         self.db_path = brain_dir / "brain.db"
 
+        # Create all directories
         self.vault_dir.mkdir(parents=True, exist_ok=True)
         self.trash_dir.mkdir(parents=True, exist_ok=True)
+        self.consolidated_dir.mkdir(parents=True, exist_ok=True)
+        for subdir in ("pdfs", "conversations", "clips", "pastes", "imports"):
+            (self.raw_dir / subdir).mkdir(parents=True, exist_ok=True)
 
         self.db = Database(self.db_path)
         self.bm25 = BM25Index()
 
-        # Ingest existing files
+        # Ingest existing vault files
         ingest_vault(self.db, embedder, self.bm25, self.vault_dir)
 
         if activate:
