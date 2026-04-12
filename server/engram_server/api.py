@@ -280,6 +280,12 @@ def create_api(manager) -> FastAPI:
 
         return suggestions
 
+    @app.get("/api/working-memory")
+    def working_memory_endpoint():
+        """Get current working memory items."""
+        from engram_server.consolidation import get_working_memory
+        return get_working_memory(_db())
+
     @app.get("/api/contradictions")
     def get_contradictions():
         """List unresolved contradictions between memories."""

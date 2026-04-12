@@ -15,12 +15,31 @@ CREATE TABLE IF NOT EXISTS engrams (
     content_hash TEXT NOT NULL,
     summary      TEXT,
     tags         TEXT,
+    kind         TEXT DEFAULT 'note',  -- note|source|quote|draft|question
     state        TEXT DEFAULT 'fresh',
     strength     REAL DEFAULT 1.0,
     access_count INTEGER DEFAULT 0,
     created_at   TEXT DEFAULT (datetime('now')),
     updated_at   TEXT DEFAULT (datetime('now')),
     accessed_at  TEXT DEFAULT (datetime('now'))
+);
+
+-- Drafts: ordered collections of engrams (Longform/Scrivener replacement)
+CREATE TABLE IF NOT EXISTS drafts (
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    description    TEXT,
+    target_words   INTEGER DEFAULT 0,
+    deadline       TEXT,
+    created_at     TEXT DEFAULT (datetime('now')),
+    updated_at     TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS draft_sections (
+    draft_id   TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    engram_id  TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    position   INTEGER NOT NULL,
+    PRIMARY KEY (draft_id, engram_id)
 );
 
 -- Text chunks at multiple granularities
@@ -162,6 +181,8 @@ CREATE INDEX IF NOT EXISTS idx_working_priority ON working_memory(priority DESC)
 CREATE INDEX IF NOT EXISTS idx_episodic_time    ON episodic_facts(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_edge_activity    ON edge_activity(last_used DESC);
 CREATE INDEX IF NOT EXISTS idx_theme_members    ON theme_members(theme_id);
+CREATE INDEX IF NOT EXISTS idx_engrams_kind     ON engrams(kind);
+CREATE INDEX IF NOT EXISTS idx_draft_sections   ON draft_sections(draft_id, position);
 """
 
 
@@ -182,6 +203,10 @@ class Database:
         logger.info("sqlite-vec loaded: {}", self.conn.execute("SELECT vec_version()").fetchone()[0])
 
     def _init_schema(self) -> None:
+        # Run migrations for existing DBs BEFORE the schema script
+        # (schema script uses IF NOT EXISTS so it's safe alongside migrations)
+        self._migrate_add_kind_column()
+
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
         tables = [r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
@@ -189,6 +214,41 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_kind_column(self) -> None:
+        """Safe migration: add `kind` column to existing engrams tables."""
+        try:
+            # Check if engrams table exists at all
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='engrams'"
+            ).fetchone()
+            if not exists:
+                return  # Fresh DB, schema script will create it with kind column
+
+            # Check if kind column exists
+            cols = [
+                row[1] for row in self.conn.execute("PRAGMA table_info(engrams)").fetchall()
+            ]
+            if "kind" in cols:
+                return  # Already migrated
+
+            logger.info("Migrating engrams table: adding `kind` column")
+            self.conn.execute("ALTER TABLE engrams ADD COLUMN kind TEXT DEFAULT 'note'")
+
+            # Auto-classify existing rows by filename prefix
+            self.conn.execute(
+                "UPDATE engrams SET kind = 'source' WHERE filename LIKE 'source-%'"
+            )
+            self.conn.execute(
+                "UPDATE engrams SET kind = 'quote' WHERE filename LIKE 'quote-%'"
+            )
+            self.conn.execute(
+                "UPDATE engrams SET kind = 'draft' WHERE filename LIKE 'draft-%'"
+            )
+            self.conn.commit()
+            logger.info("Migration complete: existing engrams classified by filename prefix")
+        except Exception as e:
+            logger.warning("Kind column migration skipped: {}", e)
         self.conn.commit()
         logger.info("Database schema initialized at {}", self.db_path)
 

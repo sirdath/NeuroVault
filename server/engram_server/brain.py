@@ -94,6 +94,13 @@ class BrainContext:
         except Exception as e:
             logger.debug("Karpathy wiki init skipped: {}", e)
 
+        # Git auto-backup (invisible, per-brain)
+        try:
+            from engram_server.git_backup import init_backup_repo
+            init_backup_repo(self.vault_dir)
+        except Exception as e:
+            logger.debug("Git backup init skipped: {}", e)
+
         if activate:
             self.activate(embedder)
 

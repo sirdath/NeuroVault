@@ -8,6 +8,8 @@ import { StatusBar } from "./components/StatusBar";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { RightSidebar } from "./components/RightSidebar";
+import { Toasts } from "./components/Toasts";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 
 type View = "editor" | "graph";
 
@@ -18,6 +20,7 @@ export default function App() {
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [triggerNewNote, setTriggerNewNote] = useState(0);
   const [triggerSearch, setTriggerSearch] = useState(0);
 
@@ -86,6 +89,13 @@ export default function App() {
         shortcut: "Ctrl+/",
         action: () => setTriggerSearch((n) => n + 1),
       },
+      {
+        id: "help",
+        title: "Show keyboard shortcuts",
+        category: "Help",
+        shortcut: "?",
+        action: () => setShortcutHelpOpen(true),
+      },
     ],
     [saveNote, toggleView]
   );
@@ -123,6 +133,20 @@ export default function App() {
       if (ctrl && e.key === "/") {
         e.preventDefault();
         setTriggerSearch((n) => n + 1);
+      }
+      // ? key (without modifiers) opens shortcut help
+      if (
+        e.key === "?" &&
+        !ctrl &&
+        !e.altKey &&
+        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+      ) {
+        e.preventDefault();
+        setShortcutHelpOpen(true);
+      }
+      // Esc closes modals
+      if (e.key === "Escape") {
+        setShortcutHelpOpen(false);
       }
     };
     window.addEventListener("keydown", handler);
@@ -163,6 +187,13 @@ export default function App() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      <ShortcutHelp
+        open={shortcutHelpOpen}
+        onClose={() => setShortcutHelpOpen(false)}
+      />
+
+      <Toasts />
     </div>
   );
 }

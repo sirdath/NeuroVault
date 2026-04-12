@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import * as tauri from "../lib/tauri";
 import type { NoteMeta } from "../lib/tauri";
+import { toast } from "./toastStore";
 
 interface NoteStore {
   notes: NoteMeta[];
@@ -45,6 +46,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       set({ notes });
     } catch (e) {
       console.error("[neurovault] Failed to load notes:", e);
+      toast.error("Failed to load notes");
       set({ notes: [] });
     }
   },
@@ -74,9 +76,15 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   },
 
   createNote: async (title: string) => {
-    const filename = await tauri.createNote(title);
-    await get().loadNotes();
-    await get().selectNote(filename);
+    try {
+      const filename = await tauri.createNote(title);
+      await get().loadNotes();
+      await get().selectNote(filename);
+      toast.success(`Created "${title}"`);
+    } catch (e) {
+      console.error("[neurovault] Failed to create note:", e);
+      toast.error("Failed to create note");
+    }
   },
 
   deleteNote: async (filename: string) => {

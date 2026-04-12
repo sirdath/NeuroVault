@@ -432,6 +432,211 @@ def get_timeline(brain: str | None = None) -> list[dict]:
     ]
 
 
+# --- Zotero Integration ---
+
+
+@mcp.tool()
+def zotero_sync(query: str = "", brain: str | None = None) -> dict:
+    """Sync Zotero library items as Source engrams via Better BibTeX RPC.
+
+    USE WHEN: the user wants to import their Zotero library or refresh it.
+    Requires Zotero running with the Better BibTeX extension installed.
+    Creates one Source note per item with citekey, abstract, and metadata.
+
+    Args:
+        query: Optional search filter (empty = all items)
+        brain: Target brain ID
+    """
+    from engram_server.zotero import sync_library
+    ctx = _ctx(brain)
+    return sync_library(ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25, query)
+
+
+@mcp.tool()
+def zotero_status() -> dict:
+    """Check if Zotero + Better BibTeX are reachable."""
+    from engram_server.zotero import check_zotero_running, BBT_RPC_URL
+    return {"reachable": check_zotero_running(), "endpoint": BBT_RPC_URL}
+
+
+# --- Pandoc Export ---
+
+
+@mcp.tool()
+def export_pandoc(
+    engram_id: str,
+    output_format: str = "docx",
+    brain: str | None = None,
+) -> dict:
+    """Export a single note to docx/pdf/html/latex/epub via Pandoc.
+
+    Args:
+        engram_id: Note ID to export
+        output_format: docx|pdf|html|latex|epub|md|rst|odt
+        brain: Target brain ID
+    """
+    from engram_server.pandoc_export import export_note_by_id
+    ctx = _ctx(brain)
+    return export_note_by_id(engram_id, output_format, ctx.db)
+
+
+@mcp.tool()
+def export_draft_pandoc(
+    draft_id: str,
+    output_format: str = "docx",
+    brain: str | None = None,
+) -> dict:
+    """Export a Draft (ordered collection) as one formatted document.
+
+    Stitches all draft sections in order. Perfect for chapter → Word/PDF.
+
+    Args:
+        draft_id: Draft ID
+        output_format: docx|pdf|html|latex|epub
+        brain: Target brain ID
+    """
+    from engram_server.pandoc_export import export_draft
+    ctx = _ctx(brain)
+    return export_draft(draft_id, output_format, ctx.db)
+
+
+@mcp.tool()
+def pandoc_status() -> dict:
+    """Check if pandoc is installed and usable."""
+    from engram_server.pandoc_export import check_pandoc_installed
+    return check_pandoc_installed()
+
+
+# --- Git Backup ---
+
+
+@mcp.tool()
+def git_history(limit: int = 20, brain: str | None = None) -> list[dict]:
+    """Show recent commits in the brain's git backup.
+
+    USE WHEN: user wants to see what changed or recover a deleted note.
+
+    Args:
+        limit: Max commits to return
+        brain: Target brain ID
+    """
+    from engram_server.git_backup import get_history
+    ctx = _ctx(brain)
+    return get_history(ctx.vault_dir, limit=limit)
+
+
+@mcp.tool()
+def git_restore(filename: str, commit_hash: str, brain: str | None = None) -> dict:
+    """Restore a file to a previous commit.
+
+    Args:
+        filename: The note filename (e.g. "my-note-abc123.md")
+        commit_hash: Short or full commit hash from git_history
+        brain: Target brain ID
+    """
+    from engram_server.git_backup import restore_file
+    ctx = _ctx(brain)
+    return restore_file(ctx.vault_dir, filename, commit_hash)
+
+
+# --- Drafts (Longform Replacement) ---
+
+
+@mcp.tool()
+def create_draft(
+    title: str,
+    description: str = "",
+    target_words: int = 0,
+    deadline: str | None = None,
+    brain: str | None = None,
+) -> dict:
+    """Create a new draft — an ordered collection of notes for long-form writing.
+
+    USE WHEN: user starts a chapter, essay, or paper. Drafts stitch together
+    existing notes into a single document you can export via Pandoc.
+
+    Args:
+        title: Draft title (e.g. "Chapter 3: Methodology")
+        description: Optional overview
+        target_words: Word count goal (0 = no target)
+        deadline: ISO date string (optional)
+        brain: Target brain ID
+    """
+    from engram_server.drafts import create_draft as _create
+    ctx = _ctx(brain)
+    return _create(ctx.db, title, description, target_words, deadline)
+
+
+@mcp.tool()
+def list_drafts(brain: str | None = None) -> list[dict]:
+    """List all drafts with progress (sections, word count, target %)."""
+    from engram_server.drafts import list_drafts as _list
+    ctx = _ctx(brain)
+    return _list(ctx.db)
+
+
+@mcp.tool()
+def get_draft(draft_id: str, brain: str | None = None) -> dict:
+    """Get a draft's full contents — ordered sections with previews and word counts."""
+    from engram_server.drafts import get_draft as _get
+    ctx = _ctx(brain)
+    result = _get(ctx.db, draft_id)
+    if not result:
+        return {"error": f"Draft not found: {draft_id}"}
+    return result
+
+
+@mcp.tool()
+def add_to_draft(
+    draft_id: str,
+    engram_id: str,
+    position: int | None = None,
+    brain: str | None = None,
+) -> dict:
+    """Add a note to a draft at a position (end if None)."""
+    from engram_server.drafts import add_section
+    ctx = _ctx(brain)
+    return add_section(ctx.db, draft_id, engram_id, position)
+
+
+@mcp.tool()
+def remove_from_draft(draft_id: str, engram_id: str, brain: str | None = None) -> dict:
+    """Remove a note from a draft (note itself is preserved)."""
+    from engram_server.drafts import remove_section
+    ctx = _ctx(brain)
+    return remove_section(ctx.db, draft_id, engram_id)
+
+
+@mcp.tool()
+def reorder_draft_section(
+    draft_id: str,
+    engram_id: str,
+    new_position: int,
+    brain: str | None = None,
+) -> dict:
+    """Move a section to a new 0-indexed position in the draft."""
+    from engram_server.drafts import reorder_section
+    ctx = _ctx(brain)
+    return reorder_section(ctx.db, draft_id, engram_id, new_position)
+
+
+# --- Brain Export / Import ---
+
+
+@mcp.tool()
+def export_brain_archive(include_db: bool = False, brain: str | None = None) -> dict:
+    """Bundle a brain into a tar.gz archive for backup, sharing, or migration.
+
+    Args:
+        include_db: If True, include brain.db (larger but instant re-import)
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    from engram_server.brain_export import export_brain
+    ctx = _ctx(brain)
+    brain_dir = ctx.vault_dir.parent
+    return export_brain(ctx.brain_id, brain_dir, include_db=include_db)
+
+
 # --- Karpathy LLM Wiki Tools ---
 
 

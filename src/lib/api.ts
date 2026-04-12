@@ -76,3 +76,65 @@ export const fetchSessionContext = () => get<SessionContext>("/api/session-conte
 export const fetchNote = (id: string) => get<NoteDetail>(`/api/notes/${id}`);
 export const fetchStrength = () => get<StrengthStats>("/api/strength");
 export const fetchBacklinks = (id: string) => get<Backlink[]>(`/api/backlinks/${id}`);
+
+export interface WorkingMemoryItem {
+  engram_id: string;
+  title: string;
+  preview: string;
+  strength: number;
+  priority: number;
+  pin_type: string;
+}
+
+export interface Contradiction {
+  id: string;
+  note_a: string;
+  note_b: string;
+  fact_a: string;
+  fact_b: string;
+  detected_at: string;
+}
+
+export interface NoteSummary {
+  id: string;
+  filename: string;
+  title: string;
+  state: string;
+  strength: number;
+  access_count: number;
+  updated_at: string;
+  kind?: string;
+}
+
+// Working memory (auto-refreshed by consolidation)
+export async function fetchWorkingMemory(): Promise<WorkingMemoryItem[]> {
+  try {
+    const res = await fetch(`${BASE}/api/notes`);
+    if (!res.ok) return [];
+    // Server doesn't expose WM directly via HTTP — fetch via a custom endpoint
+    const wm = await fetch(`${BASE}/api/working-memory`).then((r) => r.json()).catch(() => []);
+    return wm;
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchContradictions(): Promise<Contradiction[]> {
+  try {
+    const res = await fetch(`${BASE}/api/contradictions`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchNotesList(): Promise<NoteSummary[]> {
+  try {
+    const res = await fetch(`${BASE}/api/notes`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}

@@ -8,7 +8,18 @@ interface NoteStrength {
   strength: number;
   state: string;
   connections: number;
+  kind?: string;
 }
+
+type KindFilter = "all" | "note" | "source" | "quote" | "draft" | "question";
+
+const KIND_TABS: Array<{ id: KindFilter; label: string; color: string }> = [
+  { id: "all", label: "All", color: "#9999b8" },
+  { id: "note", label: "Notes", color: "#f0a500" },
+  { id: "source", label: "Sources", color: "#00c9b1" },
+  { id: "quote", label: "Quotes", color: "#8b7cf8" },
+  { id: "draft", label: "Drafts", color: "#f06080" },
+];
 
 export function Sidebar({
   triggerNewNote = 0,
@@ -29,6 +40,7 @@ export function Sidebar({
   const [strengths, setStrengths] = useState<Record<string, NoteStrength>>({});
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -63,6 +75,7 @@ export function Sidebar({
           strength: number;
           state: string;
           id: string;
+          kind?: string;
         }> = await res.json();
 
         const map: Record<string, NoteStrength> = {};
@@ -71,6 +84,7 @@ export function Sidebar({
             strength: n.strength,
             state: n.state,
             connections: 0,
+            kind: n.kind,
           };
         }
         setStrengths(map);
@@ -96,10 +110,31 @@ export function Sidebar({
     if (isCreating && inputRef.current) inputRef.current.focus();
   }, [isCreating]);
 
-  const filtered = notes.filter(
-    (note) =>
-      searchQuery === "" ||
-      note.title.toLowerCase().includes(searchQuery.toLowerCase())
+  const filtered = notes.filter((note) => {
+    // Search filter
+    if (
+      searchQuery !== "" &&
+      !note.title.toLowerCase().includes(searchQuery.toLowerCase())
+    ) {
+      return false;
+    }
+    // Kind filter
+    if (kindFilter !== "all") {
+      const s = strengths[note.filename];
+      const kind = s?.kind ?? "note";
+      if (kind !== kindFilter) return false;
+    }
+    return true;
+  });
+
+  const kindCounts = notes.reduce<Record<string, number>>(
+    (acc, note) => {
+      const kind = strengths[note.filename]?.kind ?? "note";
+      acc[kind] = (acc[kind] ?? 0) + 1;
+      acc.all = (acc.all ?? 0) + 1;
+      return acc;
+    },
+    { all: 0 }
   );
 
   const handleCreate = useCallback(async () => {
@@ -180,6 +215,31 @@ export function Sidebar({
           placeholder="Search... (Ctrl+K)"
           className="w-full bg-[#131325] text-[#ddd9f0] text-sm px-3 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
         />
+      </div>
+
+      {/* Kind tabs */}
+      <div className="px-2 pb-1 flex-shrink-0 flex gap-0.5 overflow-x-auto">
+        {KIND_TABS.map((tab) => {
+          const count = kindCounts[tab.id] ?? 0;
+          const active = kindFilter === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setKindFilter(tab.id)}
+              className={`flex-shrink-0 px-2 py-1 rounded text-[10px] font-[Geist,sans-serif] font-medium transition-colors ${
+                active
+                  ? "bg-[#131325] text-[#ddd9f0]"
+                  : "text-[#7a779a] hover:text-[#ddd9f0] hover:bg-[#131325]/50"
+              }`}
+              style={active ? { borderBottom: `1px solid ${tab.color}` } : undefined}
+            >
+              {tab.label}
+              {count > 0 && (
+                <span className="ml-1 text-[9px] text-[#555570]">{count}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Note List */}

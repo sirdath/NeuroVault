@@ -35,6 +35,28 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
+def _infer_kind(filename: str) -> str:
+    """Infer engram kind from filename prefix.
+
+    Conventions: source-*, quote-*, draft-*, question-*, theme-*, clip-*
+    Default: note
+    """
+    name = filename.lower()
+    if name.startswith("source-"):
+        return "source"
+    if name.startswith("quote-"):
+        return "quote"
+    if name.startswith("draft-"):
+        return "draft"
+    if name.startswith("question-"):
+        return "question"
+    if name.startswith("theme-"):
+        return "theme"
+    if name.startswith("clip-") or name.startswith("conv-"):
+        return "clip"
+    return "note"
+
+
 def ingest_file(
     filepath: Path,
     db: Database,
@@ -65,8 +87,16 @@ def ingest_file(
     engram_id = existing[0] if existing else str(uuid.uuid4())
     status = "updated" if existing else "created"
 
+    # Infer kind from filename prefix (source-, quote-, draft-, etc.)
+    kind = _infer_kind(filename)
+
     # 1. Store/update the engram record
     db.insert_engram(engram_id, filename, title, content, new_hash)
+    # Update kind column (not part of insert_engram signature)
+    db.conn.execute(
+        "UPDATE engrams SET kind = ? WHERE id = ?", (kind, engram_id)
+    )
+    db.conn.commit()
 
     # 2. Clear old chunks and embeddings
     db.delete_engram_chunks(engram_id)
@@ -125,6 +155,13 @@ def ingest_file(
             append_log(vault_dir, status, f"{title[:60]}")
     except Exception as e:
         logger.debug("Karpathy wiki update skipped: {}", e)
+
+    # 11. Git auto-backup: commit this change
+    try:
+        from engram_server.git_backup import auto_commit
+        auto_commit(filepath.parent, f"{status}: {title[:60]}")
+    except Exception as e:
+        logger.debug("Git auto-commit skipped: {}", e)
 
     logger.info("{} engram: {} ({}) — {} chunks, {} entities",
                 status.capitalize(), title, engram_id[:8], len(chunks), len(entities))
