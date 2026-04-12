@@ -104,6 +104,17 @@ def ingest_file(
     # 8. Rebuild BM25 index
     bm25.build(db)
 
+    # 9. Advanced intelligence (from competitors)
+    try:
+        from engram_server.intelligence import (
+            detect_contradictions, extract_temporal_facts, classify_memory
+        )
+        classify_memory(db, engram_id, content)
+        extract_temporal_facts(db, engram_id, content)
+        detect_contradictions(db, embedder, engram_id, content)
+    except Exception as e:
+        logger.debug("Intelligence features skipped: {}", e)
+
     logger.info("{} engram: {} ({}) — {} chunks, {} entities",
                 status.capitalize(), title, engram_id[:8], len(chunks), len(entities))
 

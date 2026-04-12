@@ -273,6 +273,93 @@ def create_brain(name: str, description: str = "") -> dict:
     return {"status": "created", "brain_id": ctx.brain_id, "name": ctx.name}
 
 
+# --- Advanced Intelligence Tools (stolen from competitors) ---
+
+
+@mcp.tool()
+def synthesize(topic: str, brain: str | None = None) -> str:
+    """Generate a wiki-style summary article from all memories about a topic.
+
+    Finds related notes, extracts key facts, and synthesizes a coherent article.
+    Inspired by Atomic's wiki synthesis feature.
+
+    Args:
+        topic: The topic to synthesize (e.g. "Python setup", "project architecture")
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    from engram_server.intelligence import synthesize_wiki
+    ctx = _ctx(brain)
+    return synthesize_wiki(ctx.db, topic, manager.embedder)
+
+
+@mcp.tool()
+def check_contradictions(brain: str | None = None) -> list[dict]:
+    """Find contradictions between memories in the active brain.
+
+    Scans for facts that conflict with each other (e.g. "uses PostgreSQL"
+    vs "chose SQLite"). Helps maintain knowledge consistency.
+
+    Args:
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    ctx = _ctx(brain)
+    rows = ctx.db.conn.execute(
+        """SELECT c.id, e1.title as title_a, e2.title as title_b,
+                  c.fact_a, c.fact_b, c.resolved
+           FROM contradictions c
+           JOIN engrams e1 ON e1.id = c.engram_a
+           JOIN engrams e2 ON e2.id = c.engram_b
+           WHERE c.resolved = 0
+           ORDER BY c.detected_at DESC LIMIT 20"""
+    ).fetchall()
+    return [
+        {"id": r[0], "note_a": r[1], "note_b": r[2],
+         "fact_a": r[3], "fact_b": r[4]}
+        for r in rows
+    ]
+
+
+@mcp.tool()
+def clip_url(url: str, title: str, content: str, brain: str | None = None) -> dict:
+    """Save web content as a memory note — like a browser extension save.
+
+    Use this when the user shares a URL or web content worth remembering.
+
+    Args:
+        url: Source URL
+        title: Page title
+        content: Extracted text content from the page
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    from engram_server.intelligence import clip_to_vault
+    ctx = _ctx(brain)
+    return clip_to_vault(url, title, content, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+
+
+@mcp.tool()
+def get_timeline(brain: str | None = None) -> list[dict]:
+    """Get a timeline of facts — what was true when, and what superseded what.
+
+    Tracks temporal evolution of knowledge. Inspired by Zep's Graphiti engine.
+
+    Args:
+        brain: Target brain ID (uses active brain if not specified)
+    """
+    ctx = _ctx(brain)
+    rows = ctx.db.conn.execute(
+        """SELECT tf.fact, tf.valid_from, tf.valid_until, tf.is_current,
+                  e.title, tf.superseded_by
+           FROM temporal_facts tf
+           JOIN engrams e ON e.id = tf.engram_id
+           ORDER BY tf.valid_from DESC LIMIT 50"""
+    ).fetchall()
+    return [
+        {"fact": r[0], "valid_from": r[1], "valid_until": r[2],
+         "is_current": bool(r[3]), "source": r[4]}
+        for r in rows
+    ]
+
+
 # --- Session Context Resource ---
 
 

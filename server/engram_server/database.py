@@ -61,6 +61,41 @@ CREATE TABLE IF NOT EXISTS engram_links (
     PRIMARY KEY (from_engram, to_engram)
 );
 
+-- Memory type classification (from Hindsight's 4-network model)
+-- fact: objective information (decisions, configs, specs)
+-- experience: what happened (debugging sessions, meetings, events)
+-- opinion: subjective views (preferences, assessments)
+-- procedure: how-to knowledge (workflows, recipes, patterns)
+CREATE TABLE IF NOT EXISTS memory_types (
+    engram_id TEXT PRIMARY KEY REFERENCES engrams(id) ON DELETE CASCADE,
+    memory_type TEXT DEFAULT 'fact',
+    confidence  REAL DEFAULT 1.0
+);
+
+-- Temporal facts tracking (from Zep/Graphiti)
+-- When facts became true and when they were superseded
+CREATE TABLE IF NOT EXISTS temporal_facts (
+    id          TEXT PRIMARY KEY,
+    engram_id   TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    fact        TEXT NOT NULL,
+    valid_from  TEXT DEFAULT (datetime('now')),
+    valid_until TEXT,
+    superseded_by TEXT,
+    is_current  INTEGER DEFAULT 1
+);
+
+-- Contradictions detected between memories (from Supermemory)
+CREATE TABLE IF NOT EXISTS contradictions (
+    id          TEXT PRIMARY KEY,
+    engram_a    TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    engram_b    TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    fact_a      TEXT NOT NULL,
+    fact_b      TEXT NOT NULL,
+    detected_at TEXT DEFAULT (datetime('now')),
+    resolved    INTEGER DEFAULT 0,
+    resolution  TEXT
+);
+
 -- Indices (comprehensive — prevents full-table scans at scale)
 CREATE INDEX IF NOT EXISTS idx_engrams_state    ON engrams(state);
 CREATE INDEX IF NOT EXISTS idx_engrams_strength ON engrams(strength DESC);
@@ -74,6 +109,11 @@ CREATE INDEX IF NOT EXISTS idx_mentions_entity  ON entity_mentions(entity_id);
 CREATE INDEX IF NOT EXISTS idx_links_from       ON engram_links(from_engram);
 CREATE INDEX IF NOT EXISTS idx_links_to         ON engram_links(to_engram);
 CREATE INDEX IF NOT EXISTS idx_entities_name    ON entities(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_temporal_engram  ON temporal_facts(engram_id);
+CREATE INDEX IF NOT EXISTS idx_temporal_current ON temporal_facts(is_current);
+CREATE INDEX IF NOT EXISTS idx_contradictions_a ON contradictions(engram_a);
+CREATE INDEX IF NOT EXISTS idx_contradictions_b ON contradictions(engram_b);
+CREATE INDEX IF NOT EXISTS idx_memory_type      ON memory_types(memory_type);
 """
 
 

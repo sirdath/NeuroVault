@@ -186,6 +186,63 @@ def create_api(manager) -> FastAPI:
         ).fetchall()
         return [{"engram_id": r[0], "title": r[1], "similarity": round(r[2], 3), "link_type": r[3]} for r in rows]
 
+    @app.get("/api/contradictions")
+    def get_contradictions():
+        """List unresolved contradictions between memories."""
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT c.id, e1.title, e2.title, c.fact_a, c.fact_b, c.detected_at
+               FROM contradictions c
+               JOIN engrams e1 ON e1.id = c.engram_a
+               JOIN engrams e2 ON e2.id = c.engram_b
+               WHERE c.resolved = 0
+               ORDER BY c.detected_at DESC"""
+        ).fetchall()
+        return [
+            {"id": r[0], "note_a": r[1], "note_b": r[2],
+             "fact_a": r[3], "fact_b": r[4], "detected_at": r[5]}
+            for r in rows
+        ]
+
+    @app.get("/api/timeline")
+    def get_timeline():
+        """Temporal fact timeline — what was true when."""
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT tf.fact, tf.valid_from, tf.valid_until, tf.is_current, e.title
+               FROM temporal_facts tf
+               JOIN engrams e ON e.id = tf.engram_id
+               ORDER BY tf.valid_from DESC LIMIT 100"""
+        ).fetchall()
+        return [
+            {"fact": r[0], "valid_from": r[1], "valid_until": r[2],
+             "is_current": bool(r[3]), "source": r[4]}
+            for r in rows
+        ]
+
+    @app.get("/api/memory-types")
+    def get_memory_types():
+        """Memory type distribution (fact/experience/opinion/procedure)."""
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT mt.memory_type, COUNT(*) as count
+               FROM memory_types mt
+               JOIN engrams e ON e.id = mt.engram_id
+               WHERE e.state != 'dormant'
+               GROUP BY mt.memory_type"""
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    @app.post("/api/clip")
+    def clip_web(body: dict):
+        """Save web content as a vault note."""
+        from engram_server.intelligence import clip_to_vault
+        ctx = _ctx()
+        return clip_to_vault(
+            body["url"], body["title"], body["content"],
+            ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25,
+        )
+
     @app.get("/api/session-context")
     def session_ctx():
         from engram_server.write_back import build_session_context
