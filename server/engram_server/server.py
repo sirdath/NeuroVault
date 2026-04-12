@@ -432,6 +432,73 @@ def get_timeline(brain: str | None = None) -> list[dict]:
     ]
 
 
+# --- Karpathy LLM Wiki Tools ---
+
+
+@mcp.tool()
+def read_index(brain: str | None = None) -> str:
+    """Read the auto-maintained index.md — one-line summary of every note.
+
+    USE WHEN: you want a compact overview of everything in the brain.
+    Cheaper than recall() for exploration since it's one grep-friendly file.
+    Inspired by Karpathy's LLM Wiki pattern.
+
+    Args:
+        brain: Target brain ID
+    """
+    from engram_server.karpathy import get_index
+    ctx = _ctx(brain)
+    return get_index(ctx.vault_dir)
+
+
+@mcp.tool()
+def read_log(tail: int = 50, brain: str | None = None) -> str:
+    """Read the activity log — chronological record of every event.
+
+    USE WHEN: you want to see what's happened in this brain recently.
+    Shows ingest/query/consolidate/contradiction events with timestamps.
+
+    Args:
+        tail: How many recent entries to return (default 50)
+        brain: Target brain ID
+    """
+    from engram_server.karpathy import get_log
+    ctx = _ctx(brain)
+    return get_log(ctx.vault_dir, tail=tail)
+
+
+@mcp.tool()
+def read_schema(brain: str | None = None) -> str:
+    """Read the CLAUDE.md schema — per-brain conventions and rules.
+
+    USE WHEN: starting work in a brain. Shows the tag taxonomy, naming
+    conventions, workflows, and any user-specified rules Claude should follow.
+
+    Args:
+        brain: Target brain ID
+    """
+    from engram_server.karpathy import get_schema
+    ctx = _ctx(brain)
+    return get_schema(ctx.vault_dir)
+
+
+@mcp.tool()
+def update_schema(content: str, brain: str | None = None) -> dict:
+    """Update the CLAUDE.md schema for a brain.
+
+    USE WHEN: the user asks you to change conventions, add tags, or
+    codify a new rule. Overwrites the current schema file.
+
+    Args:
+        content: New CLAUDE.md content
+        brain: Target brain ID
+    """
+    from engram_server.karpathy import update_schema as update
+    ctx = _ctx(brain)
+    path = update(ctx.vault_dir, content)
+    return {"status": "updated", "path": str(path)}
+
+
 # --- Brain-Like Memory Tools ---
 
 
@@ -909,6 +976,30 @@ Use `recall(query, max_tokens=1500)` to cap total context spend
 - `recall(query, brain="project-alpha")` to target a specific brain
 - `switch_brain(brain_id)` to change the default for subsequent calls
 """
+
+
+@mcp.resource("engram://wiki-index")
+def wiki_index_resource() -> str:
+    """Karpathy-style index.md — one-line summary of every note.
+
+    Auto-loaded on session start so Claude knows what's in the brain
+    without needing to run recall(). Grep-friendly compact catalog.
+    """
+    from engram_server.karpathy import get_index
+    ctx = manager.get_active()
+    return get_index(ctx.vault_dir)
+
+
+@mcp.resource("engram://schema")
+def schema_resource() -> str:
+    """Karpathy-style CLAUDE.md — per-brain conventions and rules.
+
+    Auto-loaded on session start so Claude follows the user's tag
+    taxonomy, naming conventions, and codified rules for this brain.
+    """
+    from engram_server.karpathy import get_schema
+    ctx = manager.get_active()
+    return get_schema(ctx.vault_dir)
 
 
 @mcp.resource("engram://contradictions")

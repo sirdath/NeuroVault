@@ -115,6 +115,17 @@ def ingest_file(
     except Exception as e:
         logger.debug("Intelligence features skipped: {}", e)
 
+    # 10. Karpathy-style auto-maintained wiki files
+    try:
+        from engram_server.karpathy import rebuild_index, append_log
+        vault_dir = filepath.parent
+        # Only rebuild index if the file wasn't itself index.md/log.md/CLAUDE.md
+        if filepath.name not in ("index.md", "log.md", "CLAUDE.md"):
+            rebuild_index(db, vault_dir)
+            append_log(vault_dir, status, f"{title[:60]}")
+    except Exception as e:
+        logger.debug("Karpathy wiki update skipped: {}", e)
+
     logger.info("{} engram: {} ({}) — {} chunks, {} entities",
                 status.capitalize(), title, engram_id[:8], len(chunks), len(entities))
 

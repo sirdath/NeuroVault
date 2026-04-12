@@ -85,6 +85,15 @@ class BrainContext:
         # Ingest existing vault files
         ingest_vault(self.db, embedder, self.bm25, self.vault_dir)
 
+        # Karpathy-style auto-maintained files
+        try:
+            from engram_server.karpathy import ensure_schema, rebuild_index, append_log
+            ensure_schema(self.vault_dir, self.name)
+            rebuild_index(self.db, self.vault_dir)
+            append_log(self.vault_dir, "activate", f"brain {self.name} initialized")
+        except Exception as e:
+            logger.debug("Karpathy wiki init skipped: {}", e)
+
         if activate:
             self.activate(embedder)
 
