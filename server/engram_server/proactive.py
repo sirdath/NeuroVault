@@ -101,7 +101,7 @@ def proactive_context(
         if hit["strength"] < min_strength:
             continue
         similarity = max(0.0, 1.0 - hit["distance"])
-        if similarity < 0.35:  # Only include genuinely relevant results
+        if similarity < 0.15:  # Only include genuinely relevant results (lenient for bge-small)
             continue
 
         memories.append({

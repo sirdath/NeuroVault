@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { useNoteStore } from "../stores/noteStore";
 import { engramTheme } from "./editor/theme";
+import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
+import { buildCompletions } from "./editor/completions";
 import { fetchNote, fetchBacklinks } from "../lib/api";
 import type { Backlink } from "../lib/api";
-
-const extensions = [
-  markdown({ base: markdownLanguage, codeLanguages: languages }),
-  EditorView.lineWrapping,
-  engramTheme,
-];
 
 interface NoteMetadata {
   strength: number;
@@ -36,6 +32,21 @@ export function Editor() {
   const [showMeta, setShowMeta] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+
+  // Build extensions once — autocomplete reads note titles via ref
+  const extensions = useMemo(
+    () => [
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      EditorView.lineWrapping,
+      engramTheme,
+      livePreviewTheme,
+      livePreviewPlugin,
+      buildCompletions(() => notesRef.current.map((n) => n.title)),
+    ],
+    []
+  );
 
   // Auto-save with 1-second debounce
   useEffect(() => {
