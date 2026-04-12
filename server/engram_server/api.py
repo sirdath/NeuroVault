@@ -175,16 +175,110 @@ def create_api(manager) -> FastAPI:
 
     @app.get("/api/backlinks/{engram_id}")
     def get_backlinks(engram_id: str):
+        """Backlinks with paragraph context (Obsidian-style).
+
+        For each note that links to this one, find the exact paragraph
+        containing the [[wikilink]] reference.
+        """
         db = _db()
+
+        # Get the target note's title for paragraph search
+        target = db.conn.execute(
+            "SELECT title FROM engrams WHERE id = ?", (engram_id,)
+        ).fetchone()
+        if not target:
+            return []
+        target_title = target[0]
+        target_lower = target_title.lower()
+
         rows = db.conn.execute(
-            """SELECT e.id, e.title, l.similarity, l.link_type
+            """SELECT e.id, e.title, e.content, l.similarity, l.link_type
                FROM engram_links l
                JOIN engrams e ON e.id = l.from_engram
                WHERE l.to_engram = ? AND e.state != 'dormant'
                ORDER BY l.similarity DESC""",
             (engram_id,),
         ).fetchall()
-        return [{"engram_id": r[0], "title": r[1], "similarity": round(r[2], 3), "link_type": r[3]} for r in rows]
+
+        results = []
+        for row in rows:
+            source_id, source_title, source_content, similarity, link_type = row
+
+            # Find the paragraph(s) that mention the target note title
+            contexts = []
+            paragraphs = source_content.split("\n\n")
+            for para in paragraphs:
+                para_lower = para.lower()
+                # Check for wikilink syntax or plain mention
+                if (
+                    f"[[{target_lower}]]" in para_lower
+                    or f"[[{target_lower}|" in para_lower
+                    or target_lower in para_lower
+                ):
+                    cleaned = para.strip().replace("\n", " ")
+                    if 10 < len(cleaned) < 500:
+                        # Highlight the matched text by surrounding with **
+                        contexts.append(cleaned)
+                        if len(contexts) >= 2:
+                            break
+
+            results.append({
+                "engram_id": source_id,
+                "title": source_title,
+                "similarity": round(similarity, 3),
+                "link_type": link_type,
+                "contexts": contexts,  # NEW: paragraph snippets
+            })
+
+        return results
+
+    @app.get("/api/unlinked-mentions/{engram_id}")
+    def unlinked_mentions(engram_id: str):
+        """Find notes whose title appears in current note's content
+        but isn't yet a [[wikilink]]. Obsidian-style suggestion.
+        """
+        db = _db()
+        target = db.get_engram(engram_id)
+        if not target:
+            return []
+
+        content_lower = target["content"].lower()
+
+        # Get all other note titles
+        all_notes = db.conn.execute(
+            """SELECT id, title FROM engrams
+               WHERE id != ? AND state != 'dormant'""",
+            (engram_id,),
+        ).fetchall()
+
+        suggestions = []
+        for other_id, other_title in all_notes:
+            title_lower = other_title.lower()
+
+            # Skip if already linked
+            if f"[[{title_lower}]]" in content_lower:
+                continue
+            # Skip if title is too short (false positives)
+            if len(title_lower) < 4:
+                continue
+
+            # Check if the title appears as a phrase
+            if title_lower in content_lower:
+                # Find the surrounding context
+                idx = content_lower.find(title_lower)
+                start = max(0, idx - 50)
+                end = min(len(target["content"]), idx + len(title_lower) + 50)
+                snippet = target["content"][start:end].strip()
+
+                suggestions.append({
+                    "engram_id": other_id,
+                    "title": other_title,
+                    "snippet": f"...{snippet}...",
+                })
+                if len(suggestions) >= 10:
+                    break
+
+        return suggestions
 
     @app.get("/api/contradictions")
     def get_contradictions():

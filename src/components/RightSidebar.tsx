@@ -16,6 +16,13 @@ interface Backlink {
   title: string;
   similarity: number;
   link_type: string;
+  contexts: string[];
+}
+
+interface UnlinkedMention {
+  engram_id: string;
+  title: string;
+  snippet: string;
 }
 
 interface OutlineItem {
@@ -32,9 +39,11 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
 
   const [detail, setDetail] = useState<NoteDetail | null>(null);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
+  const [unlinked, setUnlinked] = useState<UnlinkedMention[]>([]);
   const [openSections, setOpenSections] = useState({
     outline: true,
     backlinks: true,
+    unlinked: false,
     connections: true,
     entities: false,
   });
@@ -77,6 +86,11 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
             .then((r) => r.json())
             .then(setBacklinks)
             .catch(() => setBacklinks([]));
+
+          fetch(`http://127.0.0.1:8765/api/unlinked-mentions/${match.id}`)
+            .then((r) => r.json())
+            .then(setUnlinked)
+            .catch(() => setUnlinked([]));
         }
       )
       .catch(() => {});
@@ -175,7 +189,7 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
               )}
             </Section>
 
-            {/* Backlinks */}
+            {/* Backlinks with paragraph context (Obsidian-style) */}
             <Section
               title="Backlinks"
               count={backlinks.length}
@@ -187,18 +201,65 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
                   No notes link here
                 </p>
               ) : (
-                <div className="space-y-1 px-2">
+                <div className="space-y-2 px-3 py-1">
                   {backlinks.map((bl) => (
-                    <button
-                      key={bl.engram_id}
-                      onClick={() => navigateTo(bl.title)}
-                      className="w-full text-left text-xs text-[#8b7cf8] hover:text-[#ddd9f0] font-[Geist,sans-serif] py-1.5 px-2 rounded hover:bg-[#131325] truncate transition-colors"
-                    >
-                      {bl.title}
-                      <span className="text-[#555570] ml-2 text-[9px]">
-                        {Math.round(bl.similarity * 100)}%
-                      </span>
-                    </button>
+                    <div key={bl.engram_id} className="space-y-1">
+                      <button
+                        onClick={() => navigateTo(bl.title)}
+                        className="w-full text-left flex items-center gap-1 group"
+                      >
+                        <span className="text-xs text-[#8b7cf8] group-hover:text-[#ddd9f0] font-[Geist,sans-serif] font-medium truncate transition-colors">
+                          {bl.title}
+                        </span>
+                        <span className="text-[9px] text-[#555570] flex-shrink-0">
+                          {Math.round(bl.similarity * 100)}%
+                        </span>
+                      </button>
+
+                      {/* Paragraph context — the killer feature */}
+                      {bl.contexts.length > 0 && (
+                        <div className="space-y-1 pl-3 border-l border-[#1e1e38]">
+                          {bl.contexts.map((ctx, i) => (
+                            <p
+                              key={i}
+                              className="text-[10px] text-[#9999b8] font-[Geist,sans-serif] leading-relaxed line-clamp-3"
+                            >
+                              {ctx}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            {/* Unlinked Mentions — Obsidian's #2 killer feature */}
+            <Section
+              title="Unlinked Mentions"
+              count={unlinked.length}
+              open={openSections.unlinked}
+              onToggle={() => toggle("unlinked")}
+            >
+              {unlinked.length === 0 ? (
+                <p className="text-[10px] text-[#555570] font-[Geist,sans-serif] px-4 py-2">
+                  No unlinked mentions
+                </p>
+              ) : (
+                <div className="space-y-2 px-3 py-1">
+                  {unlinked.map((m) => (
+                    <div key={m.engram_id} className="space-y-1">
+                      <button
+                        onClick={() => navigateTo(m.title)}
+                        className="text-xs text-[#00c9b1] hover:text-[#ddd9f0] font-[Geist,sans-serif] font-medium transition-colors"
+                      >
+                        {m.title}
+                      </button>
+                      <p className="text-[10px] text-[#9999b8] font-[Geist,sans-serif] leading-relaxed line-clamp-2 pl-3 border-l border-[#1e1e38]">
+                        {m.snippet}
+                      </p>
+                    </div>
                   ))}
                 </div>
               )}
