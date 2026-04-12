@@ -286,6 +286,97 @@ def create_api(manager) -> FastAPI:
         from engram_server.consolidation import get_working_memory
         return get_working_memory(_db())
 
+    @app.post("/api/working-memory/pin/{engram_id}")
+    def pin_to_wm(engram_id: str):
+        """Manually pin a memory to working memory."""
+        from engram_server.consolidation import pin_to_working_memory
+        ok = pin_to_working_memory(_db(), engram_id)
+        return {"status": "pinned" if ok else "failed", "engram_id": engram_id}
+
+    @app.delete("/api/working-memory/{engram_id}")
+    def unpin_from_wm(engram_id: str):
+        """Remove a memory from working memory."""
+        from engram_server.consolidation import unpin_from_working_memory
+        ok = unpin_from_working_memory(_db(), engram_id)
+        return {"status": "unpinned" if ok else "not_found", "engram_id": engram_id}
+
+    # --- Contradictions ---
+
+    @app.post("/api/contradictions/{contradiction_id}/resolve")
+    def resolve_contradiction(contradiction_id: str, body: dict | None = None):
+        """Mark a contradiction as resolved."""
+        db = _db()
+        resolution = (body or {}).get("resolution", "manually_resolved")
+        cur = db.conn.execute(
+            "UPDATE contradictions SET resolved = 1, resolution = ? WHERE id = ?",
+            (resolution, contradiction_id),
+        )
+        db.conn.commit()
+        return {
+            "status": "resolved" if cur.rowcount > 0 else "not_found",
+            "id": contradiction_id,
+        }
+
+    # --- Drafts CRUD ---
+
+    @app.get("/api/drafts")
+    def list_drafts_endpoint():
+        """List all drafts with progress."""
+        from engram_server.drafts import list_drafts
+        return list_drafts(_db())
+
+    @app.get("/api/drafts/{draft_id}")
+    def get_draft_endpoint(draft_id: str):
+        """Get a draft with ordered sections."""
+        from engram_server.drafts import get_draft
+        result = get_draft(_db(), draft_id)
+        return result or {"error": "not found"}
+
+    @app.post("/api/drafts")
+    def create_draft_endpoint(body: dict):
+        """Create a new draft."""
+        from engram_server.drafts import create_draft
+        return create_draft(
+            _db(),
+            title=body.get("title", "Untitled Draft"),
+            description=body.get("description", ""),
+            target_words=body.get("target_words", 0),
+            deadline=body.get("deadline"),
+        )
+
+    @app.delete("/api/drafts/{draft_id}")
+    def delete_draft_endpoint(draft_id: str):
+        """Delete a draft (sections preserved)."""
+        from engram_server.drafts import delete_draft
+        return delete_draft(_db(), draft_id)
+
+    @app.post("/api/drafts/{draft_id}/sections")
+    def add_to_draft_endpoint(draft_id: str, body: dict):
+        """Add an engram to a draft at a position."""
+        from engram_server.drafts import add_section
+        return add_section(
+            _db(), draft_id, body["engram_id"], body.get("position")
+        )
+
+    @app.delete("/api/drafts/{draft_id}/sections/{engram_id}")
+    def remove_from_draft_endpoint(draft_id: str, engram_id: str):
+        """Remove an engram from a draft."""
+        from engram_server.drafts import remove_section
+        return remove_section(_db(), draft_id, engram_id)
+
+    @app.post("/api/drafts/{draft_id}/sections/{engram_id}/move")
+    def reorder_section_endpoint(draft_id: str, engram_id: str, body: dict):
+        """Move a section to a new position."""
+        from engram_server.drafts import reorder_section
+        return reorder_section(_db(), draft_id, engram_id, body["position"])
+
+    @app.post("/api/drafts/{draft_id}/export")
+    def export_draft_endpoint(draft_id: str, body: dict | None = None):
+        """Export a draft via Pandoc."""
+        from engram_server.pandoc_export import export_draft
+        fmt = (body or {}).get("format", "docx")
+        return export_draft(draft_id, fmt, _db())
+
     @app.get("/api/contradictions")
     def get_contradictions():
         """List unresolved contradictions between memories."""

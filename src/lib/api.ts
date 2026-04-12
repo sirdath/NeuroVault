@@ -138,3 +138,96 @@ export async function fetchNotesList(): Promise<NoteSummary[]> {
     return [];
   }
 }
+
+// --- Drafts ---
+
+export interface DraftSummary {
+  draft_id: string;
+  title: string;
+  description: string;
+  target_words: number;
+  deadline: string | null;
+  created_at: string;
+  updated_at: string;
+  section_count: number;
+  word_count: number;
+  progress: number | null;
+}
+
+export interface DraftSection {
+  engram_id: string;
+  title: string;
+  position: number;
+  word_count: number;
+  preview: string;
+}
+
+export interface DraftDetail {
+  draft_id: string;
+  title: string;
+  description: string;
+  target_words: number;
+  deadline: string | null;
+  word_count: number;
+  progress: number | null;
+  sections: DraftSection[];
+}
+
+async function jsonReq<T>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export const draftsApi = {
+  list: () => jsonReq<DraftSummary[]>("/api/drafts"),
+  get: (id: string) => jsonReq<DraftDetail>(`/api/drafts/${id}`),
+  create: (data: { title: string; description?: string; target_words?: number; deadline?: string }) =>
+    jsonReq<{ draft_id: string; title: string }>("/api/drafts", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  delete: (id: string) =>
+    jsonReq<{ status: string }>(`/api/drafts/${id}`, { method: "DELETE" }),
+  addSection: (draftId: string, engramId: string, position?: number) =>
+    jsonReq<{ status: string }>(`/api/drafts/${draftId}/sections`, {
+      method: "POST",
+      body: JSON.stringify({ engram_id: engramId, position }),
+    }),
+  removeSection: (draftId: string, engramId: string) =>
+    jsonReq<{ status: string }>(`/api/drafts/${draftId}/sections/${engramId}`, {
+      method: "DELETE",
+    }),
+  reorder: (draftId: string, engramId: string, position: number) =>
+    jsonReq<{ status: string }>(
+      `/api/drafts/${draftId}/sections/${engramId}/move`,
+      { method: "POST", body: JSON.stringify({ position }) }
+    ),
+  export: (id: string, format: string = "docx") =>
+    jsonReq<{ status: string; output_path?: string; error?: string }>(
+      `/api/drafts/${id}/export`,
+      { method: "POST", body: JSON.stringify({ format }) }
+    ),
+};
+
+// --- Working memory + contradictions ---
+
+export const workingMemoryApi = {
+  list: () => jsonReq<WorkingMemoryItem[]>("/api/working-memory"),
+  pin: (id: string) =>
+    jsonReq<{ status: string }>(`/api/working-memory/pin/${id}`, { method: "POST" }),
+  unpin: (id: string) =>
+    jsonReq<{ status: string }>(`/api/working-memory/${id}`, { method: "DELETE" }),
+};
+
+export const contradictionsApi = {
+  list: () => jsonReq<Contradiction[]>("/api/contradictions"),
+  resolve: (id: string, resolution?: string) =>
+    jsonReq<{ status: string }>(`/api/contradictions/${id}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolution: resolution ?? "manually_resolved" }),
+    }),
+};

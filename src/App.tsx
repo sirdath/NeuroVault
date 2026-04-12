@@ -10,8 +10,9 @@ import { CommandPalette, type Command } from "./components/CommandPalette";
 import { RightSidebar } from "./components/RightSidebar";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
+import { DraftsView } from "./components/DraftsView";
 
-type View = "editor" | "graph";
+type View = "editor" | "graph" | "drafts";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -29,7 +30,9 @@ export default function App() {
   }, [initVault]);
 
   const toggleView = useCallback(() => {
-    setView((v) => (v === "editor" ? "graph" : "editor"));
+    setView((v) =>
+      v === "editor" ? "graph" : v === "graph" ? "drafts" : "editor"
+    );
   }, []);
 
   // Build the command palette command list
@@ -60,6 +63,12 @@ export default function App() {
         title: "Switch to Graph view",
         category: "View",
         action: () => setView("graph"),
+      },
+      {
+        id: "view-drafts",
+        title: "Switch to Drafts view",
+        category: "View",
+        action: () => setView("drafts"),
       },
       {
         id: "toggle-view",
@@ -167,7 +176,9 @@ export default function App() {
           triggerSearch={triggerSearch}
         />
         <div className="flex-1 flex overflow-hidden">
-          {view === "editor" ? <Editor /> : <NeuralGraph />}
+          {view === "editor" && <Editor />}
+          {view === "graph" && <NeuralGraph />}
+          {view === "drafts" && <DraftsView />}
           <RightSidebar
             open={rightSidebarOpen && view === "editor"}
             onClose={() => setRightSidebarOpen(false)}

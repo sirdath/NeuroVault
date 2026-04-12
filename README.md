@@ -205,10 +205,22 @@ Markdown files are always the source of truth. The database is an index. If it b
 | Operation | Time |
 |-----------|------|
 | Embed a note | ~20ms |
-| Recall (no reranker) | ~50ms |
-| Recall (with reranker) | ~250ms |
-| Full vault ingest (100 notes) | ~5s |
+| Recall (no reranker) | ~73ms median |
+| Recall (with reranker) | ~133ms median |
+| Full vault ingest (25 notes) | ~4s cold start |
 | Semantic link computation (1000 notes) | ~50ms (numpy-accelerated) |
+
+### Retrieval Quality (reproducible benchmark)
+
+Run `cd server && uv run python ../benchmarks/run_recall.py` to verify these numbers locally. The benchmark uses 25 hand-crafted notes and 25 queries (5 easy, 10 medium, 10 hard).
+
+| Mode | Top-1 | Top-3 | Top-5 | MRR | Median latency |
+|------|-------|-------|-------|-----|----------------|
+| Hybrid (default) | **92%** | **96%** | 96% | 0.94 | 73ms |
+| Hybrid + cross-encoder rerank | **92%** | **100%** | 100% | 0.96 | 133ms |
+
+Hard queries (no keyword overlap, semantic understanding required): **9/10 top-1** without reranker.
+Easy queries (direct keyword match): **5/5** in both modes.
 
 ### Cost
 

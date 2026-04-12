@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNoteStore } from "../stores/noteStore";
+import { workingMemoryApi, contradictionsApi } from "../lib/api";
+import type { WorkingMemoryItem, Contradiction } from "../lib/api";
+import { toast } from "../stores/toastStore";
 
 interface NoteDetail {
   id: string;
@@ -40,13 +43,55 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
   const [detail, setDetail] = useState<NoteDetail | null>(null);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
   const [unlinked, setUnlinked] = useState<UnlinkedMention[]>([]);
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryItem[]>([]);
+  const [contradictions, setContradictions] = useState<Contradiction[]>([]);
   const [openSections, setOpenSections] = useState({
+    workingMemory: true,
+    contradictions: true,
     outline: true,
     backlinks: true,
     unlinked: false,
     connections: true,
     entities: false,
   });
+
+  const refreshBrainState = useCallback(async () => {
+    try {
+      const [wm, contras] = await Promise.all([
+        workingMemoryApi.list(),
+        contradictionsApi.list(),
+      ]);
+      setWorkingMemory(wm);
+      setContradictions(contras);
+    } catch {
+      // Server offline — silent
+    }
+  }, []);
+
+  // Load brain-level state once on open and after every active file change
+  useEffect(() => {
+    if (open) refreshBrainState();
+  }, [open, activeFilename, refreshBrainState]);
+
+  const handleUnpin = async (engramId: string) => {
+    try {
+      await workingMemoryApi.unpin(engramId);
+      toast.success("Unpinned from working memory");
+      await refreshBrainState();
+    } catch {
+      toast.error("Failed to unpin");
+    }
+  };
+
+  const handleResolveContradiction = async (id: string) => {
+    try {
+      await contradictionsApi.resolve(id);
+      toast.success("Contradiction resolved");
+      await refreshBrainState();
+    } catch {
+      toast.error("Failed to resolve");
+    }
+  };
 
   // Extract outline from current content
   const outline: OutlineItem[] = activeContent
@@ -124,10 +169,100 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        {/* Brain-level: Working Memory (always visible) */}
+        <Section
+          title="Working Memory"
+          count={workingMemory.length}
+          open={openSections.workingMemory}
+          onToggle={() => toggle("workingMemory")}
+        >
+          {workingMemory.length === 0 ? (
+            <p className="text-[10px] text-[#555570] font-[Geist,sans-serif] px-4 py-2">
+              Empty — consolidation will populate this
+            </p>
+          ) : (
+            <div className="space-y-1 px-2">
+              {workingMemory.map((m) => (
+                <div
+                  key={m.engram_id}
+                  className="group flex items-start justify-between gap-1 px-2 py-1.5 rounded hover:bg-[#131325]"
+                >
+                  <button
+                    onClick={() => navigateTo(m.title)}
+                    className="flex-1 text-left text-xs text-[#f0a500] hover:text-[#ddd9f0] font-[Geist,sans-serif] truncate transition-colors"
+                  >
+                    <span className="text-[9px] mr-1">
+                      {m.pin_type === "manual" ? "📌" : "•"}
+                    </span>
+                    {m.title}
+                  </button>
+                  <button
+                    onClick={() => handleUnpin(m.engram_id)}
+                    className="opacity-0 group-hover:opacity-100 text-[#7a779a] hover:text-[#f06080] text-xs flex-shrink-0"
+                    title="Unpin"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+
+        {/* Brain-level: Contradictions (always visible if any) */}
+        {contradictions.length > 0 && (
+          <Section
+            title="Contradictions"
+            count={contradictions.length}
+            open={openSections.contradictions}
+            onToggle={() => toggle("contradictions")}
+          >
+            <div className="space-y-2 px-3 py-1">
+              {contradictions.map((c) => (
+                <div
+                  key={c.id}
+                  className="border border-[#f06080]/20 bg-[#f06080]/5 rounded p-2"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[9px] uppercase tracking-wider text-[#f06080] font-semibold font-[Geist,sans-serif]">
+                      Conflict
+                    </span>
+                    <button
+                      onClick={() => handleResolveContradiction(c.id)}
+                      className="text-[9px] bg-[#f06080] text-[#07070e] px-1.5 py-0.5 rounded hover:bg-[#f06080]/90 font-medium font-[Geist,sans-serif]"
+                    >
+                      Resolve
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => navigateTo(c.note_a)}
+                    className="text-[10px] text-[#8b7cf8] hover:text-[#ddd9f0] font-[Geist,sans-serif] block truncate"
+                  >
+                    {c.note_a}
+                  </button>
+                  <p className="text-[10px] text-[#9999b8] line-clamp-2 ml-2 font-[Geist,sans-serif]">
+                    {c.fact_a}
+                  </p>
+                  <p className="text-[10px] text-[#555570] my-0.5">vs</p>
+                  <button
+                    onClick={() => navigateTo(c.note_b)}
+                    className="text-[10px] text-[#8b7cf8] hover:text-[#ddd9f0] font-[Geist,sans-serif] block truncate"
+                  >
+                    {c.note_b}
+                  </button>
+                  <p className="text-[10px] text-[#9999b8] line-clamp-2 ml-2 font-[Geist,sans-serif]">
+                    {c.fact_b}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
         {!activeFilename && (
           <div className="text-center py-12 px-4">
             <p className="text-[#555570] text-xs font-[Geist,sans-serif]">
-              Select a note to see info
+              Select a note for note-specific info
             </p>
           </div>
         )}
