@@ -432,6 +432,49 @@ def get_timeline(brain: str | None = None) -> list[dict]:
     ]
 
 
+# --- Graphify-inspired Tools ---
+
+
+@mcp.tool()
+def brain_report(brain: str | None = None) -> str:
+    """Generate a brain GRAPH_REPORT.md — one-page summary of the knowledge graph.
+
+    Highlights god nodes (most connected), surprising connections discovered
+    by embeddings, orphan notes, top entities, and suggested questions.
+    Inspired by Graphify's GRAPH_REPORT.md.
+
+    Args:
+        brain: Target brain ID
+    """
+    from engram_server.graph_report import generate_graph_report
+    ctx = _ctx(brain)
+    path = generate_graph_report(ctx.db, ctx.vault_dir)
+    return path.read_text(encoding="utf-8")
+
+
+@mcp.tool()
+def path(
+    start: str,
+    end: str,
+    max_depth: int = 6,
+    brain: str | None = None,
+) -> dict:
+    """Find the shortest semantic path between two notes (BFS over knowledge graph).
+
+    USE WHEN: the user asks "how does X relate to Y?" or wants to discover
+    indirect connections between concepts in their brain.
+
+    Args:
+        start: Title of the starting note
+        end: Title of the ending note
+        max_depth: Max hops to search (default 6)
+        brain: Target brain ID
+    """
+    from engram_server.graph_report import find_path
+    ctx = _ctx(brain)
+    return find_path(ctx.db, start, end, max_depth)
+
+
 # --- Zotero Integration ---
 
 

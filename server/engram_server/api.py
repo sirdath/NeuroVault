@@ -286,6 +286,20 @@ def create_api(manager) -> FastAPI:
         from engram_server.consolidation import get_working_memory
         return get_working_memory(_db())
 
+    @app.get("/api/brain-report")
+    def brain_report_endpoint():
+        """Generate or fetch the GRAPH_REPORT.md."""
+        from engram_server.graph_report import generate_graph_report
+        ctx = _ctx()
+        path = generate_graph_report(ctx.db, ctx.vault_dir)
+        return {"content": path.read_text(encoding="utf-8"), "path": str(path)}
+
+    @app.get("/api/path")
+    def path_endpoint(start: str, end: str, max_depth: int = 6):
+        """Find shortest path between two notes."""
+        from engram_server.graph_report import find_path
+        return find_path(_db(), start, end, max_depth)
+
     @app.post("/api/working-memory/pin/{engram_id}")
     def pin_to_wm(engram_id: str):
         """Manually pin a memory to working memory."""
