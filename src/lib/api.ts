@@ -231,3 +231,94 @@ export const contradictionsApi = {
       body: JSON.stringify({ resolution: resolution ?? "manually_resolved" }),
     }),
 };
+
+// --- Intelligence tab: code cognition + self-improving retrieval ---
+
+export interface DeadCodeCandidate {
+  name: string;
+  kind: string;
+  language: string | null;
+  last_seen: string | null;
+  first_seen: string | null;
+  reference_count: number;
+  caller_count: number;
+  confidence: number;
+}
+
+export interface RenameCandidate {
+  old_name: string;
+  new_name: string;
+  language: string;
+  kind: string | null;
+  type_hint: string | null;
+  filepath: string | null;
+  detected_at: string;
+  confirmed: boolean;
+}
+
+export interface HotFunction {
+  name: string;
+  call_count: number;
+  language: string;
+}
+
+export interface VariableStats {
+  total: number;
+  live: number;
+  removed: number;
+  by_language: Record<string, number>;
+  renames_pending: number;
+}
+
+export interface ObservationSession {
+  session_id: string;
+  event_count: number;
+  first_seen: string;
+  last_seen: string;
+  latest_title: string;
+}
+
+export interface FeedbackTopMemory {
+  engram_id: string;
+  title: string;
+  retrievals: number;
+  hits: number;
+  avg_rank: number;
+}
+
+export interface FeedbackStats {
+  total_retrievals: number;
+  retrievals_last_24h: number;
+  overall_hit_rate_7d: number;
+  top_useful_memories: FeedbackTopMemory[];
+}
+
+export interface AffinityShortcut {
+  query: string;
+  engram_title: string;
+  hit_count: number;
+  last_seen: string;
+}
+
+export interface AffinityStats {
+  total_learned_shortcuts: number;
+  top_shortcuts: AffinityShortcut[];
+}
+
+export const intelligenceApi = {
+  deadCode: (staleDays = 60, maxCallers = 0, limit = 20) =>
+    get<DeadCodeCandidate[]>(
+      `/api/calls/dead?stale_days=${staleDays}&max_callers=${maxCallers}&limit=${limit}`
+    ),
+  staleRenames: (limit = 20) => get<RenameCandidate[]>(`/api/calls/stale-renames?limit=${limit}`),
+  hotFunctions: (limit = 20) => get<HotFunction[]>(`/api/calls/hot?limit=${limit}`),
+  variableStats: () => get<VariableStats>("/api/variables/stats"),
+  renames: (limit = 20) => get<RenameCandidate[]>(`/api/variables/renames?limit=${limit}`),
+  recentSessions: (limit = 25) => get<ObservationSession[]>(`/api/observations?limit=${limit}`),
+  feedbackStats: () => get<FeedbackStats>("/api/feedback/stats"),
+  affinityStats: () => get<AffinityStats>("/api/affinity/stats"),
+  reconcileAffinity: () =>
+    jsonReq<{ reconciled: number; ranking_failures: number }>("/api/affinity/reconcile", {
+      method: "POST",
+    }),
+};

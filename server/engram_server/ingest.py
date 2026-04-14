@@ -17,7 +17,7 @@ from engram_server.entities import extract_entities, store_entities
 from engram_server.bm25_index import BM25Index
 
 # Minimum cosine similarity to create a semantic link
-LINK_THRESHOLD = 0.65
+LINK_THRESHOLD = 0.75
 
 
 def _extract_title_from_md(content: str, filename: str) -> str:

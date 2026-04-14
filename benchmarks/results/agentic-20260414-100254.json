@@ -1,0 +1,304 @@
+{
+  "timestamp": "2026-04-14T10:02:54.477330+00:00",
+  "total": 10,
+  "passed": 10,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "median_latency_ms": 33.4,
+  "scenarios": [
+    {
+      "name": "basic-fact-recall",
+      "description": "A single fact stored once is retrievable by paraphrase.",
+      "probe": "What text editor do I use?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "My Editor Preference"
+      ],
+      "expected_ranks": {
+        "My Editor Preference": 1
+      },
+      "phrases_found": [
+        "Neovim",
+        "LazyVim"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "My Editor Preference"
+      ],
+      "latency_ms": 27.7,
+      "tags": [
+        "fact",
+        "paraphrase"
+      ]
+    },
+    {
+      "name": "superseded-fact",
+      "description": "Newer fact should outrank older contradicting fact.",
+      "probe": "What database are we using right now?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Database Migration"
+      ],
+      "expected_ranks": {
+        "Database Migration": 1
+      },
+      "phrases_found": [
+        "SQLite",
+        "sqlite-vec"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Database Migration",
+        "Database Choice"
+      ],
+      "latency_ms": 47.6,
+      "tags": [
+        "temporal",
+        "contradiction"
+      ]
+    },
+    {
+      "name": "vocab-mismatch",
+      "description": "The probe uses different words than the stored memory.",
+      "probe": "How do we verify users on the API?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Authentication Strategy"
+      ],
+      "expected_ranks": {
+        "Authentication Strategy": 1
+      },
+      "phrases_found": [
+        "JWT",
+        "bearer"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Authentication Strategy"
+      ],
+      "latency_ms": 25.2,
+      "tags": [
+        "semantic"
+      ]
+    },
+    {
+      "name": "entity-disambiguation",
+      "description": "Question names a specific entity; the right note must surface.",
+      "probe": "Who runs the weekly check-ins?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Sarah - Project Lead"
+      ],
+      "expected_ranks": {
+        "Sarah - Project Lead": 1
+      },
+      "phrases_found": [
+        "Sarah",
+        "Tuesday"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Sarah - Project Lead",
+        "Sam - Designer"
+      ],
+      "latency_ms": 28.8,
+      "tags": [
+        "entity"
+      ]
+    },
+    {
+      "name": "multi-fact-synthesis",
+      "description": "Probe requires multiple memories \u2014 both should appear in top-K.",
+      "probe": "How do I run the project locally?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Build System",
+        "Server Boot"
+      ],
+      "expected_ranks": {
+        "Build System": 2,
+        "Server Boot": 1
+      },
+      "phrases_found": [
+        "cargo tauri",
+        "uv run"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Server Boot",
+        "Build System"
+      ],
+      "latency_ms": 28.4,
+      "tags": [
+        "multi-hop"
+      ]
+    },
+    {
+      "name": "rare-acronym",
+      "description": "Acronym that only appears once in the corpus must be findable.",
+      "probe": "What format does BG3 use for saves?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "BG3 Save Format"
+      ],
+      "expected_ranks": {
+        "BG3 Save Format": 1
+      },
+      "phrases_found": [
+        "LSV",
+        "LSF"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "BG3 Save Format"
+      ],
+      "latency_ms": 29.8,
+      "tags": [
+        "acronym",
+        "rare-token"
+      ]
+    },
+    {
+      "name": "negative-fact",
+      "description": "A 'we don't do X' memory should win over 'we considered X'.",
+      "probe": "Are we using Redis?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Decision: No Redis"
+      ],
+      "expected_ranks": {
+        "Decision: No Redis": 1
+      },
+      "phrases_found": [
+        "NOT",
+        "sqlite-vec"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Decision: No Redis",
+        "Considered: Redis Cache"
+      ],
+      "latency_ms": 54.4,
+      "tags": [
+        "negation",
+        "decision"
+      ]
+    },
+    {
+      "name": "fresh-intent-query",
+      "description": "A query with 'latest' in it should favor the newest fact.",
+      "probe": "What's my latest editor setup?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Editor Preference v2"
+      ],
+      "expected_ranks": {
+        "Editor Preference v2": 1
+      },
+      "phrases_found": [
+        "Neovim",
+        "LazyVim"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Editor Preference v2",
+        "Editor Preference v1"
+      ],
+      "latency_ms": 62.8,
+      "tags": [
+        "temporal",
+        "fresh-intent"
+      ]
+    },
+    {
+      "name": "historical-intent-query",
+      "description": "A query with 'originally' should favor the older fact, even if a newer one exists.",
+      "probe": "What database did we originally use?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Initial DB Decision"
+      ],
+      "expected_ranks": {
+        "Initial DB Decision": 1
+      },
+      "phrases_found": [
+        "PostgreSQL",
+        "Originally"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Initial DB Decision",
+        "Current DB"
+      ],
+      "latency_ms": 62.8,
+      "tags": [
+        "temporal",
+        "historical-intent"
+      ]
+    },
+    {
+      "name": "long-tail-detail",
+      "description": "A detail buried inside a longer note must surface.",
+      "probe": "What port does the HTTP bridge use?",
+      "passed": true,
+      "pass_recall": true,
+      "pass_phrases": true,
+      "pass_forbidden": true,
+      "expected_titles": [
+        "Tauri Architecture Overview"
+      ],
+      "expected_ranks": {
+        "Tauri Architecture Overview": 1
+      },
+      "phrases_found": [
+        "8765"
+      ],
+      "phrases_missing": [],
+      "forbidden_above": [],
+      "top_hits": [
+        "Tauri Architecture Overview"
+      ],
+      "latency_ms": 37.0,
+      "tags": [
+        "needle",
+        "long-doc"
+      ]
+    }
+  ]
+}

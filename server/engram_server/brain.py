@@ -112,9 +112,12 @@ class BrainContext:
         self.watcher.start()
         self.decay_scheduler = DecayScheduler(self.db, interval_seconds=3600)
         self.decay_scheduler.start()
-        # Sleep cycle: consolidate every 4 hours
+        # Sleep cycle: consolidate every 4 hours. Passes bm25 (Stage 4
+        # query-affinity) and `self` as brain_ctx (observation rollup
+        # needs vault_dir + archive dir).
         self.consolidation_scheduler = ConsolidationScheduler(
-            self.db, embedder, self.consolidated_dir, interval_seconds=14400
+            self.db, embedder, self.consolidated_dir,
+            interval_seconds=14400, bm25=self.bm25, brain_ctx=self,
         )
         self.consolidation_scheduler.start()
         self._active = True

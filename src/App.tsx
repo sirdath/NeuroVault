@@ -11,8 +11,9 @@ import { RightSidebar } from "./components/RightSidebar";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { DraftsView } from "./components/DraftsView";
+import { IntelligenceView } from "./components/IntelligenceView";
 
-type View = "editor" | "graph" | "drafts";
+type View = "editor" | "graph" | "drafts" | "intelligence";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -31,7 +32,13 @@ export default function App() {
 
   const toggleView = useCallback(() => {
     setView((v) =>
-      v === "editor" ? "graph" : v === "graph" ? "drafts" : "editor"
+      v === "editor"
+        ? "graph"
+        : v === "graph"
+        ? "drafts"
+        : v === "drafts"
+        ? "intelligence"
+        : "editor"
     );
   }, []);
 
@@ -69,6 +76,12 @@ export default function App() {
         title: "Switch to Drafts view",
         category: "View",
         action: () => setView("drafts"),
+      },
+      {
+        id: "view-intelligence",
+        title: "Switch to Intelligence view",
+        category: "View",
+        action: () => setView("intelligence"),
       },
       {
         id: "toggle-view",
@@ -177,8 +190,9 @@ export default function App() {
         />
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
-          {view === "graph" && <NeuralGraph />}
+          {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
           {view === "drafts" && <DraftsView />}
+          {view === "intelligence" && <IntelligenceView />}
           <RightSidebar
             open={rightSidebarOpen && view === "editor"}
             onClose={() => setRightSidebarOpen(false)}

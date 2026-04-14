@@ -29,10 +29,20 @@ WORKING_MEMORY_SIZE = 7   # Miller's magic number — 7 ± 2 items
 SPREADING_BOOST = 0.1     # How much access to credit to neighbors
 
 
-def consolidate(db: Database, embedder: Embedder, consolidated_dir: Path) -> dict:
+def consolidate(
+    db: Database,
+    embedder: Embedder,
+    consolidated_dir: Path,
+    bm25=None,
+    brain_ctx=None,
+) -> dict:
     """Run a full consolidation cycle.
 
     Returns stats about what was consolidated/pruned/strengthened.
+
+    `brain_ctx` is an optional BrainContext handle used for operations
+    that need full brain state (vault dir, archive dir, etc.) — namely
+    the observation rollup. When None, rollup is skipped.
     """
     stats = {
         "themes_created": 0,
@@ -40,6 +50,9 @@ def consolidate(db: Database, embedder: Embedder, consolidated_dir: Path) -> dic
         "edges_pruned": 0,
         "working_memory_refreshed": 0,
         "co_activations_strengthened": 0,
+        "feedback_boosted": 0,
+        "feedback_penalized": 0,
+        "sessions_rolled_up": 0,
     }
 
     logger.info("=== Starting consolidation cycle ===")
@@ -59,6 +72,45 @@ def consolidate(db: Database, embedder: Embedder, consolidated_dir: Path) -> dic
     # 4. Prune stale unused edges
     pruned = _prune_stale_edges(db)
     stats["edges_pruned"] = pruned
+
+    # 5. Apply implicit feedback from recent recall/fetch usage.
+    # Boosts strength for memories that were frequently retrieved AND
+    # subsequently fetched; penalizes retrieved-but-ignored noise.
+    # Bounded to prevent runaway updates.
+    try:
+        from engram_server.retrieval_feedback import apply_feedback_update
+        fb = apply_feedback_update(db)
+        stats["feedback_boosted"] = fb.get("boosted", 0)
+        stats["feedback_penalized"] = fb.get("penalized", 0)
+    except Exception as e:
+        logger.debug("Feedback update skipped: {}", e)
+
+    # 6. Reconcile learned query→engram affinities. Re-runs recently
+    # useful queries through the retriever and records a learned
+    # shortcut for any case where the retriever failed to surface the
+    # previously-fetched engram in the new top-3. Requires bm25 for
+    # hybrid_retrieve — skipped if the caller didn't provide it.
+    if bm25 is not None:
+        try:
+            from engram_server.query_affinity import reconcile_feedback
+            qa = reconcile_feedback(db, embedder, bm25)
+            stats["affinity_reconciled"] = qa.get("reconciled", 0)
+            stats["affinity_ranking_failures"] = qa.get("ranking_failures", 0)
+        except Exception as e:
+            logger.debug("Query affinity reconcile skipped: {}", e)
+
+    # 7. Observation rollup — compress stale hook-captured sessions
+    # into one summary engram so the vault doesn't fill up with
+    # thousands of individual obs-*.md files. Requires a full
+    # BrainContext (vault_dir, bm25, etc.) so callers without one
+    # silently skip this step.
+    if brain_ctx is not None:
+        try:
+            from engram_server.observation_rollup import rollup_stale_sessions
+            ru = rollup_stale_sessions(brain_ctx)
+            stats["sessions_rolled_up"] = ru.get("sessions_rolled_up", 0)
+        except Exception as e:
+            logger.debug("Observation rollup skipped: {}", e)
 
     logger.info("Consolidation complete: {}", stats)
     return stats
@@ -433,12 +485,16 @@ class ConsolidationScheduler:
         embedder: Embedder,
         consolidated_dir: Path,
         interval_seconds: float = 14400,  # 4 hours
+        bm25=None,
+        brain_ctx=None,
     ) -> None:
         import threading
         self.db = db
         self.embedder = embedder
         self.consolidated_dir = consolidated_dir
         self.interval = interval_seconds
+        self.bm25 = bm25
+        self.brain_ctx = brain_ctx
         self._timer: threading.Timer | None = None
         self._running = False
 
@@ -460,7 +516,10 @@ class ConsolidationScheduler:
         if not self._running:
             return
         try:
-            consolidate(self.db, self.embedder, self.consolidated_dir)
+            consolidate(
+                self.db, self.embedder, self.consolidated_dir,
+                bm25=self.bm25, brain_ctx=self.brain_ctx,
+            )
         except Exception as e:
             logger.error("Consolidation cycle failed: {}", e)
         self._schedule_next()

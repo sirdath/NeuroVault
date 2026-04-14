@@ -56,6 +56,36 @@ Force-directed visualization of your knowledge graph. Nodes sized by usage, colo
 ### Auto Write-Back
 After every meaningful exchange, Claude extracts durable facts and saves them as new notes. Decisions, preferences, technical choices — captured without any effort from you.
 
+### Silent Fact Capture
+Drop a fact casually in conversation — NeuroVault picks it up without you saying "remember this".
+
+```
+You:   I prefer Tauri 2.0 over Electron for desktop apps.
+You:   We decided to use sqlite-vec for embeddings.
+You:   Remember that Sarah runs the weekly check-ins.
+
+...later, in a fresh session...
+
+You:   what desktop framework do I like?
+Claude: You prefer Tauri 2.0 over Electron (noted Apr 14, 2026).
+```
+
+A UserPromptSubmit lifecycle hook pipes every prompt through a regex-based
+extractor that recognises 8 patterns — preferences, decisions, stack choices,
+deadlines, identity, anti-preferences, deployment targets, and explicit
+"remember that..." callouts. Each extracted fact becomes a first-class
+`kind='insight'` engram with a wiki-link back to the original observation
+for provenance.
+
+Guarantees:
+- Runs in microseconds (regex only, no LLM call, no API key)
+- Questions, commands, and weak pronominal phrases ("the API", "a thing") are rejected
+- Bounded to 3 extractions per message — no vault flooding
+- Deterministic filenames upsert duplicates instead of multiplying them
+- `<private>...</private>` blocks are stripped before extraction
+
+See the bench numbers below.
+
 ### Note Interconnection
 Three types of links computed automatically:
 - **Semantic** — cosine similarity between note embeddings
@@ -134,6 +164,7 @@ Restart Claude Desktop. The 9 NeuroVault tools will appear.
 | `list_memories` | List all memories with strength and connections |
 | `get_related` | Find related notes via knowledge graph |
 | `save_conversation_insights` | Extract and save facts from conversation |
+| `extract_insights` | Silent regex extractor · preview or save · Stage 5 |
 | `list_brains` | List all available brains |
 | `switch_brain` | Switch active memory space |
 | `create_brain` | Create a new brain for a project |
@@ -222,6 +253,25 @@ Run `cd server && uv run python ../benchmarks/run_recall.py` to verify these num
 Hard queries (no keyword overlap, semantic understanding required): **9/10 top-1** without reranker.
 Easy queries (direct keyword match): **5/5** in both modes.
 
+### Silent Fact Capture Quality (end-to-end bench)
+
+Run `cd server && uv run python benchmarks/bench_usefulness.py` to reproduce. The bench seeds 15 casual factual statements via the `UserPromptSubmit` hook (same path Claude Code uses), then probes recall with 15 paraphrased questions that never use the original wording.
+
+| Metric | Score |
+|---|---|
+| Hit@1 (right fact is #1 result) | **80%** |
+| Hit@3 (right fact in top 3) | **100%** |
+| Hit@5 (right fact in top 5) | **100%** |
+| MRR (mean reciprocal rank) | **0.878** |
+| Median recall latency | ~900ms |
+
+**Token economics (from the same bench):**
+
+- ~275 tokens per recall answer — **flat regardless of vault size**
+- Pasting the whole vault as context: 93k+ tokens and **grows linearly**
+- Break-even vs. manually re-explaining ~15 facts each session: around 17 facts
+- For real projects with hundreds of captured facts, savings exceed **99%**
+
 ### Cost
 
 | | NeuroVault | Mem0 Pro | Zep Flex |
@@ -263,7 +313,7 @@ cd .. && npx tsc --noEmit
 cd src-tauri && cargo check
 ```
 
-49 Python tests covering database, embeddings, chunking, ingestion, retrieval, strength decay, and write-back.
+237 Python tests covering database, embeddings, chunking, ingestion, retrieval, strength decay, write-back, insight extraction, impact analysis, and review context.
 
 ---
 
@@ -290,6 +340,8 @@ Dark theme with a warm, intentional feel:
 - [x] Memory panel with transparency
 - [x] Multi-brain support
 - [x] Performance optimizations (numpy, batch queries, indexes)
+- [x] Silent fact capture (Stage 5 — regex extractor + insight boost in recall)
+- [x] Reproducible usefulness + token benchmark
 - [ ] PyInstaller packaging for one-click install
 - [ ] Cross-platform builds (macOS, Linux)
 - [ ] Benchmark suite (LongMemEval, LoCoMo)

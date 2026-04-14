@@ -80,6 +80,61 @@ CREATE TABLE IF NOT EXISTS engram_links (
     PRIMARY KEY (from_engram, to_engram)
 );
 
+-- Variable tracker: remember every named thing in your codebase
+-- Solves the "what was that variable called again?" problem that plagues AI coding
+CREATE TABLE IF NOT EXISTS variables (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    scope       TEXT DEFAULT 'module',   -- module|class|function|global
+    kind        TEXT DEFAULT 'variable', -- variable|constant|function|class|type|interface
+    type_hint   TEXT,                    -- str, int, Dict[str, Any], etc.
+    language    TEXT NOT NULL,
+    description TEXT,                     -- docstring / leading comment
+    first_seen  TEXT DEFAULT (datetime('now')),
+    last_seen   TEXT DEFAULT (datetime('now')),
+    removed_at  TEXT,                     -- set when the name disappears from every file
+    UNIQUE(name, scope, language)
+);
+
+-- Rename candidates: old_name disappeared from a file and new_name appeared
+-- with matching kind + type_hint in the same engram. Surfaces likely renames
+-- without requiring a full AST diff.
+CREATE TABLE IF NOT EXISTS variable_renames (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    old_name    TEXT NOT NULL,
+    new_name    TEXT NOT NULL,
+    language    TEXT NOT NULL,
+    kind        TEXT,
+    type_hint   TEXT,
+    engram_id   TEXT REFERENCES engrams(id) ON DELETE CASCADE,
+    filepath    TEXT,
+    detected_at TEXT DEFAULT (datetime('now')),
+    confirmed   INTEGER DEFAULT 0,
+    UNIQUE(old_name, new_name, language, engram_id)
+);
+
+-- Call graph: caller→callee edges extracted from code
+CREATE TABLE IF NOT EXISTS function_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    caller_name  TEXT,                    -- NULL = module-level call
+    callee_name  TEXT NOT NULL,
+    language     TEXT NOT NULL,
+    engram_id    TEXT REFERENCES engrams(id) ON DELETE CASCADE,
+    filepath     TEXT,
+    line_number  INTEGER,
+    UNIQUE(caller_name, callee_name, filepath, line_number)
+);
+
+CREATE TABLE IF NOT EXISTS variable_references (
+    variable_id TEXT NOT NULL REFERENCES variables(id) ON DELETE CASCADE,
+    engram_id   TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    filepath    TEXT,                    -- original source file path
+    line_number INTEGER,
+    context     TEXT,                     -- 1-line code context
+    ref_type    TEXT DEFAULT 'use',      -- define|use|assign
+    PRIMARY KEY (variable_id, engram_id, line_number)
+);
+
 -- Memory type classification (from Hindsight's 4-network model)
 -- fact: objective information (decisions, configs, specs)
 -- experience: what happened (debugging sessions, meetings, events)
@@ -147,6 +202,37 @@ CREATE TABLE IF NOT EXISTS theme_members (
     PRIMARY KEY (theme_id, engram_id)
 );
 
+-- Learned query affinity — Stage 4 of self-improving retrieval.
+-- When a user explicitly fetches an engram after a recall AND the engram
+-- wasn't in the new top-3 when we re-run the query, that's a ranking
+-- failure. We store the (query, engram) pair so the next identical query
+-- gets a direct final-score boost, bypassing the ranking bug.
+CREATE TABLE IF NOT EXISTS query_affinity (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_text      TEXT NOT NULL,
+    query_embedding BLOB,                    -- cosine similarity lookup (v2)
+    engram_id       TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    hit_count       INTEGER DEFAULT 1,
+    first_seen      TEXT DEFAULT (datetime('now')),
+    last_seen       TEXT DEFAULT (datetime('now')),
+    UNIQUE(query_text, engram_id)
+);
+
+-- Retrieval feedback loop — implicit signals for self-improving recall.
+-- Every `recall()` logs its top-K results here; a subsequent explicit fetch
+-- by id sets was_accessed=1. Periodic consolidation uses these signals to
+-- apply bounded strength deltas to useful vs noisy memories.
+CREATE TABLE IF NOT EXISTS retrieval_feedback (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    query         TEXT NOT NULL,
+    engram_id     TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    rank          INTEGER NOT NULL,
+    score         REAL,
+    retrieved_at  TEXT DEFAULT (datetime('now')),
+    was_accessed  INTEGER DEFAULT 0,
+    accessed_at   TEXT
+);
+
 -- Contradictions detected between memories (from Supermemory)
 CREATE TABLE IF NOT EXISTS contradictions (
     id          TEXT PRIMARY KEY,
@@ -183,6 +269,19 @@ CREATE INDEX IF NOT EXISTS idx_edge_activity    ON edge_activity(last_used DESC)
 CREATE INDEX IF NOT EXISTS idx_theme_members    ON theme_members(theme_id);
 CREATE INDEX IF NOT EXISTS idx_engrams_kind     ON engrams(kind);
 CREATE INDEX IF NOT EXISTS idx_draft_sections   ON draft_sections(draft_id, position);
+CREATE INDEX IF NOT EXISTS idx_variables_name   ON variables(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_variables_lang   ON variables(language);
+CREATE INDEX IF NOT EXISTS idx_var_refs_engram  ON variable_references(engram_id);
+CREATE INDEX IF NOT EXISTS idx_calls_callee     ON function_calls(callee_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_calls_caller     ON function_calls(caller_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_calls_engram     ON function_calls(engram_id);
+CREATE INDEX IF NOT EXISTS idx_variables_removed ON variables(removed_at);
+CREATE INDEX IF NOT EXISTS idx_renames_engram   ON variable_renames(engram_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_engram   ON retrieval_feedback(engram_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_time     ON retrieval_feedback(retrieved_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_accessed ON retrieval_feedback(was_accessed);
+CREATE INDEX IF NOT EXISTS idx_affinity_query   ON query_affinity(query_text COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_affinity_engram  ON query_affinity(engram_id);
 """
 
 
@@ -206,6 +305,8 @@ class Database:
         # Run migrations for existing DBs BEFORE the schema script
         # (schema script uses IF NOT EXISTS so it's safe alongside migrations)
         self._migrate_add_kind_column()
+        self._migrate_add_removed_at()
+        self._migrate_add_query_embedding()
 
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
@@ -214,6 +315,40 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_query_embedding(self) -> None:
+        """Add `query_embedding` column to existing query_affinity tables (Stage 4 v2)."""
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='query_affinity'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(query_affinity)").fetchall()]
+            if "query_embedding" in cols:
+                return
+            logger.info("Migrating query_affinity: adding query_embedding column")
+            self.conn.execute("ALTER TABLE query_affinity ADD COLUMN query_embedding BLOB")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("query_embedding migration skipped: {}", e)
+
+    def _migrate_add_removed_at(self) -> None:
+        """Add `removed_at` column to existing variables tables."""
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='variables'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [row[1] for row in self.conn.execute("PRAGMA table_info(variables)").fetchall()]
+            if "removed_at" in cols:
+                return
+            logger.info("Migrating variables table: adding `removed_at` column")
+            self.conn.execute("ALTER TABLE variables ADD COLUMN removed_at TEXT")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("removed_at migration skipped: {}", e)
 
     def _migrate_add_kind_column(self) -> None:
         """Safe migration: add `kind` column to existing engrams tables."""
@@ -262,14 +397,21 @@ class Database:
         content: str,
         content_hash: str,
     ) -> None:
+        # Use millisecond-resolution timestamps instead of the column default
+        # `datetime('now')` (1-second resolution). Rapid ingests produce tied
+        # timestamps at second granularity, which breaks recency sorting in
+        # the retriever. strftime('%Y-%m-%d %H:%M:%f', 'now') gives ms.
         self.conn.execute(
-            """INSERT INTO engrams (id, filename, title, content, content_hash)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO engrams (id, filename, title, content, content_hash,
+                                    created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?,
+                       strftime('%Y-%m-%d %H:%M:%f', 'now'),
+                       strftime('%Y-%m-%d %H:%M:%f', 'now'))
                ON CONFLICT(id) DO UPDATE SET
                  title=excluded.title,
                  content=excluded.content,
                  content_hash=excluded.content_hash,
-                 updated_at=datetime('now')""",
+                 updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')""",
             (engram_id, filename, title, content, content_hash),
         )
         self.conn.commit()
@@ -328,8 +470,11 @@ class Database:
         self.conn.commit()
 
     def insert_embedding(self, chunk_id: str, embedding: list[float]) -> None:
+        # sqlite-vec vec0 virtual tables don't honor INSERT OR REPLACE, so we
+        # explicitly delete any existing row for this chunk_id first.
+        self.conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (chunk_id,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+            "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
             (chunk_id, sqlite_vec.serialize_float32(embedding)),
         )
         self.conn.commit()

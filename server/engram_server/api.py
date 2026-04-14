@@ -100,6 +100,95 @@ def create_api(manager) -> FastAPI:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @app.post("/api/notes")
+    def create_or_update_note(body: dict):
+        """Create (or update by title) a memory via HTTP.
+
+        Body: {"title": "...", "content": "...", "tags": ["..."]?}
+
+        HTTP equivalent of the `remember` MCP tool. Lets non-Claude
+        clients (web clippers, mobile apps, cron jobs, curl scripts)
+        write to the brain without needing an MCP session.
+
+        Upsert-by-title semantics: if a note with the same title
+        already exists, its content is replaced (same filename reused)
+        and the status is "updated"; otherwise a new engram is created.
+
+        Important: the returned engram_id is the one `ingest_file`
+        actually stored in the database, not the speculative uuid we
+        use for the filename slug. This matters because ingest_file
+        may mint its own uuid when it can't find a matching filename.
+        """
+        from engram_server.ingest import ingest_file
+        import uuid as _uuid
+
+        title = (body.get("title") or "").strip()
+        content = body.get("content") or ""
+        if not title:
+            return {"error": "title is required"}
+
+        ctx = _ctx()
+
+        def _slug(text: str) -> str:
+            s = ""
+            for ch in text.lower():
+                if ch.isalnum():
+                    s += ch
+                elif s and s[-1] != "-":
+                    s += "-"
+            return s.strip("-")[:60]
+
+        existing = ctx.db.get_engram_by_title(title)
+        if existing:
+            filename = existing["filename"]
+            status = "updated"
+        else:
+            # The uuid here is only used to pick a unique filename slug.
+            # The actual stored engram_id comes from ingest_file's return.
+            tmp_id = str(_uuid.uuid4())
+            filename = f"{_slug(title)}-{tmp_id[:8]}.md"
+            status = "created"
+
+        tags = body.get("tags")
+        header = f"# {title}\n"
+        if tags and isinstance(tags, list):
+            tag_line = " ".join(f"#{t.strip()}" for t in tags if isinstance(t, str) and t.strip())
+            if tag_line:
+                header += f"\n{tag_line}\n"
+
+        filepath = ctx.vault_dir / filename
+        filepath.write_text(f"{header}\n{content}", encoding="utf-8")
+
+        try:
+            stored_id = ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25)
+        except Exception as e:
+            logger.warning("POST /api/notes ingest failed: {}", e)
+            return {"error": f"ingest failed: {e}", "filename": filename}
+
+        # ingest_file returns None when the file is unchanged — resolve
+        # the real engram_id by filename in that case.
+        if not stored_id:
+            row = ctx.db.conn.execute(
+                "SELECT id FROM engrams WHERE filename = ?", (filename,)
+            ).fetchone()
+            stored_id = row[0] if row else None
+            status = "unchanged"
+
+        return {
+            "status": status,
+            "engram_id": stored_id,
+            "filename": filename,
+            "title": title,
+            "brain": ctx.brain_id,
+        }
+
+    @app.delete("/api/notes/{engram_id}")
+    def delete_note(engram_id: str):
+        """Mark a note as dormant (soft delete). Mirrors the `forget` MCP tool."""
+        db = _db()
+        ok = db.soft_delete(engram_id)
+        return {"status": "forgotten" if ok else "not_found", "engram_id": engram_id}
+
     @app.get("/api/notes/{engram_id}")
     def get_note(engram_id: str):
         db = _db()
@@ -134,18 +223,37 @@ def create_api(manager) -> FastAPI:
     # --- Graph ---
 
     @app.get("/api/graph")
-    def get_graph():
+    def get_graph(
+        include_observations: bool = False,
+        min_similarity: float = 0.75,
+    ):
+        """User-facing knowledge graph.
+
+        By default excludes hook-captured observations (they form dense
+        sub-clusters that make the graph unreadable) and prunes edges
+        below `min_similarity=0.75`. Pass `include_observations=true`
+        or lower `min_similarity` to see everything.
+        """
         db = _db()
+
+        kind_filter = "" if include_observations else (
+            " AND COALESCE(kind, 'note') NOT IN ('observation', 'session_summary')"
+        )
+
         nodes = db.conn.execute(
-            "SELECT id, title, state, strength, access_count FROM engrams WHERE state != 'dormant'"
+            f"""SELECT id, title, state, strength, access_count
+                FROM engrams
+                WHERE state != 'dormant'{kind_filter}"""
         ).fetchall()
 
         edges = db.conn.execute(
-            """SELECT l.from_engram, l.to_engram, l.similarity, l.link_type
-               FROM engram_links l
-               JOIN engrams e1 ON e1.id = l.from_engram AND e1.state != 'dormant'
-               JOIN engrams e2 ON e2.id = l.to_engram AND e2.state != 'dormant'
-               WHERE l.from_engram < l.to_engram"""
+            f"""SELECT l.from_engram, l.to_engram, l.similarity, l.link_type
+                FROM engram_links l
+                JOIN engrams e1 ON e1.id = l.from_engram AND e1.state != 'dormant'{kind_filter.replace('kind', 'e1.kind')}
+                JOIN engrams e2 ON e2.id = l.to_engram AND e2.state != 'dormant'{kind_filter.replace('kind', 'e2.kind')}
+                WHERE l.from_engram < l.to_engram
+                  AND l.similarity >= ?""",
+            (min_similarity,),
         ).fetchall()
 
         return {
@@ -500,6 +608,324 @@ def create_api(manager) -> FastAPI:
         """Export BibTeX citations."""
         from engram_server.dissertation import export_bibtex
         return {"bibtex": export_bibtex(_db(), tag)}
+
+    # --- Code & Variables ---
+
+    @app.get("/api/variables")
+    def list_variables_endpoint(
+        language: str | None = None,
+        kind: str | None = None,
+        status: str = "live",
+        limit: int = 100,
+    ):
+        from engram_server.variable_tracker import list_variables
+        return list_variables(_db(), language=language, kind=kind, status=status, limit=limit)
+
+    @app.get("/api/variables/renames")
+    def renames_endpoint(limit: int = 50):
+        from engram_server.variable_tracker import find_renames
+        return find_renames(_db(), limit=limit)
+
+    @app.get("/api/variables/stats")
+    def variable_stats_endpoint():
+        from engram_server.variable_tracker import variable_stats
+        return variable_stats(_db())
+
+    @app.get("/api/variables/search")
+    def search_variables_endpoint(q: str, limit: int = 20):
+        from engram_server.variable_tracker import search_variables
+        return search_variables(_db(), q, limit=limit)
+
+    @app.get("/api/variables/{name}")
+    def find_variable_endpoint(name: str):
+        from engram_server.variable_tracker import find_variable
+        return find_variable(_db(), name) or {"found": False, "name": name}
+
+    @app.get("/api/todos")
+    def list_todos_endpoint(marker_type: str | None = None, limit: int = 50):
+        from engram_server.code_ingest import find_todos
+        return find_todos(_db(), marker_type=marker_type, limit=limit)
+
+    @app.post("/api/ingest-repo")
+    def ingest_repo_endpoint(body: dict):
+        from pathlib import Path
+        from engram_server.code_ingest import ingest_repo
+        ctx = _ctx()
+        repo_path = Path(body["path"]).expanduser().resolve()
+        max_files = int(body.get("max_files", 500))
+        return ingest_repo(repo_path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25, max_files=max_files)
+
+    @app.post("/api/ingest-code")
+    def ingest_code_endpoint(body: dict):
+        from pathlib import Path
+        from engram_server.code_ingest import ingest_code_file
+        ctx = _ctx()
+        path = Path(body["path"]).expanduser().resolve()
+        if not path.exists():
+            return {"error": f"File not found: {path}"}
+        result = ingest_code_file(path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+        return result or {"error": "Could not ingest"}
+
+    # --- Call graph ---
+
+    @app.get("/api/calls/callers/{name}")
+    def callers_endpoint(name: str, limit: int = 50):
+        from engram_server.call_graph import find_callers
+        return find_callers(_db(), name, limit=limit)
+
+    @app.get("/api/calls/callees/{name}")
+    def callees_endpoint(name: str, limit: int = 100):
+        from engram_server.call_graph import find_callees
+        return find_callees(_db(), name, limit=limit)
+
+    @app.get("/api/calls/graph/{name}")
+    def call_graph_endpoint(name: str, depth: int = 2, direction: str = "callers"):
+        from engram_server.call_graph import call_graph_for
+        return call_graph_for(_db(), name, depth=depth, direction=direction)
+
+    @app.get("/api/calls/hot")
+    def hot_functions_endpoint(limit: int = 20):
+        from engram_server.call_graph import hot_functions
+        return hot_functions(_db(), limit=limit)
+
+    @app.post("/api/impact-radius")
+    def impact_radius_endpoint(body: dict):
+        """Blast radius of changes. Body: {"filepaths": [...], "max_depth": 3}"""
+        from engram_server.impact import get_impact_radius
+        filepaths = body.get("filepaths") or []
+        max_depth = int(body.get("max_depth", 3))
+        max_affected = int(body.get("max_affected", 200))
+        return get_impact_radius(_db(), filepaths, max_depth=max_depth, max_affected=max_affected)
+
+    @app.post("/api/detect-changes")
+    def detect_changes_endpoint(body: dict):
+        """Risk-scored PR review. Body: {"diff": "..."} or {"filepaths": [...]}"""
+        from engram_server.impact import detect_changes
+        diff_text = body.get("diff", "") or ""
+        filepaths = body.get("filepaths")
+        max_depth = int(body.get("max_depth", 3))
+        return detect_changes(_db(), diff_text=diff_text, filepaths=filepaths, max_depth=max_depth)
+
+    @app.post("/api/review-context")
+    def review_context_endpoint(body: dict):
+        """Token-efficient structural review context for a list of files.
+
+        Body: {"filepaths": ["src/auth.py", ...], "total_token_budget": 3000}
+        """
+        from engram_server.review_context import get_review_context
+        filepaths = body.get("filepaths") or []
+        budget = int(body.get("total_token_budget", 3000))
+        callers = int(body.get("callers_per_symbol", 3))
+        callees = int(body.get("callees_per_symbol", 3))
+        memories = int(body.get("memories_per_symbol", 2))
+        return get_review_context(
+            _db(),
+            filepaths,
+            total_token_budget=budget,
+            callers_per_symbol=callers,
+            callees_per_symbol=callees,
+            memories_per_symbol=memories,
+        )
+
+    @app.get("/api/calls/dead")
+    def find_dead_code_endpoint(stale_days: int = 60, max_callers: int = 0, limit: int = 50):
+        from engram_server.call_graph import find_dead_code
+        return find_dead_code(_db(), stale_days=stale_days, max_callers=max_callers, limit=limit)
+
+    @app.get("/api/calls/stale-renames")
+    def find_renamed_callsites_endpoint(limit: int = 50):
+        from engram_server.call_graph import find_renamed_callsites
+        return find_renamed_callsites(_db(), limit=limit)
+
+    @app.get("/api/sessions/{session_id}/replay")
+    def replay_session_endpoint(session_id: str, max_events: int = 200):
+        from engram_server.hooks import replay_session
+        return replay_session(_ctx(), session_id, max_events=max_events)
+
+    # --- Hooks: auto-capture observations from Claude Code lifecycle ---
+
+    @app.post("/api/observations")
+    def capture_observation_endpoint(body: dict):
+        """Receive a Claude Code hook payload and persist it as an observation.
+
+        Body shape: {"event": "PostToolUse", "payload": {...}}
+        """
+        from engram_server.hooks import capture_observation
+        ctx = _ctx()
+        event = body.get("event") or body.get("hook_event_name") or "Unknown"
+        payload = body.get("payload") or body
+        result = capture_observation(ctx, manager.embedder, event, payload)
+        return result or {"status": "skipped", "event": event}
+
+    @app.post("/api/insights/extract")
+    def extract_insights_endpoint(body: dict):
+        """Extract factual claims from a block of text.
+
+        Body: {"text": "...", "save": true|false}
+
+        When save=true, promotes each extracted insight to a first-class
+        memory engram. When save=false (default), just returns the
+        extractions for preview. Useful for piping email/doc/meeting
+        notes through the same extractor the hooks use on UserPromptSubmit.
+        """
+        from engram_server.insight_extractor import (
+            extract_insights,
+            promote_insights_from_text,
+        )
+        text = (body.get("text") or "").strip()
+        if not text:
+            return {"error": "text is required"}
+        ctx = _ctx()
+        if body.get("save"):
+            created = promote_insights_from_text(ctx, text)
+            return {"mode": "save", "insights": created, "count": len(created)}
+        insights = extract_insights(text)
+        return {
+            "mode": "preview",
+            "insights": [
+                {
+                    "title": i.title,
+                    "fact": i.fact,
+                    "pattern": i.pattern_name,
+                    "confidence": i.confidence,
+                    "negated": i.negated,
+                }
+                for i in insights
+            ],
+            "count": len(insights),
+        }
+
+    @app.post("/api/observations/rollup")
+    def rollup_session_endpoint(body: dict):
+        """Compress one session's observations into a summary engram.
+        Body: {"session_id": "<short or full id>"}
+        """
+        from engram_server.observation_rollup import rollup_session
+        ctx = _ctx()
+        session = (body.get("session_id") or "").strip()
+        if not session:
+            return {"error": "session_id is required"}
+        short = session[:8] if len(session) > 8 else session
+        return rollup_session(ctx, short)
+
+    @app.post("/api/observations/rollup-stale")
+    def rollup_stale_endpoint(body: dict):
+        """Run the bulk rollup-stale pass. Body: {"older_than_hours": 24, "min_events": 3}"""
+        from engram_server.observation_rollup import rollup_stale_sessions
+        ctx = _ctx()
+        return rollup_stale_sessions(
+            ctx,
+            older_than_hours=int(body.get("older_than_hours", 24)),
+            min_events=int(body.get("min_events", 3)),
+            max_sessions=int(body.get("max_sessions", 10)),
+        )
+
+    @app.get("/api/observations/stats")
+    def observation_stats_endpoint():
+        """Observability for observation / session-summary / archive counts."""
+        from engram_server.observation_rollup import get_rollup_stats
+        return get_rollup_stats(_ctx())
+
+    @app.get("/api/observations")
+    def list_observation_sessions_endpoint(limit: int = 25):
+        """List recent Claude Code sessions with per-session counts.
+
+        Parses the `obs-{session}-*.md` filename convention to group
+        observations by session. Frontend uses this to show a 'recent
+        sessions' list with replay buttons.
+        """
+        db = _db()
+        rows = db.conn.execute(
+            """SELECT filename, title, created_at
+               FROM engrams
+               WHERE filename LIKE 'obs-%' AND state != 'dormant'
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (limit * 20,),
+        ).fetchall()
+        sessions: dict[str, dict] = {}
+        for filename, title, created_at in rows:
+            # obs-{short_session}-{event}-{shortid}.md
+            parts = filename.split("-", 3)
+            if len(parts) < 3:
+                continue
+            sid = parts[1]
+            s = sessions.setdefault(sid, {
+                "session_id": sid,
+                "event_count": 0,
+                "first_seen": created_at,
+                "last_seen": created_at,
+                "latest_title": title,
+            })
+            s["event_count"] += 1
+            if created_at < s["first_seen"]:
+                s["first_seen"] = created_at
+            if created_at > s["last_seen"]:
+                s["last_seen"] = created_at
+                s["latest_title"] = title
+        ordered = sorted(sessions.values(), key=lambda s: s["last_seen"], reverse=True)
+        return ordered[:limit]
+
+    @app.get("/api/observations/{session_id}")
+    def list_session_observations_endpoint(session_id: str, limit: int = 50):
+        """Return all observation engrams for a given Claude Code session."""
+        from engram_server.hooks import list_session_observations
+        return list_session_observations(_ctx(), session_id, limit=limit)
+
+    @app.get("/api/feedback/stats")
+    def feedback_stats_endpoint():
+        """Observability for the self-improving retrieval feedback loop."""
+        from engram_server.retrieval_feedback import get_feedback_stats
+        return get_feedback_stats(_db())
+
+    @app.post("/api/feedback/update")
+    def feedback_update_endpoint():
+        """Manually trigger a feedback update pass (normally runs in consolidation)."""
+        from engram_server.retrieval_feedback import apply_feedback_update
+        return apply_feedback_update(_db())
+
+    @app.get("/api/affinity/stats")
+    def affinity_stats_endpoint():
+        """Observability for learned query→engram shortcuts (Stage 4)."""
+        from engram_server.query_affinity import get_affinity_stats
+        return get_affinity_stats(_db())
+
+    @app.post("/api/affinity/reconcile")
+    def affinity_reconcile_endpoint():
+        """Manually trigger the query-affinity reconcile pass."""
+        from engram_server.query_affinity import reconcile_feedback
+        ctx = _ctx()
+        return reconcile_feedback(ctx.db, manager.embedder, ctx.bm25)
+
+    @app.get("/api/recall")
+    def recall_endpoint(
+        q: str,
+        limit: int = 10,
+        mode: str = "preview",
+        as_of: str | None = None,
+    ):
+        """Hybrid retrieval over the active brain. Pass as_of (ISO) for time travel."""
+        from engram_server.retriever import hybrid_retrieve
+        ctx = _ctx()
+        results = hybrid_retrieve(
+            q, ctx.db, manager.embedder, ctx.bm25, top_k=limit, as_of=as_of
+        )
+        if mode == "titles":
+            return [
+                {"engram_id": r["engram_id"], "title": r["title"], "score": r["score"]}
+                for r in results
+            ]
+        if mode == "full":
+            return results
+        return [
+            {
+                "engram_id": r["engram_id"],
+                "title": r["title"],
+                "preview": (r["content"] or "")[:200],
+                "score": r["score"],
+            }
+            for r in results
+        ]
 
     @app.get("/api/session-context")
     def session_ctx():

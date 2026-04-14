@@ -96,7 +96,14 @@ interface HoverCard {
   preview: string;
 }
 
-export function NeuralGraph() {
+interface NeuralGraphProps {
+  /** Called when the user clicks "View note" on a hover card. Lets the
+   * parent switch back to the Editor view so the selected note becomes
+   * visible (the graph view has no editor of its own). */
+  onOpenNote?: () => void;
+}
+
+export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const nodesRef = useRef<SimNode[]>([]);
@@ -109,10 +116,34 @@ export function NeuralGraph() {
 
   const [hoverCard, setHoverCard] = useState<HoverCard | null>(null);
   const previewCacheRef = useRef<Record<string, string>>({});
+  // Grace-period timer for closing the hover card. Without this, moving the
+  // cursor from the node toward the card (through the 30px gap) fires
+  // onMouseMove-with-no-node and closes the card before the user can click
+  // "View note". The timer is cancelled when the cursor enters the card.
+  const closeTimerRef = useRef<number | null>(null);
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleClose = useCallback((delayMs: number = 250) => {
+    if (closeTimerRef.current !== null) return;  // already scheduled
+    closeTimerRef.current = window.setTimeout(() => {
+      setHoverCard(null);
+      closeTimerRef.current = null;
+    }, delayMs);
+  }, []);
+
+  // Clean up any pending timer on unmount
+  useEffect(() => () => cancelClose(), [cancelClose]);
 
   const { nodes, edges, loadGraph, setSelected } = useGraphStore();
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
+  const activeFilename = useNoteStore((s) => s.activeFilename);
 
   // Sync store into refs and pre-simulate to settle
   useEffect(() => {
@@ -194,6 +225,35 @@ export function NeuralGraph() {
     }
   }, [allNotes]);
 
+  // When the user clicks a sidebar note while the graph is visible, open
+  // the hover card over the matching node instead of silently switching
+  // the active note in the background. NeuralGraph only exists while the
+  // user is on the graph view, so this effect won't fire during editor
+  // navigation.
+  useEffect(() => {
+    if (!activeFilename) return;
+    const matchingNote = allNotes.find((n) => n.filename === activeFilename);
+    if (!matchingNote) return;
+    const title = matchingNote.title;
+    // Find the node in the current sim. Use the live ref so we get the
+    // post-settle coordinates even if React's state hasn't flushed yet.
+    const node = nodesRef.current.find((n) => n.title === title);
+    if (!node) return;
+
+    const { w, h } = sizeRef.current;
+    if (w === 0 || h === 0) return;
+    const nx = node.x * w;
+    const ny = node.y * h;
+    const cardX = nx + 30 > w - 280 ? nx - 290 : nx + 30;
+    const cardY = Math.max(10, Math.min(h - 200, ny - 50));
+
+    cancelClose();
+    loadPreviewForNode(node).then((preview) => {
+      setHoverCard({ node, x: cardX, y: cardY, preview });
+      setSelected(node.id);
+    });
+  }, [activeFilename, allNotes, loadPreviewForNode, cancelClose, setSelected]);
+
   const onMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const { cx, cy } = getCanvasPos(e);
@@ -214,7 +274,8 @@ export function NeuralGraph() {
       if (canvas) canvas.style.cursor = node ? "pointer" : "default";
 
       if (node) {
-        // Position card next to node
+        // Cursor is on a node — cancel any pending close and (re)position the card.
+        cancelClose();
         const { w, h } = sizeRef.current;
         const nx = node.x * w;
         const ny = node.y * h;
@@ -227,11 +288,14 @@ export function NeuralGraph() {
             setHoverCard({ node, x: cardX, y: cardY, preview });
           });
         }
-      } else {
-        if (hoverCard) setHoverCard(null);
+      } else if (hoverCard) {
+        // Cursor moved off a node. Don't close the card immediately — the
+        // user may be transiting through empty canvas toward the "View note"
+        // button. Schedule a close; the card's onMouseEnter will cancel it.
+        scheduleClose();
       }
     },
-    [findNodeAt, getCanvasPos, hoverCard, loadPreviewForNode]
+    [findNodeAt, getCanvasPos, hoverCard, loadPreviewForNode, cancelClose, scheduleClose]
   );
 
   const onMouseDown = useCallback(
@@ -248,13 +312,17 @@ export function NeuralGraph() {
   }, []);
 
   const handleViewNote = useCallback((node: SimNode) => {
+    cancelClose();
     setSelected(node.id);
     const match = allNotes.find((n) => n.title === node.title);
     if (match) {
       selectNote(match.filename);
       setHoverCard(null);
+      // Switch back to the editor so the selected note is visible — the
+      // graph view has no editor of its own.
+      onOpenNote?.();
     }
-  }, [setSelected, selectNote, allNotes]);
+  }, [setSelected, selectNote, allNotes, cancelClose, onOpenNote]);
 
   // Render loop — only redraws on change/hover, not constantly
   useEffect(() => {
@@ -353,7 +421,9 @@ export function NeuralGraph() {
         onMouseUp={onMouseUp}
         onMouseLeave={() => {
           dragRef.current = null;
-          setHoverCard(null);
+          // Grace period — the user may be moving toward the hover card,
+          // which sits inside this same container div.
+          scheduleClose();
         }}
         className="absolute inset-0 w-full h-full"
       />
@@ -363,7 +433,8 @@ export function NeuralGraph() {
         <div
           className="absolute bg-[#0d0d1a] border border-[#1e1e38] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
           style={{ left: hoverCard.x, top: hoverCard.y }}
-          onMouseEnter={() => { /* keep card open */ }}
+          onMouseEnter={cancelClose}
+          onMouseLeave={() => scheduleClose()}
         >
           <div className="flex items-start justify-between gap-2 mb-2">
             <h3 className="text-sm font-semibold text-[#ddd9f0] font-[Geist,sans-serif] leading-tight">

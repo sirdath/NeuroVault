@@ -8,6 +8,10 @@ Improvements over v1:
 - BM25 gets higher weight for short/keyword queries where it excels
 """
 
+import math
+import re
+from datetime import datetime, timezone
+
 import numpy as np
 from sentence_transformers import CrossEncoder
 from loguru import logger
@@ -82,6 +86,114 @@ def _expand_query(query: str) -> str:
     return query
 
 
+# Query-aware temporal intent classifier (Stage 2 of self-improving retrieval).
+# Fires on strong signals only — ambiguous queries default to neutral so we
+# don't surprise users. If both fresh and historical match, we also default
+# to neutral to avoid a wrong bet.
+_FRESH_PATTERNS = re.compile(
+    r"\b("
+    r"recent|recently|latest|newest|current|currently|now|today|tonight|"
+    r"yesterday|just now|lately|updated|newly|most recent|"
+    r"this (week|month|year|morning|afternoon|evening)|"
+    r"in the last \w+|for the last \w+"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_HISTORICAL_PATTERNS = re.compile(
+    r"\b("
+    r"original|originally|first|initially|initial|used to|back then|back when|"
+    r"previously|formerly|historically|ancient|long ago|in the past|"
+    r"at the start|at the beginning|early on|earlier|old(est|er)?|"
+    r"was (the|a|an|my|our|your)|were (the|a|my|our|your)|before (we|i|they|you)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def classify_temporal_intent(query: str) -> str:
+    """Classify a query as 'fresh', 'historical', or 'neutral'.
+
+    Used by hybrid_retrieve to decide whether to emphasize newer or older
+    memories for this specific query. Conservative — only fires on strong
+    signals so neutral queries behave identically to the current default.
+    """
+    if not query:
+        return "neutral"
+    fresh = bool(_FRESH_PATTERNS.search(query))
+    historical = bool(_HISTORICAL_PATTERNS.search(query))
+    if fresh and not historical:
+        return "fresh"
+    if historical and not fresh:
+        return "historical"
+    return "neutral"
+
+
+def _recency_params(intent: str) -> tuple[float, float]:
+    """Return (newest_factor, oldest_factor) for a given temporal intent.
+
+    Philosophy: recency is only a retrieval signal when the user
+    explicitly asks for it. A neutral query gets no recency weighting —
+    semantic relevance + the decision/contradiction bonuses do the work.
+    Otherwise recency silently contaminates every query, which the
+    research on LLM reranker recency bias confirms is a real hazard.
+    """
+    if intent == "fresh":
+        return (1.00, 0.60)   # wide, strongly favor newest
+    if intent == "historical":
+        return (0.60, 1.00)   # INVERTED, oldest wins
+    return (1.00, 1.00)       # neutral — no recency tilt, let semantics lead
+
+
+def _recency_lambda(intent: str) -> float:
+    """Return the exponential decay rate λ (in 1/days) for the age prior.
+
+    From arxiv 2509.19376 — "Solving Freshness in RAG: A Simple Recency
+    Prior..." — a dumb exp(-λ·age_days) multiplier outperforms most
+    sophisticated temporal models. We layer it on top of the linear
+    spread:
+
+    - fresh: moderate λ (half-life ≈ 70d). Combined with the linear
+      spread, fresh intent gets both rank-relative AND absolute-age
+      penalties for older memories.
+    - neutral: gentle λ (half-life ≈ 2 years). Almost invisible for
+      recent memories, meaningful only for years-old ones. Keeps the
+      entity-disambiguation case passing because sub-day age diffs are
+      effectively zero.
+    - historical: 0. User asked about the past; we do NOT penalize age.
+    """
+    if intent == "fresh":
+        return 0.01
+    if intent == "historical":
+        return 0.0
+    return 0.001
+
+
+def _age_days(updated_at: str | None) -> float:
+    """Parse a stored ISO timestamp and return its age in days (>= 0).
+
+    Timestamps are written by `insert_engram` via SQLite's
+    strftime('%Y-%m-%d %H:%M:%f', 'now') which is UTC. We compare to
+    datetime.utcnow() (also naive UTC) so both sides of the subtraction
+    live in the same reference frame.
+    """
+    if not updated_at:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(updated_at)
+    except (ValueError, TypeError):
+        return 0.0
+    # If the parsed datetime is naive (no tzinfo), treat it as UTC since
+    # SQLite's strftime('%Y-%m-%d %H:%M:%f', 'now') writes UTC by default.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        delta = datetime.now(timezone.utc) - dt
+    except Exception:
+        return 0.0
+    return max(0.0, delta.total_seconds() / 86400.0)
+
+
 def hybrid_retrieve(
     query: str,
     db: Database,
@@ -89,10 +201,28 @@ def hybrid_retrieve(
     bm25: BM25Index,
     top_k: int = 10,
     use_reranker: bool = False,
+    as_of: str | None = None,
+    exclude_kinds: list[str] | None = None,
 ) -> list[dict]:
-    """Hybrid retrieval with adaptive weighting and query expansion."""
+    """Hybrid retrieval with adaptive weighting and query expansion.
+
+    If `as_of` is provided (ISO timestamp), the brain is queried *as it was*
+    at that moment: engrams created/updated after as_of are excluded, and
+    temporal facts that became valid after as_of are ignored. Lets Claude
+    answer "what did you know about X last Tuesday?" — pure time travel
+    over the cognitive layer.
+
+    `exclude_kinds` filters out engrams by kind (e.g. 'observation') before
+    scoring. Defaults to excluding observations so the auto-captured hook
+    pipeline doesn't drown out manual memories. Pass an empty list to
+    include everything, or a custom list like ['observation', 'draft'].
+    """
+    if exclude_kinds is None:
+        exclude_kinds = ["observation"]
+    exclude_set = set(exclude_kinds)
     candidate_pool = top_k * 4
     query_type = _classify_query(query)
+    temporal_intent = classify_temporal_intent(query)
 
     # Adapt weights based on query type
     if query_type == "keyword":
@@ -199,23 +329,139 @@ def hybrid_retrieve(
 
     sorted_candidates = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
-    # Build candidate list
+    # Build candidate list — apply as_of filter at engram resolution time so
+    # engrams created/updated after the timestamp are dropped before scoring.
+    # Also drop any engram whose kind is in the exclude_set (default: observations,
+    # so the auto-captured hook pipeline doesn't drown out manual memories).
     candidates: list[dict] = []
     for eid, rrf in sorted_candidates[:candidate_pool]:
         engram = db.get_engram(eid)
         if not engram or engram["state"] == "dormant":
             continue
+        if exclude_set and (engram.get("kind") or "note") in exclude_set:
+            continue
+        if as_of:
+            created = engram.get("created_at") or ""
+            if created and created > as_of:
+                continue  # didn't exist yet at as_of
         candidates.append({
             "engram_id": eid,
             "title": engram["title"],
             "content": engram["content"][:1000],
             "strength": engram["strength"],
             "state": engram["state"],
+            "updated_at": engram.get("updated_at", ""),
+            "created_at": engram.get("created_at", ""),
+            "kind": engram.get("kind") or "note",
             "rrf_score": rrf,
         })
 
     if not candidates:
         return []
+
+    # --- Temporal & decision-aware adjustments ---
+    # Newer memories beat older ones on contested topics; explicitly-superseded
+    # facts get a hard penalty; titles flagged as decisions/updates get a small
+    # bonus. Together these handle "Database Migration > Database Choice" and
+    # "Decision: No Redis > Considered: Redis" without changing recall accuracy
+    # for non-temporal queries.
+    eids = [c["engram_id"] for c in candidates]
+    if eids:
+        placeholders = ",".join("?" * len(eids))
+        if as_of:
+            # A fact only counts as superseded at as_of if its valid_until was
+            # already in the past at that timestamp. Otherwise it was still
+            # current at as_of, so we must NOT penalize it.
+            superseded_rows = db.conn.execute(
+                f"""SELECT engram_id FROM temporal_facts
+                    WHERE engram_id IN ({placeholders})
+                      AND valid_until IS NOT NULL
+                      AND valid_until <= ?""",
+                eids + [as_of],
+            ).fetchall()
+        else:
+            superseded_rows = db.conn.execute(
+                f"SELECT engram_id FROM temporal_facts WHERE engram_id IN ({placeholders}) AND is_current = 0",
+                eids,
+            ).fetchall()
+        superseded_eids = {r[0] for r in superseded_rows}
+    else:
+        superseded_eids = set()
+
+    # Query-aware recency spread: the newest/oldest factor range shifts
+    # based on whether the query wants fresh content, historical content,
+    # or is neutral. Fresh widens the spread toward newest; historical
+    # INVERTS the gradient so older memories win; neutral keeps the
+    # current default (1.00 → 0.80).
+    newest_f, oldest_f = _recency_params(temporal_intent)
+    lambda_days = _recency_lambda(temporal_intent)
+
+    sorted_by_recency = sorted(candidates, key=lambda c: c["updated_at"] or "", reverse=True)
+    n = len(sorted_by_recency)
+    for i, c in enumerate(sorted_by_recency):
+        if n <= 1:
+            linear = newest_f
+        else:
+            t = i / (n - 1)
+            linear = newest_f + t * (oldest_f - newest_f)
+
+        # Layer the absolute exponential age decay on top of the linear
+        # rank-relative spread. λ=0 (historical intent) disables this
+        # entirely. Safe for all existing tests because the test scenarios
+        # create memories seconds apart — age_days ≈ 0 → multiplier ≈ 1.
+        age_factor = 1.0
+        if lambda_days > 0:
+            age_days = _age_days(c.get("updated_at"))
+            age_factor = math.exp(-lambda_days * age_days)
+
+        c["recency_factor"] = linear * age_factor
+        c["age_days"] = _age_days(c.get("updated_at")) if lambda_days > 0 else 0.0
+
+    DECISION_KEYWORDS = (
+        "decision:", "decided", "update:", "actually", "instead",
+        "switched", "migrated", "migration", "moved to", "moving to",
+    )
+    NEGATION_HINTS = (
+        "not using", "no longer", "moved away", "deprecated",
+        "abandoned", " not ", "won't use", "wont use", "stopped using",
+    )
+
+    # Stage 4: learned query→engram affinities. If we've previously seen
+    # this exact query and the user fetched a specific engram as the
+    # answer, boost it directly. Capped at +0.05 per pair.
+    affinity_map: dict[str, float] = {}
+    try:
+        from engram_server.query_affinity import lookup_affinities, affinity_boost
+        # Pass the already-computed query_embedding so the semantic
+        # fallback can fire without re-encoding. Cosine similarity
+        # catches paraphrased queries, not just literal repeats.
+        for entry in lookup_affinities(db, query, query_embedding=list(query_embedding)):
+            affinity_map[entry["engram_id"]] = affinity_boost(entry["hit_count"])
+    except Exception as e:
+        logger.debug("query_affinity lookup skipped: {}", e)
+
+    for c in candidates:
+        title_lower = c["title"].lower()
+        content_head = c["content"][:300].lower()
+        c["decision_bonus"] = 0.0
+        c["affinity_bonus"] = affinity_map.get(c["engram_id"], 0.0)
+
+        if temporal_intent == "historical":
+            # User explicitly asked about the past. Newer decisions are
+            # NOT the answer — whatever was true then is. Skip the decision
+            # bonus and *reward* superseded facts since they're what the
+            # user is looking for.
+            if c["engram_id"] in superseded_eids:
+                c["recency_factor"] = min(1.0, c["recency_factor"] * 1.5)
+            continue
+
+        if any(k in title_lower for k in DECISION_KEYWORDS):
+            c["decision_bonus"] = 0.08
+        elif any(p in content_head for p in NEGATION_HINTS):
+            c["decision_bonus"] = 0.05
+        if c["engram_id"] in superseded_eids:
+            c["recency_factor"] *= 0.5
+            c["decision_bonus"] = 0.0
 
     # --- Optional cross-encoder reranking ---
     if use_reranker and len(candidates) > 1:
@@ -229,9 +475,22 @@ def hybrid_retrieve(
         for c in candidates:
             c["rerank_score"] = c["rrf_score"]
 
-    # --- Final scoring: 80% rerank + 20% strength ---
+    # --- Final scoring: rerank + strength + recency + decision + affinity ---
+    # Insight engrams carry a small flat boost: they're distilled 1-line
+    # facts promoted from conversation, so when they match a query they're
+    # almost always the most useful answer versus a long code file or a
+    # raw observation that happens to share keywords.
+    INSIGHT_BOOST = 0.06
     for c in candidates:
-        c["final_score"] = round(c["rerank_score"] * 0.8 + c["strength"] * 0.2, 4)
+        base = c["rerank_score"] * 0.75 + c["strength"] * 0.15
+        kind_bonus = INSIGHT_BOOST if c.get("kind") == "insight" else 0.0
+        c["final_score"] = round(
+            base * c["recency_factor"]
+            + c["decision_bonus"]
+            + c.get("affinity_bonus", 0.0)
+            + kind_bonus,
+            4,
+        )
 
     candidates.sort(key=lambda x: x["final_score"], reverse=True)
 
@@ -248,8 +507,8 @@ def hybrid_retrieve(
         db.bump_access(c["engram_id"])
 
     logger.info(
-        "Hybrid retrieval: {} results for '{}' (type={}, semantic={}, bm25={}, graph={}, titles={}, reranker={})",
-        len(results), query[:50], query_type,
+        "Hybrid retrieval: {} results for '{}' (type={}, intent={}, semantic={}, bm25={}, graph={}, titles={}, reranker={})",
+        len(results), query[:50], query_type, temporal_intent,
         len(semantic_ranked), len(bm25_ranked), len(graph_ranked), len(title_matches),
         "on" if use_reranker else "off",
     )

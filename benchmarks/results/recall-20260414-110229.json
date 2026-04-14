@@ -1,0 +1,527 @@
+{
+  "timestamp": "20260414-110229",
+  "fast": {
+    "config": {
+      "use_reranker": false,
+      "embedding_model": "BAAI/bge-small-en-v1.5",
+      "test_corpus_size": 25,
+      "test_queries": 25,
+      "ingest_time_seconds": 4.41
+    },
+    "metrics": {
+      "top1_accuracy": "13/25 (52%)",
+      "top3_accuracy": "24/25 (96%)",
+      "top5_accuracy": "24/25 (96%)",
+      "mrr": 0.74,
+      "median_latency_ms": 74.8,
+      "p95_latency_ms": 77.7,
+      "max_latency_ms": 77.7
+    },
+    "by_difficulty": {
+      "easy": {
+        "count": 5,
+        "top1": "1/5 (20%)",
+        "top3": "5/5 (100%)"
+      },
+      "medium": {
+        "count": 10,
+        "top1": "5/10 (50%)",
+        "top3": "9/10 (90%)"
+      },
+      "hard": {
+        "count": 10,
+        "top1": "7/10 (70%)",
+        "top3": "10/10 (100%)"
+      }
+    },
+    "results": [
+      {
+        "query": "How does Python async/await work?",
+        "expected": "python-async.md",
+        "expected_title": "Python Async Programming",
+        "rank": 2,
+        "difficulty": "easy",
+        "top1": "REST API Design Principles",
+        "latency_ms": 77.7
+      },
+      {
+        "query": "What is Rust ownership?",
+        "expected": "rust-ownership.md",
+        "expected_title": "Rust Ownership Model",
+        "rank": 2,
+        "difficulty": "easy",
+        "top1": "REST API Design Principles",
+        "latency_ms": 72.0
+      },
+      {
+        "query": "React useState hook best practices",
+        "expected": "react-hooks.md",
+        "expected_title": "React Hooks Best Practices",
+        "rank": 2,
+        "difficulty": "easy",
+        "top1": "REST API Design Principles",
+        "latency_ms": 71.9
+      },
+      {
+        "query": "PostgreSQL B-tree indexes",
+        "expected": "postgresql-indexing.md",
+        "expected_title": "PostgreSQL Index Strategies",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "PostgreSQL Index Strategies",
+        "latency_ms": 76.4
+      },
+      {
+        "query": "Docker Compose YAML",
+        "expected": "docker-compose.md",
+        "expected_title": "Docker Compose Orchestration",
+        "rank": 2,
+        "difficulty": "easy",
+        "top1": "REST API Design Principles",
+        "latency_ms": 74.2
+      },
+      {
+        "query": "How do transformers focus on different parts of input?",
+        "expected": "transformers-attention.md",
+        "expected_title": "Transformer Attention Mechanism",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Transformer Attention Mechanism",
+        "latency_ms": 75.7
+      },
+      {
+        "query": "What is RAG and how does it ground LLM outputs?",
+        "expected": "rag-retrieval.md",
+        "expected_title": "Retrieval Augmented Generation",
+        "rank": null,
+        "difficulty": "medium",
+        "top1": "Transformer Attention Mechanism",
+        "latency_ms": 73.4
+      },
+      {
+        "query": "How are text embeddings created?",
+        "expected": "vector-embeddings.md",
+        "expected_title": "Vector Embeddings for Semantic Search",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Vector Embeddings for Semantic Search",
+        "latency_ms": 74.8
+      },
+      {
+        "query": "Should I rebase or merge my feature branch?",
+        "expected": "git-rebasing.md",
+        "expected_title": "Git Rebasing vs Merging",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Git Rebasing vs Merging",
+        "latency_ms": 77.5
+      },
+      {
+        "query": "Smallest deployable unit in K8s",
+        "expected": "kubernetes-pods.md",
+        "expected_title": "Kubernetes Pod Lifecycle",
+        "rank": 2,
+        "difficulty": "medium",
+        "top1": "REST API Design Principles",
+        "latency_ms": 74.1
+      },
+      {
+        "query": "How do I structure my thesis chapters?",
+        "expected": "dissertation-structure.md",
+        "expected_title": "Dissertation Chapter Structure",
+        "rank": 2,
+        "difficulty": "medium",
+        "top1": "Writing a Literature Review",
+        "latency_ms": 76.6
+      },
+      {
+        "query": "Reference manager that works with Word",
+        "expected": "citation-management.md",
+        "expected_title": "Citation Management with Zotero",
+        "rank": 2,
+        "difficulty": "medium",
+        "top1": "REST API Design Principles",
+        "latency_ms": 72.7
+      },
+      {
+        "query": "How to organize sources in a lit review",
+        "expected": "literature-review.md",
+        "expected_title": "Writing a Literature Review",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Writing a Literature Review",
+        "latency_ms": 76.7
+      },
+      {
+        "query": "Framework for clinical research questions",
+        "expected": "research-questions.md",
+        "expected_title": "Formulating Research Questions",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Formulating Research Questions",
+        "latency_ms": 77.6
+      },
+      {
+        "query": "How to analyze interview transcripts",
+        "expected": "qualitative-coding.md",
+        "expected_title": "Qualitative Data Coding Methods",
+        "rank": 2,
+        "difficulty": "medium",
+        "top1": "Writing a Literature Review",
+        "latency_ms": 75.9
+      },
+      {
+        "query": "What does p < 0.05 mean?",
+        "expected": "statistical-significance.md",
+        "expected_title": "Statistical Significance Testing",
+        "rank": 2,
+        "difficulty": "hard",
+        "top1": "REST API Design Principles",
+        "latency_ms": 71.1
+      },
+      {
+        "query": "Why do I forget things over time?",
+        "expected": "memory-decay.md",
+        "expected_title": "Ebbinghaus Forgetting Curve",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Ebbinghaus Forgetting Curve",
+        "latency_ms": 73.2
+      },
+      {
+        "query": "Graph database for entities and relationships",
+        "expected": "knowledge-graphs.md",
+        "expected_title": "Knowledge Graph Fundamentals",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Knowledge Graph Fundamentals",
+        "latency_ms": 75.8
+      },
+      {
+        "query": "My model performs great on training but bad on test",
+        "expected": "ml-overfitting.md",
+        "expected_title": "Preventing Overfitting in Machine Learning",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Preventing Overfitting in Machine Learning",
+        "latency_ms": 73.2
+      },
+      {
+        "query": "Best practices for HTTP endpoints",
+        "expected": "api-design.md",
+        "expected_title": "REST API Design Principles",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "REST API Design Principles",
+        "latency_ms": 73.0
+      },
+      {
+        "query": "Reusable functions across types in TS",
+        "expected": "typescript-generics.md",
+        "expected_title": "TypeScript Generic Types",
+        "rank": 2,
+        "difficulty": "hard",
+        "top1": "REST API Design Principles",
+        "latency_ms": 77.6
+      },
+      {
+        "query": "One-dimensional layout for web pages",
+        "expected": "css-flexbox.md",
+        "expected_title": "CSS Flexbox Layout",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "CSS Flexbox Layout",
+        "latency_ms": 75.6
+      },
+      {
+        "query": "Make my SQLite queries faster",
+        "expected": "sqlite-performance.md",
+        "expected_title": "SQLite Performance Tuning",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "SQLite Performance Tuning",
+        "latency_ms": 74.6
+      },
+      {
+        "query": "How big should my embedding vectors be?",
+        "expected": "embeddings-dimensions.md",
+        "expected_title": "Choosing Embedding Dimensions",
+        "rank": 2,
+        "difficulty": "hard",
+        "top1": "Vector Embeddings for Semantic Search",
+        "latency_ms": 73.5
+      },
+      {
+        "query": "Persistent memory for Claude across chats",
+        "expected": "memory-mcp-servers.md",
+        "expected_title": "MCP Memory Servers for Claude",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "MCP Memory Servers for Claude",
+        "latency_ms": 76.0
+      }
+    ]
+  },
+  "with_reranker": {
+    "config": {
+      "use_reranker": true,
+      "embedding_model": "BAAI/bge-small-en-v1.5",
+      "test_corpus_size": 25,
+      "test_queries": 25,
+      "ingest_time_seconds": 3.63
+    },
+    "metrics": {
+      "top1_accuracy": "23/25 (92%)",
+      "top3_accuracy": "25/25 (100%)",
+      "top5_accuracy": "25/25 (100%)",
+      "mrr": 0.96,
+      "median_latency_ms": 138.3,
+      "p95_latency_ms": 3391.5,
+      "max_latency_ms": 4765.3
+    },
+    "by_difficulty": {
+      "easy": {
+        "count": 5,
+        "top1": "5/5 (100%)",
+        "top3": "5/5 (100%)"
+      },
+      "medium": {
+        "count": 10,
+        "top1": "10/10 (100%)",
+        "top3": "10/10 (100%)"
+      },
+      "hard": {
+        "count": 10,
+        "top1": "8/10 (80%)",
+        "top3": "10/10 (100%)"
+      }
+    },
+    "results": [
+      {
+        "query": "How does Python async/await work?",
+        "expected": "python-async.md",
+        "expected_title": "Python Async Programming",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "Python Async Programming",
+        "latency_ms": 4765.3
+      },
+      {
+        "query": "What is Rust ownership?",
+        "expected": "rust-ownership.md",
+        "expected_title": "Rust Ownership Model",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "Rust Ownership Model",
+        "latency_ms": 125.1
+      },
+      {
+        "query": "React useState hook best practices",
+        "expected": "react-hooks.md",
+        "expected_title": "React Hooks Best Practices",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "React Hooks Best Practices",
+        "latency_ms": 116.4
+      },
+      {
+        "query": "PostgreSQL B-tree indexes",
+        "expected": "postgresql-indexing.md",
+        "expected_title": "PostgreSQL Index Strategies",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "PostgreSQL Index Strategies",
+        "latency_ms": 142.1
+      },
+      {
+        "query": "Docker Compose YAML",
+        "expected": "docker-compose.md",
+        "expected_title": "Docker Compose Orchestration",
+        "rank": 1,
+        "difficulty": "easy",
+        "top1": "Docker Compose Orchestration",
+        "latency_ms": 132.0
+      },
+      {
+        "query": "How do transformers focus on different parts of input?",
+        "expected": "transformers-attention.md",
+        "expected_title": "Transformer Attention Mechanism",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Transformer Attention Mechanism",
+        "latency_ms": 137.4
+      },
+      {
+        "query": "What is RAG and how does it ground LLM outputs?",
+        "expected": "rag-retrieval.md",
+        "expected_title": "Retrieval Augmented Generation",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Retrieval Augmented Generation",
+        "latency_ms": 139.6
+      },
+      {
+        "query": "How are text embeddings created?",
+        "expected": "vector-embeddings.md",
+        "expected_title": "Vector Embeddings for Semantic Search",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Vector Embeddings for Semantic Search",
+        "latency_ms": 126.1
+      },
+      {
+        "query": "Should I rebase or merge my feature branch?",
+        "expected": "git-rebasing.md",
+        "expected_title": "Git Rebasing vs Merging",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Git Rebasing vs Merging",
+        "latency_ms": 143.3
+      },
+      {
+        "query": "Smallest deployable unit in K8s",
+        "expected": "kubernetes-pods.md",
+        "expected_title": "Kubernetes Pod Lifecycle",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Kubernetes Pod Lifecycle",
+        "latency_ms": 132.5
+      },
+      {
+        "query": "How do I structure my thesis chapters?",
+        "expected": "dissertation-structure.md",
+        "expected_title": "Dissertation Chapter Structure",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Dissertation Chapter Structure",
+        "latency_ms": 134.0
+      },
+      {
+        "query": "Reference manager that works with Word",
+        "expected": "citation-management.md",
+        "expected_title": "Citation Management with Zotero",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Citation Management with Zotero",
+        "latency_ms": 133.4
+      },
+      {
+        "query": "How to organize sources in a lit review",
+        "expected": "literature-review.md",
+        "expected_title": "Writing a Literature Review",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Writing a Literature Review",
+        "latency_ms": 117.3
+      },
+      {
+        "query": "Framework for clinical research questions",
+        "expected": "research-questions.md",
+        "expected_title": "Formulating Research Questions",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Formulating Research Questions",
+        "latency_ms": 161.8
+      },
+      {
+        "query": "How to analyze interview transcripts",
+        "expected": "qualitative-coding.md",
+        "expected_title": "Qualitative Data Coding Methods",
+        "rank": 1,
+        "difficulty": "medium",
+        "top1": "Qualitative Data Coding Methods",
+        "latency_ms": 123.4
+      },
+      {
+        "query": "What does p < 0.05 mean?",
+        "expected": "statistical-significance.md",
+        "expected_title": "Statistical Significance Testing",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Statistical Significance Testing",
+        "latency_ms": 140.5
+      },
+      {
+        "query": "Why do I forget things over time?",
+        "expected": "memory-decay.md",
+        "expected_title": "Ebbinghaus Forgetting Curve",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Ebbinghaus Forgetting Curve",
+        "latency_ms": 128.0
+      },
+      {
+        "query": "Graph database for entities and relationships",
+        "expected": "knowledge-graphs.md",
+        "expected_title": "Knowledge Graph Fundamentals",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Knowledge Graph Fundamentals",
+        "latency_ms": 185.9
+      },
+      {
+        "query": "My model performs great on training but bad on test",
+        "expected": "ml-overfitting.md",
+        "expected_title": "Preventing Overfitting in Machine Learning",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "Preventing Overfitting in Machine Learning",
+        "latency_ms": 150.9
+      },
+      {
+        "query": "Best practices for HTTP endpoints",
+        "expected": "api-design.md",
+        "expected_title": "REST API Design Principles",
+        "rank": 2,
+        "difficulty": "hard",
+        "top1": "React Hooks Best Practices",
+        "latency_ms": 163.1
+      },
+      {
+        "query": "Reusable functions across types in TS",
+        "expected": "typescript-generics.md",
+        "expected_title": "TypeScript Generic Types",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "TypeScript Generic Types",
+        "latency_ms": 138.3
+      },
+      {
+        "query": "One-dimensional layout for web pages",
+        "expected": "css-flexbox.md",
+        "expected_title": "CSS Flexbox Layout",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "CSS Flexbox Layout",
+        "latency_ms": 165.2
+      },
+      {
+        "query": "Make my SQLite queries faster",
+        "expected": "sqlite-performance.md",
+        "expected_title": "SQLite Performance Tuning",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "SQLite Performance Tuning",
+        "latency_ms": 145.4
+      },
+      {
+        "query": "How big should my embedding vectors be?",
+        "expected": "embeddings-dimensions.md",
+        "expected_title": "Choosing Embedding Dimensions",
+        "rank": 2,
+        "difficulty": "hard",
+        "top1": "Vector Embeddings for Semantic Search",
+        "latency_ms": 128.5
+      },
+      {
+        "query": "Persistent memory for Claude across chats",
+        "expected": "memory-mcp-servers.md",
+        "expected_title": "MCP Memory Servers for Claude",
+        "rank": 1,
+        "difficulty": "hard",
+        "top1": "MCP Memory Servers for Claude",
+        "latency_ms": 152.3
+      }
+    ]
+  }
+}

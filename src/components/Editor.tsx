@@ -9,6 +9,7 @@ import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 import { fetchNote, fetchBacklinks } from "../lib/api";
 import type { Backlink } from "../lib/api";
+import { MarkdownPreview } from "./MarkdownPreview";
 
 interface NoteMetadata {
   strength: number;
@@ -30,6 +31,10 @@ export function Editor() {
   const [metadata, setMetadata] = useState<NoteMetadata | null>(null);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
   const [showMeta, setShowMeta] = useState(false);
+  // Preview mode is the default when opening a note (Obsidian-style Reader
+  // mode). Clicking anywhere inside the preview flips to raw CodeMirror
+  // edit mode. Escape (outside an input) flips back to preview after save.
+  const [mode, setMode] = useState<"preview" | "edit">("preview");
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notesRef = useRef(notes);
@@ -55,6 +60,28 @@ export function Editor() {
     saveTimerRef.current = setTimeout(() => { saveNote(); }, 1000);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [isDirty, activeContent, saveNote]);
+
+  // Reset to preview whenever a different note is opened so the user always
+  // starts in reader mode, same as Obsidian's default behaviour.
+  useEffect(() => {
+    setMode("preview");
+  }, [activeFilename]);
+
+  // Escape in edit mode flips back to preview (only when focus is not in
+  // an input the user might be typing into — CodeMirror's own focus is
+  // fine since Escape is treated as a view toggle there).
+  useEffect(() => {
+    if (mode !== "edit") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      setMode("preview");
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [mode]);
 
   // Load metadata when note changes
   useEffect(() => {
@@ -170,6 +197,30 @@ export function Editor() {
                 <span className="text-[#35335a]">Saved</span>
               )}
             </span>
+            <div className="flex items-center gap-0.5 bg-[#131325] rounded p-0.5">
+              <button
+                onClick={() => setMode("preview")}
+                title="Reader mode (Esc)"
+                className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
+                  mode === "preview"
+                    ? "bg-[#1e1e38] text-[#ddd9f0]"
+                    : "text-[#7a779a] hover:text-[#ddd9f0]"
+                }`}
+              >
+                preview
+              </button>
+              <button
+                onClick={() => setMode("edit")}
+                title="Raw edit mode"
+                className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
+                  mode === "edit"
+                    ? "bg-[#1e1e38] text-[#ddd9f0]"
+                    : "text-[#7a779a] hover:text-[#ddd9f0]"
+                }`}
+              >
+                edit
+              </button>
+            </div>
             <button
               onClick={() => setShowMeta((v) => !v)}
               className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
@@ -183,26 +234,33 @@ export function Editor() {
           </div>
         </div>
 
-        {/* Editor */}
-        <div className="flex-1 overflow-auto">
-          <CodeMirror
-            value={activeContent}
-            onChange={onChange}
-            extensions={extensions}
-            theme="none"
-            basicSetup={{
-              lineNumbers: false,
-              foldGutter: false,
-              highlightActiveLine: true,
-              highlightSelectionMatches: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              autocompletion: false,
-            }}
-            className="h-full"
-            style={{ height: "100%" }}
+        {/* Editor body: reader-style preview by default, raw CodeMirror on demand */}
+        {mode === "preview" ? (
+          <MarkdownPreview
+            content={activeContent}
+            onSwitchToEdit={() => setMode("edit")}
           />
-        </div>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            <CodeMirror
+              value={activeContent}
+              onChange={onChange}
+              extensions={extensions}
+              theme="none"
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: false,
+                highlightActiveLine: true,
+                highlightSelectionMatches: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: false,
+              }}
+              className="h-full"
+              style={{ height: "100%" }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Metadata sidebar (toggleable) */}

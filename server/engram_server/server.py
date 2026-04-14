@@ -128,6 +128,8 @@ def recall(
     limit: int = 10,
     mode: str = "preview",
     max_tokens: int | None = None,
+    as_of: str | None = None,
+    include_observations: bool = False,
     brain: str | None = None,
 ) -> list[dict]:
     """Search memory with hybrid retrieval (semantic + BM25 + knowledge graph).
@@ -141,15 +143,46 @@ def recall(
       - "preview" (~100 tokens/result): title + 200-char snippet — for most uses (DEFAULT)
       - "full" (~400 tokens/result): full content — only when you need deep context
 
+    Time travel: pass `as_of` (ISO timestamp like "2026-03-30T00:00:00Z") to
+    query the brain *as it was* at that moment. Engrams created after the
+    timestamp are excluded, and temporal facts that became invalid before
+    the timestamp are penalized correctly. Use this to answer:
+      - "what did you know about X last week?"
+      - "why did you give me a different answer two weeks ago?"
+
+    Observations: by default this tool excludes auto-captured Claude Code
+    tool-call observations so they don't drown out real memories. Pass
+    `include_observations=True` when the user explicitly asks "what did
+    you do yesterday", "show me that edit", or similar session-replay
+    questions. For full session replay use `replay_session(session_id)`.
+
     Args:
         query: Natural language query (e.g. "what did I decide about testing?")
         limit: Max results (default 10)
         mode: "titles" | "preview" | "full" — trade precision for token cost
         max_tokens: Optional budget — stops adding results once this is hit
+        as_of: Optional ISO timestamp for time-travel queries
+        include_observations: Set True to include auto-captured tool-call
+            observations in the result set (default False keeps them out).
         brain: Target brain ID (uses active brain if not specified)
     """
     ctx = _ctx(brain)
-    raw_results = hybrid_retrieve(query, ctx.db, manager.embedder, ctx.bm25, top_k=limit)
+    exclude_kinds = [] if include_observations else ["observation"]
+    raw_results = hybrid_retrieve(
+        query, ctx.db, manager.embedder, ctx.bm25,
+        top_k=limit, as_of=as_of, exclude_kinds=exclude_kinds,
+    )
+
+    # Log retrieval for the self-improving feedback loop (stage 1).
+    # Every returned engram gets a row; subsequent explicit fetches will
+    # credit them. Skipped for time-travel queries to avoid polluting the
+    # "now" statistics with historical lookups.
+    if raw_results and not as_of:
+        try:
+            from engram_server.retrieval_feedback import log_retrieval
+            log_retrieval(ctx.db, query, raw_results)
+        except Exception as e:
+            logger.debug("Retrieval feedback log skipped: {}", e)
 
     # Spreading activation: boost neighbors of accessed memories
     # (mimics how recalling one concept makes related concepts easier to recall)
@@ -236,7 +269,7 @@ def list_memories(tag: str | None = None, brain: str | None = None) -> list[dict
     return results
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: use recall(query=title) which already includes graph neighbors
 def get_related(title: str, limit: int = 5, brain: str | None = None) -> list[dict]:
     """Find memories related by semantic similarity, shared entities, or wikilinks.
 
@@ -348,7 +381,7 @@ def create_brain(name: str, description: str = "") -> dict:
 # --- Advanced Intelligence Tools (stolen from competitors) ---
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: rare; recall + manual synthesis covers it
 def synthesize(topic: str, brain: str | None = None) -> str:
     """Generate a wiki-style summary article from all memories about a topic.
 
@@ -364,7 +397,7 @@ def synthesize(topic: str, brain: str | None = None) -> str:
     return synthesize_wiki(ctx.db, topic, manager.embedder)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: surfaced via engram://contradictions resource
 def check_contradictions(brain: str | None = None) -> list[dict]:
     """Find contradictions between memories in the active brain.
 
@@ -452,7 +485,7 @@ def brain_report(brain: str | None = None) -> str:
     return path.read_text(encoding="utf-8")
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: niche graph operation, callable internally
 def path(
     start: str,
     end: str,
@@ -495,7 +528,7 @@ def zotero_sync(query: str = "", brain: str | None = None) -> dict:
     return sync_library(ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25, query)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: status check, not user-facing
 def zotero_status() -> dict:
     """Check if Zotero + Better BibTeX are reachable."""
     from engram_server.zotero import check_zotero_running, BBT_RPC_URL
@@ -523,7 +556,7 @@ def export_pandoc(
     return export_note_by_id(engram_id, output_format, ctx.db)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: subsumed by export_pandoc with draft_id param
 def export_draft_pandoc(
     draft_id: str,
     output_format: str = "docx",
@@ -543,7 +576,7 @@ def export_draft_pandoc(
     return export_draft(draft_id, output_format, ctx.db)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: status check, not user-facing
 def pandoc_status() -> dict:
     """Check if pandoc is installed and usable."""
     from engram_server.pandoc_export import check_pandoc_installed
@@ -553,7 +586,7 @@ def pandoc_status() -> dict:
 # --- Git Backup ---
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: rare; available via /api/git/history
 def git_history(limit: int = 20, brain: str | None = None) -> list[dict]:
     """Show recent commits in the brain's git backup.
 
@@ -568,7 +601,7 @@ def git_history(limit: int = 20, brain: str | None = None) -> list[dict]:
     return get_history(ctx.vault_dir, limit=limit)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: destructive, should be UI-driven not Claude-driven
 def git_restore(filename: str, commit_hash: str, brain: str | None = None) -> dict:
     """Restore a file to a previous commit.
 
@@ -610,7 +643,7 @@ def create_draft(
     return _create(ctx.db, title, description, target_words, deadline)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: drafts UI is in the Tauri app, not via MCP
 def list_drafts(brain: str | None = None) -> list[dict]:
     """List all drafts with progress (sections, word count, target %)."""
     from engram_server.drafts import list_drafts as _list
@@ -618,7 +651,7 @@ def list_drafts(brain: str | None = None) -> list[dict]:
     return _list(ctx.db)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: drafts UI is in the Tauri app
 def get_draft(draft_id: str, brain: str | None = None) -> dict:
     """Get a draft's full contents — ordered sections with previews and word counts."""
     from engram_server.drafts import get_draft as _get
@@ -629,7 +662,7 @@ def get_draft(draft_id: str, brain: str | None = None) -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: drafts UI is in the Tauri app
 def add_to_draft(
     draft_id: str,
     engram_id: str,
@@ -642,7 +675,7 @@ def add_to_draft(
     return add_section(ctx.db, draft_id, engram_id, position)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: drafts UI is in the Tauri app
 def remove_from_draft(draft_id: str, engram_id: str, brain: str | None = None) -> dict:
     """Remove a note from a draft (note itself is preserved)."""
     from engram_server.drafts import remove_section
@@ -650,7 +683,7 @@ def remove_from_draft(draft_id: str, engram_id: str, brain: str | None = None) -
     return remove_section(ctx.db, draft_id, engram_id)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: drafts UI is in the Tauri app
 def reorder_draft_section(
     draft_id: str,
     engram_id: str,
@@ -666,7 +699,7 @@ def reorder_draft_section(
 # --- Brain Export / Import ---
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: rare admin op, UI-driven
 def export_brain_archive(include_db: bool = False, brain: str | None = None) -> dict:
     """Bundle a brain into a tar.gz archive for backup, sharing, or migration.
 
@@ -699,7 +732,7 @@ def read_index(brain: str | None = None) -> str:
     return get_index(ctx.vault_dir)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: read_index covers wiki overview; log is verbose
 def read_log(tail: int = 50, brain: str | None = None) -> str:
     """Read the activity log — chronological record of every event.
 
@@ -730,7 +763,7 @@ def read_schema(brain: str | None = None) -> str:
     return get_schema(ctx.vault_dir)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: schema edits should be UI-driven, not Claude-driven
 def update_schema(content: str, brain: str | None = None) -> dict:
     """Update the CLAUDE.md schema for a brain.
 
@@ -781,7 +814,7 @@ def pin_memory(engram_id: str, brain: str | None = None) -> dict:
     return {"status": "pinned", "engram_id": engram_id}
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: background scheduler runs this every 4h
 def consolidate_now(brain: str | None = None) -> dict:
     """Trigger a memory consolidation cycle (the brain's sleep cycle).
 
@@ -796,7 +829,7 @@ def consolidate_now(brain: str | None = None) -> dict:
     return run_consolidation(ctx.db, manager.embedder, ctx.consolidated_dir)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: save_conversation_insights covers the user-facing path
 def log_conversation(
     user_message: str,
     assistant_response: str,
@@ -817,7 +850,7 @@ def log_conversation(
     return {"status": "logged", "file": str(filepath.name)}
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: subsumed by recall over conversation_log engrams
 def search_history(query: str, limit: int = 10, brain: str | None = None) -> list[dict]:
     """Search conversation history for past exchanges with Claude.
 
@@ -836,7 +869,7 @@ def search_history(query: str, limit: int = 10, brain: str | None = None) -> lis
 # --- AI-Efficient Compound Tools ---
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: subsumed by recall — graph traversal already in hybrid retriever
 def explore(query: str, depth: int = 2, brain: str | None = None) -> dict:
     """Deep exploration in ONE call — replaces recall + get_related + backlinks.
 
@@ -908,7 +941,7 @@ def explore(query: str, depth: int = 2, brain: str | None = None) -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: invoked automatically by the server, not by Claude
 def proactive_context(message: str, brain: str | None = None) -> dict:
     """Proactive context detection — NO LLM call, pure pattern + vector.
 
@@ -988,7 +1021,7 @@ def about(entity: str, brain: str | None = None) -> dict:
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: niche; recall(query, max_tokens=N) is enough
 def context_for(topic: str, token_budget: int = 2000, brain: str | None = None) -> dict:
     """Build a context pack fitted to a token budget — for maximum-efficiency recall.
 
@@ -1074,7 +1107,7 @@ def add_tag(engram_id: str, tag: str, brain: str | None = None) -> dict:
     return {"status": "added" if success else "failed", "tag": tag}
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: list_memories(tag=...) handles this
 def find_by_tag(tag: str, brain: str | None = None) -> list[dict]:
     """Find all memories with a specific tag.
 
@@ -1087,7 +1120,7 @@ def find_by_tag(tag: str, brain: str | None = None) -> list[dict]:
     return find(ctx.db, tag)
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: niche; available via /api/tags
 def list_tags(brain: str | None = None) -> list[dict]:
     """List all tags with usage counts.
 
@@ -1119,7 +1152,7 @@ def ingest_pdf(pdf_path: str, brain: str | None = None) -> dict:
     )
 
 
-@mcp.tool()
+# @mcp.tool()  # demoted: rare; available via /api/citations
 def export_citations(tag: str | None = None, brain: str | None = None) -> str:
     """Export notes as BibTeX citations.
 
@@ -1138,28 +1171,679 @@ def export_citations(tag: str | None = None, brain: str | None = None) -> str:
 # --- Session Context Resource ---
 
 
+# --- Progressive disclosure: tier 2 (timeline) + tier 3 (fetch) ---
+
+
+@mcp.tool()
+def timeline(
+    around: str,
+    before: int = 3,
+    after: int = 3,
+    brain: str | None = None,
+) -> list[dict]:
+    """Show the chronological neighbors of an engram (tier 2 of progressive disclosure).
+
+    USE WHEN: you have an engram_id from `recall(mode='titles')` and want to
+    see what happened immediately before/after it — useful for reconstructing
+    a session's flow without paying full content cost. Returns lightweight
+    title+preview rows ordered by created_at.
+
+    Args:
+        around: An engram_id, OR a query string (uses the top recall hit as anchor).
+        before: How many engrams before the anchor to include.
+        after:  How many engrams after the anchor to include.
+        brain: Target brain ID.
+    """
+    ctx = _ctx(brain)
+
+    # Resolve the anchor engram
+    anchor = ctx.db.get_engram(around)
+    if not anchor:
+        # Treat as a query, use top recall hit
+        hits = hybrid_retrieve(around, ctx.db, manager.embedder, ctx.bm25, top_k=1)
+        if not hits:
+            return []
+        anchor = ctx.db.get_engram(hits[0]["engram_id"])
+        if not anchor:
+            return []
+
+    anchor_time = anchor.get("created_at")
+    if not anchor_time:
+        return []
+
+    before_rows = ctx.db.conn.execute(
+        """SELECT id, title, content, created_at, kind
+           FROM engrams
+           WHERE created_at < ? AND state != 'dormant'
+           ORDER BY created_at DESC LIMIT ?""",
+        (anchor_time, before),
+    ).fetchall()
+    after_rows = ctx.db.conn.execute(
+        """SELECT id, title, content, created_at, kind
+           FROM engrams
+           WHERE created_at > ? AND state != 'dormant'
+           ORDER BY created_at ASC LIMIT ?""",
+        (anchor_time, after),
+    ).fetchall()
+
+    def fmt(r, position: str) -> dict:
+        return {
+            "engram_id": r[0],
+            "title": r[1],
+            "preview": (r[2] or "")[:160],
+            "created_at": r[3],
+            "kind": r[4] or "note",
+            "position": position,
+        }
+
+    timeline_items: list[dict] = [fmt(r, "before") for r in reversed(before_rows)]
+    timeline_items.append({
+        "engram_id": anchor["id"],
+        "title": anchor["title"],
+        "preview": (anchor["content"] or "")[:160],
+        "created_at": anchor_time,
+        "kind": anchor.get("kind") or "note",
+        "position": "anchor",
+    })
+    timeline_items.extend(fmt(r, "after") for r in after_rows)
+    return timeline_items
+
+
+@mcp.tool()
+def fetch(
+    engram_ids: list[str],
+    brain: str | None = None,
+) -> list[dict]:
+    """Get full content for a batch of engram IDs (tier 3 of progressive disclosure).
+
+    USE WHEN: you've narrowed down via `recall(mode='titles')` and `timeline()`
+    and now need the actual full text. Batched so a single call gets multiple
+    engrams without round-trips.
+
+    This is the "expensive" tier — only call after the cheap tiers have done
+    their filtering work, otherwise you're burning tokens.
+
+    Args:
+        engram_ids: List of engram IDs to fetch in full.
+        brain: Target brain ID.
+    """
+    ctx = _ctx(brain)
+    results: list[dict] = []
+    for eid in engram_ids[:20]:  # Cap to avoid runaway batches
+        engram = ctx.db.get_engram(eid)
+        if not engram:
+            continue
+        results.append({
+            "engram_id": engram["id"],
+            "title": engram["title"],
+            "content": engram["content"],
+            "kind": engram.get("kind") or "note",
+            "tags": engram.get("tags"),
+            "strength": engram.get("strength"),
+            "created_at": engram.get("created_at"),
+            "updated_at": engram.get("updated_at"),
+        })
+        try:
+            ctx.db.bump_access(eid)
+        except Exception:
+            pass
+        # Positive-usage signal for the feedback loop: an explicit fetch
+        # after a recall is the strongest "this memory was actually useful"
+        # signal we can capture without asking the user.
+        try:
+            from engram_server.retrieval_feedback import mark_accessed
+            mark_accessed(ctx.db, eid)
+        except Exception as e:
+            logger.debug("Retrieval feedback mark_accessed skipped: {}", e)
+    return results
+
+
+# --- Code & Variable Tools ---
+
+
+@mcp.tool()
+def ingest_code(filepath: str, brain: str | None = None) -> dict:
+    """Ingest a single source code file into the brain.
+
+    Extracts functions, imports, TODO/FIXME markers, and tracks every
+    named variable/function/class for later lookup. Works on Python, JS,
+    TS, Rust, Go, Java, C/C++, and 20+ other languages.
+    """
+    from engram_server.code_ingest import ingest_code_file
+    ctx = _ctx(brain)
+    path = Path(filepath).expanduser().resolve()
+    if not path.exists():
+        return {"error": f"File not found: {path}"}
+    result = ingest_code_file(path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
+    if result is None:
+        return {"error": f"Could not ingest (skipped or unsupported): {path}"}
+    return result
+
+
+@mcp.tool()
+def ingest_repo(repo_path: str, max_files: int = 500, brain: str | None = None) -> dict:
+    """Walk a code repository and ingest every supported source file.
+
+    Skips node_modules, .git, build/dist, lock files, and binaries. Each
+    file becomes a Source engram; markers become TODO engrams; variables
+    are tracked. Use after pointing NeuroVault at a new project.
+    """
+    from engram_server.code_ingest import ingest_repo as do_ingest_repo
+    ctx = _ctx(brain)
+    path = Path(repo_path).expanduser().resolve()
+    return do_ingest_repo(path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25, max_files=max_files)
+
+
+@mcp.tool()
+def find_todos(marker_type: str | None = None, limit: int = 50, brain: str | None = None) -> list[dict]:
+    """List open TODO/FIXME/HACK/WHY markers across the codebase.
+
+    Filter by marker_type (TODO, FIXME, HACK, NOTE, BUG, etc.) or pass
+    None to get them all. Useful for "what work is outstanding?" queries.
+    """
+    from engram_server.code_ingest import find_todos as do_find_todos
+    ctx = _ctx(brain)
+    return do_find_todos(ctx.db, marker_type=marker_type, limit=limit)
+
+
+@mcp.tool()
+def find_variable(name: str, brain: str | None = None) -> dict:
+    """Look up a tracked variable, function, class, or type by name.
+
+    Returns the canonical definition (type hint, language, scope,
+    docstring) plus every place it is referenced. Solves the
+    "what was that variable called again?" problem for AI coding.
+    """
+    from engram_server.variable_tracker import find_variable as do_find_variable
+    ctx = _ctx(brain)
+    result = do_find_variable(ctx.db, name)
+    return result or {"found": False, "name": name}
+
+
+@mcp.tool()
+def list_variables(
+    language: str | None = None,
+    kind: str | None = None,
+    status: str = "live",
+    limit: int = 100,
+    brain: str | None = None,
+) -> list[dict]:
+    """List tracked variables, optionally filtered by language, kind, or status.
+
+    status ∈ {'live', 'removed', 'all'} — 'live' hides names that have
+    disappeared from every file. kind ∈ {variable, constant, function,
+    class, type}. Sorted by reference count.
+    """
+    from engram_server.variable_tracker import list_variables as do_list_variables
+    ctx = _ctx(brain)
+    return do_list_variables(ctx.db, language=language, kind=kind, status=status, limit=limit)
+
+
+# @mcp.tool()  # demoted: niche; surfaced inside find_variable.rename_candidates
+def find_renames(limit: int = 50, brain: str | None = None) -> list[dict]:
+    """List detected rename candidates (old_name → new_name).
+
+    A rename candidate is flagged when a name disappears from a file and
+    a new name with the same kind + type_hint appears in the same engram
+    during re-ingest. Use to audit refactors.
+    """
+    from engram_server.variable_tracker import find_renames as do_find_renames
+    ctx = _ctx(brain)
+    return do_find_renames(ctx.db, limit=limit)
+
+
+# @mcp.tool()  # demoted: niche; available via /api/variables/stats
+def variable_stats(brain: str | None = None) -> dict:
+    """Summary counts: live vs removed vars, per language, pending renames."""
+    from engram_server.variable_tracker import variable_stats as do_stats
+    ctx = _ctx(brain)
+    return do_stats(ctx.db)
+
+
+# @mcp.tool()  # demoted: find_variable handles substring lookups internally
+def search_variables(pattern: str, limit: int = 20, brain: str | None = None) -> list[dict]:
+    """Fuzzy-search tracked variables by substring of the name.
+
+    Use when you remember part of a name ("config", "auth_") but not
+    the exact identifier. Case-insensitive LIKE match.
+    """
+    from engram_server.variable_tracker import search_variables as do_search_variables
+    ctx = _ctx(brain)
+    return do_search_variables(ctx.db, pattern, limit=limit)
+
+
+# --- Call Graph Tools ---
+
+
+@mcp.tool()
+def find_callers(name: str, limit: int = 50, brain: str | None = None) -> list[dict]:
+    """List every place a function is called from.
+
+    Returns callsites with the containing function (caller), filepath, and
+    line number. Use this when refactoring to see who depends on a function.
+    """
+    from engram_server.call_graph import find_callers as do_find_callers
+    ctx = _ctx(brain)
+    return do_find_callers(ctx.db, name, limit=limit)
+
+
+@mcp.tool()
+def find_callees(name: str, limit: int = 100, brain: str | None = None) -> list[dict]:
+    """List every function that a given function calls.
+
+    Returns the outgoing call edges. Use this to understand what a function
+    depends on before changing its behavior.
+    """
+    from engram_server.call_graph import find_callees as do_find_callees
+    ctx = _ctx(brain)
+    return do_find_callees(ctx.db, name, limit=limit)
+
+
+@mcp.tool()
+def get_impact_radius(
+    filepaths: list[str],
+    max_depth: int = 3,
+    max_affected: int = 200,
+    brain: str | None = None,
+) -> dict:
+    """Trace the blast radius of changes to a set of files.
+
+    USE WHEN: the user is about to edit or has just edited one or more
+    files and wants to know what's at risk. Returns every function that
+    would be transitively affected (BFS upward through the call graph),
+    risk-scored by caller count + memory strength + related decisions +
+    depth penalty.
+
+    NeuroVault-unique: the risk score uses the cognitive layer (decay,
+    access count, related decision engrams) that pure structural tools
+    can't build. So "hot function with a pinned decision note" scores
+    higher than "cold helper nobody touches."
+
+    Args:
+        filepaths: Source files to trace impact from.
+        max_depth: How many BFS hops upward to explore (default 3).
+        max_affected: Hard cap on total symbols returned (default 200).
+        brain: Target brain ID (uses active brain if not specified).
+    """
+    from engram_server.impact import get_impact_radius as do_impact
+    ctx = _ctx(brain)
+    return do_impact(ctx.db, filepaths, max_depth=max_depth, max_affected=max_affected)
+
+
+@mcp.tool()
+def detect_changes(
+    diff: str = "",
+    filepaths: list[str] | None = None,
+    max_depth: int = 3,
+    brain: str | None = None,
+) -> dict:
+    """Parse a git diff (or accept explicit file paths) and return a
+    risk-ranked view of what the change affects.
+
+    USE WHEN: reviewing a PR, answering "is this change safe?", or
+    grading how aggressive a refactor is. Accepts unified diff text
+    (`git diff` output) and parses the `+++ b/path` lines, OR a list
+    of filepaths for programmatic callers.
+
+    Returns the full impact radius plus a diff-level risk score
+    (0-10), a risk_level label ("low"/"medium"/"high"/"critical"),
+    and the top-15 high-risk symbols so Claude can decide whether
+    to flag the change for deeper review.
+
+    Pair with `review_context(filepaths)` for a complete "PR review"
+    workflow: impact radius tells you WHAT is at risk, review_context
+    tells you WHAT THE CODE LOOKS LIKE, and both avoid reading raw files.
+
+    Args:
+        diff: Unified diff text (e.g. `git diff` output). Optional if
+            filepaths is provided.
+        filepaths: Alternative to diff — explicit list of changed files.
+        max_depth: BFS depth for the impact graph (default 3).
+        brain: Target brain ID.
+    """
+    from engram_server.impact import detect_changes as do_detect
+    ctx = _ctx(brain)
+    return do_detect(ctx.db, diff_text=diff, filepaths=filepaths, max_depth=max_depth)
+
+
+@mcp.tool()
+def review_context(
+    filepaths: list[str],
+    total_token_budget: int = 3000,
+    callers_per_symbol: int = 3,
+    callees_per_symbol: int = 3,
+    memories_per_symbol: int = 2,
+    brain: str | None = None,
+) -> dict:
+    """Token-efficient structural review context for a list of files.
+
+    USE WHEN: the user asks you to review a PR, explain what a file does,
+    assess the impact of a change, or check related decisions before
+    editing. Returns a tight structural summary (symbols + their top
+    callers + top callees + related memory engrams) instead of the raw
+    file content — typically 5-10x fewer tokens than concatenating the
+    files, plus information (callers, related decisions) that raw
+    content doesn't have.
+
+    NeuroVault-unique: surfaces related decision/memory engrams per
+    symbol. code-review-graph has no cognitive layer, so their review
+    context is purely structural; ours also shows "there's a decision
+    note from March about this function" which is often the most
+    valuable context when reviewing a diff.
+    """
+    from engram_server.review_context import get_review_context
+    ctx = _ctx(brain)
+    return get_review_context(
+        ctx.db,
+        filepaths,
+        total_token_budget=total_token_budget,
+        callers_per_symbol=callers_per_symbol,
+        callees_per_symbol=callees_per_symbol,
+        memories_per_symbol=memories_per_symbol,
+    )
+
+
+# @mcp.tool()  # demoted: BFS niche; find_callers/find_callees cover most uses
+def call_graph(
+    name: str,
+    depth: int = 2,
+    direction: str = "callers",
+    brain: str | None = None,
+) -> dict:
+    """BFS the call graph outward from a function.
+
+    direction ∈ {'callers', 'callees', 'both'}. Returns levels of edges so
+    you can trace impact ("if I change foo, what's affected?") or follow
+    execution flow ("what does foo end up calling?").
+    """
+    from engram_server.call_graph import call_graph_for
+    ctx = _ctx(brain)
+    return call_graph_for(ctx.db, name, depth=depth, direction=direction)
+
+
+# @mcp.tool()  # demoted: stats query, available via /api/calls/hot
+def hot_functions(limit: int = 20, brain: str | None = None) -> list[dict]:
+    """The most-called functions in the codebase.
+
+    Surfaces the project's de-facto API surface — the names you must know
+    to read the code. Sorted by inbound call count.
+    """
+    from engram_server.call_graph import hot_functions as do_hot
+    ctx = _ctx(brain)
+    return do_hot(ctx.db, limit=limit)
+
+
+# --- Cognitive code intelligence (NeuroVault's unique angle) ---
+
+
+@mcp.tool()
+def find_dead_code(
+    stale_days: int = 60,
+    max_callers: int = 0,
+    limit: int = 50,
+    brain: str | None = None,
+) -> list[dict]:
+    """Find functions/classes that look dead — uncalled and untouched.
+
+    USE WHEN: the user asks "what code can I delete?", "is this still used?",
+    or wants to clean up a project. Returns symbols that haven't been touched
+    in `stale_days` days AND have at most `max_callers` inbound call edges,
+    each with a confidence score 0..1.
+
+    Combines decay (last_seen) + reference count + call graph. Only NeuroVault
+    can answer this — pure structural tools have no concept of staleness.
+    """
+    from engram_server.call_graph import find_dead_code as do_find_dead
+    ctx = _ctx(brain)
+    return do_find_dead(ctx.db, stale_days=stale_days, max_callers=max_callers, limit=limit)
+
+
+@mcp.tool()
+def find_renamed_callsites(limit: int = 50, brain: str | None = None) -> list[dict]:
+    """Find places that still call the OLD name of a renamed symbol.
+
+    USE WHEN: the user asks "did I finish that rename?", "are there leftover
+    references to old_name?", or wants to verify a refactor propagated.
+    For each detected rename in `variable_renames`, lists every callsite
+    that still uses the old name in the live call graph.
+
+    Demo answer: "You renamed `user_id` to `account_id` 2 weeks ago, but
+    these 3 files still call the old name." Nobody else can ship this —
+    GitNexus tracks current state, we track rename history.
+    """
+    from engram_server.call_graph import find_renamed_callsites as do_find_stale
+    ctx = _ctx(brain)
+    return do_find_stale(ctx.db, limit=limit)
+
+
+@mcp.tool()
+def extract_insights(
+    text: str,
+    save: bool = False,
+    brain: str | None = None,
+) -> dict:
+    """Silently harvest factual claims from a block of text.
+
+    USE WHEN: the user types a casual message with facts buried in it
+    ("I prefer Tauri 2.0", "the deadline is Friday", "Sarah runs the
+    weekly check-ins", "remember that X lives at Y") and you want the
+    brain to pick those up as first-class memories without asking.
+
+    Runs fast regex patterns for: explicit saves ("remember that..."),
+    preferences ("I prefer X"), decisions ("we chose Y"), stack
+    ("we're using Z"), deadlines, locations, and identity claims.
+    Questions, commands, and hypotheticals are skipped.
+
+    With `save=True`, promotes each extracted insight into its own
+    `kind='insight'` engram so it becomes searchable via `recall`.
+    With `save=False` (default), just returns the extractions for
+    review. The hooks pipeline already runs save=True automatically
+    on every UserPromptSubmit, so manual calls are mostly useful
+    for one-off text blobs (emails, meeting notes, docs).
+    """
+    from engram_server.insight_extractor import extract_insights as do_extract, promote_insights_from_text
+    ctx = _ctx(brain)
+    if save:
+        created = promote_insights_from_text(ctx, text)
+        return {"mode": "save", "insights": created, "count": len(created)}
+    insights = do_extract(text)
+    return {
+        "mode": "preview",
+        "insights": [
+            {
+                "title": i.title,
+                "fact": i.fact,
+                "pattern": i.pattern_name,
+                "confidence": i.confidence,
+            }
+            for i in insights
+        ],
+        "count": len(insights),
+    }
+
+
+@mcp.tool()
+def rollup_session(
+    session_id: str,
+    brain: str | None = None,
+) -> dict:
+    """Compress a Claude Code session's raw observation engrams into ONE summary.
+
+    USE WHEN: a session is clearly done and you want to free the brain
+    from the individual tool-call noise, OR when the vault feels cluttered
+    with `obs-*.md` files. Produces a single `session_summary` engram with
+    event counts, tool-usage breakdown, user prompts, and a timeline —
+    then soft-deletes the raw observations and archives their files to
+    ~/.engram/brains/{brain}/archive/ so they stop slowing vault scans.
+
+    Reversible: the raw markdown files are preserved in the archive dir,
+    and the original engram rows stay in the DB with state='dormant'.
+
+    For automatic bulk rollup of stale sessions, this also runs during
+    the 4-hour consolidation cycle for sessions idle >24h with >=3 events.
+    """
+    from engram_server.observation_rollup import rollup_session as do_rollup
+    ctx = _ctx(brain)
+    # Accept either the 8-char short session or the full id
+    short = session_id[:8] if len(session_id) > 8 else session_id
+    return do_rollup(ctx, short)
+
+
+@mcp.tool()
+def replay_session(session_id: str, max_events: int = 200, brain: str | None = None) -> dict:
+    """Reconstruct what Claude did during a previous Claude Code session.
+
+    USE WHEN: the user asks "what did you do yesterday?", "show me that
+    debugging session", or wants to remember a sequence of actions. Returns
+    a chronological list of every captured observation for the given
+    session_id, plus event-type and tool-usage rollups.
+
+    Powered by the auto-capture hook pipeline — observations land as engrams
+    with `obs-{session}-*.md` filenames, and this tool replays them in order.
+    """
+    from engram_server.hooks import replay_session as do_replay
+    ctx = _ctx(brain)
+    return do_replay(ctx, session_id, max_events=max_events)
+
+
 @mcp.resource("engram://session-context")
 def session_context() -> str:
-    """Session wake-up context — what Engram knows right now.
+    """Proactive wake-up bundle — everything Claude needs on session start.
 
-    Loaded automatically on session start. Gives Claude an at-a-glance view
-    of core identity facts (L0) and active memories (L1).
+    Loaded automatically the moment a session begins. Designed so Claude
+    has to call almost zero extra tools to know what the user is working
+    on, who the user is, what's unresolved, and what happened recently.
+
+    Sections, in order of value:
+      1. **Active brain** — which brain + cheap stats
+      2. **Core identity (L0)** — who the user is, preferences, role
+      3. **Recent sessions** — last 3 rolled-up session summaries so
+         Claude knows what happened yesterday without asking
+      4. **Working memory** — pinned engrams the user considers active
+      5. **Unresolved contradictions** — things the brain spotted that
+         need human review (shown proactively so Claude can flag them)
+      6. **Top active memories (L1)** — the N most-referenced engrams
+      7. **Brain health** — one-line status (how many memories, how
+         many learned shortcuts, how fresh the feedback loop is)
+
+    Total target: ~1500-2500 tokens. Fits comfortably in context, yet
+    gives Claude 90% of what it would otherwise need to fetch via tools.
     """
     ctx = manager.get_active()
-    session = build_session_context(ctx.db)
-    lines = [
-        f"## Active Brain: {ctx.name}",
-        "",
-        "### Core Identity (L0)",
-        session["l0"],
-        "",
-        "### Top Active Memories (L1)",
-        session["l1"],
-        "",
+    db = ctx.db
+    session = build_session_context(db)
+
+    lines: list[str] = []
+    lines.append(f"# NeuroVault — Active Brain: {ctx.name}")
+    lines.append("")
+    lines.append(
         f"*{session['stats']['total_memories']} memories · "
         f"{session['stats']['total_connections']} connections · "
-        f"use `recall(query)` to dig deeper*",
-    ]
+        f"brain id `{ctx.brain_id}`*"
+    )
+    lines.append("")
+
+    # Section 1 — core identity (preferences, role, long-lived facts)
+    lines.append("## Core identity")
+    lines.append(session["l0"] or "_(no identity memories yet — save some with `remember()`)_")
+    lines.append("")
+
+    # Section 2 — recent session summaries (from observation rollup)
+    try:
+        summary_rows = db.conn.execute(
+            """SELECT title, SUBSTR(content, 1, 400)
+               FROM engrams
+               WHERE kind = 'session_summary' AND state != 'dormant'
+               ORDER BY updated_at DESC
+               LIMIT 3"""
+        ).fetchall()
+    except Exception:
+        summary_rows = []
+    if summary_rows:
+        lines.append("## Recent sessions")
+        for title, preview in summary_rows:
+            # Compress the preview to one line per session
+            first_line = (preview or "").split("\n", 1)[0].strip("# ")
+            lines.append(f"- **{title}** — {first_line[:120]}")
+        lines.append("")
+
+    # Section 3 — working memory (pinned by user OR auto-refreshed)
+    try:
+        wm_rows = db.conn.execute(
+            """SELECT e.title, w.pin_type, w.priority
+               FROM working_memory w
+               JOIN engrams e ON e.id = w.engram_id
+               WHERE e.state != 'dormant'
+               ORDER BY w.priority DESC, w.pinned_at DESC
+               LIMIT 7"""
+        ).fetchall()
+    except Exception:
+        wm_rows = []
+    if wm_rows:
+        lines.append("## Working memory (active context)")
+        for title, pin_type, _prio in wm_rows:
+            tag = "📌" if pin_type == "manual" else "•"
+            lines.append(f"- {tag} {title}")
+        lines.append("")
+
+    # Section 4 — unresolved contradictions (proactive flag)
+    try:
+        contradiction_rows = db.conn.execute(
+            """SELECT e1.title, e2.title, c.fact_a, c.fact_b
+               FROM contradictions c
+               JOIN engrams e1 ON e1.id = c.engram_a
+               JOIN engrams e2 ON e2.id = c.engram_b
+               WHERE c.resolved = 0
+               ORDER BY c.detected_at DESC
+               LIMIT 3"""
+        ).fetchall()
+    except Exception:
+        contradiction_rows = []
+    if contradiction_rows:
+        lines.append("## ⚠️  Unresolved contradictions")
+        for a_title, b_title, fact_a, fact_b in contradiction_rows:
+            lines.append(f"- **{a_title}** vs **{b_title}**")
+            lines.append(f"  - {(fact_a or '')[:100]}")
+            lines.append(f"  - {(fact_b or '')[:100]}")
+        lines.append("")
+
+    # Section 5 — top active memories (the L1 slice)
+    lines.append("## Top active memories")
+    lines.append(session["l1"] or "_(no active memories yet)_")
+    lines.append("")
+
+    # Section 6 — brain health (one-line status of self-improving pipeline)
+    health_parts: list[str] = []
+    try:
+        obs_count = db.conn.execute(
+            "SELECT COUNT(*) FROM engrams WHERE kind='observation' AND state != 'dormant'"
+        ).fetchone()[0]
+        summary_count = db.conn.execute(
+            "SELECT COUNT(*) FROM engrams WHERE kind='session_summary' AND state != 'dormant'"
+        ).fetchone()[0]
+        shortcut_count = db.conn.execute(
+            "SELECT COUNT(*) FROM query_affinity"
+        ).fetchone()[0]
+        feedback_recent = db.conn.execute(
+            "SELECT COUNT(*) FROM retrieval_feedback WHERE retrieved_at >= datetime('now', '-1 day')"
+        ).fetchone()[0]
+        health_parts.append(f"{obs_count} live observations")
+        health_parts.append(f"{summary_count} session summaries")
+        health_parts.append(f"{shortcut_count} learned query shortcuts")
+        health_parts.append(f"{feedback_recent} retrievals in last 24h")
+    except Exception:
+        pass
+
+    if health_parts:
+        lines.append("## Brain health")
+        lines.append(" · ".join(health_parts))
+        lines.append("")
+
+    lines.append(
+        "_Use `recall(query)` for deeper lookups, `about(entity)` for entity-first, "
+        "`review_context(files)` for PR review, `replay_session(id)` to replay a session._"
+    )
+
     return "\n".join(lines)
 
 
