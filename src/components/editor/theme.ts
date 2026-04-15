@@ -4,17 +4,17 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
 const colors = {
-  bg: "#07070e",
-  surface: "#0d0d1a",
-  raised: "#131325",
-  border: "#1e1e38",
+  bg: "#0b0b12",
+  surface: "#12121c",
+  raised: "#1a1a28",
+  border: "#1f1f2e",
   amber: "#f0a500",
   teal: "#00c9b1",
   purple: "#8b7cf8",
-  coral: "#f06080",
+  coral: "#ff6b6b",
   green: "#4ade80",
-  text: "#ddd9f0",
-  sub: "#7a779a",
+  text: "#e8e6f0",
+  sub: "#8a88a0",
   muted: "#35335a",
 };
 

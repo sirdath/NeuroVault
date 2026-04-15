@@ -39,15 +39,15 @@ export function IntelligenceView() {
   } = store;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#0f0f17]">
-      <div className="max-w-[1100px] mx-auto px-8 py-6 space-y-6">
+    <div className="flex-1 overflow-y-auto bg-[#0b0b12]">
+      <div className="max-w-[1400px] mx-auto px-8 py-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-[#f0a500] font-[Geist,sans-serif]">
               Brain Intelligence
             </h1>
-            <p className="text-xs text-[#7a779a] font-[Geist,sans-serif] mt-1">
+            <p className="text-xs text-[#8a88a0] font-[Geist,sans-serif] mt-1">
               Code cognition &amp; self-improving retrieval
               {lastLoaded && (
                 <span className="ml-2 text-[#35335a]">
@@ -59,18 +59,24 @@ export function IntelligenceView() {
           <button
             onClick={() => loadAll()}
             disabled={loading}
-            className="px-3 py-1.5 text-xs font-[Geist,sans-serif] bg-[#131325] hover:bg-[#1e1e38] text-[#ddd9f0] rounded border border-[#1e1e38] disabled:opacity-50"
+            className="px-3 py-1.5 text-xs font-[Geist,sans-serif] bg-[#1a1a28] hover:bg-[#1f1f2e] text-[#e8e6f0] rounded border border-[#1f1f2e] disabled:opacity-50"
           >
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
 
         {error && (
-          <div className="bg-[#2a1018] border border-[#f06080]/30 text-[#f06080] text-xs px-4 py-3 rounded font-[Geist,sans-serif]">
+          <div className="bg-[#2a1018] border border-[#ff6b6b]/30 text-[#ff6b6b] text-xs px-4 py-3 rounded font-[Geist,sans-serif]">
             {error}
           </div>
         )}
 
+        {/* 2×3 responsive grid. Brain Health and Recent Sessions span both
+             columns because they carry wide stats/lists; the other four
+             sections sit side-by-side on screens wide enough (lg:). Below
+             lg: the whole grid collapses to a single column automatically. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="lg:col-span-2">
         {/* 1. Brain Health */}
         <Section
           title="Brain Health"
@@ -99,7 +105,7 @@ export function IntelligenceView() {
             />
           </div>
           {variableStats && variableStats.removed > 0 && (
-            <p className="text-[10px] text-[#7a779a] font-[Geist,sans-serif] mt-3">
+            <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] mt-3">
               {variableStats.removed} removed · {variableStats.renames_pending} rename candidates ·
               {Object.entries(variableStats.by_language)
                 .slice(0, 3)
@@ -108,6 +114,7 @@ export function IntelligenceView() {
             </p>
           )}
         </Section>
+          </div>
 
         {/* 2. Dead Code */}
         <Section
@@ -123,8 +130,8 @@ export function IntelligenceView() {
                   key={`${d.name}-${d.language}`}
                   left={
                     <>
-                      <span className="text-[#ddd9f0] font-mono">{d.name}</span>
-                      <span className="ml-2 text-[10px] text-[#7a779a]">
+                      <span className="text-[#e8e6f0] font-mono">{d.name}</span>
+                      <span className="ml-2 text-[10px] text-[#8a88a0]">
                         {d.kind} · {d.language}
                       </span>
                     </>
@@ -132,7 +139,7 @@ export function IntelligenceView() {
                   right={
                     <>
                       <ConfidenceBar confidence={d.confidence} />
-                      <span className="text-[10px] text-[#7a779a] ml-3 min-w-[50px] text-right">
+                      <span className="text-[10px] text-[#8a88a0] ml-3 min-w-[50px] text-right">
                         {d.caller_count} callers
                       </span>
                     </>
@@ -157,15 +164,15 @@ export function IntelligenceView() {
                   key={`${r.old_name}-${i}`}
                   left={
                     <>
-                      <span className="font-mono text-[#f06080] line-through">
+                      <span className="font-mono text-[#ff6b6b] line-through">
                         {r.old_name}
                       </span>
-                      <span className="mx-2 text-[#7a779a]">→</span>
+                      <span className="mx-2 text-[#8a88a0]">→</span>
                       <span className="font-mono text-[#00c9b1]">{r.new_name}</span>
                     </>
                   }
                   right={
-                    <span className="text-[10px] text-[#7a779a]">
+                    <span className="text-[10px] text-[#8a88a0]">
                       {r.language} · {r.kind ?? "—"}
                     </span>
                   }
@@ -187,9 +194,9 @@ export function IntelligenceView() {
               {hotFunctions.slice(0, 10).map((h) => (
                 <div
                   key={`${h.name}-${h.language}`}
-                  className="bg-[#131325] rounded px-3 py-2 flex items-center justify-between"
+                  className="bg-[#1a1a28] rounded px-3 py-2 flex items-center justify-between"
                 >
-                  <span className="font-mono text-xs text-[#ddd9f0] truncate">
+                  <span className="font-mono text-xs text-[#e8e6f0] truncate">
                     {h.name}
                   </span>
                   <span className="text-[10px] text-[#f0a500] font-[Geist,sans-serif] ml-2">
@@ -208,7 +215,7 @@ export function IntelligenceView() {
           action={
             <button
               onClick={() => reconcileAffinity()}
-              className="text-[10px] font-[Geist,sans-serif] text-[#7a779a] hover:text-[#f0a500] px-2 py-1 rounded hover:bg-[#131325]"
+              className="text-[10px] font-[Geist,sans-serif] text-[#8a88a0] hover:text-[#f0a500] px-2 py-1 rounded hover:bg-[#1a1a28]"
             >
               reconcile
             </button>
@@ -223,8 +230,8 @@ export function IntelligenceView() {
                   key={`${s.query}-${i}`}
                   left={
                     <>
-                      <span className="text-[#ddd9f0]">{truncate(s.query, 50)}</span>
-                      <span className="mx-2 text-[#7a779a]">→</span>
+                      <span className="text-[#e8e6f0]">{truncate(s.query, 50)}</span>
+                      <span className="mx-2 text-[#8a88a0]">→</span>
                       <span className="text-[#00c9b1]">{truncate(s.engram_title, 40)}</span>
                     </>
                   }
@@ -240,6 +247,7 @@ export function IntelligenceView() {
         </Section>
 
         {/* 6. Recent Sessions */}
+        <div className="lg:col-span-2">
         <Section
           title="Recent Sessions"
           subtitle="Auto-captured Claude Code sessions (via lifecycle hooks)"
@@ -253,16 +261,16 @@ export function IntelligenceView() {
                   key={s.session_id}
                   left={
                     <>
-                      <span className="font-mono text-xs text-[#ddd9f0]">
+                      <span className="font-mono text-xs text-[#e8e6f0]">
                         {s.session_id}
                       </span>
-                      <span className="ml-2 text-[10px] text-[#7a779a]">
+                      <span className="ml-2 text-[10px] text-[#8a88a0]">
                         {s.event_count} events
                       </span>
                     </>
                   }
                   right={
-                    <span className="text-[10px] text-[#7a779a]">
+                    <span className="text-[10px] text-[#8a88a0]">
                       {new Date(s.last_seen).toLocaleString()}
                     </span>
                   }
@@ -271,6 +279,8 @@ export function IntelligenceView() {
             </div>
           )}
         </Section>
+        </div>
+        </div>
       </div>
     </div>
   );
@@ -288,14 +298,14 @@ function Section({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="bg-[#0d0d1a] border border-[#1e1e38] rounded-lg px-5 py-4">
+    <div className="bg-[#12121c] border border-[#1f1f2e] rounded-lg px-5 py-4">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#ddd9f0] font-[Geist,sans-serif]">
+          <h2 className="text-sm font-semibold text-[#e8e6f0] font-[Geist,sans-serif]">
             {title}
           </h2>
           {subtitle && (
-            <p className="text-[10px] text-[#7a779a] font-[Geist,sans-serif] mt-0.5">
+            <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] mt-0.5">
               {subtitle}
             </p>
           )}
@@ -309,11 +319,11 @@ function Section({
 
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="bg-[#131325] rounded px-3 py-2">
-      <p className="text-lg font-semibold text-[#ddd9f0] font-[Geist,sans-serif]">
+    <div className="bg-[#1a1a28] rounded px-3 py-2">
+      <p className="text-lg font-semibold text-[#e8e6f0] font-[Geist,sans-serif]">
         {value}
       </p>
-      <p className="text-[10px] text-[#7a779a] font-[Geist,sans-serif]">
+      <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif]">
         {label}
       </p>
     </div>
@@ -328,7 +338,7 @@ function Row({
   right: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between bg-[#131325] rounded px-3 py-2 text-xs font-[Geist,sans-serif]">
+    <div className="flex items-center justify-between bg-[#1a1a28] rounded px-3 py-2 text-xs font-[Geist,sans-serif]">
       <div className="flex items-center overflow-hidden min-w-0">{left}</div>
       <div className="flex items-center flex-shrink-0">{right}</div>
     </div>
@@ -346,16 +356,16 @@ function EmptyState({ text }: { text: string }) {
 function ConfidenceBar({ confidence }: { confidence: number }) {
   const pct = Math.round(confidence * 100);
   const color =
-    confidence > 0.7 ? "#f06080" : confidence > 0.4 ? "#f0a500" : "#00c9b1";
+    confidence > 0.7 ? "#ff6b6b" : confidence > 0.4 ? "#f0a500" : "#00c9b1";
   return (
     <div className="flex items-center gap-2 w-[80px]">
-      <div className="flex-1 h-1.5 bg-[#1e1e38] rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-[#1f1f2e] rounded-full overflow-hidden">
         <div
           className="h-full rounded-full"
           style={{ width: `${pct}%`, backgroundColor: color }}
         />
       </div>
-      <span className="text-[10px] text-[#7a779a] min-w-[24px] text-right">
+      <span className="text-[10px] text-[#8a88a0] min-w-[24px] text-right">
         {pct}%
       </span>
     </div>

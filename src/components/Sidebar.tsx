@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNoteStore } from "../stores/noteStore";
 import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
+import type { NoteMeta } from "../lib/tauri";
 
 interface NoteStrength {
   strength: number;
@@ -11,14 +12,20 @@ interface NoteStrength {
   kind?: string;
 }
 
+// Virtualized row estimate. Rows with previews run ~72px, without ~48px.
+// The virtualizer uses this as a bootstrap and then refines per-row once
+// each row is measured via measureElement.
+const ESTIMATED_ROW_HEIGHT = 68;
+const VIRTUAL_OVERSCAN = 6;
+
 type KindFilter = "all" | "note" | "source" | "quote" | "draft" | "question";
 
 const KIND_TABS: Array<{ id: KindFilter; label: string; color: string }> = [
-  { id: "all", label: "All", color: "#9999b8" },
+  { id: "all", label: "All", color: "#a8a6c0" },
   { id: "note", label: "Notes", color: "#f0a500" },
   { id: "source", label: "Sources", color: "#00c9b1" },
   { id: "quote", label: "Quotes", color: "#8b7cf8" },
-  { id: "draft", label: "Drafts", color: "#f06080" },
+  { id: "draft", label: "Drafts", color: "#ff6b6b" },
 ];
 
 export function Sidebar({
@@ -155,16 +162,16 @@ export function Sidebar({
   );
 
   return (
-    <div className="w-[260px] min-w-[260px] h-full flex flex-col bg-[#0d0d1a] border-r border-[#1e1e38]">
+    <div className="w-[260px] min-w-[260px] h-full flex flex-col bg-[#12121c] border-r border-[#1f1f2e]">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[#1e1e38] flex-shrink-0">
+      <div className="px-4 py-3 border-b border-[#1f1f2e] flex-shrink-0">
         <h1 className="text-lg font-semibold font-[Geist,sans-serif] text-[#f0a500] tracking-tight">
           neurovault
         </h1>
       </div>
 
       {/* New Note */}
-      <div className="px-3 py-2 border-b border-[#1e1e38] flex-shrink-0">
+      <div className="px-3 py-2 border-b border-[#1f1f2e] flex-shrink-0">
         {isCreating ? (
           <form
             onSubmit={(e) => {
@@ -187,11 +194,11 @@ export function Sidebar({
                 if (!newTitle.trim()) setIsCreating(false);
               }}
               placeholder="Note title..."
-              className="flex-1 bg-[#131325] text-[#ddd9f0] text-sm px-2 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+              className="flex-1 bg-[#1a1a28] text-[#e8e6f0] text-sm px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
             />
             <button
               type="submit"
-              className="text-[#f0a500] text-sm px-2 py-1 hover:bg-[#131325] rounded font-[Geist,sans-serif]"
+              className="text-[#f0a500] text-sm px-2 py-1 hover:bg-[#1a1a28] rounded font-[Geist,sans-serif]"
             >
               +
             </button>
@@ -199,7 +206,7 @@ export function Sidebar({
         ) : (
           <button
             onClick={() => setIsCreating(true)}
-            className="w-full text-left text-sm text-[#7a779a] hover:text-[#f0a500] px-2 py-1.5 hover:bg-[#131325] rounded transition-colors font-[Geist,sans-serif]"
+            className="w-full text-left text-sm text-[#8a88a0] hover:text-[#f0a500] px-2 py-1.5 hover:bg-[#1a1a28] rounded transition-colors font-[Geist,sans-serif]"
           >
             + New note
           </button>
@@ -213,7 +220,7 @@ export function Sidebar({
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search... (Ctrl+K)"
-          className="w-full bg-[#131325] text-[#ddd9f0] text-sm px-3 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+          className="w-full bg-[#1a1a28] text-[#e8e6f0] text-sm px-3 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
         />
       </div>
 
@@ -228,98 +235,35 @@ export function Sidebar({
               onClick={() => setKindFilter(tab.id)}
               className={`flex-shrink-0 px-2 py-1 rounded text-[10px] font-[Geist,sans-serif] font-medium transition-colors ${
                 active
-                  ? "bg-[#131325] text-[#ddd9f0]"
-                  : "text-[#7a779a] hover:text-[#ddd9f0] hover:bg-[#131325]/50"
+                  ? "bg-[#1a1a28] text-[#e8e6f0]"
+                  : "text-[#8a88a0] hover:text-[#e8e6f0] hover:bg-[#1a1a28]/50"
               }`}
               style={active ? { borderBottom: `1px solid ${tab.color}` } : undefined}
             >
               {tab.label}
               {count > 0 && (
-                <span className="ml-1 text-[9px] text-[#555570]">{count}</span>
+                <span className="ml-1 text-[9px] text-[#6a6880]">{count}</span>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* Note List */}
-      <div className="flex-1 overflow-y-auto min-h-0">
-        <AnimatePresence>
-          {filtered.map((note) => {
-            const s = strengths[note.filename];
-            const stateColor =
-              s?.state === "active" || s?.state === "fresh"
-                ? "#f0a500"
-                : s?.state === "connected"
-                  ? "#00c9b1"
-                  : "#35335a";
+      {/* Note List — virtualized via @tanstack/react-virtual.
+           Row heights vary (with/without preview/strength bar), so we let
+           the virtualizer measure each row after first paint via
+           measureElement. The scroll container MUST have a fixed height
+           (flex-1 + min-h-0 provides that inside the flex column). */}
+      <NoteList
+        filtered={filtered}
+        strengths={strengths}
+        previews={previews}
+        activeFilename={activeFilename}
+        onSelect={(fn) => selectNote(fn)}
+        onDelete={handleDelete}
+      />
 
-            return (
-              <motion.div
-                key={note.filename}
-                layout
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.15 }}
-                onClick={() => selectNote(note.filename)}
-                className={`group relative px-4 py-3 cursor-pointer border-l-2 transition-colors ${
-                  activeFilename === note.filename
-                    ? "border-[#f0a500] bg-[#131325]"
-                    : "border-transparent hover:bg-[#0d0d1a]/80"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h3
-                    className={`text-sm font-medium truncate font-[Geist,sans-serif] ${
-                      activeFilename === note.filename
-                        ? "text-[#ddd9f0]"
-                        : "text-[#ddd9f0]/80"
-                    }`}
-                  >
-                    {note.title}
-                  </h3>
-                  <span className="text-[10px] text-[#7a779a] font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
-                    {relativeTime(note.modified)}
-                  </span>
-                </div>
-
-                {previews[note.filename] && (
-                  <p className="text-xs text-[#7a779a] mt-1 line-clamp-2 font-[Geist,sans-serif]">
-                    {previews[note.filename]}
-                  </p>
-                )}
-
-                {/* Strength bar */}
-                {s && (
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <div className="flex-1 h-[2px] bg-[#131325] rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${s.strength * 100}%`,
-                          backgroundColor: stateColor,
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Delete */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(note.filename, note.title);
-                  }}
-                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#7a779a] hover:text-[#f06080] transition-opacity text-xs p-1 rounded hover:bg-[#131325]"
-                >
-                  ×
-                </button>
-              </motion.div>
-            );
-          })}
-        </AnimatePresence>
-
+      <div className="flex-shrink-0">
         {filtered.length === 0 && notes.length > 0 && (
           <p className="text-[#35335a] text-xs text-center mt-8 font-[Geist,sans-serif]">
             No matching notes
@@ -328,7 +272,7 @@ export function Sidebar({
 
         {notes.length === 0 && (
           <div className="text-center mt-8 px-4">
-            <p className="text-[#7a779a] text-sm font-[Geist,sans-serif]">
+            <p className="text-[#8a88a0] text-sm font-[Geist,sans-serif]">
               No notes yet
             </p>
             <p className="text-[#35335a] text-xs mt-1 font-[Geist,sans-serif]">
@@ -336,6 +280,146 @@ export function Sidebar({
             </p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// --- Virtualized note list ------------------------------------------------
+
+interface NoteListProps {
+  filtered: NoteMeta[];
+  strengths: Record<string, NoteStrength>;
+  previews: Record<string, string>;
+  activeFilename: string | null;
+  onSelect: (filename: string) => void;
+  onDelete: (filename: string, title: string) => void;
+}
+
+/**
+ * Virtualized note-list scroller. Only renders rows currently in the
+ * viewport (+ overscan) regardless of total list size, so sidebars with
+ * thousands of notes stay as responsive as lists with ten.
+ *
+ * Rows have variable heights (preview lines wrap, strength bar optional)
+ * so we let `measureElement` take a real measurement on first paint and
+ * cache it by index. Selection by filename keeps row identity stable
+ * across filter changes so scroll position isn't reset.
+ */
+function NoteList({
+  filtered,
+  strengths,
+  previews,
+  activeFilename,
+  onSelect,
+  onDelete,
+}: NoteListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    overscan: VIRTUAL_OVERSCAN,
+    getItemKey: (index) => filtered[index]?.filename ?? index,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+
+  return (
+    <div
+      ref={scrollRef}
+      className="flex-1 overflow-y-auto min-h-0"
+      data-testid="sidebar-note-list"
+    >
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualItems.map((virtualRow) => {
+          const note = filtered[virtualRow.index];
+          if (!note) return null;
+          const s = strengths[note.filename];
+          const stateColor =
+            s?.state === "active" || s?.state === "fresh"
+              ? "#f0a500"
+              : s?.state === "connected"
+                ? "#00c9b1"
+                : "#35335a";
+          const isActive = activeFilename === note.filename;
+          const preview = previews[note.filename];
+
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              onClick={() => onSelect(note.filename)}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start}px)`,
+                paddingLeft: "var(--pad-x)",
+                paddingRight: "var(--pad-x)",
+                paddingTop: "var(--pad-y)",
+                paddingBottom: "var(--pad-y)",
+              }}
+              className={`group cursor-pointer border-l-2 transition-colors ${
+                isActive
+                  ? "border-[#f0a500] bg-[#1a1a28]"
+                  : "border-transparent hover:bg-[#12121c]/80"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h3
+                  className={`text-sm font-medium truncate font-[Geist,sans-serif] ${
+                    isActive ? "text-[#e8e6f0]" : "text-[#e8e6f0]/80"
+                  }`}
+                >
+                  {note.title}
+                </h3>
+                <span className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
+                  {relativeTime(note.modified)}
+                </span>
+              </div>
+
+              {preview && (
+                <p className="text-xs text-[#8a88a0] mt-1 line-clamp-2 font-[Geist,sans-serif]">
+                  {preview}
+                </p>
+              )}
+
+              {s && (
+                <div className="flex items-center gap-2 mt-1.5">
+                  <div className="flex-1 h-[2px] bg-[#1a1a28] rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${s.strength * 100}%`,
+                        backgroundColor: stateColor,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(note.filename, note.title);
+                }}
+                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#8a88a0] hover:text-[#ff6b6b] transition-opacity text-xs p-1 rounded hover:bg-[#1a1a28]"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

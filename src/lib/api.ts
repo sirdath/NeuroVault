@@ -68,7 +68,22 @@ export interface Backlink {
   link_type: string;
 }
 
+export interface RecallResult {
+  engram_id: string;
+  title: string;
+  content?: string;
+  preview?: string;
+  score: number;
+  strength: number;
+  state: string;
+  kind?: string;
+  filename?: string;
+}
+
 // --- API calls ---
+
+export const recall = (query: string, limit = 8) =>
+  get<RecallResult[]>(`/api/recall?q=${encodeURIComponent(query)}&limit=${limit}`);
 
 export const fetchGraph = () => get<GraphData>("/api/graph");
 export const fetchStatus = () => get<ServerStatus>("/api/status");

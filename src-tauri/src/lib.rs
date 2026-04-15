@@ -159,10 +159,52 @@ fn delete_note(filename: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::Emitter;
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    // CmdOrCtrl+Shift+Space — opens the QuickCapture overlay even when the
+    // window isn't focused. Matches Bear/Drafts/Raycast muscle memory.
+    let quick_capture = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::SHIFT),
+        Code::Space,
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if shortcut != &quick_capture {
+                        return;
+                    }
+                    // Bring the main window to the front + focus, then
+                    // emit the event. The frontend listens for it and
+                    // opens the overlay regardless of current view.
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit("quick-capture-shortcut", ());
+                })
+                .build(),
+        )
+        .setup(move |app| {
+            // Register the shortcut at startup. If another app already owns
+            // the combo we log and move on — the in-app Ctrl+Shift+Space
+            // handler still works when the window is focused.
+            match app.global_shortcut().register(quick_capture) {
+                Ok(_) => eprintln!("[neurovault] global shortcut registered: Ctrl/Cmd+Shift+Space"),
+                Err(e) => eprintln!(
+                    "[neurovault] could not register global shortcut (another app likely owns it): {e}"
+                ),
+            }
+
             #[cfg(not(dev))]
             {
                 use tauri_plugin_shell::ShellExt;

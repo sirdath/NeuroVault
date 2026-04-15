@@ -5,7 +5,7 @@ const COLORS = {
   info: "border-[#00c9b1] bg-[#00c9b1]/10 text-[#00c9b1]",
   success: "border-[#4ade80] bg-[#4ade80]/10 text-[#4ade80]",
   warning: "border-[#f0a500] bg-[#f0a500]/10 text-[#f0a500]",
-  error: "border-[#f06080] bg-[#f06080]/10 text-[#f06080]",
+  error: "border-[#ff6b6b] bg-[#ff6b6b]/10 text-[#ff6b6b]",
 };
 
 export function Toasts() {

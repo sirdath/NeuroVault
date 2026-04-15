@@ -4,36 +4,58 @@
 
 @import "tailwindcss";
 
-/* NeuroVault Design System — based on Obsidian's proven scale */
+/* NeuroVault Design System — Vault Noir
+ *
+ * A calm, warm-dark palette tuned for long-form reading and AI memory.
+ * Three background tiers (bg / surface / surface-elevated) give the eye a
+ * real depth gradient. Text contrast against --color-bg (#0b0b12):
+ *   primary  e8e6f0  14.6:1  AAA
+ *   secondary a8a6c0  8.2:1  AAA
+ *   tertiary  8a88a0  5.4:1  AA
+ *   muted     6a6880  3.4:1  AA Large only — chrome labels, not body
+ */
 @theme {
-  /* Background hierarchy: sidebars darker than editor (Obsidian inversion) */
-  --color-bg: #0f0f17;          /* editor background — slightly lighter */
-  --color-surface: #07070e;     /* sidebars darker — creates depth */
-  --color-raised: #131325;      /* cards, code blocks, hover states */
-  --color-border: #1e1e38;
-  --color-border-strong: #2a2a4a;
+  /* Background hierarchy — three tiers */
+  --color-bg: #0b0b12;              /* canvas / editor */
+  --color-surface: #12121c;         /* sidebars, topbar, statusbar */
+  --color-surface-elevated: #1a1a28;/* cards, hover, popovers */
+  --color-border: #1f1f2e;
+  --color-border-strong: #2a2a40;
 
-  /* Accents */
-  --color-amber: #f0a500;       /* primary accent */
-  --color-amber-dim: rgba(240, 165, 0, 0.1);
-  --color-teal: #00c9b1;        /* AI elements */
-  --color-purple: #8b7cf8;      /* code, entities */
-  --color-coral: #f06080;       /* errors */
-  --color-green: #4ade80;       /* success */
+  /* Compatibility alias — components that still reference --color-raised. */
+  --color-raised: #1a1a28;
 
-  /* Text hierarchy */
-  --color-txt: #ddd9f0;         /* primary text */
-  --color-sub: #9999b8;         /* secondary text */
-  --color-muted: #555570;       /* faint */
-  --color-faint: #35335a;       /* placeholder */
+  /* Accents — your brand identity, kept */
+  --color-amber: #f0a500;            /* primary accent / fresh state */
+  --color-amber-dim: rgba(240, 165, 0, 0.12);
+  --color-teal: #00c9b1;             /* AI / connected state */
+  --color-purple: #8b7cf8;           /* entities, code */
+  --color-coral: #ff6b6b;             /* danger / contradictions */
+  --color-green: #4ade80;             /* success / online */
 
-  /* Obsidian's 4px spacing grid */
+  /* Text hierarchy — AA-compliant against --color-bg */
+  --color-txt: #e8e6f0;              /* primary body text */
+  --color-sub: #a8a6c0;              /* secondary labels */
+  --color-tertiary: #8a88a0;         /* chrome labels, captions */
+  --color-muted: #6a6880;             /* placeholders, decorations */
+  --color-faint: #35335a;             /* disabled / dormant */
+
+  /* 4px spacing grid */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
   --space-8: 32px;
+
+  /* Density tokens — overridden by [data-density] selectors below.
+     `--row-h` controls list-row height (sidebar notes, palette items, etc).
+     `--gap`  controls inter-element gap inside dense lists.
+     Defaults match the "comfortable" preset. */
+  --row-h: 36px;
+  --gap: 12px;
+  --pad-x: 16px;
+  --pad-y: 12px;
 
   /* Typography scale */
   --font-ui-small: 12px;
@@ -56,8 +78,8 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #0f0f17;
-  color: #ddd9f0;
+  background-color: var(--color-bg);
+  color: var(--color-txt);
   font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 13px;            /* UI default */
   -webkit-font-smoothing: antialiased;
@@ -97,11 +119,11 @@ html, body, #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2a4a;
+  background: #2a2a40;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a5a;
+  background: #3a3a55;
 }
 
 /* Disable text selection on UI chrome */
@@ -119,10 +141,34 @@ button, a, .transition {
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-/* Focus states */
+/* Focus states — solid amber ring meets WCAG AA against every surface tier.
+   The previous rgba(240,165,0,0.4) failed AA on --color-surface-elevated. */
 input:focus, textarea:focus, button:focus-visible {
-  outline: 2px solid rgba(240, 165, 0, 0.4);
-  outline-offset: 1px;
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Density modes — applied to <html data-density="..."> by densityStore.
+   Components opt in by reading var(--row-h) / var(--gap). Existing fixed
+   sizing stays unchanged unless a component explicitly references these. */
+html[data-density="comfortable"] {
+  --row-h: 36px;
+  --gap: 12px;
+  --pad-x: 16px;
+  --pad-y: 12px;
+}
+html[data-density="cozy"] {
+  --row-h: 30px;
+  --gap: 8px;
+  --pad-x: 14px;
+  --pad-y: 8px;
+}
+html[data-density="compact"] {
+  --row-h: 24px;
+  --gap: 4px;
+  --pad-x: 12px;
+  --pad-y: 6px;
 }
 
 /* Animation: gentle fade in for modals */

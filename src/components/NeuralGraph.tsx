@@ -20,7 +20,7 @@ const STATE_COLORS: Record<string, string> = {
   active: "#f0a500",
   connected: "#00c9b1",
   dormant: "#35335a",
-  consolidated: "#1e1e38",
+  consolidated: "#1f1f2e",
 };
 
 function nodeRadius(accessCount: number): number {
@@ -343,7 +343,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
       }
 
-      ctx.fillStyle = "#07070e";
+      ctx.fillStyle = "#0b0b12";
       ctx.fillRect(0, 0, w, h);
 
       // Edges
@@ -398,7 +398,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
 
         // Always show node title (so users can read them at a glance)
         ctx.font = '11px "Geist", system-ui, sans-serif';
-        ctx.fillStyle = isHov ? "#ddd9f0" : "#7a779a";
+        ctx.fillStyle = isHov ? "#e8e6f0" : "#8a88a0";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         const truncated = n.title.length > 20 ? n.title.slice(0, 18) + "…" : n.title;
@@ -413,7 +413,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [hoverCard]);
 
   return (
-    <div ref={containerRef} className="flex-1 relative bg-[#07070e] overflow-hidden">
+    <div ref={containerRef} className="flex-1 relative bg-[#0b0b12] overflow-hidden">
       <canvas
         ref={canvasRef}
         onMouseMove={onMouseMove}
@@ -431,13 +431,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {/* Hover preview card */}
       {hoverCard && (
         <div
-          className="absolute bg-[#0d0d1a] border border-[#1e1e38] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
+          className="absolute bg-[#12121c] border border-[#1f1f2e] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
           style={{ left: hoverCard.x, top: hoverCard.y }}
           onMouseEnter={cancelClose}
           onMouseLeave={() => scheduleClose()}
         >
           <div className="flex items-start justify-between gap-2 mb-2">
-            <h3 className="text-sm font-semibold text-[#ddd9f0] font-[Geist,sans-serif] leading-tight">
+            <h3 className="text-sm font-semibold text-[#e8e6f0] font-[Geist,sans-serif] leading-tight">
               {hoverCard.node.title}
             </h3>
             <span
@@ -446,7 +446,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
                   ? "bg-[#f0a500]/15 text-[#f0a500]"
                   : hoverCard.node.state === "connected"
                     ? "bg-[#00c9b1]/15 text-[#00c9b1]"
-                    : "bg-[#35335a]/30 text-[#7a779a]"
+                    : "bg-[#35335a]/30 text-[#8a88a0]"
               }`}
             >
               {Math.round(hoverCard.node.strength * 100)}%
@@ -454,7 +454,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           </div>
 
           {hoverCard.preview && (
-            <p className="text-xs text-[#7a779a] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
+            <p className="text-xs text-[#8a88a0] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
               {hoverCard.preview}
             </p>
           )}
@@ -466,7 +466,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
 
           <button
             onClick={() => handleViewNote(hoverCard.node)}
-            className="w-full text-xs font-medium font-[Geist,sans-serif] bg-[#f0a500] text-[#07070e] py-1.5 rounded hover:bg-[#f0a500]/90 transition-colors"
+            className="w-full text-xs font-medium font-[Geist,sans-serif] bg-[#f0a500] text-[#0b0b12] py-1.5 rounded hover:bg-[#f0a500]/90 transition-colors"
           >
             View note
           </button>
@@ -474,7 +474,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       )}
 
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#7a779a] pointer-events-none">
+      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#8a88a0] pointer-events-none">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> active
         </span>

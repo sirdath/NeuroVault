@@ -101,7 +101,7 @@ export const livePreviewTheme = EditorView.baseTheme({
   ".cm-line:has(.cm-heading-3)": {
     fontSize: "1.2em",
     fontWeight: "600",
-    color: "#ddd9f0",
+    color: "#e8e6f0",
     lineHeight: "1.3",
     marginTop: "0.6em",
   },

@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useNoteStore } from "../stores/noteStore";
+import { WikiLink } from "./WikiLink";
 
 /**
  * MarkdownPreview — the "reader mode" for a note. Renders the stored
@@ -68,31 +69,46 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
               <h1 className="text-2xl font-semibold text-[#f0a500] mt-6 mb-4" {...props} />
             ),
             h2: ({ node, ...props }) => (
-              <h2 className="text-xl font-semibold text-[#ddd9f0] mt-6 mb-3 border-b border-[#1e1e38] pb-1" {...props} />
+              <h2 className="text-xl font-semibold text-[#e8e6f0] mt-6 mb-3 border-b border-[#1f1f2e] pb-1" {...props} />
             ),
             h3: ({ node, ...props }) => (
-              <h3 className="text-lg font-semibold text-[#ddd9f0] mt-5 mb-2" {...props} />
+              <h3 className="text-lg font-semibold text-[#e8e6f0] mt-5 mb-2" {...props} />
             ),
             h4: ({ node, ...props }) => (
-              <h4 className="text-base font-semibold text-[#ddd9f0] mt-4 mb-2" {...props} />
+              <h4 className="text-base font-semibold text-[#e8e6f0] mt-4 mb-2" {...props} />
             ),
             p: ({ node, ...props }) => (
               <p className="text-[#c9c4e0] text-[15px] leading-relaxed my-3" {...props} />
             ),
-            a: ({ node, href, children, ...props }) => (
-              <a
-                href={href}
-                onClick={(e) => handleAnchorClick(e, href)}
-                className={
-                  href?.startsWith("#wiki:")
-                    ? "text-[#8b7cf8] hover:text-[#a998ff] underline decoration-dotted cursor-pointer"
-                    : "text-[#00c9b1] hover:text-[#4de0cb] underline"
-                }
-                {...props}
-              >
-                {children}
-              </a>
-            ),
+            a: ({ node, href, children, ...props }) => {
+              // Wiki-links get hover-preview behaviour via the shared
+              // HoverPreviewStore. Regular URLs stay as plain links.
+              if (href?.startsWith("#wiki:")) {
+                const target = decodeURIComponent(href.slice("#wiki:".length));
+                const match = notes.find(
+                  (n) => n.title.toLowerCase() === target.toLowerCase(),
+                );
+                return (
+                  <WikiLink
+                    title={target}
+                    filename={match?.filename ?? null}
+                    onClick={(e) => handleAnchorClick(e, href)}
+                  >
+                    {children}
+                  </WikiLink>
+                );
+              }
+              return (
+                <a
+                  href={href}
+                  onClick={(e) => handleAnchorClick(e, href)}
+                  className="text-[#00c9b1] hover:text-[#4de0cb] underline"
+                  {...props}
+                >
+                  {children}
+                </a>
+              );
+            },
             ul: ({ node, ...props }) => (
               <ul className="list-disc pl-6 text-[#c9c4e0] my-3 space-y-1" {...props} />
             ),
@@ -111,7 +127,7 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
               if (isBlock) {
                 return (
                   <code
-                    className={`${className} block bg-[#0d0d1a] border border-[#1e1e38] rounded px-4 py-3 text-[13px] text-[#ddd9f0] font-mono overflow-x-auto`}
+                    className={`${className} block bg-[#12121c] border border-[#1f1f2e] rounded px-4 py-3 text-[13px] text-[#e8e6f0] font-mono overflow-x-auto`}
                     {...props}
                   >
                     {children}
@@ -120,7 +136,7 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
               }
               return (
                 <code
-                  className="bg-[#131325] text-[#f0a500] px-1.5 py-0.5 rounded text-[13px] font-mono"
+                  className="bg-[#1a1a28] text-[#f0a500] px-1.5 py-0.5 rounded text-[13px] font-mono"
                   {...props}
                 >
                   {children}
@@ -132,7 +148,7 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
                 {children}
               </pre>
             ),
-            hr: ({ node, ...props }) => <hr className="border-[#1e1e38] my-6" {...props} />,
+            hr: ({ node, ...props }) => <hr className="border-[#1f1f2e] my-6" {...props} />,
             table: ({ node, ...props }) => (
               <div className="overflow-x-auto my-4">
                 <table className="border-collapse text-[14px] text-[#c9c4e0]" {...props} />
@@ -140,17 +156,17 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
             ),
             th: ({ node, ...props }) => (
               <th
-                className="border border-[#1e1e38] bg-[#0d0d1a] px-3 py-1.5 text-left font-semibold text-[#ddd9f0]"
+                className="border border-[#1f1f2e] bg-[#12121c] px-3 py-1.5 text-left font-semibold text-[#e8e6f0]"
                 {...props}
               />
             ),
             td: ({ node, ...props }) => (
-              <td className="border border-[#1e1e38] px-3 py-1.5" {...props} />
+              <td className="border border-[#1f1f2e] px-3 py-1.5" {...props} />
             ),
-            strong: ({ node, ...props }) => <strong className="text-[#ddd9f0]" {...props} />,
+            strong: ({ node, ...props }) => <strong className="text-[#e8e6f0]" {...props} />,
             em: ({ node, ...props }) => <em className="text-[#c9c4e0]" {...props} />,
             img: ({ node, ...props }) => (
-              <img className="max-w-full my-4 rounded border border-[#1e1e38]" {...props} />
+              <img className="max-w-full my-4 rounded border border-[#1f1f2e]" {...props} />
             ),
           }}
         >

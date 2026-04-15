@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 
@@ -43,6 +44,53 @@ mcp = FastMCP(
 manager = BrainManager()
 
 
+# --- Tiered tool registration ----------------------------------------------
+# FastMCP ships every @mcp.tool() to the client as schema at session start.
+# With 39 tools that's ~7k tokens of overhead before a single message lands.
+# Users opt into what they want via ENGRAM_MCP_TIER:
+#
+#   core      — 5 tools: remember, recall, list_brains, switch_brain, create_brain
+#   power     — core + general memory ops (forget, list_memories, extract_insights, ...)
+#   code      — power + code intelligence (find_variable, find_callers, impact, ...)
+#   research  — power + pdf/zotero/pandoc/clip
+#   full/all  — everything (default for backwards compat)
+#
+# Set via env var: ENGRAM_MCP_TIER=core (or a comma list: "power,code")
+_TIER_INCLUDES = {
+    "core": {"core"},
+    "power": {"core", "power"},
+    "code": {"core", "power", "code"},
+    "research": {"core", "power", "research"},
+    "full": {"core", "power", "code", "research"},
+    "all": {"core", "power", "code", "research"},
+}
+
+_raw_tier = os.environ.get("ENGRAM_MCP_TIER", "full").lower().strip()
+_ACTIVE_TIERS: set[str] = set()
+for token in [t.strip() for t in _raw_tier.split(",") if t.strip()]:
+    _ACTIVE_TIERS.update(_TIER_INCLUDES.get(token, {token}))
+if not _ACTIVE_TIERS:
+    _ACTIVE_TIERS = {"core", "power", "code", "research"}
+# Core is never excluded — a usable brain always needs remember/recall.
+_ACTIVE_TIERS.add("core")
+logger.info("MCP tool tiers active: {} (from ENGRAM_MCP_TIER={!r})", sorted(_ACTIVE_TIERS), _raw_tier)
+
+
+def tiered(*tiers: str):
+    """Register a tool with FastMCP only if one of `tiers` is active.
+
+    Replaces the bare `@mcp.tool()` decorator so the schema for unused tools
+    never ships to the client. Functions stripped out of the active tier are
+    still callable internally (they just lose their MCP registration), which
+    keeps the HTTP API and tests intact regardless of tier.
+    """
+    def decorator(fn):
+        if any(t in _ACTIVE_TIERS for t in tiers):
+            return mcp.tool()(fn)
+        return fn
+    return decorator
+
+
 def _ctx(brain: str | None = None) -> BrainContext:
     """Resolve brain context — active brain if no brain specified."""
     if brain:
@@ -70,7 +118,7 @@ def _write_md_file(vault_dir: Path, filename: str, title: str, content: str) -> 
 # --- Memory Tools ---
 
 
-@mcp.tool()
+@tiered("core")
 def remember(title: str, content: str, brain: str | None = None) -> dict:
     """Create or update a memory. Saves as a markdown file and indexes it.
 
@@ -122,7 +170,7 @@ def remember(title: str, content: str, brain: str | None = None) -> dict:
     }
 
 
-@mcp.tool()
+@tiered("core")
 def recall(
     query: str,
     limit: int = 10,
@@ -226,7 +274,7 @@ def recall(
     return results
 
 
-@mcp.tool()
+@tiered("power")
 def forget(engram_id: str, brain: str | None = None) -> dict:
     """Mark a memory as dormant. File is preserved but won't appear in searches.
 
@@ -242,7 +290,7 @@ def forget(engram_id: str, brain: str | None = None) -> dict:
     return {"status": "not_found", "engram_id": engram_id}
 
 
-@mcp.tool()
+@tiered("power")
 def list_memories(tag: str | None = None, brain: str | None = None) -> list[dict]:
     """List all active memories with title, state, strength, and connections.
 
@@ -317,7 +365,7 @@ def get_related(title: str, limit: int = 5, brain: str | None = None) -> list[di
     return related
 
 
-@mcp.tool()
+@tiered("power")
 def save_conversation_insights(
     user_message: str,
     assistant_response: str,
@@ -349,13 +397,13 @@ def save_conversation_insights(
 # --- Brain Management Tools ---
 
 
-@mcp.tool()
+@tiered("core")
 def list_brains() -> list[dict]:
     """List all available brains with their active status."""
     return manager.list_brains()
 
 
-@mcp.tool()
+@tiered("core")
 def switch_brain(brain_id: str) -> dict:
     """Switch the active brain context.
 
@@ -366,7 +414,7 @@ def switch_brain(brain_id: str) -> dict:
     return {"status": "switched", "brain_id": ctx.brain_id, "name": ctx.name}
 
 
-@mcp.tool()
+@tiered("core")
 def create_brain(name: str, description: str = "") -> dict:
     """Create a new brain for a project or context.
 
@@ -424,7 +472,7 @@ def check_contradictions(brain: str | None = None) -> list[dict]:
     ]
 
 
-@mcp.tool()
+@tiered("research")
 def clip_url(url: str, title: str, content: str, brain: str | None = None) -> dict:
     """Save web content as a memory note — like a browser extension save.
 
@@ -441,7 +489,7 @@ def clip_url(url: str, title: str, content: str, brain: str | None = None) -> di
     return clip_to_vault(url, title, content, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
 
 
-@mcp.tool()
+@tiered("power")
 def get_timeline(brain: str | None = None) -> list[dict]:
     """Get a timeline of facts — what was true when, and what superseded what.
 
@@ -468,7 +516,7 @@ def get_timeline(brain: str | None = None) -> list[dict]:
 # --- Graphify-inspired Tools ---
 
 
-@mcp.tool()
+@tiered("power")
 def brain_report(brain: str | None = None) -> str:
     """Generate a brain GRAPH_REPORT.md — one-page summary of the knowledge graph.
 
@@ -511,7 +559,7 @@ def path(
 # --- Zotero Integration ---
 
 
-@mcp.tool()
+@tiered("research")
 def zotero_sync(query: str = "", brain: str | None = None) -> dict:
     """Sync Zotero library items as Source engrams via Better BibTeX RPC.
 
@@ -538,7 +586,7 @@ def zotero_status() -> dict:
 # --- Pandoc Export ---
 
 
-@mcp.tool()
+@tiered("research")
 def export_pandoc(
     engram_id: str,
     output_format: str = "docx",
@@ -618,7 +666,7 @@ def git_restore(filename: str, commit_hash: str, brain: str | None = None) -> di
 # --- Drafts (Longform Replacement) ---
 
 
-@mcp.tool()
+@tiered("research")
 def create_draft(
     title: str,
     description: str = "",
@@ -716,7 +764,7 @@ def export_brain_archive(include_db: bool = False, brain: str | None = None) -> 
 # --- Karpathy LLM Wiki Tools ---
 
 
-@mcp.tool()
+@tiered("power")
 def read_index(brain: str | None = None) -> str:
     """Read the auto-maintained index.md — one-line summary of every note.
 
@@ -748,7 +796,7 @@ def read_log(tail: int = 50, brain: str | None = None) -> str:
     return get_log(ctx.vault_dir, tail=tail)
 
 
-@mcp.tool()
+@tiered("power")
 def read_schema(brain: str | None = None) -> str:
     """Read the CLAUDE.md schema — per-brain conventions and rules.
 
@@ -783,7 +831,7 @@ def update_schema(content: str, brain: str | None = None) -> dict:
 # --- Brain-Like Memory Tools ---
 
 
-@mcp.tool()
+@tiered("power")
 def working_memory(brain: str | None = None) -> list[dict]:
     """Get the current working memory — always-in-context memories.
 
@@ -798,7 +846,7 @@ def working_memory(brain: str | None = None) -> list[dict]:
     return get_wm(ctx.db)
 
 
-@mcp.tool()
+@tiered("power")
 def pin_memory(engram_id: str, brain: str | None = None) -> dict:
     """Pin a memory to working memory so it's always in context.
 
@@ -961,7 +1009,7 @@ def proactive_context(message: str, brain: str | None = None) -> dict:
     return pc(message, ctx.db, manager.embedder)
 
 
-@mcp.tool()
+@tiered("power")
 def about(entity: str, brain: str | None = None) -> dict:
     """Entity-first lookup — everything NeuroVault knows about a person, concept, or project.
 
@@ -1076,7 +1124,7 @@ def context_for(topic: str, token_budget: int = 2000, brain: str | None = None) 
 # --- Dissertation Tools ---
 
 
-@mcp.tool()
+@tiered("power")
 def quick_capture(text: str, title: str | None = None, brain: str | None = None) -> dict:
     """Quick-capture text as a note. Auto-extracts title if not provided.
 
@@ -1092,7 +1140,7 @@ def quick_capture(text: str, title: str | None = None, brain: str | None = None)
     return qc(text, title, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
 
 
-@mcp.tool()
+@tiered("power")
 def add_tag(engram_id: str, tag: str, brain: str | None = None) -> dict:
     """Add a tag to a memory for organization.
 
@@ -1132,7 +1180,7 @@ def list_tags(brain: str | None = None) -> list[dict]:
     return lt(ctx.db)
 
 
-@mcp.tool()
+@tiered("research")
 def ingest_pdf(pdf_path: str, brain: str | None = None) -> dict:
     """Ingest a PDF paper — extracts text, highlights, and metadata.
 
@@ -1174,7 +1222,7 @@ def export_citations(tag: str | None = None, brain: str | None = None) -> str:
 # --- Progressive disclosure: tier 2 (timeline) + tier 3 (fetch) ---
 
 
-@mcp.tool()
+@tiered("power")
 def timeline(
     around: str,
     before: int = 3,
@@ -1249,7 +1297,7 @@ def timeline(
     return timeline_items
 
 
-@mcp.tool()
+@tiered("research")
 def fetch(
     engram_ids: list[str],
     brain: str | None = None,
@@ -1301,7 +1349,7 @@ def fetch(
 # --- Code & Variable Tools ---
 
 
-@mcp.tool()
+@tiered("code")
 def ingest_code(filepath: str, brain: str | None = None) -> dict:
     """Ingest a single source code file into the brain.
 
@@ -1320,7 +1368,7 @@ def ingest_code(filepath: str, brain: str | None = None) -> dict:
     return result
 
 
-@mcp.tool()
+@tiered("code")
 def ingest_repo(repo_path: str, max_files: int = 500, brain: str | None = None) -> dict:
     """Walk a code repository and ingest every supported source file.
 
@@ -1334,7 +1382,7 @@ def ingest_repo(repo_path: str, max_files: int = 500, brain: str | None = None) 
     return do_ingest_repo(path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25, max_files=max_files)
 
 
-@mcp.tool()
+@tiered("code")
 def find_todos(marker_type: str | None = None, limit: int = 50, brain: str | None = None) -> list[dict]:
     """List open TODO/FIXME/HACK/WHY markers across the codebase.
 
@@ -1346,7 +1394,7 @@ def find_todos(marker_type: str | None = None, limit: int = 50, brain: str | Non
     return do_find_todos(ctx.db, marker_type=marker_type, limit=limit)
 
 
-@mcp.tool()
+@tiered("code")
 def find_variable(name: str, brain: str | None = None) -> dict:
     """Look up a tracked variable, function, class, or type by name.
 
@@ -1360,7 +1408,7 @@ def find_variable(name: str, brain: str | None = None) -> dict:
     return result or {"found": False, "name": name}
 
 
-@mcp.tool()
+@tiered("code")
 def list_variables(
     language: str | None = None,
     kind: str | None = None,
@@ -1415,7 +1463,7 @@ def search_variables(pattern: str, limit: int = 20, brain: str | None = None) ->
 # --- Call Graph Tools ---
 
 
-@mcp.tool()
+@tiered("code")
 def find_callers(name: str, limit: int = 50, brain: str | None = None) -> list[dict]:
     """List every place a function is called from.
 
@@ -1427,7 +1475,7 @@ def find_callers(name: str, limit: int = 50, brain: str | None = None) -> list[d
     return do_find_callers(ctx.db, name, limit=limit)
 
 
-@mcp.tool()
+@tiered("code")
 def find_callees(name: str, limit: int = 100, brain: str | None = None) -> list[dict]:
     """List every function that a given function calls.
 
@@ -1439,7 +1487,7 @@ def find_callees(name: str, limit: int = 100, brain: str | None = None) -> list[
     return do_find_callees(ctx.db, name, limit=limit)
 
 
-@mcp.tool()
+@tiered("code")
 def get_impact_radius(
     filepaths: list[str],
     max_depth: int = 3,
@@ -1470,7 +1518,7 @@ def get_impact_radius(
     return do_impact(ctx.db, filepaths, max_depth=max_depth, max_affected=max_affected)
 
 
-@mcp.tool()
+@tiered("code")
 def detect_changes(
     diff: str = "",
     filepaths: list[str] | None = None,
@@ -1506,7 +1554,7 @@ def detect_changes(
     return do_detect(ctx.db, diff_text=diff, filepaths=filepaths, max_depth=max_depth)
 
 
-@mcp.tool()
+@tiered("code")
 def review_context(
     filepaths: list[str],
     total_token_budget: int = 3000,
@@ -1576,7 +1624,7 @@ def hot_functions(limit: int = 20, brain: str | None = None) -> list[dict]:
 # --- Cognitive code intelligence (NeuroVault's unique angle) ---
 
 
-@mcp.tool()
+@tiered("code")
 def find_dead_code(
     stale_days: int = 60,
     max_callers: int = 0,
@@ -1598,7 +1646,7 @@ def find_dead_code(
     return do_find_dead(ctx.db, stale_days=stale_days, max_callers=max_callers, limit=limit)
 
 
-@mcp.tool()
+@tiered("code")
 def find_renamed_callsites(limit: int = 50, brain: str | None = None) -> list[dict]:
     """Find places that still call the OLD name of a renamed symbol.
 
@@ -1616,7 +1664,7 @@ def find_renamed_callsites(limit: int = 50, brain: str | None = None) -> list[di
     return do_find_stale(ctx.db, limit=limit)
 
 
-@mcp.tool()
+@tiered("power")
 def extract_insights(
     text: str,
     save: bool = False,
@@ -1662,7 +1710,7 @@ def extract_insights(
     }
 
 
-@mcp.tool()
+@tiered("power")
 def rollup_session(
     session_id: str,
     brain: str | None = None,
@@ -1689,7 +1737,7 @@ def rollup_session(
     return do_rollup(ctx, short)
 
 
-@mcp.tool()
+@tiered("power")
 def replay_session(session_id: str, max_events: int = 200, brain: str | None = None) -> dict:
     """Reconstruct what Claude did during a previous Claude Code session.
 
@@ -1963,6 +2011,25 @@ def contradictions_resource() -> str:
 
 # --- Entry point ---
 
+def _warm_embedder() -> None:
+    """Force the sentence-transformer to load and embed one dummy string.
+
+    Without this the first `recall` call after boot pays a ~10s model-load
+    tax while the user sits watching the spinner. Running it during server
+    startup moves that cost off the critical path so the first real query
+    feels fast. Safe to call multiple times — Embedder.get() is a singleton.
+    """
+    try:
+        import time as _t
+        t0 = _t.time()
+        from engram_server.embeddings import Embedder
+        embedder = Embedder.get()
+        embedder.encode("warmup query")
+        logger.info("Embedder warmed in {:.1f}s", _t.time() - t0)
+    except Exception as e:
+        logger.warning("Embedder warmup failed (non-fatal): {}", e)
+
+
 def main() -> None:
     import sys
 
@@ -1970,6 +2037,8 @@ def main() -> None:
     logger.info("Starting Engram MCP server")
     logger.info("Active brain: {} ({})", active.name, active.brain_id)
     logger.info("Vault: {}", active.vault_dir)
+
+    _warm_embedder()
 
     if "--http-only" in sys.argv:
         import uvicorn

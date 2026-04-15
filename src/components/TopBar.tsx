@@ -29,10 +29,10 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps)
   }, []);
 
   return (
-    <div className="h-10 min-h-[40px] flex items-center justify-between px-4 bg-[#0d0d1a] border-b border-[#1e1e38]">
+    <div className="h-10 min-h-[40px] flex items-center justify-between px-4 bg-[#12121c] border-b border-[#1f1f2e]">
       {/* Left: View switcher + Brain selector */}
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1 bg-[#131325] rounded p-0.5">
+        <div className="flex items-center gap-1 bg-[#1a1a28] rounded p-0.5">
           <ViewButton active={view === "editor"} onClick={() => onViewChange("editor")} label="Editor" />
           <ViewButton active={view === "graph"} onClick={() => onViewChange("graph")} label="Graph" />
           <ViewButton active={view === "drafts"} onClick={() => onViewChange("drafts")} label="Drafts" />
@@ -42,7 +42,7 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps)
       </div>
 
       {/* Center: Memory count */}
-      <div className="flex items-center gap-2 text-xs font-[Geist,sans-serif] text-[#7a779a]">
+      <div className="flex items-center gap-2 text-xs font-[Geist,sans-serif] text-[#8a88a0]">
         {memoryCount > 0 && (
           <span>{memoryCount} {memoryCount === 1 ? "memory" : "memories"}</span>
         )}
@@ -51,14 +51,14 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps)
       {/* Right: Status + Memory Panel */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#f06080]"}`} />
-          <span className="text-[10px] font-[Geist,sans-serif] text-[#7a779a]">
+          <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#ff6b6b]"}`} />
+          <span className="text-[10px] font-[Geist,sans-serif] text-[#8a88a0]">
             {serverUp ? "MCP" : "offline"}
           </span>
         </div>
         <button
           onClick={onMemoryPanelToggle}
-          className="text-xs font-[Geist,sans-serif] text-[#7a779a] hover:text-[#f0a500] transition-colors px-2 py-1 rounded hover:bg-[#131325]"
+          className="text-xs font-[Geist,sans-serif] text-[#8a88a0] hover:text-[#f0a500] transition-colors px-2 py-1 rounded hover:bg-[#1a1a28]"
         >
           brain
         </button>
@@ -72,7 +72,7 @@ function ViewButton({ active, onClick, label }: { active: boolean; onClick: () =
     <button
       onClick={onClick}
       className={`px-3 py-1 text-xs font-[Geist,sans-serif] rounded transition-colors ${
-        active ? "bg-[#1e1e38] text-[#ddd9f0]" : "text-[#7a779a] hover:text-[#ddd9f0]"
+        active ? "bg-[#1f1f2e] text-[#e8e6f0]" : "text-[#8a88a0] hover:text-[#e8e6f0]"
       }`}
     >
       {label}

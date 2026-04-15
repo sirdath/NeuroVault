@@ -46,16 +46,16 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed top-0 right-0 h-full w-[380px] bg-[#0d0d1a] border-l border-[#1e1e38] z-50 flex flex-col overflow-hidden"
+            className="fixed top-0 right-0 h-full w-[380px] bg-[#12121c] border-l border-[#1f1f2e] z-50 flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[#1e1e38]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#1f1f2e]">
               <h2 className="text-sm font-semibold font-[Geist,sans-serif] text-[#f0a500]">
                 Memory Panel
               </h2>
               <button
                 onClick={onClose}
-                className="text-[#7a779a] hover:text-[#ddd9f0] text-lg"
+                className="text-[#8a88a0] hover:text-[#e8e6f0] text-lg"
               >
                 ×
               </button>
@@ -64,7 +64,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
             {/* Content */}
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
               {error ? (
-                <div className="text-[#f06080] text-sm font-[Geist,sans-serif]">
+                <div className="text-[#ff6b6b] text-sm font-[Geist,sans-serif]">
                   {error}
                 </div>
               ) : (
@@ -96,8 +96,8 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
                     {strength ? (
                       <div className="space-y-2">
                         <div className="flex justify-between text-xs font-[Geist,sans-serif]">
-                          <span className="text-[#7a779a]">Average strength</span>
-                          <span className="text-[#ddd9f0]">
+                          <span className="text-[#8a88a0]">Average strength</span>
+                          <span className="text-[#e8e6f0]">
                             {Math.round(strength.average_strength * 100)}%
                           </span>
                         </div>
@@ -111,7 +111,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
                   {/* Session Context */}
                   <Section title="What Claude Knows (L0)">
                     {context ? (
-                      <pre className="text-xs text-[#ddd9f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
+                      <pre className="text-xs text-[#e8e6f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
                         {context.l0}
                       </pre>
                     ) : (
@@ -121,7 +121,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
 
                   <Section title="Active Memories (L1)">
                     {context ? (
-                      <pre className="text-xs text-[#ddd9f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
+                      <pre className="text-xs text-[#e8e6f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
                         {context.l1}
                       </pre>
                     ) : (
@@ -133,7 +133,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
             </div>
 
             {/* Footer */}
-            <div className="px-5 py-3 border-t border-[#1e1e38]">
+            <div className="px-5 py-3 border-t border-[#1f1f2e]">
               <p className="text-[10px] text-[#35335a] font-[Geist,sans-serif]">
                 MCP server on localhost:8765
               </p>
@@ -154,7 +154,7 @@ function Section({
 }) {
   return (
     <div>
-      <h3 className="text-xs font-medium text-[#7a779a] font-[Geist,sans-serif] uppercase tracking-wider mb-2">
+      <h3 className="text-xs font-medium text-[#8a88a0] font-[Geist,sans-serif] uppercase tracking-wider mb-2">
         {title}
       </h3>
       {children}
@@ -164,11 +164,11 @@ function Section({
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-[#131325] rounded px-3 py-2">
-      <p className="text-lg font-semibold text-[#ddd9f0] font-[Geist,sans-serif]">
+    <div className="bg-[#1a1a28] rounded px-3 py-2">
+      <p className="text-lg font-semibold text-[#e8e6f0] font-[Geist,sans-serif]">
         {value}
       </p>
-      <p className="text-[10px] text-[#7a779a] font-[Geist,sans-serif]">
+      <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif]">
         {label}
       </p>
     </div>
@@ -200,7 +200,7 @@ function StrengthBar({
 
   return (
     <div className="space-y-1">
-      <div className="flex h-2 rounded-full overflow-hidden bg-[#131325]">
+      <div className="flex h-2 rounded-full overflow-hidden bg-[#1a1a28]">
         {segments.map((seg) => {
           const count = distribution[seg.key] ?? 0;
           const pct = (count / total) * 100;
@@ -219,7 +219,7 @@ function StrengthBar({
           const count = distribution[seg.key] ?? 0;
           if (count === 0) return null;
           return (
-            <span key={seg.key} className="text-[#7a779a]">
+            <span key={seg.key} className="text-[#8a88a0]">
               <span style={{ color: seg.color }}>{count}</span> {seg.label}
             </span>
           );

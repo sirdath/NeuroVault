@@ -68,15 +68,15 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: "spring", damping: 22, stiffness: 300 }}
-            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[85vh] bg-[#0f0f17] border border-[#2a2a4a] rounded-lg shadow-2xl z-[70] flex flex-col overflow-hidden"
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[85vh] bg-[#0b0b12] border border-[#2a2a40] rounded-lg shadow-2xl z-[70] flex flex-col overflow-hidden"
           >
-            <div className="px-5 py-3 border-b border-[#1e1e38] flex items-center justify-between">
+            <div className="px-5 py-3 border-b border-[#1f1f2e] flex items-center justify-between">
               <h2 className="text-sm font-semibold font-[Geist,sans-serif] text-[#f0a500]">
                 Keyboard Shortcuts
               </h2>
               <button
                 onClick={onClose}
-                className="text-[#555570] hover:text-[#ddd9f0] text-lg leading-none"
+                className="text-[#6a6880] hover:text-[#e8e6f0] text-lg leading-none"
               >
                 ×
               </button>
@@ -85,19 +85,19 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
               {SHORTCUTS.map((group) => (
                 <div key={group.category}>
-                  <h3 className="text-[10px] uppercase tracking-wider text-[#9999b8] font-semibold mb-2 font-[Geist,sans-serif]">
+                  <h3 className="text-[10px] uppercase tracking-wider text-[#a8a6c0] font-semibold mb-2 font-[Geist,sans-serif]">
                     {group.category}
                   </h3>
                   <div className="space-y-1.5">
                     {group.items.map((s) => (
                       <div
                         key={s.keys}
-                        className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-[#131325]"
+                        className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-[#1a1a28]"
                       >
-                        <span className="text-xs text-[#ddd9f0] font-[Geist,sans-serif]">
+                        <span className="text-xs text-[#e8e6f0] font-[Geist,sans-serif]">
                           {s.description}
                         </span>
-                        <kbd className="px-2 py-0.5 bg-[#131325] border border-[#2a2a4a] rounded text-[10px] text-[#9999b8] font-mono">
+                        <kbd className="px-2 py-0.5 bg-[#1a1a28] border border-[#2a2a40] rounded text-[10px] text-[#a8a6c0] font-mono">
                           {s.keys}
                         </kbd>
                       </div>
@@ -107,8 +107,8 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
               ))}
             </div>
 
-            <div className="px-5 py-2 border-t border-[#1e1e38] text-[10px] text-[#555570] font-[Geist,sans-serif] text-center">
-              Press <kbd className="px-1 bg-[#131325] rounded">Esc</kbd> to close
+            <div className="px-5 py-2 border-t border-[#1f1f2e] text-[10px] text-[#6a6880] font-[Geist,sans-serif] text-center">
+              Press <kbd className="px-1 bg-[#1a1a28] rounded">Esc</kbd> to close
             </div>
           </motion.div>
         </>

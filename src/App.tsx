@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useNoteStore } from "./stores/noteStore";
 import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
@@ -7,6 +8,8 @@ import { TopBar } from "./components/TopBar";
 import { StatusBar } from "./components/StatusBar";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import { QuickCapture } from "./components/QuickCapture";
+import { HoverPreview } from "./components/HoverPreview";
 import { RightSidebar } from "./components/RightSidebar";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
@@ -21,14 +24,30 @@ export default function App() {
   const [view, setView] = useState<View>("editor");
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [triggerNewNote, setTriggerNewNote] = useState(0);
   const [triggerSearch, setTriggerSearch] = useState(0);
 
   useEffect(() => {
     initVault();
   }, [initVault]);
+
+  // Global-shortcut bridge: Rust registers Ctrl/Cmd+Shift+Space at the OS
+  // level and emits `quick-capture-shortcut` when pressed, so the overlay
+  // opens even when the window isn't focused. The in-app keydown handler
+  // below still fires when the window IS focused — keeping both covers
+  // the case where the OS refused to register the global combo.
+  useEffect(() => {
+    const unlistenPromise = listen<null>("quick-capture-shortcut", () => {
+      setQuickCaptureOpen(true);
+    });
+    return () => {
+      unlistenPromise.then((un) => un()).catch(() => {});
+    };
+  }, []);
 
   const toggleView = useCallback(() => {
     setView((v) =>
@@ -45,6 +64,13 @@ export default function App() {
   // Build the command palette command list
   const commands: Command[] = useMemo(
     () => [
+      {
+        id: "quick-capture",
+        title: "Quick capture",
+        category: "Action",
+        shortcut: "Ctrl+Shift+Space",
+        action: () => setQuickCaptureOpen(true),
+      },
       {
         id: "new-note",
         title: "Create new note",
@@ -105,6 +131,13 @@ export default function App() {
         action: () => setRightSidebarOpen((o) => !o),
       },
       {
+        id: "focus-mode",
+        title: "Toggle Focus Mode",
+        category: "View",
+        shortcut: "F11",
+        action: () => setFocusMode((f) => !f),
+      },
+      {
         id: "search",
         title: "Focus search",
         category: "Action",
@@ -130,6 +163,25 @@ export default function App() {
       if (ctrl && e.key === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
+        return;
+      }
+      // F11 — toggle Focus Mode. Hides sidebars/topbar/statusbar so the
+      // editor gets the whole window. Classic distraction-free writing
+      // pattern. Esc exits below.
+      if (e.key === "F11") {
+        e.preventDefault();
+        setFocusMode((f) => !f);
+        return;
+      }
+      // Cmd+Shift+Space — Quick Capture inbox overlay.
+      // NOTE: in-app only; for global (works even when app is unfocused)
+      // we'd need a Tauri Rust-side globalShortcut registration. That's
+      // a followup — the in-app shortcut already covers the common case
+      // where you're coding in the editor and want to drop a fact
+      // without switching views.
+      if (ctrl && e.shiftKey && (e.key === " " || e.code === "Space")) {
+        e.preventDefault();
+        setQuickCaptureOpen((o) => !o);
         return;
       }
       if (ctrl && e.key === "n") {
@@ -166,9 +218,10 @@ export default function App() {
         e.preventDefault();
         setShortcutHelpOpen(true);
       }
-      // Esc closes modals
+      // Esc closes modals — and exits focus mode as a safety net.
       if (e.key === "Escape") {
         setShortcutHelpOpen(false);
+        setFocusMode(false);
       }
     };
     window.addEventListener("keydown", handler);
@@ -176,31 +229,50 @@ export default function App() {
   }, [saveNote, toggleView]);
 
   return (
-    <div className="flex flex-col h-screen bg-[#0f0f17] text-[#ddd9f0] overflow-hidden">
-      <TopBar
-        view={view}
-        onViewChange={setView}
-        onMemoryPanelToggle={() => setMemoryPanelOpen((o) => !o)}
-      />
+    <div className="flex flex-col h-screen bg-[#0b0b12] text-[#e8e6f0] overflow-hidden">
+      {!focusMode && (
+        <TopBar
+          view={view}
+          onViewChange={setView}
+          onMemoryPanelToggle={() => setMemoryPanelOpen((o) => !o)}
+        />
+      )}
 
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          triggerNewNote={triggerNewNote}
-          triggerSearch={triggerSearch}
-        />
+        {!focusMode && (
+          <Sidebar
+            triggerNewNote={triggerNewNote}
+            triggerSearch={triggerSearch}
+          />
+        )}
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
           {view === "drafts" && <DraftsView />}
           {view === "intelligence" && <IntelligenceView />}
           <RightSidebar
-            open={rightSidebarOpen && view === "editor"}
+            open={rightSidebarOpen && view === "editor" && !focusMode}
             onClose={() => setRightSidebarOpen(false)}
           />
         </div>
       </div>
 
-      <StatusBar />
+      {!focusMode && <StatusBar />}
+
+      {focusMode && (
+        <button
+          onClick={() => setFocusMode(false)}
+          className="fixed top-3 right-3 z-40 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded transition-colors"
+          style={{
+            backgroundColor: "var(--color-surface-elevated)",
+            color: "var(--color-tertiary)",
+            border: "1px solid var(--color-border)",
+          }}
+          title="Exit focus mode (F11 or Esc)"
+        >
+          exit focus
+        </button>
+      )}
 
       <MemoryPanel
         open={memoryPanelOpen}
@@ -212,6 +284,13 @@ export default function App() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      <QuickCapture
+        open={quickCaptureOpen}
+        onClose={() => setQuickCaptureOpen(false)}
+      />
+
+      <HoverPreview />
 
       <ShortcutHelp
         open={shortcutHelpOpen}

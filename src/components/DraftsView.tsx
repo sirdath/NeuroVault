@@ -131,23 +131,23 @@ export function DraftsView() {
   };
 
   return (
-    <div className="flex-1 flex bg-[#0f0f17] overflow-hidden">
+    <div className="flex-1 flex bg-[#0b0b12] overflow-hidden">
       {/* Drafts list (left column) */}
-      <div className="w-[280px] min-w-[280px] flex flex-col border-r border-[#1e1e38] bg-[#07070e]">
-        <div className="px-4 py-3 border-b border-[#1e1e38] flex items-center justify-between">
-          <h2 className="text-xs font-semibold text-[#9999b8] font-[Geist,sans-serif] uppercase tracking-wider">
+      <div className="w-[280px] min-w-[280px] flex flex-col border-r border-[#1f1f2e] bg-[#0b0b12]">
+        <div className="px-4 py-3 border-b border-[#1f1f2e] flex items-center justify-between">
+          <h2 className="text-xs font-semibold text-[#a8a6c0] font-[Geist,sans-serif] uppercase tracking-wider">
             Drafts
           </h2>
           <button
             onClick={() => setCreating(true)}
-            className="text-[#f0a500] text-xs hover:bg-[#131325] px-2 py-0.5 rounded font-[Geist,sans-serif]"
+            className="text-[#f0a500] text-xs hover:bg-[#1a1a28] px-2 py-0.5 rounded font-[Geist,sans-serif]"
           >
             + New
           </button>
         </div>
 
         {creating && (
-          <div className="p-3 space-y-2 border-b border-[#1e1e38]">
+          <div className="p-3 space-y-2 border-b border-[#1f1f2e]">
             <input
               autoFocus
               value={newTitle}
@@ -157,25 +157,25 @@ export function DraftsView() {
                 if (e.key === "Escape") setCreating(false);
               }}
               placeholder="Draft title..."
-              className="w-full bg-[#131325] text-[#ddd9f0] text-xs px-2 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+              className="w-full bg-[#1a1a28] text-[#e8e6f0] text-xs px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
             />
             <input
               value={newTarget}
               onChange={(e) => setNewTarget(e.target.value)}
               placeholder="Word count target (optional)"
               type="number"
-              className="w-full bg-[#131325] text-[#ddd9f0] text-xs px-2 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+              className="w-full bg-[#1a1a28] text-[#e8e6f0] text-xs px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
             />
             <div className="flex gap-1">
               <button
                 onClick={handleCreate}
-                className="flex-1 bg-[#f0a500] text-[#07070e] text-xs px-2 py-1 rounded hover:bg-[#f0a500]/90 font-medium font-[Geist,sans-serif]"
+                className="flex-1 bg-[#f0a500] text-[#0b0b12] text-xs px-2 py-1 rounded hover:bg-[#f0a500]/90 font-medium font-[Geist,sans-serif]"
               >
                 Create
               </button>
               <button
                 onClick={() => setCreating(false)}
-                className="text-xs px-2 py-1 text-[#7a779a] hover:text-[#ddd9f0] font-[Geist,sans-serif]"
+                className="text-xs px-2 py-1 text-[#8a88a0] hover:text-[#e8e6f0] font-[Geist,sans-serif]"
               >
                 Cancel
               </button>
@@ -185,7 +185,7 @@ export function DraftsView() {
 
         <div className="flex-1 overflow-y-auto">
           {drafts.length === 0 ? (
-            <p className="text-[#555570] text-xs text-center mt-8 px-4 font-[Geist,sans-serif]">
+            <p className="text-[#6a6880] text-xs text-center mt-8 px-4 font-[Geist,sans-serif]">
               No drafts yet. Click + New to start a chapter.
             </p>
           ) : (
@@ -205,20 +205,20 @@ export function DraftsView() {
                     onClick={() => loadActive(d.draft_id)}
                     className={`group relative px-4 py-3 cursor-pointer border-l-2 ${
                       active
-                        ? "border-[#f0a500] bg-[#131325]"
-                        : "border-transparent hover:bg-[#0d0d1a]/80"
+                        ? "border-[#f0a500] bg-[#1a1a28]"
+                        : "border-transparent hover:bg-[#12121c]/80"
                     }`}
                   >
-                    <h3 className="text-sm font-medium text-[#ddd9f0] font-[Geist,sans-serif] truncate">
+                    <h3 className="text-sm font-medium text-[#e8e6f0] font-[Geist,sans-serif] truncate">
                       {d.title}
                     </h3>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] text-[#7a779a] font-[Geist,sans-serif]">
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-[#8a88a0] font-[Geist,sans-serif]">
                       <span>{d.section_count} sections</span>
                       <span>·</span>
                       <span>{d.word_count.toLocaleString()} words</span>
                     </div>
                     {progress !== null && (
-                      <div className="mt-1.5 h-[2px] bg-[#131325] rounded-full overflow-hidden">
+                      <div className="mt-1.5 h-[2px] bg-[#1a1a28] rounded-full overflow-hidden">
                         <div
                           className="h-full bg-[#f0a500] transition-all duration-500"
                           style={{ width: `${progress * 100}%` }}
@@ -230,7 +230,7 @@ export function DraftsView() {
                         e.stopPropagation();
                         handleDelete(d.draft_id, d.title);
                       }}
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#7a779a] hover:text-[#f06080] text-xs p-1"
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#8a88a0] hover:text-[#ff6b6b] text-xs p-1"
                     >
                       ×
                     </button>
@@ -247,7 +247,7 @@ export function DraftsView() {
         {!activeDraft ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <p className="text-[#555570] text-sm font-[Geist,sans-serif]">
+              <p className="text-[#6a6880] text-sm font-[Geist,sans-serif]">
                 Select or create a draft
               </p>
               <p className="text-[#35335a] text-xs mt-2 font-[Geist,sans-serif]">
@@ -258,17 +258,17 @@ export function DraftsView() {
         ) : (
           <>
             {/* Draft header */}
-            <div className="px-6 py-4 border-b border-[#1e1e38] flex items-start justify-between gap-4">
+            <div className="px-6 py-4 border-b border-[#1f1f2e] flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
-                <h1 className="text-xl font-semibold text-[#ddd9f0] font-[Geist,sans-serif]">
+                <h1 className="text-xl font-semibold text-[#e8e6f0] font-[Geist,sans-serif]">
                   {activeDraft.title}
                 </h1>
                 {activeDraft.description && (
-                  <p className="text-xs text-[#7a779a] mt-1 font-[Geist,sans-serif]">
+                  <p className="text-xs text-[#8a88a0] mt-1 font-[Geist,sans-serif]">
                     {activeDraft.description}
                   </p>
                 )}
-                <div className="flex items-center gap-3 mt-2 text-xs text-[#7a779a] font-[Geist,sans-serif]">
+                <div className="flex items-center gap-3 mt-2 text-xs text-[#8a88a0] font-[Geist,sans-serif]">
                   <span>{activeDraft.sections.length} sections</span>
                   <span>·</span>
                   <span>{activeDraft.word_count.toLocaleString()} words</span>
@@ -286,19 +286,19 @@ export function DraftsView() {
               <div className="flex gap-1 flex-shrink-0">
                 <button
                   onClick={() => handleExport("docx")}
-                  className="text-xs bg-[#131325] hover:bg-[#1e1e38] text-[#ddd9f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
+                  className="text-xs bg-[#1a1a28] hover:bg-[#1f1f2e] text-[#e8e6f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
                 >
                   Export DOCX
                 </button>
                 <button
                   onClick={() => handleExport("pdf")}
-                  className="text-xs bg-[#131325] hover:bg-[#1e1e38] text-[#ddd9f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
+                  className="text-xs bg-[#1a1a28] hover:bg-[#1f1f2e] text-[#e8e6f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
                 >
                   PDF
                 </button>
                 <button
                   onClick={() => handleExport("html")}
-                  className="text-xs bg-[#131325] hover:bg-[#1e1e38] text-[#ddd9f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
+                  className="text-xs bg-[#1a1a28] hover:bg-[#1f1f2e] text-[#e8e6f0] px-3 py-1.5 rounded font-[Geist,sans-serif] transition-colors"
                 >
                   HTML
                 </button>
@@ -308,7 +308,7 @@ export function DraftsView() {
             {/* Sections */}
             <div className="flex-1 overflow-y-auto p-6">
               {activeDraft.sections.length === 0 ? (
-                <p className="text-center text-[#555570] text-sm font-[Geist,sans-serif] mt-8">
+                <p className="text-center text-[#6a6880] text-sm font-[Geist,sans-serif] mt-8">
                   No sections yet. Add notes from below to build your draft.
                 </p>
               ) : (
@@ -316,25 +316,25 @@ export function DraftsView() {
                   {activeDraft.sections.map((s, i) => (
                     <div
                       key={s.engram_id}
-                      className="group p-4 bg-[#131325] border border-[#1e1e38] rounded-lg hover:border-[#2a2a4a] transition-colors"
+                      className="group p-4 bg-[#1a1a28] border border-[#1f1f2e] rounded-lg hover:border-[#2a2a40] transition-colors"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[10px] text-[#555570] font-mono">
+                            <span className="text-[10px] text-[#6a6880] font-mono">
                               §{i + 1}
                             </span>
                             <button
                               onClick={() => handleOpenSection(s.engram_id)}
-                              className="text-sm font-medium text-[#ddd9f0] hover:text-[#f0a500] font-[Geist,sans-serif] truncate text-left"
+                              className="text-sm font-medium text-[#e8e6f0] hover:text-[#f0a500] font-[Geist,sans-serif] truncate text-left"
                             >
                               {s.title}
                             </button>
                           </div>
-                          <p className="text-xs text-[#7a779a] line-clamp-2 font-[Geist,sans-serif]">
+                          <p className="text-xs text-[#8a88a0] line-clamp-2 font-[Geist,sans-serif]">
                             {s.preview}
                           </p>
-                          <span className="text-[10px] text-[#555570] font-[Geist,sans-serif] mt-1 inline-block">
+                          <span className="text-[10px] text-[#6a6880] font-[Geist,sans-serif] mt-1 inline-block">
                             {s.word_count} words
                           </span>
                         </div>
@@ -342,7 +342,7 @@ export function DraftsView() {
                           <button
                             onClick={() => handleMove(s.engram_id, "up")}
                             disabled={i === 0}
-                            className="text-[#7a779a] hover:text-[#f0a500] disabled:opacity-30 disabled:hover:text-[#7a779a] text-xs px-1"
+                            className="text-[#8a88a0] hover:text-[#f0a500] disabled:opacity-30 disabled:hover:text-[#8a88a0] text-xs px-1"
                             title="Move up"
                           >
                             ▲
@@ -350,14 +350,14 @@ export function DraftsView() {
                           <button
                             onClick={() => handleMove(s.engram_id, "down")}
                             disabled={i === activeDraft.sections.length - 1}
-                            className="text-[#7a779a] hover:text-[#f0a500] disabled:opacity-30 disabled:hover:text-[#7a779a] text-xs px-1"
+                            className="text-[#8a88a0] hover:text-[#f0a500] disabled:opacity-30 disabled:hover:text-[#8a88a0] text-xs px-1"
                             title="Move down"
                           >
                             ▼
                           </button>
                           <button
                             onClick={() => handleRemoveSection(s.engram_id)}
-                            className="text-[#7a779a] hover:text-[#f06080] text-xs px-1"
+                            className="text-[#8a88a0] hover:text-[#ff6b6b] text-xs px-1"
                             title="Remove from draft"
                           >
                             ×
@@ -374,19 +374,19 @@ export function DraftsView() {
                 {!showAddSection ? (
                   <button
                     onClick={() => setShowAddSection(true)}
-                    className="w-full py-3 border border-dashed border-[#2a2a4a] rounded-lg text-[#7a779a] hover:text-[#f0a500] hover:border-[#f0a500]/40 text-xs font-[Geist,sans-serif] transition-colors"
+                    className="w-full py-3 border border-dashed border-[#2a2a40] rounded-lg text-[#8a88a0] hover:text-[#f0a500] hover:border-[#f0a500]/40 text-xs font-[Geist,sans-serif] transition-colors"
                   >
                     + Add section from your notes
                   </button>
                 ) : (
-                  <div className="border border-[#2a2a4a] rounded-lg bg-[#131325] p-3">
+                  <div className="border border-[#2a2a40] rounded-lg bg-[#1a1a28] p-3">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] text-[#7a779a] font-[Geist,sans-serif] uppercase tracking-wider">
+                      <span className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] uppercase tracking-wider">
                         Pick a note to add
                       </span>
                       <button
                         onClick={() => setShowAddSection(false)}
-                        className="text-[#7a779a] hover:text-[#ddd9f0] text-xs"
+                        className="text-[#8a88a0] hover:text-[#e8e6f0] text-xs"
                       >
                         ×
                       </button>
@@ -415,7 +415,7 @@ export function DraftsView() {
                               );
                               if (match) await handleAddSection(match.id);
                             }}
-                            className="w-full text-left px-2 py-1 text-xs text-[#ddd9f0] hover:bg-[#1e1e38] rounded font-[Geist,sans-serif] truncate"
+                            className="w-full text-left px-2 py-1 text-xs text-[#e8e6f0] hover:bg-[#1f1f2e] rounded font-[Geist,sans-serif] truncate"
                           >
                             {n.title}
                           </button>

@@ -51,7 +51,7 @@ export function BrainSelector() {
       {/* Trigger button */}
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-[Geist,sans-serif] rounded transition-colors bg-[#131325] text-[#ddd9f0] hover:bg-[#1e1e38]"
+        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-[Geist,sans-serif] rounded transition-colors bg-[#1a1a28] text-[#e8e6f0] hover:bg-[#1f1f2e]"
         disabled={loading}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-[#f0a500]" />
@@ -59,7 +59,7 @@ export function BrainSelector() {
           {loading ? "Switching..." : activeBrainName}
         </span>
         <svg
-          className={`w-3 h-3 text-[#7a779a] transition-transform ${open ? "rotate-180" : ""}`}
+          className={`w-3 h-3 text-[#8a88a0] transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -70,7 +70,7 @@ export function BrainSelector() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-[240px] bg-[#0d0d1a] border border-[#1e1e38] rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className="absolute top-full left-0 mt-1 w-[240px] bg-[#12121c] border border-[#1f1f2e] rounded-lg shadow-xl z-50 overflow-hidden">
           {/* Brain list */}
           <div className="max-h-[240px] overflow-y-auto">
             {brains.map((brain) => (
@@ -79,8 +79,8 @@ export function BrainSelector() {
                 onClick={() => handleSwitch(brain.id)}
                 className={`w-full text-left px-3 py-2 flex items-start gap-2 transition-colors ${
                   brain.is_active
-                    ? "bg-[#131325]"
-                    : "hover:bg-[#131325]/50"
+                    ? "bg-[#1a1a28]"
+                    : "hover:bg-[#1a1a28]/50"
                 }`}
               >
                 <span
@@ -89,11 +89,11 @@ export function BrainSelector() {
                   }`}
                 />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-[#ddd9f0] font-[Geist,sans-serif] truncate">
+                  <p className="text-xs font-medium text-[#e8e6f0] font-[Geist,sans-serif] truncate">
                     {brain.name}
                   </p>
                   {brain.description && (
-                    <p className="text-[10px] text-[#7a779a] font-[Geist,sans-serif] truncate">
+                    <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] truncate">
                       {brain.description}
                     </p>
                   )}
@@ -103,7 +103,7 @@ export function BrainSelector() {
           </div>
 
           {/* Divider */}
-          <div className="border-t border-[#1e1e38]" />
+          <div className="border-t border-[#1f1f2e]" />
 
           {/* Create new */}
           {creating ? (
@@ -117,7 +117,7 @@ export function BrainSelector() {
                   if (e.key === "Escape") setCreating(false);
                 }}
                 placeholder="Brain name..."
-                className="w-full bg-[#131325] text-[#ddd9f0] text-xs px-2 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+                className="w-full bg-[#1a1a28] text-[#e8e6f0] text-xs px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
               />
               <input
                 value={newDesc}
@@ -127,18 +127,18 @@ export function BrainSelector() {
                   if (e.key === "Escape") setCreating(false);
                 }}
                 placeholder="Description (optional)"
-                className="w-full bg-[#131325] text-[#ddd9f0] text-xs px-2 py-1.5 rounded border border-[#1e1e38] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+                className="w-full bg-[#1a1a28] text-[#e8e6f0] text-xs px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
               />
               <div className="flex gap-1">
                 <button
                   onClick={handleCreate}
-                  className="flex-1 text-xs font-[Geist,sans-serif] px-2 py-1 bg-[#f0a500] text-[#07070e] rounded hover:bg-[#f0a500]/90 font-medium"
+                  className="flex-1 text-xs font-[Geist,sans-serif] px-2 py-1 bg-[#f0a500] text-[#0b0b12] rounded hover:bg-[#f0a500]/90 font-medium"
                 >
                   Create
                 </button>
                 <button
                   onClick={() => setCreating(false)}
-                  className="text-xs font-[Geist,sans-serif] px-2 py-1 text-[#7a779a] hover:text-[#ddd9f0] rounded"
+                  className="text-xs font-[Geist,sans-serif] px-2 py-1 text-[#8a88a0] hover:text-[#e8e6f0] rounded"
                 >
                   Cancel
                 </button>
@@ -147,7 +147,7 @@ export function BrainSelector() {
           ) : (
             <button
               onClick={() => setCreating(true)}
-              className="w-full text-left px-3 py-2 text-xs text-[#7a779a] hover:text-[#f0a500] font-[Geist,sans-serif] transition-colors hover:bg-[#131325]/50"
+              className="w-full text-left px-3 py-2 text-xs text-[#8a88a0] hover:text-[#f0a500] font-[Geist,sans-serif] transition-colors hover:bg-[#1a1a28]/50"
             >
               + New Brain
             </button>
