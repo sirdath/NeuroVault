@@ -2,9 +2,9 @@
 
 import uuid
 
-from engram_server.bm25_index import BM25Index
-from engram_server.database import Database
-from engram_server.retriever import (
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.database import Database
+from neurovault_server.retriever import (
     classify_temporal_intent,
     _recency_params,
     _recency_lambda,
@@ -132,7 +132,7 @@ def _insert_engram_with_kind(db: Database, title: str, kind: str) -> str:
 
 
 def test_exclude_kinds_removes_observations_by_default(tmp_db: Database, embedder):
-    from engram_server.ingest import ingest_file
+    from neurovault_server.ingest import ingest_file
     from pathlib import Path
     import tempfile
 
@@ -171,7 +171,7 @@ def test_exclude_kinds_removes_observations_by_default(tmp_db: Database, embedde
 
 def test_exclude_kinds_custom_list(tmp_db: Database, embedder):
     """Custom exclude_kinds should drop the specified kinds only."""
-    from engram_server.ingest import ingest_file
+    from neurovault_server.ingest import ingest_file
     from pathlib import Path
     import tempfile
 

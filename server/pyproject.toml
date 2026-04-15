@@ -1,7 +1,7 @@
 [project]
-name = "engram-server"
+name = "neurovault-server"
 version = "0.2.0"
-description = "Local AI memory MCP server for Engram"
+description = "Local AI memory MCP server for NeuroVault"
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=1.6.0",

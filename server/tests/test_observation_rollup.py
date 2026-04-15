@@ -4,9 +4,9 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from engram_server.database import Database
-from engram_server.bm25_index import BM25Index
-from engram_server.observation_rollup import (
+from neurovault_server.database import Database
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.observation_rollup import (
     rollup_session,
     rollup_stale_sessions,
     get_rollup_stats,

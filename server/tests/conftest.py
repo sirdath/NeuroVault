@@ -2,8 +2,8 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
 
 
 @pytest.fixture(scope="session")

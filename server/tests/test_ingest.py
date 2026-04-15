@@ -1,10 +1,10 @@
 import uuid
 from pathlib import Path
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
-from engram_server.bm25_index import BM25Index
-from engram_server.ingest import ingest_file, ingest_vault
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.ingest import ingest_file, ingest_vault
 
 
 def test_ingest_single_file(tmp_db: Database, embedder: Embedder, tmp_vault: Path):

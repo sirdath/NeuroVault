@@ -2,8 +2,8 @@
 
 import uuid
 
-from engram_server.database import Database
-from engram_server.variable_tracker import (
+from neurovault_server.database import Database
+from neurovault_server.variable_tracker import (
     extract_python_variables,
     extract_typescript_variables,
     track_variables,

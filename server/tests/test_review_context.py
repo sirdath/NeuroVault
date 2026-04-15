@@ -2,10 +2,10 @@
 
 import uuid
 
-from engram_server.database import Database
-from engram_server.variable_tracker import track_variables
-from engram_server.call_graph import track_calls
-from engram_server.review_context import (
+from neurovault_server.database import Database
+from neurovault_server.variable_tracker import track_variables
+from neurovault_server.call_graph import track_calls
+from neurovault_server.review_context import (
     get_review_context,
     _estimate_tokens,
     _symbols_in_file,

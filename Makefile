@@ -7,7 +7,7 @@ dev: dev-server dev-app
 
 # Start the Python MCP server (run in its own terminal)
 dev-server:
-	cd server && uv run python -m engram_server
+	cd server && uv run python -m neurovault_server
 
 # Start the Tauri app (run in its own terminal)
 dev-app:
@@ -37,12 +37,12 @@ typecheck:
 
 # Build the PyInstaller server binary
 build-server:
-	cd server && uv run pyinstaller engram-server.spec --noconfirm
+	cd server && uv run pyinstaller neurovault-server.spec --noconfirm
 
 # Copy server binary to Tauri sidecar location
 stage-sidecar: build-server
 	mkdir -p src-tauri/binaries
-	cp server/dist/engram-server/engram-server.exe src-tauri/binaries/engram-server-x86_64-pc-windows-msvc.exe
+	cp server/dist/neurovault-server/neurovault-server.exe src-tauri/binaries/neurovault-server-x86_64-pc-windows-msvc.exe
 
 # Build the full Tauri application
 build: stage-sidecar

@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from engram_server.database import Database
-from engram_server.strength import compute_strength, state_from_strength, decay_all
+from neurovault_server.database import Database
+from neurovault_server.strength import compute_strength, state_from_strength, decay_all
 
 
 def test_fresh_memory_full_strength():

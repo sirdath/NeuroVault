@@ -1,6 +1,6 @@
 import uuid
 
-from engram_server.database import Database
+from neurovault_server.database import Database
 
 
 def test_schema_creation(tmp_db: Database):

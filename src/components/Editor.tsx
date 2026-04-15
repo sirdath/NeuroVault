@@ -4,7 +4,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { useNoteStore } from "../stores/noteStore";
-import { engramTheme } from "./editor/theme";
+import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 import { fetchNote, fetchBacklinks } from "../lib/api";
@@ -45,7 +45,7 @@ export function Editor() {
     () => [
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
-      engramTheme,
+      neurovaultTheme,
       livePreviewTheme,
       livePreviewPlugin,
       buildCompletions(() => notesRef.current.map((n) => n.title)),

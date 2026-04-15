@@ -38,11 +38,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
-from engram_server.bm25_index import BM25Index
-from engram_server.ingest import ingest_file
-from engram_server.retriever import hybrid_retrieve
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.ingest import ingest_file
+from neurovault_server.retriever import hybrid_retrieve
 
 
 @dataclass
@@ -123,7 +123,7 @@ SCENARIOS: list[Scenario] = [
             ("Build System",
              "We build the Tauri app with `cargo tauri build` for the desktop bundle."),
             ("Server Boot",
-             "The Python MCP server is started via `uv run python -m engram_server`."),
+             "The Python MCP server is started via `uv run python -m neurovault_server`."),
         ],
         probe="How do I run the project locally?",
         expected_titles=["Build System", "Server Boot"],

@@ -71,7 +71,7 @@ async function httpReadNote(filename: string): Promise<string> {
 export const getVaultPath = () =>
   IS_TAURI
     ? invoke<string>("get_vault_path")
-    : Promise.resolve("~/.engram/brains/default/vault");
+    : Promise.resolve("~/.neurovault/brains/default/vault");
 
 export const listNotes = () =>
   IS_TAURI ? invoke<NoteMeta[]>("list_notes") : httpListNotes();

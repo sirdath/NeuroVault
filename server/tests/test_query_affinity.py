@@ -3,8 +3,8 @@
 import math
 import uuid
 
-from engram_server.database import Database
-from engram_server.query_affinity import (
+from neurovault_server.database import Database
+from neurovault_server.query_affinity import (
     record_affinity,
     lookup_affinities,
     affinity_boost,

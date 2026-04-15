@@ -4,10 +4,10 @@ import uuid
 import hashlib
 from pathlib import Path
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
-from engram_server.bm25_index import BM25Index
-from engram_server.dissertation import (
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.dissertation import (
     quick_capture,
     add_tag,
     remove_tag,

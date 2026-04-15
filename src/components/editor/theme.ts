@@ -18,7 +18,7 @@ const colors = {
   muted: "#35335a",
 };
 
-const engramEditorTheme = EditorView.theme(
+const neurovaultEditorTheme = EditorView.theme(
   {
     "&": {
       backgroundColor: colors.bg,
@@ -103,7 +103,7 @@ const engramEditorTheme = EditorView.theme(
   { dark: true }
 );
 
-const engramHighlightStyle = HighlightStyle.define([
+const neurovaultHighlightStyle = HighlightStyle.define([
   { tag: t.keyword, color: colors.purple },
   { tag: [t.name, t.deleted, t.character, t.macroName], color: colors.text },
   { tag: [t.function(t.variableName), t.labelName], color: colors.teal },
@@ -148,7 +148,7 @@ const engramHighlightStyle = HighlightStyle.define([
   },
 ]);
 
-export const engramTheme: Extension = [
-  engramEditorTheme,
-  syntaxHighlighting(engramHighlightStyle),
+export const neurovaultTheme: Extension = [
+  neurovaultEditorTheme,
+  syntaxHighlighting(neurovaultHighlightStyle),
 ];

@@ -187,13 +187,13 @@ def boot_server(tier: str | None) -> subprocess.Popen:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     if tier:
-        env["ENGRAM_MCP_TIER"] = tier
+        env["NEUROVAULT_MCP_TIER"] = tier
     venv_py = repo_root / ".venv" / ("Scripts" if sys.platform == "win32" else "bin") / ("python.exe" if sys.platform == "win32" else "python")
     if not venv_py.exists():
         venv_py = Path(sys.executable)
-    _step(f"booting server: {venv_py} -m engram_server --http-only (tier={tier or 'full'})")
+    _step(f"booting server: {venv_py} -m neurovault_server --http-only (tier={tier or 'full'})")
     proc = subprocess.Popen(
-        [str(venv_py), "-m", "engram_server", "--http-only"],
+        [str(venv_py), "-m", "neurovault_server", "--http-only"],
         cwd=str(repo_root),
         env=env,
         stdout=subprocess.DEVNULL,

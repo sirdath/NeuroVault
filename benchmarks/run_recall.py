@@ -31,11 +31,11 @@ from pathlib import Path
 # Add server to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
-from engram_server.bm25_index import BM25Index
-from engram_server.ingest import ingest_vault
-from engram_server.retriever import hybrid_retrieve
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.ingest import ingest_vault
+from neurovault_server.retriever import hybrid_retrieve
 
 
 # Test corpus: 25 notes covering technology, productivity, dissertation, AI

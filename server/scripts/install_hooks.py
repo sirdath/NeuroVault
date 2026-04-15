@@ -75,7 +75,7 @@ def install(server_dir: Path) -> None:
     print()
     print("Restart Claude Code for hooks to take effect.")
     print("Make sure the NeuroVault server is running:")
-    print(f"  cd {server_dir} && uv run python -m engram_server")
+    print(f"  cd {server_dir} && uv run python -m neurovault_server")
 
 
 def uninstall() -> None:

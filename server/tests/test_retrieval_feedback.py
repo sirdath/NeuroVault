@@ -2,8 +2,8 @@
 
 import uuid
 
-from engram_server.database import Database
-from engram_server.retrieval_feedback import (
+from neurovault_server.database import Database
+from neurovault_server.retrieval_feedback import (
     log_retrieval,
     mark_accessed,
     apply_feedback_update,

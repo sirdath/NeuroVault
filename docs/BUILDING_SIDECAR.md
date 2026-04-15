@@ -20,18 +20,18 @@ uv sync --extra dev          # installs PyInstaller into .venv
 .venv\Scripts\python.exe -m PyInstaller engram_server.spec --clean --noconfirm
 ```
 
-The resulting single-file exe lands at `server/dist/engram-server.exe`.
+The resulting single-file exe lands at `server/dist/neurovault-server.exe`.
 Copy it to the Tauri sidecar path:
 
 ```powershell
-copy server\dist\engram-server.exe src-tauri\binaries\engram-server-x86_64-pc-windows-msvc.exe
+copy server\dist\neurovault-server.exe src-tauri\binaries\neurovault-server-x86_64-pc-windows-msvc.exe
 ```
 
 Then re-enable the sidecar in `src-tauri/tauri.conf.json` by adding:
 
 ```json
 "externalBin": [
-  "binaries/engram-server"
+  "binaries/neurovault-server"
 ]
 ```
 

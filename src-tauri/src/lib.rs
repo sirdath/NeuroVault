@@ -13,21 +13,42 @@ pub struct NoteMeta {
     pub size: u64,
 }
 
+/// Resolve the active NeuroVault data directory, with a one-time fallback
+/// to the legacy `~/.engram/` path.
+///
+/// During the engram -> neurovault rename, some users will have data at
+/// `~/.engram/` but not yet at `~/.neurovault/` — the Python server migrates
+/// the directory on its first boot after the rename ships. If the desktop
+/// app launches BEFORE the Python server has had a chance to migrate, this
+/// helper still finds the vault so the UI isn't empty.
+fn nv_home() -> PathBuf {
+    let home = dirs::home_dir().expect("Could not determine home directory");
+    let new_home = home.join(".neurovault");
+    if new_home.exists() {
+        return new_home;
+    }
+    let legacy_home = home.join(".engram");
+    if legacy_home.exists() {
+        return legacy_home;
+    }
+    // Fresh install: return the new path, caller will mkdir it.
+    new_home
+}
+
 /// Find the active vault directory. Checks (in order):
 /// 1. brains.json registry (multi-brain mode)
-/// 2. Legacy ~/.engram/vault/ (pre-migration)
-/// 3. Creates ~/.engram/brains/default/vault/ as fallback
+/// 2. Legacy single-brain ~/.neurovault/vault/ (pre-multi-brain migration)
+/// 3. Creates ~/.neurovault/brains/default/vault/ as fallback
 fn vault_dir() -> PathBuf {
-    let home = dirs::home_dir().expect("Could not determine home directory");
-    let engram_home = home.join(".engram");
+    let nv_home = nv_home();
 
     // Try brains.json first (multi-brain mode)
-    let registry_path = engram_home.join("brains.json");
+    let registry_path = nv_home.join("brains.json");
     if registry_path.exists() {
         if let Ok(data) = fs::read_to_string(&registry_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
-                    let vault = engram_home.join("brains").join(active_id).join("vault");
+                    let vault = nv_home.join("brains").join(active_id).join("vault");
                     fs::create_dir_all(&vault).ok();
                     return vault;
                 }
@@ -35,28 +56,27 @@ fn vault_dir() -> PathBuf {
         }
     }
 
-    // Legacy single-brain mode: ~/.engram/vault/
-    let legacy_vault = engram_home.join("vault");
+    // Legacy single-brain mode: {nv_home}/vault/
+    let legacy_vault = nv_home.join("vault");
     if legacy_vault.exists() {
         return legacy_vault;
     }
 
     // Fresh install fallback: create default brain vault
-    let default_vault = engram_home.join("brains").join("default").join("vault");
+    let default_vault = nv_home.join("brains").join("default").join("vault");
     fs::create_dir_all(&default_vault).expect("Could not create vault directory");
     default_vault
 }
 
 fn trash_dir() -> PathBuf {
-    let home = dirs::home_dir().expect("Could not determine home directory");
-    let engram_home = home.join(".engram");
+    let nv_home = nv_home();
 
-    let registry_path = engram_home.join("brains.json");
+    let registry_path = nv_home.join("brains.json");
     if registry_path.exists() {
         if let Ok(data) = fs::read_to_string(&registry_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
-                    let trash = engram_home.join("brains").join(active_id).join("trash");
+                    let trash = nv_home.join("brains").join(active_id).join("trash");
                     fs::create_dir_all(&trash).ok();
                     return trash;
                 }
@@ -64,12 +84,12 @@ fn trash_dir() -> PathBuf {
         }
     }
 
-    let legacy_trash = engram_home.join("trash");
+    let legacy_trash = nv_home.join("trash");
     if legacy_trash.exists() {
         return legacy_trash;
     }
 
-    let default_trash = engram_home.join("brains").join("default").join("trash");
+    let default_trash = nv_home.join("brains").join("default").join("trash");
     fs::create_dir_all(&default_trash).expect("Could not create trash directory");
     default_trash
 }
@@ -211,11 +231,11 @@ pub fn run() {
             // When a sidecar binary exists at src-tauri/binaries/, we'll
             // spawn it automatically; otherwise the desktop app assumes
             // the user has already started the server via:
-            //     cd server && uv run python -m engram_server --http-only
+            //     cd server && uv run python -m neurovault_server --http-only
             let _ = app;
             eprintln!(
                 "[neurovault] assumes the Python server is running on 127.0.0.1:8765 \
-                 (start it via: cd server && uv run python -m engram_server --http-only)"
+                 (start it via: cd server && uv run python -m neurovault_server --http-only)"
             );
             Ok(())
         })

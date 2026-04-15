@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from engram_server.database import Database
-from engram_server.embeddings import Embedder
-from engram_server.bm25_index import BM25Index
-from engram_server.ingest import ingest_vault
-from engram_server.karpathy import (
+from neurovault_server.database import Database
+from neurovault_server.embeddings import Embedder
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.ingest import ingest_vault
+from neurovault_server.karpathy import (
     rebuild_index,
     append_log,
     ensure_schema,

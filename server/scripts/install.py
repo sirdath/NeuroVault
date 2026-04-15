@@ -34,7 +34,7 @@ from pathlib import Path
 
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
-ENGRAM_HOME = Path.home() / ".engram"
+NEUROVAULT_HOME = Path.home() / ".neurovault"
 CLAUDE_CODE_SETTINGS = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "engram_hook"
 HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "SessionEnd")
@@ -81,7 +81,7 @@ def _stdio_entry() -> dict:
             "run",
             "python",
             "-m",
-            "engram_server",
+            "neurovault_server",
         ],
     }
 
@@ -245,7 +245,7 @@ def step_sync(check_only: bool) -> bool:
 
 def step_brain(check_only: bool) -> bool:
     _section("Step 3: ensure default brain")
-    brains_dir = ENGRAM_HOME / "brains"
+    brains_dir = NEUROVAULT_HOME / "brains"
     default_brain = brains_dir / "default"
     if default_brain.exists():
         _say(f"default brain already exists at {default_brain}", ok=True)
@@ -259,7 +259,7 @@ def step_brain(check_only: bool) -> bool:
         # Boot server briefly so it migrates / creates the default brain.
         subprocess.run(
             ["uv", "run", "python", "-c",
-             "from engram_server.brain import BrainManager; BrainManager().get_active(); print('ok')"],
+             "from neurovault_server.brain import BrainManager; BrainManager().get_active(); print('ok')"],
             cwd=str(SERVER_DIR),
             capture_output=True,
             text=True,
@@ -305,7 +305,7 @@ def step_claude_desktop(check_only: bool) -> bool:
             "run",
             "python",
             "-m",
-            "engram_server",
+            "neurovault_server",
         ],
     }
 
@@ -459,7 +459,7 @@ def print_summary(
     print()
     print("  1. Start the server (from another terminal):")
     print(f"       cd {SERVER_DIR}")
-    print(f"       uv run python -m engram_server")
+    print(f"       uv run python -m neurovault_server")
     print()
     if install_claude_desktop:
         print("  2. Restart Claude Desktop. The 'neurovault' MCP server should appear")
@@ -483,7 +483,7 @@ def print_summary(
     print("  Manual setup for Codex CLI (TOML config — skipped automatically):")
     print("       Add this to ~/.codex/config.toml under [mcp_servers.neurovault]:")
     print(f'         command = "uv"')
-    print(f'         args = ["--directory", "{SERVER_DIR}", "run", "python", "-m", "engram_server"]')
+    print(f'         args = ["--directory", "{SERVER_DIR}", "run", "python", "-m", "neurovault_server"]')
     print()
 
 

@@ -3,9 +3,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from engram_server.database import Database
-from engram_server.bm25_index import BM25Index
-from engram_server.insight_extractor import (
+from neurovault_server.database import Database
+from neurovault_server.bm25_index import BM25Index
+from neurovault_server.insight_extractor import (
     extract_insights,
     promote_insights_from_text,
     _looks_like_question,

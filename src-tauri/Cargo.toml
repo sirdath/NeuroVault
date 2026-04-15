@@ -1,12 +1,12 @@
 [package]
-name = "engram"
+name = "neurovault"
 version = "0.1.0"
 description = "AI-native memory system for Claude"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "engram_lib"
+name = "neurovault_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

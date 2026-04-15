@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklascodes/tauri-docs/refs/heads/main/src/content/docs/_schema/config.schema.json",
-  "productName": "Engram",
+  "productName": "NeuroVault",
   "version": "0.1.0",
-  "identifier": "com.engram.app",
+  "identifier": "com.neurovault.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Engram",
+        "title": "NeuroVault",
         "width": 1200,
         "height": 800,
         "minWidth": 800,

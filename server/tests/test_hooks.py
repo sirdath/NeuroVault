@@ -1,6 +1,6 @@
 """Tests for hooks: dedupe cache, capture_observation, privacy filtering."""
 
-from engram_server.hooks import (
+from neurovault_server.hooks import (
     _observation_signature,
     _is_recent_duplicate,
     _recent_sigs,
@@ -116,7 +116,7 @@ class _FakeBrainContext:
 
 
 def test_capture_observation_dedupes_spam(tmp_db, tmp_vault, embedder):
-    from engram_server.bm25_index import BM25Index
+    from neurovault_server.bm25_index import BM25Index
     _reset_dedupe()
 
     ctx = _FakeBrainContext(tmp_db, tmp_vault, BM25Index())
@@ -143,7 +143,7 @@ def test_capture_observation_dedupes_spam(tmp_db, tmp_vault, embedder):
 
 
 def test_capture_observation_skips_trivial_tools(tmp_db, tmp_vault, embedder):
-    from engram_server.bm25_index import BM25Index
+    from neurovault_server.bm25_index import BM25Index
     _reset_dedupe()
 
     ctx = _FakeBrainContext(tmp_db, tmp_vault, BM25Index())
@@ -158,7 +158,7 @@ def test_capture_observation_skips_trivial_tools(tmp_db, tmp_vault, embedder):
 
 
 def test_capture_observation_tags_kind_as_observation(tmp_db, tmp_vault, embedder):
-    from engram_server.bm25_index import BM25Index
+    from neurovault_server.bm25_index import BM25Index
     _reset_dedupe()
 
     ctx = _FakeBrainContext(tmp_db, tmp_vault, BM25Index())

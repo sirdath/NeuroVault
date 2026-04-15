@@ -10,7 +10,7 @@ an AI can read, write, and challenge.
 
 Concretely, NeuroVault is:
 
-- A **local markdown vault** you own forever (`~/.engram/brains/{name}/vault/*.md`)
+- A **local markdown vault** you own forever (`~/.neurovault/brains/{name}/vault/*.md`)
 - A **Tauri desktop app** for humans to explore what the agent knows — neural graph view, wikilinks, hover previews, backlinks with paragraph context, ⌘K command palette
 - An **MCP server** agents connect to directly (Claude Desktop, Claude Code, any MCP client)
 - A **hybrid retrieval engine** — semantic + BM25 + knowledge graph, cross-encoder reranking, Ebbinghaus strength decay
@@ -192,7 +192,7 @@ cd server && uv sync --extra dev
 
 ```bash
 # Terminal 1: Start the memory server
-cd server && uv run python -m engram_server --http-only
+cd server && uv run python -m neurovault_server --http-only
 
 # Terminal 2: Start the desktop app
 cargo tauri dev
@@ -209,7 +209,7 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
       "command": "uv",
       "args": [
         "--directory", "/path/to/NeuroVault/server",
-        "run", "python", "-m", "engram_server"
+        "run", "python", "-m", "neurovault_server"
       ]
     }
   }
@@ -256,14 +256,14 @@ Every memory tool accepts an optional `brain` parameter to target a specific bra
 ┌──────────────────────▼──────────────────────────┐
 │  SQLite + sqlite-vec                            │
 │  6 tables · 12 indexes · vector search          │
-│  ~/.engram/brains/{name}/brain.db               │
+│  ~/.neurovault/brains/{name}/brain.db           │
 └─────────────────────────────────────────────────┘
 ```
 
 ### Data Storage
 
 ```
-~/.engram/
+~/.neurovault/
   brains.json                    # Brain registry
   brains/
     default/

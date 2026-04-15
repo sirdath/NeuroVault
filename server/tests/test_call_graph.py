@@ -2,8 +2,8 @@
 
 import uuid
 
-from engram_server.database import Database
-from engram_server.call_graph import (
+from neurovault_server.database import Database
+from neurovault_server.call_graph import (
     extract_python_calls,
     extract_brace_calls,
     track_calls,
@@ -13,7 +13,7 @@ from engram_server.call_graph import (
     find_renamed_callsites,
     hot_functions,
 )
-from engram_server.variable_tracker import track_variables
+from neurovault_server.variable_tracker import track_variables
 
 
 def _stub(db: Database) -> str:

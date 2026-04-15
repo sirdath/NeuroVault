@@ -1,23 +1,23 @@
-# CLAUDE.md — Engram Build Specification
+# CLAUDE.md — NeuroVault Build Specification
 
-> You are Claude, operating as the primary developer of the Engram project.
+> You are Claude, operating as the primary developer of the NeuroVault project.
 > Read this file before writing code. This is the source of truth.
 
-## What is Engram?
+## What is NeuroVault?
 
 A **local-first, open source, AI-native memory system** for Claude and other LLMs.
 
-**One sentence:** Claude forgets you after every conversation. Engram doesn't.
+**One sentence:** Claude forgets you after every conversation. NeuroVault doesn't.
 
 Three components:
 1. **Tauri 2.0 desktop app** (React + TypeScript) — markdown note editor + neural graph view
 2. **Python MCP server** (FastMCP) — 6 tools, hybrid retrieval, ingestion pipeline, write-back
-3. **SQLite database** (~/.engram/brain.db) — sqlite-vec for vectors, knowledge graph
+3. **SQLite database** (~/.neurovault/brain.db) — sqlite-vec for vectors, knowledge graph
 
 ## Architecture
 
 ```
-Tauri App (React) --file I/O--> ~/.engram/vault/*.md <--watchdog-- Python Server
+Tauri App (React) --file I/O--> ~/.neurovault/vault/*.md <--watchdog-- Python Server
 Tauri App --HTTP :8765--> Python Server (status, graph, strength)
 Claude Desktop --stdio/MCP--> Python Server (6 tools + 1 resource)
 ```
@@ -26,12 +26,12 @@ Claude Desktop --stdio/MCP--> Python Server (6 tools + 1 resource)
 
 1. `remember(title, content)` — save memory, triggers full ingestion
 2. `recall(query, limit)` — hybrid search: semantic + BM25 + graph + cross-encoder rerank
-3. `forget(engram_id)` — mark dormant
+3. `forget(engram_id)` — mark dormant (the `engrams` SQL table name is intentionally preserved — biologically-correct type noun for a memory unit, see the engram→neurovault rename plan for details)
 4. `list_memories(tag)` — list with connections
 5. `get_related(title, limit)` — knowledge graph traversal
 6. `save_conversation_insights(user_message, assistant_response)` — write-back
 
-Resource: `engram://session-context` — L0/L1 wake-up context
+Resource: `neurovault://session-context` — L0/L1 wake-up context
 
 ## Development
 
@@ -41,11 +41,12 @@ npm install
 cd server && uv sync --extra dev
 
 # Dev (two terminals)
-cd server && uv run python -m engram_server   # Terminal 1: Python server
-cargo tauri dev                                 # Terminal 2: Tauri app
+cd server && uv run python -m neurovault_server   # Terminal 1: Python server
+cargo tauri dev                                    # Terminal 2: Tauri app
 
 # Test
 cd server && uv run pytest tests/ -v
+
 
 # Build
 make build

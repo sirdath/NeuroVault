@@ -1,4 +1,4 @@
-from engram_server.embeddings import Embedder
+from neurovault_server.embeddings import Embedder
 
 
 def test_encode_returns_384_floats(embedder: Embedder):

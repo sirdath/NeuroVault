@@ -1,4 +1,4 @@
-from engram_server.chunker import hierarchical_chunk, extract_wikilinks
+from neurovault_server.chunker import hierarchical_chunk, extract_wikilinks
 
 
 def test_document_chunk():
