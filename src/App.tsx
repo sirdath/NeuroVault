@@ -15,8 +15,9 @@ import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { DraftsView } from "./components/DraftsView";
 import { IntelligenceView } from "./components/IntelligenceView";
+import { CompilationReview } from "./components/CompilationReview";
 
-type View = "editor" | "graph" | "drafts" | "intelligence";
+type View = "editor" | "graph" | "drafts" | "intelligence" | "compile";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -108,6 +109,13 @@ export default function App() {
         title: "Switch to Intelligence view",
         category: "View",
         action: () => setView("intelligence"),
+      },
+      {
+        id: "view-compile",
+        title: "Switch to Compilation Review",
+        category: "View",
+        shortcut: "Ctrl+Shift+K",
+        action: () => setView("compile"),
       },
       {
         id: "toggle-view",
@@ -208,6 +216,13 @@ export default function App() {
         e.preventDefault();
         setTriggerSearch((n) => n + 1);
       }
+      // Ctrl+Shift+K — open Compilation Review. Parallel to Ctrl+K (command
+      // palette) but lower down the keyboard so it doesn't fight muscle
+      // memory, and Shift distinguishes it from plain K.
+      if (ctrl && e.shiftKey && (e.key === "K" || e.key === "k")) {
+        e.preventDefault();
+        setView("compile");
+      }
       // ? key (without modifiers) opens shortcut help
       if (
         e.key === "?" &&
@@ -250,6 +265,7 @@ export default function App() {
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
           {view === "drafts" && <DraftsView />}
           {view === "intelligence" && <IntelligenceView />}
+          {view === "compile" && <CompilationReview />}
           <RightSidebar
             open={rightSidebarOpen && view === "editor" && !focusMode}
             onClose={() => setRightSidebarOpen(false)}

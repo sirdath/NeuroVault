@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchStatus } from "../lib/api";
 import { BrainSelector } from "./BrainSelector";
 
-type View = "editor" | "graph" | "drafts" | "intelligence";
+type View = "editor" | "graph" | "drafts" | "intelligence" | "compile";
 
 interface TopBarProps {
   view: View;
@@ -37,6 +37,7 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps)
           <ViewButton active={view === "graph"} onClick={() => onViewChange("graph")} label="Graph" />
           <ViewButton active={view === "drafts"} onClick={() => onViewChange("drafts")} label="Drafts" />
           <ViewButton active={view === "intelligence"} onClick={() => onViewChange("intelligence")} label="Intelligence" />
+          <ViewButton active={view === "compile"} onClick={() => onViewChange("compile")} label="Compile" />
         </div>
         <BrainSelector />
       </div>

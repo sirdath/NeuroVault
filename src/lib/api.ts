@@ -337,3 +337,63 @@ export const intelligenceApi = {
       method: "POST",
     }),
 };
+
+// --- Knowledge compiler (wiki page synthesis) ------------------------------
+
+export interface CompilationChangelogEntry {
+  change: "added" | "updated" | "removed" | string;
+  field: string;
+  before: string | null;
+  after: string | null;
+  reason: string;
+  source_ids: string[];
+}
+
+export interface CompilationSource {
+  id: string;
+  title: string;
+  kind: string;
+}
+
+export interface CompilationSummary {
+  id: string;
+  topic: string;
+  status: "pending" | "approved" | "rejected" | string;
+  model: string;
+  change_count: number;
+  source_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface CompilationDetail extends CompilationSummary {
+  wiki_engram_id: string | null;
+  old_content: string;
+  new_content: string;
+  changelog: CompilationChangelogEntry[];
+  sources: CompilationSource[];
+  review_comment: string | null;
+}
+
+export const compilationApi = {
+  list: (status?: string, limit = 50) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    q.set("limit", String(limit));
+    return jsonReq<CompilationSummary[]>(`/api/compilations?${q}`);
+  },
+  pending: () => jsonReq<CompilationSummary[]>("/api/compilations/pending"),
+  get: (id: string) => jsonReq<CompilationDetail>(`/api/compilations/${id}`),
+  approve: (id: string, comment?: string) =>
+    jsonReq<{ status: string }>(`/api/compilations/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ review_comment: comment ?? null }),
+    }),
+  reject: (id: string, comment?: string) =>
+    jsonReq<{ status: string }>(`/api/compilations/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ review_comment: comment ?? null }),
+    }),
+};
