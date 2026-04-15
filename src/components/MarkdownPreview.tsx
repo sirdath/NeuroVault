@@ -18,7 +18,9 @@ import { WikiLink } from "./WikiLink";
 
 interface MarkdownPreviewProps {
   content: string;
-  onSwitchToEdit: () => void;
+  /** Caller-supplied handler. Omit in read-only contexts (e.g. the
+   *  compilation review panel) where there's nothing to switch to. */
+  onSwitchToEdit?: () => void;
 }
 
 // Rewrite [[Target]] into [Target](#wiki:Target) so ReactMarkdown treats it
@@ -52,14 +54,15 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
   return (
     <div
       onClick={(e) => {
+        if (!onSwitchToEdit) return;
         // If the click was on a link/button, let it handle itself and don't
         // flip into edit mode.
         const target = e.target as HTMLElement;
         if (target.closest("a") || target.closest("button")) return;
         onSwitchToEdit();
       }}
-      className="flex-1 overflow-y-auto cursor-text"
-      title="Click to edit"
+      className={`flex-1 overflow-y-auto ${onSwitchToEdit ? "cursor-text" : "cursor-default"}`}
+      title={onSwitchToEdit ? "Click to edit" : undefined}
     >
       <div className="mx-auto max-w-[760px] px-10 py-8 prose-neurovault font-[Geist,sans-serif]">
         <ReactMarkdown

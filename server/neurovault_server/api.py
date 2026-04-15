@@ -559,16 +559,25 @@ def create_api(manager) -> FastAPI:
         return result or {"error": "not_found", "id": compilation_id}
 
     @app.post("/api/compilations/{compilation_id}/approve")
-    def approve_compilation_endpoint(compilation_id: str):
-        """Mark a pending compilation as approved. Wiki content is already live."""
+    def approve_compilation_endpoint(compilation_id: str, body: dict | None = None):
+        """Mark a pending compilation as approved. Wiki content is already live.
+
+        Optional body: {"review_comment": "..."} — annotation stored alongside
+        the approval for later provenance / audit.
+        """
         from neurovault_server.compiler import approve_compilation
-        return approve_compilation(_ctx(), compilation_id)
+        comment = (body or {}).get("review_comment")
+        return approve_compilation(_ctx(), compilation_id, review_comment=comment)
 
     @app.post("/api/compilations/{compilation_id}/reject")
-    def reject_compilation_endpoint(compilation_id: str):
-        """Reject a compilation. Reverts the wiki file to old_content (or deletes on first compile)."""
+    def reject_compilation_endpoint(compilation_id: str, body: dict | None = None):
+        """Reject a compilation. Reverts the wiki file to old_content (or deletes on first compile).
+
+        Optional body: {"review_comment": "..."} — reason for rejection.
+        """
         from neurovault_server.compiler import reject_compilation
-        return reject_compilation(_ctx(), compilation_id)
+        comment = (body or {}).get("review_comment")
+        return reject_compilation(_ctx(), compilation_id, review_comment=comment)
 
     @app.post("/api/compilations/run")
     def run_compilation_endpoint(body: dict):

@@ -636,18 +636,26 @@ def run_pending_compilations(ctx: "BrainContext", max_per_run: int = MAX_PER_RUN
     return results
 
 
-def approve_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, Any]:
+def approve_compilation(
+    ctx: "BrainContext",
+    compilation_id: str,
+    review_comment: str | None = None,
+) -> dict[str, Any]:
     """Mark a compilation as approved. Wiki content is already on disk."""
     db = ctx.db
     db.conn.execute(
-        "UPDATE compilations SET status='approved', reviewed_at=? WHERE id=?",
-        (datetime.now(timezone.utc).isoformat(), compilation_id),
+        "UPDATE compilations SET status='approved', reviewed_at=?, review_comment=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), review_comment, compilation_id),
     )
     db.conn.commit()
     return {"status": "approved", "id": compilation_id}
 
 
-def reject_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, Any]:
+def reject_compilation(
+    ctx: "BrainContext",
+    compilation_id: str,
+    review_comment: str | None = None,
+) -> dict[str, Any]:
     """Mark a compilation as rejected and revert the wiki file to old_content.
 
     If old_content is empty (first compile), delete the wiki file instead.
@@ -672,8 +680,8 @@ def reject_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, An
         logger.warning("compiler: revert write failed for {}: {}", compilation_id[:8], e)
 
     db.conn.execute(
-        "UPDATE compilations SET status='rejected', reviewed_at=? WHERE id=?",
-        (datetime.now(timezone.utc).isoformat(), compilation_id),
+        "UPDATE compilations SET status='rejected', reviewed_at=?, review_comment=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), review_comment, compilation_id),
     )
     db.conn.commit()
     return {"status": "rejected", "id": compilation_id}
@@ -733,7 +741,8 @@ def get_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, Any] 
         """
         SELECT id, topic, wiki_engram_id, old_content, new_content,
                changelog_json, sources_json, model,
-               input_tokens, output_tokens, status, created_at, reviewed_at
+               input_tokens, output_tokens, status, created_at, reviewed_at,
+               review_comment
         FROM compilations
         WHERE id=?
         """,
@@ -748,6 +757,11 @@ def get_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, Any] 
     except json.JSONDecodeError:
         changelog, sources = [], []
 
+    # Derive counts from the parsed lists so the summary + detail shapes agree
+    # even if callers only inspect one of them.
+    change_count = len(changelog) if isinstance(changelog, list) else 0
+    source_count = len(sources) if isinstance(sources, list) else 0
+
     return {
         "id": row[0],
         "topic": row[1],
@@ -757,10 +771,13 @@ def get_compilation(ctx: "BrainContext", compilation_id: str) -> dict[str, Any] 
         "diff": _diff_text(row[3] or "", row[4] or "", row[1]),
         "changelog": changelog,
         "sources": sources,
+        "change_count": change_count,
+        "source_count": source_count,
         "model": row[7],
         "input_tokens": row[8],
         "output_tokens": row[9],
         "status": row[10],
         "created_at": row[11],
         "reviewed_at": row[12],
+        "review_comment": row[13],
     }

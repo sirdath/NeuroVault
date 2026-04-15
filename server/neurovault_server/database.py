@@ -262,7 +262,8 @@ CREATE TABLE IF NOT EXISTS compilations (
     output_tokens   INTEGER DEFAULT 0,
     status          TEXT DEFAULT 'pending',  -- pending | approved | rejected | auto_applied
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    reviewed_at     TEXT
+    reviewed_at     TEXT,
+    review_comment  TEXT                     -- optional annotation left by the reviewer on approve/reject
 );
 
 -- Indices (comprehensive — prevents full-table scans at scale)
@@ -330,6 +331,7 @@ class Database:
         self._migrate_add_kind_column()
         self._migrate_add_removed_at()
         self._migrate_add_query_embedding()
+        self._migrate_add_review_comment()
 
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
@@ -338,6 +340,27 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_review_comment(self) -> None:
+        """Add `review_comment` column to existing compilations tables.
+
+        Lets reviewers leave an annotation on approve/reject (e.g. "rejected
+        because the new page dropped the benchmark numbers").
+        """
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='compilations'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(compilations)").fetchall()]
+            if "review_comment" in cols:
+                return
+            logger.info("Migrating compilations: adding review_comment column")
+            self.conn.execute("ALTER TABLE compilations ADD COLUMN review_comment TEXT")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("review_comment migration skipped: {}", e)
 
     def _migrate_add_query_embedding(self) -> None:
         """Add `query_embedding` column to existing query_affinity tables (Stage 4 v2)."""

@@ -23,10 +23,64 @@ function statusBadge(status: string): { label: string; color: string } {
   return { label: "PENDING", color: "bg-[#2a2438] text-[#b592ff]" };
 }
 
+/** Short relative timestamp — "2 min ago", "3 hours ago", "yesterday".
+ *  Falls back to the raw ISO string if Date parsing fails so we never
+ *  crash the header on a malformed row. */
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return iso;
+  const diff = Date.now() - then;
+  const sec = Math.round(diff / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  const day = Math.round(hr / 24);
+  if (day === 1) return "yesterday";
+  if (day < 7) return `${day} days ago`;
+  return new Date(then).toISOString().slice(0, 10);
+}
+
 function changeBadge(change: string): string {
   if (change === "added") return POSITIVE;
   if (change === "removed") return NEGATIVE;
   return ACCENT;
+}
+
+/** Side-by-side compare view used when a compilation is UPDATING an existing
+ *  wiki page (i.e. `old_content` is non-empty). Renders both versions through
+ *  MarkdownPreview so we keep typography + wiki-link handling consistent with
+ *  the normal reader view, and lets the reviewer eyeball what actually
+ *  changed at the prose level rather than reading a raw unified diff. The
+ *  changelog sidebar carries the structured "why" in parallel.
+ */
+function CompareView({ oldContent, newContent }: { oldContent: string; newContent: string }) {
+  return (
+    <div className="flex h-full min-h-0">
+      <div className={`flex-1 overflow-y-auto border-r ${BORDER}`}>
+        <div className={`sticky top-0 ${BG} px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
+          <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif]`}>
+            Before · previous wiki page
+          </div>
+        </div>
+        <div className="px-6 py-4 max-w-none">
+          <MarkdownPreview content={oldContent} />
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div className={`sticky top-0 ${BG} px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
+          <div className={`text-[10px] uppercase tracking-wider ${ACCENT} font-[Geist,sans-serif]`}>
+            After · compiled version
+          </div>
+        </div>
+        <div className="px-6 py-4 max-w-none">
+          <MarkdownPreview content={newContent} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ChangelogEntry({ entry }: { entry: CompilationChangelogEntry }) {
@@ -102,14 +156,28 @@ export function CompilationReview() {
 
   const handleApprove = async () => {
     if (!activeDetail) return;
-    await approve(activeDetail.id);
+    // Optional annotation — blank / cancel means no comment. We don't block
+    // approval on providing one; most approvals are a silent "ship it".
+    const comment = window.prompt(
+      `Approve compilation for "${activeDetail.topic}"?\n\nOptional comment (press OK to approve without one):`,
+      ""
+    );
+    if (comment === null) return; // cancelled
+    await approve(activeDetail.id, comment || undefined);
     toast.success(`Approved "${activeDetail.topic}"`);
   };
 
   const handleReject = async () => {
     if (!activeDetail) return;
-    if (!window.confirm(`Reject compilation for "${activeDetail.topic}"?`)) return;
-    await reject(activeDetail.id);
+    // Rejection reason is more useful — asking for one every time trains
+    // the habit. Cancel aborts; empty string is still allowed (user can
+    // reject without explaining if they really want to).
+    const comment = window.prompt(
+      `Reject compilation for "${activeDetail.topic}"?\n\nReason (helps future compiles do better):`,
+      ""
+    );
+    if (comment === null) return;
+    await reject(activeDetail.id, comment || undefined);
     toast.success(`Rejected "${activeDetail.topic}"`);
   };
 
@@ -142,14 +210,37 @@ export function CompilationReview() {
             </div>
           )}
           {error && !loadingList && (
-            <div className={`px-4 py-6 text-xs ${NEGATIVE} font-[Geist,sans-serif]`}>
-              {error}
+            <div className={`px-4 py-6`}>
+              <div className={`text-[10px] uppercase tracking-wider ${NEGATIVE} mb-2 font-[Geist,sans-serif] font-semibold`}>
+                Can't reach the server
+              </div>
+              <div className={`text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif] mb-3 leading-relaxed`}>
+                The Python backend on <span className="font-mono">127.0.0.1:8765</span> isn't
+                answering. Compilations are stored in the brain DB so this view
+                needs it running.
+              </div>
+              <div className={`text-[10px] ${TEXT_DIM} font-mono whitespace-pre-wrap mb-3`}>
+                {error}
+              </div>
+              <button
+                onClick={() => loadList()}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 border ${BORDER} ${TEXT_MUTED} hover:${TEXT} rounded font-[Geist,sans-serif]`}
+              >
+                retry
+              </button>
             </div>
           )}
           {!loadingList && list.length === 0 && !error && (
-            <div className={`px-4 py-6 text-xs ${TEXT_DIM} font-[Geist,sans-serif]`}>
-              No compilations yet. Run the compiler to generate wiki pages from
-              raw sources.
+            <div className={`px-4 py-8`}>
+              <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} mb-2 font-[Geist,sans-serif] font-semibold`}>
+                Nothing to review
+              </div>
+              <div className={`text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif] leading-relaxed`}>
+                No compilations yet. The compiler turns raw notes about a topic
+                into a single canonical wiki page, gated behind a human
+                approval. Ask Claude Code to compile a topic that's well-covered
+                in the current brain and the review will show up here.
+              </div>
             </div>
           )}
           {list.map((c) => {
@@ -187,16 +278,33 @@ export function CompilationReview() {
 
       {/* Right: detail */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {!activeDetail && !loadingDetail && (
+        {!activeDetail && !loadingDetail && list.length > 0 && (
           <div className={`flex-1 flex items-center justify-center ${TEXT_DIM}`}>
-            <div className="text-center">
-              <p className="text-sm font-[Geist,sans-serif]">
-                Select a compilation to review
+            <div className="text-center max-w-sm px-8">
+              <p className={`text-sm ${TEXT_MUTED} font-[Geist,sans-serif]`}>
+                Select a compilation on the left
               </p>
-              <p className="text-xs mt-2 font-[Geist,sans-serif]">
+              <p className={`text-xs mt-2 ${TEXT_DIM} font-[Geist,sans-serif]`}>
                 {counts.pending > 0
-                  ? `${counts.pending} pending review`
-                  : "Nothing pending"}
+                  ? `${counts.pending} waiting for your review`
+                  : "Everything reviewed — nothing pending"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!activeDetail && !loadingDetail && list.length === 0 && (
+          <div className={`flex-1 flex items-center justify-center ${TEXT_DIM}`}>
+            <div className="text-center max-w-md px-8">
+              <div className={`text-3xl ${TEXT_DIM} mb-3 font-[Geist,sans-serif]`}>○</div>
+              <p className={`text-sm ${TEXT_MUTED} font-[Geist,sans-serif] mb-2`}>
+                The compiler hasn't run yet
+              </p>
+              <p className={`text-xs ${TEXT_DIM} font-[Geist,sans-serif] leading-relaxed`}>
+                When you ask Claude Code to compile a topic, the generated
+                wiki page lands here as <span className="font-mono">pending</span> and
+                waits for you to approve, reject with a reason, or edit the
+                raw sources and recompile.
               </p>
             </div>
           </div>
@@ -204,7 +312,7 @@ export function CompilationReview() {
 
         {loadingDetail && (
           <div className={`flex-1 flex items-center justify-center ${TEXT_DIM}`}>
-            <p className="text-sm font-[Geist,sans-serif]">Loading…</p>
+            <p className={`text-xs ${TEXT_MUTED} font-[Geist,sans-serif]`}>Loading detail…</p>
           </div>
         )}
 
@@ -250,30 +358,58 @@ export function CompilationReview() {
                 <span>{activeDetail.sources.length} sources</span>
                 <span>·</span>
                 <span className="font-mono">{activeDetail.model}</span>
+                <span>·</span>
+                <span title={activeDetail.created_at}>
+                  created {relativeTime(activeDetail.created_at)}
+                </span>
                 {activeDetail.reviewed_at && (
                   <>
                     <span>·</span>
-                    <span>reviewed {activeDetail.reviewed_at}</span>
+                    <span title={activeDetail.reviewed_at}>
+                      reviewed {relativeTime(activeDetail.reviewed_at)}
+                    </span>
                   </>
                 )}
               </div>
+              {activeDetail.review_comment && (
+                <div
+                  className={`mt-3 border-l-2 ${
+                    activeDetail.status === "approved"
+                      ? "border-[#8cd98c]"
+                      : activeDetail.status === "rejected"
+                      ? "border-[#ff8a8a]"
+                      : "border-[#b592ff]"
+                  } pl-3 py-1`}
+                >
+                  <div className={`text-[9px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif] mb-0.5`}>
+                    Reviewer note
+                  </div>
+                  <div className={`text-xs ${TEXT} font-[Geist,sans-serif] italic`}>
+                    "{activeDetail.review_comment}"
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Body: two columns - preview + changelog */}
             <div className="flex-1 flex overflow-hidden">
-              {/* Wiki preview */}
-              <div className="flex-1 overflow-y-auto px-8 py-6">
-                <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} mb-3 font-[Geist,sans-serif]`}>
-                  Compiled wiki page
-                </div>
-                <div className="max-w-3xl">
-                  <MarkdownPreview
-                    content={activeDetail.new_content}
-                    onSwitchToEdit={() => {
-                      /* read-only preview in the review panel */
-                    }}
+              {/* Wiki preview (or diff view when we're UPDATING an existing page) */}
+              <div className="flex-1 overflow-y-auto">
+                {activeDetail.old_content ? (
+                  <CompareView
+                    oldContent={activeDetail.old_content}
+                    newContent={activeDetail.new_content}
                   />
-                </div>
+                ) : (
+                  <div className="px-8 py-6">
+                    <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} mb-3 font-[Geist,sans-serif]`}>
+                      Compiled wiki page · first compile
+                    </div>
+                    <div className="max-w-3xl">
+                      <MarkdownPreview content={activeDetail.new_content} />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Changelog sidebar */}
