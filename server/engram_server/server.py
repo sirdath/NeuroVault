@@ -65,7 +65,7 @@ _TIER_INCLUDES = {
     "all": {"core", "power", "code", "research"},
 }
 
-_raw_tier = os.environ.get("ENGRAM_MCP_TIER", "full").lower().strip()
+_raw_tier = os.environ.get("ENGRAM_MCP_TIER", "core").lower().strip()
 _ACTIVE_TIERS: set[str] = set()
 for token in [t.strip() for t in _raw_tier.split(",") if t.strip()]:
     _ACTIVE_TIERS.update(_TIER_INCLUDES.get(token, {token}))

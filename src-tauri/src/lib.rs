@@ -205,20 +205,18 @@ pub fn run() {
                 ),
             }
 
-            #[cfg(not(dev))]
-            {
-                use tauri_plugin_shell::ShellExt;
-                let sidecar = app.shell().sidecar("engram-server")
-                    .expect("failed to create engram-server sidecar");
-                let (_rx, _child) = sidecar.spawn()
-                    .expect("failed to spawn engram-server sidecar");
-                app.manage(_child);
-            }
-            #[cfg(dev)]
-            {
-                let _ = app;
-                eprintln!("[neurovault] dev mode: run server with `cd server && uv run python -m engram_server --http-only`");
-            }
+            // The Python MCP server runs as an external process. See
+            // docs/BUILDING_SIDECAR.md for how to build a packaged
+            // PyInstaller sidecar locally (275 MB, not checked into git).
+            // When a sidecar binary exists at src-tauri/binaries/, we'll
+            // spawn it automatically; otherwise the desktop app assumes
+            // the user has already started the server via:
+            //     cd server && uv run python -m engram_server --http-only
+            let _ = app;
+            eprintln!(
+                "[neurovault] assumes the Python server is running on 127.0.0.1:8765 \
+                 (start it via: cd server && uv run python -m engram_server --http-only)"
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

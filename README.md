@@ -1,16 +1,38 @@
 # NeuroVault
 
-**Local-first AI memory system for Claude.**
+**A local-first knowledge layer for AI agents. Not RAG. A living internal wiki.**
 
-Claude forgets you after every conversation. NeuroVault doesn't.
+Most "agent memory" products today are retrieval pipelines in a trench coat —
+chunk, embed, retrieve, hallucinate, repeat. NeuroVault is what you get when
+you stop treating memory as search over a pile of chunks and start treating it
+as a structured, updatable, inspectable, human-editable knowledge base that
+an AI can read, write, and challenge.
 
-NeuroVault gives Claude persistent memory across sessions — automatically, locally, and without any cloud dependency. It is three things simultaneously:
+Concretely, NeuroVault is:
 
-1. A **markdown note editor** (Tauri desktop app)
-2. A **local AI memory database** (SQLite + vector search)
-3. An **MCP server** that Claude connects to directly
+- A **local markdown vault** you own forever (`~/.engram/brains/{name}/vault/*.md`)
+- A **Tauri desktop app** for humans to explore what the agent knows — neural graph view, wikilinks, hover previews, backlinks with paragraph context, ⌘K command palette
+- An **MCP server** agents connect to directly (Claude Desktop, Claude Code, any MCP client)
+- A **hybrid retrieval engine** — semantic + BM25 + knowledge graph, cross-encoder reranking, Ebbinghaus strength decay
+- A **silent fact-capture pipeline** that listens to conversation and quietly promotes casually-dropped facts to first-class memories with wiki-link provenance back to where you said them
 
-Everything runs on your machine. Your notes are plain `.md` files you own forever.
+Every memory is a plain `.md` file. The database is an index. If the index
+breaks, rebuild from files. You own your brain.
+
+![NeuroVault neural graph view — force-directed knowledge graph of the meta-brain](docs/screenshots/neural-graph.png)
+
+*The neural graph view — force-directed layout, three automatic link types
+(semantic, entity, wikilinks). Nodes sized by access frequency, colored by
+strength state (amber = fresh, teal = connected, gray = dormant). Every
+node is a real markdown file in the vault.*
+
+![Unified ⌘K command palette with Commands and Notes sections](docs/screenshots/command-palette.png)
+
+*`⌘K` is the primary nav verb. Three sections in one palette:
+**Commands** (local fuzzy match), **Notes** (fuzzy title search), and
+**Memory** (debounced semantic `/api/recall`, appears once you type 3+
+chars). Single ↑↓ flow across all sections, kind-specific icons
+(amber › commands, teal ◆ notes, purple ✦ memory).*
 
 ---
 
@@ -22,17 +44,61 @@ You write a note in the editor
   → File watcher triggers ingestion pipeline
   → Text chunked → embedded locally → entities extracted → knowledge graph updated
 
-You ask Claude a question
-  → Claude calls recall() via MCP
-  → Hybrid search: semantic + keywords + knowledge graph
-  → Top memories returned with relevance scores
-  → Claude answers with full context of your vault
+You drop a fact in conversation ("I prefer Tauri 2.0 over Electron")
+  → UserPromptSubmit hook silently runs it through a regex extractor
+  → 8 patterns catch preferences, decisions, deadlines, identities, stacks
+  → Each fact becomes a first-class `kind='insight'` engram
+  → With a wiki-link back to the original observation for provenance
 
-After Claude responds
-  → Write-back extracts durable facts from the exchange
-  → New facts auto-saved as notes
-  → Brain grows from every conversation
+You ask the agent a question
+  → Agent calls recall() via MCP
+  → Hybrid search: semantic + BM25 + knowledge graph, fused via RRF
+  → Cross-encoder reranks the top candidates
+  → Recent/contested decisions get a score bonus; dormant ones fade
+  → Top memories returned at a flat ~275 tokens regardless of vault size
+  → Agent answers with context it couldn't have had before
+
+After meaningful exchanges
+  → Write-back extracts durable facts and saves them as new notes
+  → Consolidation worker runs every 4h: strengthens, links, spreads activation
+  → Brain grows from every conversation, decays what you stop touching
 ```
+
+---
+
+## Why this isn't RAG
+
+RAG is an answer-pipeline. You have a question, you chunk+embed a corpus,
+retrieve K chunks, stuff them in the context window, generate, repeat.
+The corpus is dead data. The retrieval step has no memory of past
+retrievals. Contradictions are invisible. Provenance is a prayer.
+
+NeuroVault is a **knowledge layer**. It differs from RAG in five specific
+ways that map directly to what a living internal wiki needs:
+
+| What a wiki needs | RAG's answer | NeuroVault's answer |
+|---|---|---|
+| **Accumulate over time** | re-chunk, re-embed | Ebbinghaus strength decay + access reinforcement. Used facts stay strong; unused ones fade. |
+| **Structure** | flat chunks | Karpathy's 3-layer raw/wiki/schema pattern, engrams typed as `note`/`source`/`quote`/`draft`/`insight`/`observation`. |
+| **Link** | none | Three automatic connection types (semantic similarity, shared entities, explicit `[[wikilinks]]`) + a force-directed graph view. |
+| **Provenance** | cite the chunk | Silent fact capture that promotes casually-dropped facts and stores `**Source:** [[observation-...]]` wiki-links back to the exact prompt where they were said. |
+| **Challenge / update** | none | Temporal fact tracking — when a new fact contradicts an existing one, the old fact is marked superseded and takes a recency penalty in retrieval so it stops polluting answers. |
+
+**Reproducible benchmark** on the fact-capture pipeline
+([`server/benchmarks/bench_usefulness.py`](server/benchmarks/bench_usefulness.py)):
+15 casual factual statements seeded via the `UserPromptSubmit` hook,
+probed with 15 paraphrased questions that never use the original wording.
+
+| Metric | Score |
+|---|---|
+| Hit@1 (right fact is #1 result) | **80%** |
+| Hit@3 (right fact in top 3) | **100%** |
+| Hit@5 (right fact in top 5) | **100%** |
+| MRR (mean reciprocal rank) | **0.878** |
+| Tokens per answer | **~275** (flat regardless of vault size) |
+| Paste-whole-vault baseline | ~93,000 tokens, grows linearly |
+
+237 Python tests green. Every claim on this page is reproducible locally.
 
 ## Features
 

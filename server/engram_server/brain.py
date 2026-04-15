@@ -4,6 +4,7 @@ A brain = vault directory + SQLite database + BM25 index + file watcher + decay 
 The embedding model is shared across all brains (expensive to load, stateless).
 """
 
+import hashlib
 import json
 import shutil
 import threading
@@ -22,6 +23,25 @@ from engram_server.ingest import ingest_vault
 from engram_server.watcher import VaultWatcher
 from engram_server.strength import DecayScheduler
 from engram_server.consolidation import ConsolidationScheduler
+
+
+def _compute_vault_fingerprint(vault_dir: Path) -> str:
+    """Hash of (filename, mtime, size) for every .md in the vault.
+
+    Cheap — only stats, no reads. Used to short-circuit ingest_vault when
+    nothing on disk has changed since the last run.
+    """
+    parts: list[str] = []
+    try:
+        for p in sorted(vault_dir.glob("*.md")):
+            try:
+                st = p.stat()
+                parts.append(f"{p.name}:{int(st.st_mtime)}:{st.st_size}")
+            except OSError:
+                continue
+    except OSError:
+        return ""
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -57,7 +77,23 @@ class BrainContext:
     _active: bool = field(default=False, repr=False)
 
     def initialize(self, embedder: Embedder, activate: bool = False) -> None:
-        """Set up the full brain directory structure."""
+        """Full init: infrastructure setup + vault load + optional activation.
+
+        Split into two phases so BrainManager can cache the context between
+        them — a failed load never causes a crash-loop on subsequent API calls,
+        because the expensive ingest step runs *after* the context is stored.
+        """
+        self._setup_infra()
+        self._load_index_and_maybe_ingest(embedder)
+        if activate:
+            self.activate(embedder)
+
+    def _setup_infra(self) -> None:
+        """Phase 1: must-succeed setup — dirs, DB handle, BM25 object.
+
+        Cheap and deterministic. Everything downstream depends on this, so
+        if it fails the brain context is genuinely unusable.
+        """
         brain_dir = BRAINS_DIR / self.brain_id
 
         # Processed brain (what Claude sees)
@@ -82,10 +118,51 @@ class BrainContext:
         self.db = Database(self.db_path)
         self.bm25 = BM25Index()
 
-        # Ingest existing vault files
-        ingest_vault(self.db, embedder, self.bm25, self.vault_dir)
+    def _load_index_and_maybe_ingest(self, embedder: Embedder) -> None:
+        """Phase 2: best-effort ingest + BM25 build.
 
-        # Karpathy-style auto-maintained files
+        Compares the vault fingerprint against the last-seen fingerprint
+        stored in `.vault_fingerprint`. If unchanged, skips ingest_vault
+        entirely. Either way, rebuilds BM25 from the DB so queries work.
+
+        Exceptions here are logged, not raised — the context stays usable
+        for reads and the next watcher event retries the ingest.
+        """
+        brain_dir = BRAINS_DIR / self.brain_id
+        fingerprint_path = brain_dir / ".vault_fingerprint"
+        current_fp = _compute_vault_fingerprint(self.vault_dir)
+        cached_fp = ""
+        if fingerprint_path.exists():
+            try:
+                cached_fp = fingerprint_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                cached_fp = ""
+
+        try:
+            if current_fp and current_fp != cached_fp:
+                logger.info(
+                    "Vault fingerprint changed for {} ({} -> {}), running ingest",
+                    self.brain_id, cached_fp or "<new>", current_fp,
+                )
+                ingest_vault(self.db, embedder, self.bm25, self.vault_dir)
+                try:
+                    fingerprint_path.write_text(current_fp, encoding="utf-8")
+                except OSError as e:
+                    logger.warning("Could not write vault fingerprint: {}", e)
+            else:
+                logger.debug("Vault fingerprint unchanged for {}, skipping ingest", self.brain_id)
+
+            # Always rebuild BM25 from DB — cheap, keeps index live even
+            # when ingest was skipped. Fixes the "empty BM25 after restart"
+            # bug where ingest_vault only rebuilt BM25 when count > 0.
+            self.bm25.build(self.db)
+        except Exception as e:
+            logger.error(
+                "Ingest/BM25 build failed for brain {}: {}. Context remains usable for reads; next watcher event will retry.",
+                self.brain_id, e,
+            )
+
+        # Karpathy-style auto-maintained files (best-effort)
         try:
             from engram_server.karpathy import ensure_schema, rebuild_index, append_log
             ensure_schema(self.vault_dir, self.name)
@@ -94,15 +171,12 @@ class BrainContext:
         except Exception as e:
             logger.debug("Karpathy wiki init skipped: {}", e)
 
-        # Git auto-backup (invisible, per-brain)
+        # Git auto-backup (best-effort, per-brain)
         try:
             from engram_server.git_backup import init_backup_repo
             init_backup_repo(self.vault_dir)
         except Exception as e:
             logger.debug("Git backup init skipped: {}", e)
-
-        if activate:
-            self.activate(embedder)
 
     def activate(self, embedder: Embedder) -> None:
         """Start watcher and decay scheduler (only for the active brain)."""
@@ -353,7 +427,14 @@ class BrainManager:
         return self.get_context(self._active_id, activate=True)
 
     def get_context(self, brain_id: str, activate: bool = False) -> BrainContext:
-        """Get or lazy-load a brain context."""
+        """Get or lazy-load a brain context.
+
+        Critical ordering: the context is cached in `self._contexts` *after*
+        the cheap `_setup_infra()` step but *before* the expensive
+        `_load_index_and_maybe_ingest()` step. This prevents crash-loops —
+        if ingest raises, the cached context is still retrievable on the
+        next call, instead of triggering a fresh re-ingest every time.
+        """
         with self._lock:
             if brain_id in self._contexts:
                 ctx = self._contexts[brain_id]
@@ -371,9 +452,18 @@ class BrainManager:
             name=entry["name"],
             description=entry.get("description", ""),
         )
-        ctx.initialize(self.embedder, activate=activate)
 
+        # Phase 1 (must succeed): dirs + DB + BM25 object
+        ctx._setup_infra()
+
+        # Cache BEFORE expensive work — failures below don't cause re-init storms
         with self._lock:
             self._contexts[brain_id] = ctx
+
+        # Phase 2 (best-effort): ingest + BM25 build + karpathy + git
+        ctx._load_index_and_maybe_ingest(self.embedder)
+
+        if activate:
+            ctx.activate(self.embedder)
 
         return ctx

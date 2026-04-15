@@ -134,14 +134,21 @@ def ingest_file(
     # 8. Rebuild BM25 index
     bm25.build(db)
 
-    # 9. Advanced intelligence (from competitors)
+    # 9. Advanced intelligence (temporal facts + classification).
+    # detect_contradictions is DISABLED — the naive keyword-pair detector
+    # (see intelligence.py _find_contradiction_local) produced thousands of
+    # false positives on real vaults because it flags ANY pair of topic-
+    # similar engrams that share weak negation keywords ("yes/no", "added/
+    # removed", "free/paid", etc). Until the detector is rewritten to do
+    # real subject matching + grounded fact comparison, running it is worse
+    # than not running it. Temporal fact tracking + memory classification
+    # still run because they don't have this problem.
     try:
         from engram_server.intelligence import (
-            detect_contradictions, extract_temporal_facts, classify_memory
+            extract_temporal_facts, classify_memory
         )
         classify_memory(db, engram_id, content)
         extract_temporal_facts(db, engram_id, content)
-        detect_contradictions(db, embedder, engram_id, content)
     except Exception as e:
         logger.debug("Intelligence features skipped: {}", e)
 

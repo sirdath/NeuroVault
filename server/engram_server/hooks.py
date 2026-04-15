@@ -49,6 +49,28 @@ DEDUPE_MAX_ENTRIES = 500
 _recent_sigs: "OrderedDict[str, float]" = OrderedDict()
 
 
+# --- PostToolUse capture policy -------------------------------------------
+# Claude Code's PostToolUse hook fires after EVERY tool call. In a typical
+# coding session that's dozens of events per minute — Read, Grep, Bash,
+# Glob, WebFetch, Monitor, etc. Most of them are transient observability
+# ops that nobody ever needs to recall. Embedding them all saturates the
+# embedder and drowns real memories in observation sludge.
+#
+# Policy comes from env var `ENGRAM_HOOKS_POSTTOOLUSE`:
+#   "mutations"  (default) — only Edit, Write, NotebookEdit (state-changing)
+#   "all"                  — every tool (the old behavior)
+#   "off"                  — disable PostToolUse capture entirely
+#
+# Silent fact capture (UserPromptSubmit → insight_extractor) is unaffected
+# and remains the recommended ambient-capture path for decisions/preferences.
+import os
+
+_POSTTOOLUSE_MODE = os.environ.get("ENGRAM_HOOKS_POSTTOOLUSE", "mutations").lower().strip()
+# Tools that actually mutate user state — what's worth remembering by default.
+_MUTATION_TOOLS = frozenset({"edit", "write", "notebookedit", "multiedit"})
+logger.info("hooks: PostToolUse mode = {!r}", _POSTTOOLUSE_MODE)
+
+
 def _observation_signature(event: str, payload: dict) -> str | None:
     """Build a stable dedupe key for a PostToolUse event, or None."""
     if event != "PostToolUse":
@@ -193,11 +215,13 @@ def capture_observation(
         logger.debug("hooks: ignoring unhandled event {}", event)
         return None
 
-    # PostToolUse is high-volume — skip trivial reads / cosmetic tools to
-    # avoid drowning the brain in noise.
+    # PostToolUse is high-volume — apply the capture policy from
+    # ENGRAM_HOOKS_POSTTOOLUSE (default "mutations"). See module top.
     if event == "PostToolUse":
+        if _POSTTOOLUSE_MODE == "off":
+            return None
         tool = (payload.get("tool_name") or payload.get("tool") or "").lower()
-        if tool in {"read", "ls", "glob", "grep", "todowrite"}:
+        if _POSTTOOLUSE_MODE == "mutations" and tool not in _MUTATION_TOOLS:
             return None
 
     # Dedupe: PostToolUse for the same tool+input inside the window is a

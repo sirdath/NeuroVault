@@ -10,12 +10,15 @@ Improvements over v1:
 
 import math
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
+from threading import Lock
 
 import numpy as np
 from sentence_transformers import CrossEncoder
 from loguru import logger
 
+from engram_server.bm25_index import _tokenize as _bm25_tokenize
 from engram_server.database import Database
 from engram_server.embeddings import Embedder
 from engram_server.bm25_index import BM25Index
@@ -24,6 +27,52 @@ RRF_K = 60
 
 _reranker: CrossEncoder | None = None
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
+# --- Title-embedding LRU -------------------------------------------------
+# Titles rarely change; embedding them on every recall was burning ~85%
+# of hybrid_retrieve's wall time for small vaults (31 titles × ~20ms =
+# ~600ms wasted per query). Cache is keyed on the raw title string, so
+# renames naturally invalidate and two engrams sharing a title share a
+# slot. Capped at 4k entries (~6MB) — far above any realistic vault size.
+_TITLE_CACHE_MAX = 4000
+_title_cache: "OrderedDict[str, list[float]]" = OrderedDict()
+_title_cache_lock = Lock()
+
+
+def _get_title_embeddings(titles: list[str], embedder: Embedder) -> list[list[float]]:
+    """Return embeddings for `titles`, using the LRU for repeats.
+
+    Only novel titles go through `embedder.encode_batch()`. In typical
+    usage (titles stable across queries), the batch is empty on every
+    call after the first — collapsing recall's title-scoring cost from
+    O(titles) embeds to O(0).
+    """
+    out: list[list[float] | None] = [None] * len(titles)
+    novel: list[tuple[int, str]] = []
+    with _title_cache_lock:
+        for i, t in enumerate(titles):
+            cached = _title_cache.get(t)
+            if cached is not None:
+                _title_cache.move_to_end(t)
+                out[i] = cached
+            else:
+                novel.append((i, t))
+    if novel:
+        fresh = embedder.encode_batch([t for _, t in novel])
+        with _title_cache_lock:
+            for (i, t), vec in zip(novel, fresh):
+                out[i] = vec
+                _title_cache[t] = vec
+                _title_cache.move_to_end(t)
+            while len(_title_cache) > _TITLE_CACHE_MAX:
+                _title_cache.popitem(last=False)
+    return [v for v in out if v is not None]  # type: ignore[return-value]
+
+
+def title_cache_stats() -> dict:
+    with _title_cache_lock:
+        return {"size": len(_title_cache), "max": _TITLE_CACHE_MAX}
 
 
 def _get_reranker() -> CrossEncoder:
@@ -236,7 +285,9 @@ def hybrid_retrieve(
     expanded_query = _expand_query(query)
 
     # --- Signal 1: Semantic search ---
-    query_embedding = embedder.encode(expanded_query)
+    # encode_query uses a query-level LRU cache — repeat/paraphrased
+    # queries in the same session skip the ~600-800ms model forward pass.
+    query_embedding = embedder.encode_query(expanded_query)
     semantic_hits = db.knn_search(query_embedding, limit=candidate_pool)
 
     semantic_ranked: list[dict] = []
@@ -277,36 +328,99 @@ def hybrid_retrieve(
     # --- Signal 3: Knowledge graph traversal ---
     graph_ranked = _graph_retrieve(query, db, limit=candidate_pool)
 
-    # --- Signal 4: Title matching (semantic + keyword) ---
-    # Embed all titles and compare to query for semantic title relevance
-    title_scores: dict[str, float] = {}
+    # --- Signal 4: Title matching (semantic + keyword coverage) ---
+    # Titles are high-signal: a 5-word page title is a declaration of the
+    # page's topic, far more focused than paragraph-level content. We
+    # score every title two ways and take the max.
+    #
+    # (a) Semantic: cosine(query_emb, title_emb). Threshold 0.45.
+    # (b) Keyword coverage: fraction of (stopword-stripped) query tokens
+    #     that appear in the title. A query whose tokens are all in the
+    #     title gets a near-max bonus; a partial match scales linearly.
+    #     This fixes the "mcp core tier tools" → mcp-tools-tiers case:
+    #     3/3 non-stopword tokens land in that title, 2/3 in mcp-registration.
+    #
+    # Title embeddings go through `_get_title_embeddings()` which caches
+    # them across recall calls — previously we re-embedded every title
+    # in the vault on every query, wasting ~600ms on a 31-title vault.
+    # Two separate signals, scored independently so a strong keyword match
+    # never gets crowded out by a forest of weaker semantic-cosine matches:
+    #
+    #   semantic_title_scores : cosine(query, title_emb), cosine ∈ (0.45, 1.0]
+    #   keyword_title_scores  : bidirectional token coverage, score ∈ (0.4, 1.0]
+    #
+    # The semantic signal can match dozens of engrams (cosine is forgiving
+    # for short strings), so we cap its boost at top-10 by score. The
+    # keyword signal is far more discriminating — typical query/title
+    # pairs have zero overlap, so we apply its boost UNCAPPED to every
+    # match. This is the fix for the "mcp core tier tools" benchmark
+    # case where mcp-tools-tiers had a 0.802 keyword score but lost a
+    # top-10 slot to ten high-cosine semantic neighbours.
+    semantic_title_scores: dict[str, float] = {}
+    keyword_title_scores: dict[str, float] = {}
+
+    # Also pull the filename so a kebab-case slug like `http-api.md` can
+    # participate in keyword matching alongside the display title. Slugs
+    # are pure keywords (no "&", "(", "·" filler), so they tend to give
+    # cleaner coverage signals than prettified titles.
     all_engrams_list = db.conn.execute(
-        "SELECT id, title FROM engrams WHERE state != 'dormant'"
+        "SELECT id, title, filename FROM engrams WHERE state != 'dormant'"
     ).fetchall()
 
+    query_token_set = set(t for t in _bm25_tokenize(query) if len(t) > 1)
+    query_token_count = max(len(query_token_set), 1)
+
     if all_engrams_list:
-        titles_text = [t[1] for t in all_engrams_list]
-        title_embeddings = embedder.encode_batch(titles_text)
+        titles_text = [row[1] for row in all_engrams_list]
+        title_embeddings = _get_title_embeddings(titles_text, embedder)
         query_emb_np = np.array(query_embedding, dtype=np.float32)
         q_norm = np.linalg.norm(query_emb_np)
         if q_norm > 0:
             query_emb_np = query_emb_np / q_norm
 
-        for i, (eid, title) in enumerate(all_engrams_list):
-            t_emb = np.array(title_embeddings[i], dtype=np.float32)
-            t_norm = np.linalg.norm(t_emb)
-            if t_norm > 0:
-                sim = float(np.dot(query_emb_np, t_emb / t_norm))
-                if sim > 0.45:  # Moderate threshold — titles are short
-                    title_scores[eid] = sim
+        for i, row in enumerate(all_engrams_list):
+            eid, title, filename = row[0], row[1], (row[2] or "")
 
-            # Also check keyword overlap (for exact matches)
-            query_words = set(expanded_query.lower().split())
-            title_words = set(title.lower().split())
-            overlap = query_words & title_words
-            if len(overlap) >= 2:
-                title_scores[eid] = max(title_scores.get(eid, 0), 0.6)
+            # (a) Semantic title similarity — the wide net.
+            if i < len(title_embeddings):
+                t_emb = np.array(title_embeddings[i], dtype=np.float32)
+                t_norm = np.linalg.norm(t_emb)
+                if t_norm > 0:
+                    sim = float(np.dot(query_emb_np, t_emb / t_norm))
+                    if sim > 0.45:
+                        semantic_title_scores[eid] = sim
 
+            # (b) Bidirectional keyword coverage against (title ∪ slug).
+            # Take the MAX of two fractions so a short focused title whose
+            # words are fully in the query wins the same way a long title
+            # with majority query coverage does:
+            #   C_query = |overlap| / |query_tokens|
+            #   C_title = |overlap| / |title_tokens|
+            # `_bm25_tokenize` uses the same stopword set BM25 uses so
+            # filler ("of", "the", "in") never inflates either fraction.
+            slug = filename.replace(".md", "").replace("-", " ").replace("_", " ")
+            title_tokens: set[str] = set()
+            for src in (title, slug):
+                for tok in _bm25_tokenize(src):
+                    if len(tok) > 1:
+                        title_tokens.add(tok)
+
+            if query_token_set and title_tokens:
+                overlap = query_token_set & title_tokens
+                if overlap:
+                    c_query = len(overlap) / query_token_count
+                    c_title = len(overlap) / max(len(title_tokens), 1)
+                    coverage = max(c_query, c_title)
+                    if coverage >= 0.4:
+                        # Coverage ∈ [0.4, 1.0] → keyword_score ∈ [0.56, 1.0]
+                        keyword_title_scores[eid] = 0.4 + 0.6 * coverage
+
+    # title_matches drives the OLD logging count (kept for parity)
+    title_scores: dict[str, float] = {}
+    for eid, s in semantic_title_scores.items():
+        title_scores[eid] = max(title_scores.get(eid, 0.0), s)
+    for eid, s in keyword_title_scores.items():
+        title_scores[eid] = max(title_scores.get(eid, 0.0), s)
     title_matches = sorted(title_scores.keys(), key=lambda x: title_scores.get(x, 0), reverse=True)
 
     # --- Reciprocal Rank Fusion ---
@@ -322,10 +436,28 @@ def hybrid_retrieve(
     for rank, eid in enumerate(graph_ranked, 1):
         rrf_scores[eid] = rrf_scores.get(eid, 0) + w_graph * _rrf_score(rank)
 
-    # Title match bonus — scaled by semantic similarity to query
-    for eid in title_matches[:5]:  # Top 5 most relevant titles
-        boost = title_scores.get(eid, 0.3) * 0.08  # Higher similarity = bigger boost
-        rrf_scores[eid] = rrf_scores.get(eid, 0) + boost
+    # Two-track title boost (see signal-4 block above for rationale):
+    #
+    # 1) Keyword coverage — UNCAPPED, applied to every engram with
+    #    coverage ≥ 0.4. Strong, discriminating signal (most engrams
+    #    have zero overlap, so the boost stays sparse). Magnitude 0.30
+    #    is large enough for a near-full-coverage keyword match to
+    #    dominate any combination of weak semantic neighbours.
+    # 2) Semantic title cosine — capped at top-10 by score. Cosine
+    #    is forgiving for short strings so this can match dozens of
+    #    titles at once. Magnitude 0.15 — half the keyword boost, so
+    #    it informs ranking without drowning out the precise signal.
+    # Two-track title boost (see signal-4 block above for rationale):
+    # 1) Keyword coverage — UNCAPPED, every engram with coverage ≥ 0.4
+    # 2) Semantic title cosine — capped at top-10 by score
+    for eid, kscore in keyword_title_scores.items():
+        rrf_scores[eid] = rrf_scores.get(eid, 0.0) + kscore * 0.30
+
+    semantic_top = sorted(
+        semantic_title_scores.items(), key=lambda kv: kv[1], reverse=True
+    )[:10]
+    for eid, sscore in semantic_top:
+        rrf_scores[eid] = rrf_scores.get(eid, 0.0) + sscore * 0.15
 
     sorted_candidates = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
@@ -365,28 +497,45 @@ def hybrid_retrieve(
     # bonus. Together these handle "Database Migration > Database Choice" and
     # "Decision: No Redis > Considered: Redis" without changing recall accuracy
     # for non-temporal queries.
+    # superseded_fraction[eid] = fraction of this engram's temporal_facts
+    # that are marked not-current. Used to SCALE the recency penalty so a
+    # single stale fact on a page with 189 total doesn't halve the whole
+    # page's score (the old behavior, triggered by the intelligence
+    # module parsing example dialog blocks as "claims" and flagging them
+    # as mutual contradictions). A truly obsolete page with most facts
+    # superseded still gets a meaningful penalty.
     eids = [c["engram_id"] for c in candidates]
+    superseded_fraction: dict[str, float] = {}
     if eids:
         placeholders = ",".join("?" * len(eids))
         if as_of:
-            # A fact only counts as superseded at as_of if its valid_until was
-            # already in the past at that timestamp. Otherwise it was still
-            # current at as_of, so we must NOT penalize it.
-            superseded_rows = db.conn.execute(
-                f"""SELECT engram_id FROM temporal_facts
-                    WHERE engram_id IN ({placeholders})
-                      AND valid_until IS NOT NULL
-                      AND valid_until <= ?""",
-                eids + [as_of],
+            rows = db.conn.execute(
+                f"""SELECT engram_id,
+                       SUM(CASE WHEN valid_until IS NOT NULL AND valid_until <= ?
+                                THEN 1 ELSE 0 END) AS not_current,
+                       COUNT(*) AS total
+                     FROM temporal_facts
+                     WHERE engram_id IN ({placeholders})
+                     GROUP BY engram_id""",
+                [as_of] + eids,
             ).fetchall()
         else:
-            superseded_rows = db.conn.execute(
-                f"SELECT engram_id FROM temporal_facts WHERE engram_id IN ({placeholders}) AND is_current = 0",
+            rows = db.conn.execute(
+                f"""SELECT engram_id,
+                       SUM(CASE WHEN is_current = 0 THEN 1 ELSE 0 END) AS not_current,
+                       COUNT(*) AS total
+                     FROM temporal_facts
+                     WHERE engram_id IN ({placeholders})
+                     GROUP BY engram_id""",
                 eids,
             ).fetchall()
-        superseded_eids = {r[0] for r in superseded_rows}
-    else:
-        superseded_eids = set()
+        for eid, not_current, total in rows:
+            if total and not_current:
+                superseded_fraction[eid] = not_current / total
+    # Legacy name kept so the historical-intent branch below still works;
+    # it's "everything with ANY superseded fact", which matches the old
+    # semantics for that specific code path (boosting archival hits).
+    superseded_eids = set(superseded_fraction.keys())
 
     # Query-aware recency spread: the newest/oldest factor range shifts
     # based on whether the query wants fresh content, historical content,
@@ -459,9 +608,16 @@ def hybrid_retrieve(
             c["decision_bonus"] = 0.08
         elif any(p in content_head for p in NEGATION_HINTS):
             c["decision_bonus"] = 0.05
-        if c["engram_id"] in superseded_eids:
-            c["recency_factor"] *= 0.5
-            c["decision_bonus"] = 0.0
+        # Fractional supersede penalty: scale the recency factor by the
+        # fraction of this engram's temporal_facts that are stale. A page
+        # with 2% stale facts gets a 1% penalty (multiplier 0.99); a page
+        # with 100% stale facts gets the old full 0.5 multiplier. Only
+        # pages with a MAJORITY of stale facts lose their decision bonus.
+        frac = superseded_fraction.get(c["engram_id"], 0.0)
+        if frac > 0.0:
+            c["recency_factor"] *= (1.0 - 0.5 * frac)
+            if frac > 0.5:
+                c["decision_bonus"] = 0.0
 
     # --- Optional cross-encoder reranking ---
     if use_reranker and len(candidates) > 1:
