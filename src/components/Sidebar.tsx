@@ -126,8 +126,13 @@ export function Sidebar({
 
   return (
     <div
-      className="h-full flex flex-col bg-white/[0.03] backdrop-blur-[10px] border-r border-white/[0.06] relative"
-      style={{ width: sidebarWidth, minWidth: sidebarWidth }}
+      className="h-full flex flex-col backdrop-blur-[10px] relative"
+      style={{
+        width: sidebarWidth,
+        minWidth: sidebarWidth,
+        background: "var(--nv-surface)",
+        borderRight: "1px solid var(--nv-border)",
+      }}
     >
       {/* Resize handle */}
       <div
@@ -137,7 +142,7 @@ export function Sidebar({
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-5">
-          <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] text-white/90 tracking-tight">
+          <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] tracking-tight" style={{ color: "var(--nv-text)" }}>
             NeuroVault
           </h1>
           <button
@@ -318,30 +323,29 @@ function NoteList({
               className="px-3 py-0.5"
             >
               <div
-                className={`group relative cursor-pointer rounded-2xl px-3.5 py-3 transition-all duration-200 ${
-                  isActive
-                    ? "bg-white/[0.08] border border-white/[0.12]"
-                    : "border border-transparent hover:bg-white/[0.04] hover:border-white/[0.06]"
-                }`}
+                className="group relative cursor-pointer rounded-2xl px-3.5 py-3 transition-all duration-200"
                 style={isActive ? {
-                  boxShadow: "inset 0 1px 1px rgba(255,255,255,0.08), 0 4px 16px rgba(0,0,0,0.15)"
-                } : undefined}
+                  background: "var(--nv-surface)",
+                  border: `1px solid var(--nv-border)`,
+                  boxShadow: `inset 0 1px 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.15)`,
+                } : {
+                  border: "1px solid transparent",
+                }}
               >
                 <div className="flex items-start justify-between gap-2">
                   <h3
-                    className={`text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug ${
-                      isActive ? "text-white/90" : "text-white/60"
-                    }`}
+                    className="text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug"
+                    style={{ color: isActive ? "var(--nv-text)" : "var(--nv-text-muted)" }}
                   >
                     {note.title}
                   </h3>
-                  <span className="text-[10px] text-white/15 font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
+                  <span className="text-[10px] font-[Geist,sans-serif] whitespace-nowrap mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
                     {relativeTime(note.modified)}
                   </span>
                 </div>
 
                 {preview && (
-                  <p className="text-[11.5px] text-white/25 mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
+                  <p className="text-[11.5px] mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
                     {preview}
                   </p>
                 )}

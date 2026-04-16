@@ -10,7 +10,7 @@ import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { CompilationReview } from "./components/CompilationReview";
-import { SettingsView } from "./components/SettingsView";
+import { SettingsView, useSettings, type Theme } from "./components/SettingsView";
 import { fetchStatus } from "./lib/api";
 
 type View = "editor" | "graph" | "compile" | "settings";
@@ -18,6 +18,7 @@ type View = "editor" | "graph" | "compile" | "settings";
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
+  const { theme } = useSettings();
   const [view, setView] = useState<View>("editor");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
@@ -214,49 +215,86 @@ export default function App() {
     );
   }
 
+  // Inject theme as CSS custom properties so every component can read them
+  const themeVars: React.CSSProperties & Record<string, string> = {
+    "--nv-bg": theme.bg,
+    "--nv-surface": theme.surface,
+    "--nv-border": theme.border,
+    "--nv-text": theme.text,
+    "--nv-text-muted": theme.textMuted,
+    "--nv-text-dim": theme.textDim,
+    "--nv-accent": theme.accent,
+    "--nv-accent-glow": theme.accentGlow,
+    "--nv-positive": theme.positive,
+    "--nv-negative": theme.negative,
+  } as React.CSSProperties & Record<string, string>;
+
   return (
-    <div className="flex flex-col h-screen bg-[#08080f] text-white/90 overflow-hidden">
+    <div
+      className="flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]"
+      style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
+    >
       {/* Server-down banner */}
       {serverDown && (
-        <div className="bg-[#ff6b6b]/[0.04] border-b border-[#ff6b6b]/10 px-5 py-2 flex items-center gap-2.5 flex-shrink-0 backdrop-blur-[10px]">
-          <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse shadow-sm shadow-[#ff6b6b]/30" />
-          <span className="text-[12px] text-[#ff8a8a]/60 font-[Geist,sans-serif]">
+        <div
+          className="px-5 py-2 flex items-center gap-2.5 flex-shrink-0 backdrop-blur-[10px]"
+          style={{ background: `${theme.negative}10`, borderBottom: `1px solid ${theme.negative}20` }}
+        >
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: theme.negative }} />
+          <span className="text-[12px]" style={{ color: `${theme.negative}aa` }}>
             Server offline — search, graph, and memory features unavailable
           </span>
         </div>
       )}
 
-      {/* Top bar — Apple glass */}
+      {/* Top bar */}
       <div
-        className="h-11 min-h-[44px] flex items-center justify-between px-5 backdrop-blur-[10px] bg-white/[0.03] border-b border-white/[0.06]"
-        style={{ boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)" }}
+        className="h-11 min-h-[44px] flex items-center justify-between px-5 backdrop-blur-[10px]"
+        style={{
+          background: theme.surface,
+          borderBottom: `1px solid ${theme.border}`,
+          boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
+        }}
       >
         <div
-          className="flex items-center gap-0.5 bg-white/[0.05] rounded-xl p-1 border border-white/[0.08]"
-          style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
+          className="flex items-center gap-0.5 rounded-xl p-1"
+          style={{
+            background: theme.surface,
+            border: `1px solid ${theme.border}`,
+            boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
+          }}
         >
-          <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" />
-          <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" />
-          <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" />
+          <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" theme={theme} />
+          <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" theme={theme} />
+          <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" theme={theme} />
         </div>
 
         <div className="flex items-center gap-4">
           {noteCount > 0 && (
-            <span className="text-[11px] text-white/20 font-[Geist,sans-serif]">
+            <span className="text-[11px]" style={{ color: theme.textDim }}>
               {noteCount} {noteCount === 1 ? "note" : "notes"}
             </span>
           )}
           <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80] shadow-sm shadow-[#4ade80]/40" : "bg-[#ff6b6b]/50"}`} />
-            <span className="text-[11px] font-[Geist,sans-serif] text-white/20">
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                backgroundColor: serverUp ? theme.positive : theme.negative,
+                boxShadow: serverUp ? `0 0 6px ${theme.positive}66` : undefined,
+              }}
+            />
+            <span className="text-[11px]" style={{ color: theme.textDim }}>
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
           <button
             onClick={() => setView("settings")}
-            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all ${
-              view === "settings" ? "bg-white/[0.12] text-white/80" : "text-white/20 hover:text-white/50 hover:bg-white/[0.04]"
-            }`}
+            className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
+            style={{
+              background: view === "settings" ? theme.surface : undefined,
+              color: view === "settings" ? theme.text : theme.textDim,
+              border: view === "settings" ? `1px solid ${theme.border}` : undefined,
+            }}
             title="Settings"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -302,19 +340,20 @@ export default function App() {
   );
 }
 
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function TabButton({ active, onClick, label, theme }: { active: boolean; onClick: () => void; label: string; theme: Theme }) {
   return (
     <button
       onClick={onClick}
-      className={`px-4 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200 ${
-        active
-          ? "bg-white/[0.12] text-white/90 backdrop-blur-[10px]"
-          : "text-white/25 hover:text-white/50 hover:bg-white/[0.04]"
-      }`}
+      className="px-4 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200"
       style={active ? {
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 3px rgba(0,0,0,0.3)",
-        border: "1px solid rgba(255,255,255,0.1)",
-      } : undefined}
+        background: theme.surface,
+        color: theme.text,
+        border: `1px solid ${theme.border}`,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.3)",
+      } : {
+        color: theme.textDim,
+        border: "1px solid transparent",
+      }}
     >
       {label}
     </button>

@@ -75,7 +75,7 @@ export function Editor() {
 
   if (!activeFilename) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[#08080f]">
+      <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: "var(--nv-bg)" }}>
         <div className="text-center max-w-xs">
           <div
             className="w-14 h-14 mx-auto mb-5 rounded-2xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center"
@@ -97,15 +97,19 @@ export function Editor() {
   }
 
   return (
-    <div className="flex-1 flex bg-[#08080f] overflow-hidden">
+    <div className="flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
         <div
-          className="flex items-center justify-between px-6 py-2.5 border-b border-white/[0.06] bg-white/[0.02]"
-          style={{ boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.02)" }}
+          className="flex items-center justify-between px-6 py-2.5"
+          style={{
+            background: "var(--nv-surface)",
+            borderBottom: "1px solid var(--nv-border)",
+            boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.02)",
+          }}
         >
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <span className="text-white/85 text-[14px] font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
+            <span className="text-[14px] font-semibold font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }} title={activeFilename ?? undefined}>
               {notes.find((n) => n.filename === activeFilename)?.title ??
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}

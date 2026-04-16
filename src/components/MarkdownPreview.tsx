@@ -54,7 +54,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto cursor-default bg-[#08080f]">
+    <div className="flex-1 overflow-y-auto cursor-default" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="mx-auto max-w-[720px] px-12 py-12">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
