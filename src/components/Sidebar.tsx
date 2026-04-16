@@ -18,10 +18,12 @@ export function Sidebar({
   triggerNewNote = 0,
   triggerSearch = 0,
   onNoteSelect,
+  onSettingsOpen,
 }: {
   triggerNewNote?: number;
   triggerSearch?: number;
   onNoteSelect?: () => void;
+  onSettingsOpen?: () => void;
 } = {}) {
   const notes = useNoteStore((s) => s.notes);
   const activeFilename = useNoteStore((s) => s.activeFilename);
@@ -140,45 +142,34 @@ export function Sidebar({
         className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
         onMouseDown={() => { resizing.current = true; document.body.style.cursor = "col-resize"; }}
       />
-      {/* Header */}
-      <div className="px-5 pt-5 pb-4 flex-shrink-0">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] tracking-tight" style={{ color: "var(--nv-text)" }}>
-              NeuroVault
-            </h1>
-            <div className="mt-1.5">
-              <BrainSelector />
-            </div>
+      {/* Header — search + new note on same line */}
+      <div className="px-3 pt-3 pb-2 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              ref={searchRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search notes..."
+              className="w-full text-[13px] pl-8 pr-3 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif] transition-all"
+              style={{
+                background: "var(--nv-surface)",
+                color: "var(--nv-text)",
+                border: "1px solid var(--nv-border)",
+              }}
+            />
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="w-7 h-7 flex items-center justify-center rounded-md transition-all text-lg leading-none"
+            className="w-7 h-7 flex items-center justify-center rounded-md transition-all text-base leading-none flex-shrink-0"
             style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
             title="New note (Ctrl+N)"
           >
             +
           </button>
-        </div>
-
-        {/* Search */}
-        <div className="relative">
-          <input
-            ref={searchRef}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search notes..."
-            className="w-full text-[13px] pl-8 pr-3 py-2 rounded-md focus:outline-none font-[Geist,sans-serif] transition-all"
-            style={{
-              background: "var(--nv-surface)",
-              color: "var(--nv-text)",
-              border: "1px solid var(--nv-border)",
-              boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
-            }}
-          />
-          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
         </div>
       </div>
 
@@ -226,37 +217,40 @@ export function Sidebar({
         onDelete={handleDelete}
       />
 
-      <div className="flex-shrink-0 px-4">
-        {filtered.length === 0 && notes.length > 0 && (
-          <p className="text-[#4a4870] text-[13px] text-center mt-12 font-[Geist,sans-serif]">
-            No results
+      {/* Empty states */}
+      {filtered.length === 0 && notes.length > 0 && (
+        <p className="text-[13px] text-center mt-12 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+          No results
+        </p>
+      )}
+      {notes.length === 0 && (
+        <div className="mt-12 text-center px-4">
+          <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
+            No notes yet
           </p>
-        )}
+          <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+            Press <kbd className="px-1 py-0.5 rounded text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-accent)" }}>Ctrl+N</kbd> to start
+          </p>
+        </div>
+      )}
 
-        {notes.length === 0 && (
-          <div className="mt-12 text-center">
-            <div className="w-10 h-10 mx-auto mb-4 rounded-md bg-[#16162a] flex items-center justify-center">
-              <span className="text-[#b592ff] text-lg">+</span>
-            </div>
-            <p className="text-[#8a88a0] text-[13px] font-[Geist,sans-serif] mb-1">
-              No notes yet
-            </p>
-            <p className="text-[#4a4870] text-[12px] font-[Geist,sans-serif] mb-6">
-              Press <kbd className="px-1.5 py-0.5 bg-[#16162a] rounded text-[#b592ff] text-[11px] font-mono">Ctrl+N</kbd> to start
-            </p>
-            <div className="text-left space-y-2">
-              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
-                <span className="text-[#b592ff] font-mono">[[</span> link notes together
-              </p>
-              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
-                <kbd className="text-[#6a6880] font-mono">Ctrl+K</kbd> search everything
-              </p>
-              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
-                Auto-saves as you type
-              </p>
-            </div>
-          </div>
-        )}
+      {/* Bottom bar — Obsidian-style: brain selector + settings */}
+      <div
+        className="flex-shrink-0 flex items-center justify-between px-3 py-2"
+        style={{ borderTop: "1px solid var(--nv-border)" }}
+      >
+        <BrainSelector />
+        <button
+          onClick={() => onSettingsOpen?.()}
+          className="w-7 h-7 flex items-center justify-center rounded-md transition-all"
+          style={{ color: "var(--nv-text-dim)" }}
+          title="Settings"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </div>
     </div>
   );
