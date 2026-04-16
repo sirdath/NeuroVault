@@ -16,15 +16,26 @@ const VIRTUAL_OVERSCAN = 6;
 export function Sidebar({
   triggerNewNote = 0,
   triggerSearch = 0,
+  onNoteSelect,
 }: {
   triggerNewNote?: number;
   triggerSearch?: number;
+  onNoteSelect?: () => void;
 } = {}) {
   const notes = useNoteStore((s) => s.notes);
   const activeFilename = useNoteStore((s) => s.activeFilename);
   const searchQuery = useNoteStore((s) => s.searchQuery);
   const setSearchQuery = useNoteStore((s) => s.setSearchQuery);
-  const selectNote = useNoteStore((s) => s.selectNote);
+  const _selectNote = useNoteStore((s) => s.selectNote);
+
+  // When a note is clicked, select it AND switch to editor view
+  const selectNote = useCallback(
+    async (filename: string) => {
+      await _selectNote(filename);
+      onNoteSelect?.();
+    },
+    [_selectNote, onNoteSelect]
+  );
   const createNote = useNoteStore((s) => s.createNote);
   const deleteNoteAction = useNoteStore((s) => s.deleteNote);
 
@@ -97,8 +108,32 @@ export function Sidebar({
     [deleteNoteAction]
   );
 
+  // Resizable sidebar width
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const resizing = useRef(false);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!resizing.current) return;
+      const w = Math.max(200, Math.min(500, e.clientX));
+      setSidebarWidth(w);
+    };
+    const onMouseUp = () => { resizing.current = false; document.body.style.cursor = ""; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => { window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mouseup", onMouseUp); };
+  }, []);
+
   return (
-    <div className="w-[280px] min-w-[280px] h-full flex flex-col bg-white/[0.03] backdrop-blur-[10px] border-r border-white/[0.06]">
+    <div
+      className="h-full flex flex-col bg-white/[0.03] backdrop-blur-[10px] border-r border-white/[0.06] relative"
+      style={{ width: sidebarWidth, minWidth: sidebarWidth }}
+    >
+      {/* Resize handle */}
+      <div
+        className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+        onMouseDown={() => { resizing.current = true; document.body.style.cursor = "col-resize"; }}
+      />
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-5">

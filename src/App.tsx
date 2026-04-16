@@ -256,7 +256,11 @@ export default function App() {
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar triggerNewNote={triggerNewNote} triggerSearch={triggerSearch} />
+        <Sidebar
+          triggerNewNote={triggerNewNote}
+          triggerSearch={triggerSearch}
+          onNoteSelect={() => { if (view !== "editor") setView("editor"); }}
+        />
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
@@ -288,12 +292,15 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200 ${
+      className={`px-4 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200 ${
         active
-          ? "bg-white/[0.1] text-white/90 border border-white/[0.1]"
-          : "text-white/30 hover:text-white/60 hover:bg-white/[0.04] border border-transparent"
+          ? "bg-white/[0.12] text-white/90 backdrop-blur-[10px]"
+          : "text-white/25 hover:text-white/50 hover:bg-white/[0.04]"
       }`}
-      style={active ? { boxShadow: "inset 0 1px 1px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.2)" } : undefined}
+      style={active ? {
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 3px rgba(0,0,0,0.3)",
+        border: "1px solid rgba(255,255,255,0.1)",
+      } : undefined}
     >
       {label}
     </button>

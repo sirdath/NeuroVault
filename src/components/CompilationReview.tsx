@@ -7,20 +7,20 @@ import type { CompilationChangelogEntry } from "../lib/api";
 // Vault Noir palette anchors (kept local to this file — same values the
 // other panels use, imported via CSS custom properties elsewhere but
 // inlined here for Tailwind arbitrary-value syntax).
-const BG = "bg-[#0b0b12]";
-const BORDER = "border-[#1f1f2e]";
-const TEXT = "text-[#e8e6f0]";
-const TEXT_MUTED = "text-[#8a88a0]";
-const TEXT_DIM = "text-[#6a6880]";
+const BG = "bg-[#08080f]";
+const BORDER = "border-white/[0.06]";
+const TEXT = "text-white/90";
+const TEXT_MUTED = "text-white/40";
+const TEXT_DIM = "text-white/20";
 const ACCENT = "text-[#b592ff]";
-const ACCENT_BG = "bg-[#b592ff]";
-const POSITIVE = "text-[#8cd98c]";
-const NEGATIVE = "text-[#ff8a8a]";
+const ACCENT_BG = "bg-white/[0.12]";
+const POSITIVE = "text-[#4ade80]";
+const NEGATIVE = "text-[#ff6b6b]";
 
 function statusBadge(status: string): { label: string; color: string } {
-  if (status === "approved") return { label: "APPROVED", color: "bg-[#1f3a1f] text-[#8cd98c]" };
-  if (status === "rejected") return { label: "REJECTED", color: "bg-[#3a1f1f] text-[#ff8a8a]" };
-  return { label: "PENDING", color: "bg-[#2a2438] text-[#b592ff]" };
+  if (status === "approved") return { label: "APPROVED", color: "bg-[#4ade80]/10 text-[#4ade80] border border-[#4ade80]/15" };
+  if (status === "rejected") return { label: "REJECTED", color: "bg-[#ff6b6b]/10 text-[#ff6b6b] border border-[#ff6b6b]/15" };
+  return { label: "PENDING", color: "bg-white/[0.06] text-white/50 border border-white/[0.08]" };
 }
 
 /** Short relative timestamp — "2 min ago", "3 hours ago", "yesterday".
@@ -184,7 +184,7 @@ export function CompilationReview() {
   return (
     <div className={`flex-1 flex ${BG} overflow-hidden`}>
       {/* Left: compilation list */}
-      <div className={`w-[320px] border-r ${BORDER} flex flex-col`}>
+      <div className={`w-[260px] min-w-[260px] border-r ${BORDER} flex flex-col bg-white/[0.02]`}>
         <div className={`px-4 py-3 border-b ${BORDER}`}>
           <div className="flex items-center justify-between mb-1">
             <h2 className={`text-sm font-semibold ${TEXT} font-[Geist,sans-serif]`}>
@@ -413,7 +413,7 @@ export function CompilationReview() {
               </div>
 
               {/* Changelog sidebar */}
-              <div className={`w-[340px] border-l ${BORDER} flex flex-col`}>
+              <div className={`w-[300px] min-w-[300px] border-l ${BORDER} flex flex-col bg-white/[0.02]`}>
                 <div className={`px-4 py-3 border-b ${BORDER}`}>
                   <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif]`}>
                     Changelog ({activeDetail.changelog.length})
