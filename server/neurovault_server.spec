@@ -8,23 +8,22 @@ The resulting onefile exe at dist/neurovault-server.exe is copied into
 src-tauri/binaries/neurovault-server-x86_64-pc-windows-msvc.exe so the Tauri
 app can spawn it as a sidecar.
 
-NOTES ON PACKAGING PAIN POINTS:
+SIZE NOTES (v0.2 — post-ONNX migration):
 
-  sqlite-vec ships a vec0.dll that Python loads at runtime via ctypes.
-  PyInstaller can't see that import statically, so we add it as a data
-  file and use a runtime hook to locate it relative to sys._MEIPASS.
+  The v0.1 sidecar was ~263 MB because it bundled PyTorch (~150 MB compressed)
+  for sentence-transformers. v0.2 replaces torch with fastembed (ONNX Runtime),
+  dropping the bundle to ~60-80 MB.
 
-  sentence-transformers pulls in torch + transformers + huggingface_hub.
-  torch has hundreds of dynamic submodules — we use collect_all() for
-  the three of them so PyInstaller grabs everything. Resulting bundle
-  is ~500-700 MB but that's the cost of local embeddings.
+  fastembed downloads the ONNX model weights (~30 MB) on first use to
+  ~/.cache/fastembed/. Not bundled in the exe.
 
-  The BGE model weights (~130 MB) are NOT bundled — sentence-transformers
-  downloads them on first call to ~/.cache/huggingface/. User needs
-  internet for the first launch. If this ships to offline contexts we
-  can bundle via --add-data later.
+  PyMuPDF (fitz) is NOT bundled in the base sidecar — it's a 51 MB C
+  extension used only for PDF ingestion. If the user uploads a PDF, the
+  server imports pymupdf lazily and fails with a clear error if it's not
+  installed. Power users can install it via `uv pip install pymupdf`.
 
-  PyMuPDF (fitz) ships a C extension; collect_all gets it.
+  sqlite-vec ships a vec0.dll loaded via ctypes at runtime. PyInstaller
+  can't see it statically, so we collect it as a data file.
 """
 
 from PyInstaller.utils.hooks import collect_all, copy_metadata, collect_data_files
@@ -33,24 +32,27 @@ from pathlib import Path
 block_cipher = None
 server_root = Path('.').resolve()
 
-# --- Deps that need aggressive collection ---
-# torch / transformers / sentence_transformers have so many dynamic
-# imports that hand-listing them is infeasible. collect_all grabs every
-# submodule, data file, and binary these packages reference.
+# --- Deps that need collection ---
 hidden = []
 datas = []
 binaries = []
-# collect_all() returns (datas, binaries, hiddenimports) in that order.
-# Getting this wrong produces a cryptic TypeError about 'tuple' in modnm.
-for pkg in ('sentence_transformers', 'transformers', 'huggingface_hub', 'tokenizers', 'torch', 'pymupdf'):
-    d, b, h = collect_all(pkg)
-    datas += d
-    binaries += b
-    hidden += h
+
+# fastembed + onnxruntime (the new lightweight embedding stack)
+for pkg in ('fastembed', 'onnxruntime', 'huggingface_hub', 'tokenizers'):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hidden += h
+    except Exception:
+        pass  # package may not be installed; skip gracefully
 
 # Metadata lookups (FastAPI/Starlette use importlib.metadata for version strings)
 for pkg in ('fastapi', 'uvicorn', 'starlette', 'pydantic', 'pydantic_core', 'anthropic', 'mcp'):
-    datas += copy_metadata(pkg)
+    try:
+        datas += copy_metadata(pkg)
+    except Exception:
+        pass
 
 # sqlite_vec vec0.dll — ctypes-loaded, invisible to static analysis
 datas += collect_data_files('sqlite_vec', include_py_files=False)
@@ -82,6 +84,8 @@ hidden += [
     'neurovault_server.conversation_log',
     'neurovault_server.write_back',
     'neurovault_server.config',
+    'neurovault_server.audit',
+    'neurovault_server.compiler',
 ]
 
 
@@ -95,10 +99,23 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Keep the bundle smaller by dropping stuff we never use.
+        # --- Big packages we no longer need ---
+        'torch',
+        'torch.*',
+        'sentence_transformers',
+        'transformers',
+        'scipy',
+        'scipy.*',
+        'sklearn',
+        'sklearn.*',
+        'pymupdf',           # deferred — lazy import at runtime
+        'fitz',              # pymupdf alias
+        # --- Stuff we never used ---
         'tkinter',
         'matplotlib',
+        'PIL',
         'PIL.ImageTk',
+        'pillow',
         'PyQt5',
         'PyQt6',
         'PySide2',
@@ -108,6 +125,8 @@ a = Analysis(
         'notebook',
         'pytest',
         'sphinx',
+        'numpy.testing',
+        'numpy.doc',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -126,11 +145,11 @@ exe = EXE(
     name='neurovault-server',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
+    strip=True,             # strip debug symbols — saves ~5-10%
+    upx=False,              # skip UPX — causes antivirus false positives on Windows
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,  # sidecar runs headless; stdout visible in child process
+    console=True,           # sidecar runs headless; stdout visible in child process
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -1,25 +1,36 @@
+"""Local text embedding via ONNX Runtime (fastembed).
+
+Uses BAAI/bge-small-en-v1.5 (384 dimensions) through Qdrant's fastembed
+library, which runs the model via ONNX Runtime instead of PyTorch. Same
+model, same quality, same 384-dim output — but the dependency footprint
+drops from ~450 MB (torch + sentence-transformers + scipy) to ~15 MB
+(onnxruntime + fastembed). This is the single biggest size reduction in
+the entire packaging pipeline.
+
+The Embedder class is a singleton with a bounded LRU query cache.
+Recall latency is ~85% query embedding cost; humans and LLMs both repeat
+queries in a session, so the cache pays off quickly.
+"""
+
 from collections import OrderedDict
 from threading import Lock
+from typing import Generator
 
-from sentence_transformers import SentenceTransformer
 from loguru import logger
 
-from neurovault_server.config import EMBEDDING_MODEL
+from neurovault_server.config import EMBEDDING_MODEL, EMBEDDING_DIM
 
 
-# Query-embedding LRU. Recall latency is ~85% query embedding cost; humans
-# and LLMs both repeat queries inside a session ("recall mcp tools" then
-# "recall mcp tiers"), so a cache keyed on the raw query string pays off
-# quickly. 1000 entries ≈ 1.5 MB at 384 floats × 4 bytes × 1000.
+# Query-embedding LRU. 1000 entries ≈ 1.5 MB at 384 floats × 4 bytes × 1000.
 _QUERY_CACHE_MAX = 1000
 
 
 class Embedder:
-    """Singleton wrapper around sentence-transformers for local embedding.
+    """Singleton wrapper around fastembed for local embedding.
 
     Adds a bounded LRU on `encode_query()` so repeated recall() calls in a
-    session skip the ~600-800 ms model forward pass. Indexing/ingest still
-    uses `encode()` / `encode_batch()` uncached — those go through fresh text.
+    session skip the model forward pass. Indexing/ingest still uses
+    `encode()` / `encode_batch()` uncached.
     """
 
     _instance: "Embedder | None" = None
@@ -31,19 +42,29 @@ class Embedder:
         return cls._instance
 
     def __init__(self) -> None:
-        logger.info("Loading embedding model: {}", EMBEDDING_MODEL)
-        self.model = SentenceTransformer(EMBEDDING_MODEL)
-        logger.info("Embedding model loaded ({} dimensions)", self.model.get_embedding_dimension())
+        from fastembed import TextEmbedding
+
+        logger.info("Loading embedding model: {} (ONNX/fastembed)", EMBEDDING_MODEL)
+        self.model = TextEmbedding(model_name=EMBEDDING_MODEL)
+        logger.info("Embedding model loaded ({} dimensions)", EMBEDDING_DIM)
         self._query_cache: "OrderedDict[str, list[float]]" = OrderedDict()
         self._query_cache_lock = Lock()
         self._query_cache_hits = 0
         self._query_cache_misses = 0
 
+    def _embed_one(self, text: str) -> list[float]:
+        """Embed a single string via fastembed. Returns a plain list[float]."""
+        # fastembed.embed() returns a generator of numpy arrays
+        results: Generator = self.model.embed([text])
+        return next(results).tolist()
+
     def encode(self, text: str) -> list[float]:
-        return self.model.encode(text).tolist()
+        return self._embed_one(text)
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
-        return self.model.encode(texts).tolist()
+        if not texts:
+            return []
+        return [vec.tolist() for vec in self.model.embed(texts)]
 
     def encode_query(self, query: str) -> list[float]:
         """Encode a recall-time query, hitting an LRU for repeat queries.
@@ -53,7 +74,7 @@ class Embedder:
         """
         key = (query or "").strip()
         if not key:
-            return self.encode(query)
+            return self._embed_one(query)
         with self._query_cache_lock:
             cached = self._query_cache.get(key)
             if cached is not None:
@@ -61,10 +82,7 @@ class Embedder:
                 self._query_cache_hits += 1
                 return cached
             self._query_cache_misses += 1
-        # Do the expensive encode outside the lock so concurrent misses
-        # don't serialize. Worst case: two callers encode the same novel
-        # query concurrently — cheap to tolerate, expensive to prevent.
-        vec = self.model.encode(key).tolist()
+        vec = self._embed_one(key)
         with self._query_cache_lock:
             self._query_cache[key] = vec
             self._query_cache.move_to_end(key)

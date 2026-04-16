@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from threading import Lock
 
 import numpy as np
-from sentence_transformers import CrossEncoder
 from loguru import logger
 
 from neurovault_server.bm25_index import _tokenize as _bm25_tokenize
@@ -25,7 +24,7 @@ from neurovault_server.bm25_index import BM25Index
 
 RRF_K = 60
 
-_reranker: CrossEncoder | None = None
+_reranker = None  # lazy-loaded CrossEncoder, only if reranking is requested
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
@@ -75,11 +74,25 @@ def title_cache_stats() -> dict:
         return {"size": len(_title_cache), "max": _TITLE_CACHE_MAX}
 
 
-def _get_reranker() -> CrossEncoder:
+def _get_reranker():
+    """Lazy-load the cross-encoder reranker.
+
+    sentence-transformers is only imported here — not at module level — so
+    the entire torch dependency is avoided unless the user explicitly
+    requests reranking (which is off by default).
+    """
     global _reranker
     if _reranker is None:
-        logger.info("Loading cross-encoder reranker: {}", RERANKER_MODEL)
-        _reranker = CrossEncoder(RERANKER_MODEL)
+        try:
+            from sentence_transformers import CrossEncoder
+            logger.info("Loading cross-encoder reranker: {}", RERANKER_MODEL)
+            _reranker = CrossEncoder(RERANKER_MODEL)
+        except ImportError:
+            logger.warning(
+                "sentence-transformers not installed — cross-encoder reranking disabled. "
+                "Install it with: uv pip install sentence-transformers"
+            )
+            raise
     return _reranker
 
 
