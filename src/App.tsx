@@ -26,6 +26,7 @@ export default function App() {
   const [serverDown, setServerDown] = useState(false);
   const [serverUp, setServerUp] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
+  const [firstBoot, setFirstBoot] = useState(true);
   const failCountRef = useRef(0);
 
   useEffect(() => {
@@ -40,6 +41,7 @@ export default function App() {
           failCountRef.current = 0;
           setServerDown(false);
           setServerUp(true);
+          setFirstBoot(false);
           setNoteCount(s.memories);
         })
         .catch(() => {
@@ -186,9 +188,34 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [saveNote, toggleView]);
 
+  // First-boot loading screen — shows while the sidecar server is starting
+  // up (and potentially downloading the ONNX model on first install).
+  // Disappears the moment the first successful health check comes back.
+  if (firstBoot && !serverUp) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-[#0b0b12] text-[#e8e6f0]">
+        <h1 className="text-2xl font-bold font-[Geist,sans-serif] mb-3 tracking-tight">
+          NeuroVault
+        </h1>
+        <p className="text-[13px] text-[#6a6880] font-[Geist,sans-serif] mb-6">
+          Starting up...
+        </p>
+        <div className="w-48 h-1 bg-[#16162a] rounded-full overflow-hidden">
+          <div className="h-full w-1/3 bg-[#b592ff] rounded-full animate-[shimmer_1.5s_ease-in-out_infinite]" />
+        </div>
+        <style>{`
+          @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-[#0b0b12] text-[#e8e6f0] overflow-hidden">
-      {/* Server-down banner */}
+      {/* Server-down banner (only after initial boot) */}
       {serverDown && (
         <div className="bg-[#3a1f1f] border-b border-[#ff6b6b]/30 px-4 py-2 flex items-center gap-2 flex-shrink-0">
           <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse" />

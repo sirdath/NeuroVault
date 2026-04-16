@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-sidecar:
+    name: Build Python sidecar
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python deps + build sidecar
+        working-directory: server
+        run: |
+          uv sync --extra dev
+          uv pip install pyinstaller
+          uv run pyinstaller neurovault_server.spec --clean --noconfirm
+
+      - name: Stage sidecar binary
+        run: |
+          copy server\dist\neurovault-server.exe src-tauri\binaries\neurovault-server-x86_64-pc-windows-msvc.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-windows
+          path: src-tauri/binaries/neurovault-server-x86_64-pc-windows-msvc.exe
+
+  build-tauri:
+    name: Build Tauri app
+    needs: build-sidecar
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Download sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-windows
+          path: src-tauri/binaries
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "NeuroVault ${{ github.ref_name }}"
+          releaseBody: |
+            ## NeuroVault ${{ github.ref_name }}
+
+            Download **NeuroVault_x64-setup.exe** below to install.
+
+            The app auto-updates — future releases will be installed automatically.
+          releaseDraft: false
+          prerelease: false
