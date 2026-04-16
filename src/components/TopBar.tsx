@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-import { fetchStatus } from "../lib/api";
 import { BrainSelector } from "./BrainSelector";
 
 type View = "editor" | "graph" | "compile";
@@ -8,26 +6,11 @@ interface TopBarProps {
   view: View;
   onViewChange: (view: View) => void;
   onMemoryPanelToggle: () => void;
+  serverUp: boolean;
+  memoryCount: number;
 }
 
-export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps) {
-  const [serverUp, setServerUp] = useState(false);
-  const [memoryCount, setMemoryCount] = useState(0);
-
-  useEffect(() => {
-    const check = () => {
-      fetchStatus()
-        .then((s) => {
-          setServerUp(true);
-          setMemoryCount(s.memories);
-        })
-        .catch(() => setServerUp(false));
-    };
-    check();
-    const id = setInterval(check, 5000);
-    return () => clearInterval(id);
-  }, []);
-
+export function TopBar({ view, onViewChange, onMemoryPanelToggle, serverUp, memoryCount }: TopBarProps) {
   return (
     <div className="h-10 min-h-[40px] flex items-center justify-between px-4 bg-[#12121c] border-b border-[#1f1f2e]">
       {/* Left: View switcher + Brain selector */}
@@ -40,19 +23,19 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle }: TopBarProps)
         <BrainSelector />
       </div>
 
-      {/* Center: Memory count */}
+      {/* Center: Note count */}
       <div className="flex items-center gap-2 text-xs font-[Geist,sans-serif] text-[#8a88a0]">
         {memoryCount > 0 && (
-          <span>{memoryCount} {memoryCount === 1 ? "memory" : "memories"}</span>
+          <span>{memoryCount} {memoryCount === 1 ? "note" : "notes"}</span>
         )}
       </div>
 
-      {/* Right: Status + Memory Panel */}
+      {/* Right: Status + Brain Status panel */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#ff6b6b]"}`} />
           <span className="text-[10px] font-[Geist,sans-serif] text-[#8a88a0]">
-            {serverUp ? "MCP" : "offline"}
+            {serverUp ? "connected" : "offline"}
           </span>
         </div>
         <button

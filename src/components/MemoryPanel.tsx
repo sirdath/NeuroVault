@@ -51,7 +51,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-[#1f1f2e]">
               <h2 className="text-sm font-semibold font-[Geist,sans-serif] text-[#f0a500]">
-                Memory Panel
+                Brain Status
               </h2>
               <button
                 onClick={onClose}
@@ -73,10 +73,10 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
                   <Section title="Status">
                     {status ? (
                       <div className="grid grid-cols-2 gap-3">
-                        <Stat label="Memories" value={status.memories} />
-                        <Stat label="Chunks" value={status.chunks} />
-                        <Stat label="Entities" value={status.entities} />
-                        <Stat label="Links" value={status.connections} />
+                        <Stat label="Notes" value={status.memories} />
+                        <Stat label="Passages" value={status.chunks} />
+                        <Stat label="People & things" value={status.entities} />
+                        <Stat label="Connections" value={status.connections} />
                       </div>
                     ) : (
                       <Loading />
@@ -109,7 +109,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
                   </Section>
 
                   {/* Session Context */}
-                  <Section title="What Claude Knows (L0)">
+                  <Section title="Session Summary">
                     {context ? (
                       <pre className="text-xs text-[#e8e6f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
                         {context.l0}
@@ -119,7 +119,7 @@ export function MemoryPanel({ open, onClose }: MemoryPanelProps) {
                     )}
                   </Section>
 
-                  <Section title="Active Memories (L1)">
+                  <Section title="Most Active Notes">
                     {context ? (
                       <pre className="text-xs text-[#e8e6f0] font-[Geist,sans-serif] whitespace-pre-wrap leading-relaxed">
                         {context.l1}

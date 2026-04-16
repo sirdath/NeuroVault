@@ -25,7 +25,6 @@ const KIND_TABS: Array<{ id: KindFilter; label: string; color: string }> = [
   { id: "note", label: "Notes", color: "#f0a500" },
   { id: "source", label: "Sources", color: "#00c9b1" },
   { id: "quote", label: "Quotes", color: "#8b7cf8" },
-  { id: "draft", label: "Drafts", color: "#ff6b6b" },
 ];
 
 export function Sidebar({

@@ -31,24 +31,28 @@ export default function App() {
   const [triggerNewNote, setTriggerNewNote] = useState(0);
   const [triggerSearch, setTriggerSearch] = useState(0);
   const [serverDown, setServerDown] = useState(false);
+  const [serverUp, setServerUp] = useState(false);
+  const [memoryCount, setMemoryCount] = useState(0);
   const failCountRef = useRef(0);
 
   useEffect(() => {
     initVault();
   }, [initVault]);
 
-  // Server health monitor — show a non-blocking banner after 3 consecutive
-  // failures. The banner clears itself the moment the server comes back.
-  // Doesn't block interaction: the user can still browse local files.
+  // Single server health monitor — drives BOTH the TopBar status dot and
+  // the server-down banner. One source of truth, one polling interval.
   useEffect(() => {
     const check = () => {
       fetchStatus()
-        .then(() => {
+        .then((s) => {
           failCountRef.current = 0;
           setServerDown(false);
+          setServerUp(true);
+          setMemoryCount(s.memories);
         })
         .catch(() => {
           failCountRef.current += 1;
+          setServerUp(false);
           if (failCountRef.current >= 3) setServerDown(true);
         });
     };
@@ -266,6 +270,8 @@ export default function App() {
           view={view}
           onViewChange={setView}
           onMemoryPanelToggle={() => setMemoryPanelOpen((o) => !o)}
+          serverUp={serverUp}
+          memoryCount={memoryCount}
         />
       )}
 

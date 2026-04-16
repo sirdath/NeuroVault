@@ -172,14 +172,6 @@ export function Editor() {
         {/* Status bar */}
         <div className="flex items-center justify-between px-6 py-2 border-b border-[#1f1f2e]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            {/* Breadcrumb: Vault › Title. The vault segment is a visual
-                anchor only for now; clicking the title would open a rename
-                dialog in a later PR. Keeps the header honest about where
-                the user is without eating a whole row of vertical space. */}
-            <span className="text-[10px] uppercase tracking-wider text-[#6a6880] font-[Geist,sans-serif]">
-              Vault
-            </span>
-            <span className="text-[#6a6880] text-xs">›</span>
             <span className="text-[#e8e6f0] text-xs font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
               {notes.find((n) => n.filename === activeFilename)?.title ??
                 activeFilename?.replace(/\.md$/, "") ??

@@ -500,23 +500,23 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {/* Legend */}
       <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#8a88a0] pointer-events-none">
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> active
+          <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> strong
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#00c9b1]" /> connected
+          <span className="w-2 h-2 rounded-full bg-[#00c9b1]" /> linked
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#35335a]" /> dormant
+          <span className="w-2 h-2 rounded-full bg-[#35335a]" /> fading
         </span>
         <span className="flex items-center gap-1 ml-2 text-[#35335a]">
-          drag nodes to reposition
+          click a node to open
         </span>
       </div>
 
       {nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-[#35335a] text-sm font-[Geist,sans-serif]">
-            Start the server to see the knowledge graph
+          <p className="text-[#6a6880] text-sm font-[Geist,sans-serif]">
+            Create a few notes to see your knowledge graph
           </p>
         </div>
       )}
