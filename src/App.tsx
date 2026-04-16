@@ -10,7 +10,8 @@ import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { CompilationReview } from "./components/CompilationReview";
-import { SettingsView, useSettings, type Theme } from "./components/SettingsView";
+import { SettingsView } from "./components/SettingsView";
+import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { fetchStatus } from "./lib/api";
 
 type View = "editor" | "graph" | "compile" | "settings";
@@ -18,7 +19,7 @@ type View = "editor" | "graph" | "compile" | "settings";
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
-  const { theme } = useSettings();
+  const theme = useSettingsStore((s) => s.theme);
   const [view, setView] = useState<View>("editor");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
