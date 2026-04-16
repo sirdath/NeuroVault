@@ -1,10 +1,121 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
-/** Persisted settings — stored in localStorage so they survive app restarts. */
+// --- Theme system -----------------------------------------------------------
+
+export interface Theme {
+  id: string;
+  name: string;
+  description: string;
+  bg: string;           // deepest background
+  surface: string;      // glass surface tint (rgba)
+  border: string;       // border color (rgba)
+  text: string;         // primary text (rgba)
+  textMuted: string;    // secondary text (rgba)
+  textDim: string;      // tertiary text (rgba)
+  accent: string;       // accent color (hex)
+  accentGlow: string;   // accent shadow color (rgba)
+  positive: string;
+  negative: string;
+}
+
+const THEMES: Theme[] = [
+  {
+    id: "midnight",
+    name: "Midnight",
+    description: "Deep dark with violet accents — the default",
+    bg: "#08080f",
+    surface: "rgba(255,255,255,0.03)",
+    border: "rgba(255,255,255,0.06)",
+    text: "rgba(255,255,255,0.9)",
+    textMuted: "rgba(255,255,255,0.4)",
+    textDim: "rgba(255,255,255,0.2)",
+    accent: "#b592ff",
+    accentGlow: "rgba(181,146,255,0.15)",
+    positive: "#4ade80",
+    negative: "#ff6b6b",
+  },
+  {
+    id: "claude",
+    name: "Claude",
+    description: "Warm cream tones inspired by Anthropic's Claude",
+    bg: "#1a1714",
+    surface: "rgba(255,245,230,0.04)",
+    border: "rgba(255,245,230,0.08)",
+    text: "rgba(255,245,230,0.9)",
+    textMuted: "rgba(255,245,230,0.45)",
+    textDim: "rgba(255,245,230,0.2)",
+    accent: "#d4a574",
+    accentGlow: "rgba(212,165,116,0.15)",
+    positive: "#7dcea0",
+    negative: "#e57373",
+  },
+  {
+    id: "chatgpt",
+    name: "OpenAI",
+    description: "Clean dark with teal-green accents",
+    bg: "#0d0d0d",
+    surface: "rgba(255,255,255,0.04)",
+    border: "rgba(255,255,255,0.07)",
+    text: "rgba(255,255,255,0.88)",
+    textMuted: "rgba(255,255,255,0.42)",
+    textDim: "rgba(255,255,255,0.2)",
+    accent: "#10a37f",
+    accentGlow: "rgba(16,163,127,0.15)",
+    positive: "#10a37f",
+    negative: "#ef4444",
+  },
+  {
+    id: "github",
+    name: "GitHub Dark",
+    description: "Neutral dark with blue accents",
+    bg: "#0d1117",
+    surface: "rgba(200,220,255,0.03)",
+    border: "rgba(200,220,255,0.08)",
+    text: "rgba(230,237,243,0.9)",
+    textMuted: "rgba(200,220,255,0.4)",
+    textDim: "rgba(200,220,255,0.2)",
+    accent: "#58a6ff",
+    accentGlow: "rgba(88,166,255,0.15)",
+    positive: "#3fb950",
+    negative: "#f85149",
+  },
+  {
+    id: "rosepine",
+    name: "Rosé Pine",
+    description: "Soft muted palette with rose and gold",
+    bg: "#191724",
+    surface: "rgba(224,206,235,0.04)",
+    border: "rgba(224,206,235,0.08)",
+    text: "rgba(224,222,244,0.9)",
+    textMuted: "rgba(144,140,170,0.7)",
+    textDim: "rgba(110,106,134,0.5)",
+    accent: "#c4a7e7",
+    accentGlow: "rgba(196,167,231,0.15)",
+    positive: "#9ccfd8",
+    negative: "#eb6f92",
+  },
+  {
+    id: "nord",
+    name: "Nord",
+    description: "Arctic blue-grey Scandinavian palette",
+    bg: "#1a1e26",
+    surface: "rgba(180,200,230,0.04)",
+    border: "rgba(180,200,230,0.08)",
+    text: "rgba(216,222,233,0.9)",
+    textMuted: "rgba(216,222,233,0.45)",
+    textDim: "rgba(216,222,233,0.22)",
+    accent: "#88c0d0",
+    accentGlow: "rgba(136,192,208,0.15)",
+    positive: "#a3be8c",
+    negative: "#bf616a",
+  },
+];
+
+// --- Settings ---------------------------------------------------------------
+
 interface AppSettings {
-  accentColor: string;
+  themeId: string;
   fontSize: "small" | "medium" | "large";
-  sidebarPosition: "left" | "right";
   showPreviewSnippets: boolean;
   showTimestamps: boolean;
   editorMaxWidth: number;
@@ -12,29 +123,18 @@ interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
-  accentColor: "#b592ff",
+  themeId: "midnight",
   fontSize: "medium",
-  sidebarPosition: "left",
   showPreviewSnippets: true,
   showTimestamps: true,
   editorMaxWidth: 720,
   reduceMotion: false,
 };
 
-const ACCENT_PRESETS = [
-  { label: "Violet", value: "#b592ff" },
-  { label: "Blue", value: "#60a5fa" },
-  { label: "Teal", value: "#2dd4bf" },
-  { label: "Green", value: "#4ade80" },
-  { label: "Gold", value: "#f0a500" },
-  { label: "Rose", value: "#f472b6" },
-  { label: "White", value: "#e8e6f0" },
-];
-
 const FONT_SIZES = [
-  { label: "Small", value: "small" as const, px: 14 },
-  { label: "Medium", value: "medium" as const, px: 16 },
-  { label: "Large", value: "large" as const, px: 18 },
+  { label: "Small", value: "small" as const },
+  { label: "Medium", value: "medium" as const },
+  { label: "Large", value: "large" as const },
 ];
 
 function loadSettings(): AppSettings {
@@ -49,9 +149,12 @@ function saveSettings(s: AppSettings) {
   localStorage.setItem("nv.settings", JSON.stringify(s));
 }
 
+export function getTheme(id?: string): Theme {
+  return THEMES.find((t) => t.id === id) ?? THEMES[0]!;
+}
+
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
-
   const update = (partial: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...partial };
@@ -59,56 +162,108 @@ export function useSettings() {
       return next;
     });
   };
-
-  return { settings, update };
+  const theme = getTheme(settings.themeId);
+  return { settings, update, theme };
 }
+
+// --- Server controls --------------------------------------------------------
+
+const SERVER_URL = "http://127.0.0.1:8765";
+
+function useServerStatus() {
+  const [online, setOnline] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  const check = useCallback(async () => {
+    setChecking(true);
+    try {
+      const r = await fetch(`${SERVER_URL}/api/brains/active`, { signal: AbortSignal.timeout(3000) });
+      setOnline(r.ok);
+    } catch {
+      setOnline(false);
+    }
+    setChecking(false);
+  }, []);
+
+  useEffect(() => { check(); }, [check]);
+
+  return { online, checking, check };
+}
+
+// --- Component --------------------------------------------------------------
 
 export function SettingsView() {
   const { settings, update } = useSettings();
+  const { online, checking, check: recheckServer } = useServerStatus();
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8765/api/brains/active")
-      .then((r) => r.json())
-      .then((d) => {
-        fetch("http://127.0.0.1:8765/api/status")
-          .then((r) => r.json())
-          .then((s) => setServerInfo({ notes: s.memories, connections: s.connections, brain: d.name }))
-          .catch(() => null);
-      })
-      .catch(() => null);
-  }, []);
+    if (!online) { setServerInfo(null); return; }
+    Promise.all([
+      fetch(`${SERVER_URL}/api/brains/active`).then((r) => r.json()),
+      fetch(`${SERVER_URL}/api/status`).then((r) => r.json()),
+    ])
+      .then(([brain, status]) => setServerInfo({ notes: status.memories, connections: status.connections, brain: brain.name }))
+      .catch(() => setServerInfo(null));
+  }, [online]);
+
+  const handleStopServer = async () => {
+    setStopping(true);
+    try {
+      await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST" }).catch(() => null);
+    } catch { /* expected — server closes the connection */ }
+    setTimeout(() => { recheckServer(); setStopping(false); }, 1500);
+  };
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#08080f]">
-      <div className="mx-auto max-w-[560px] px-8 py-12">
+      <div className="mx-auto max-w-[580px] px-8 py-12">
         <h1 className="text-[20px] font-semibold text-white/90 font-[Geist,sans-serif] mb-8">
           Settings
         </h1>
 
-        {/* Appearance */}
-        <Section title="Appearance">
-          {/* Accent color */}
-          <SettingRow label="Accent color" description="Used for active states, highlights, and buttons">
-            <div className="flex gap-2">
-              {ACCENT_PRESETS.map((p) => (
-                <button
-                  key={p.value}
-                  onClick={() => update({ accentColor: p.value })}
-                  className={`w-7 h-7 rounded-full transition-all ${
-                    settings.accentColor === p.value
-                      ? "ring-2 ring-white/30 ring-offset-2 ring-offset-[#08080f] scale-110"
-                      : "hover:scale-110"
-                  }`}
-                  style={{ backgroundColor: p.value }}
-                  title={p.label}
-                />
-              ))}
-            </div>
-          </SettingRow>
+        {/* Theme */}
+        <Section title="Theme">
+          <div className="grid grid-cols-2 gap-3">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => update({ themeId: t.id })}
+                className={`relative text-left rounded-xl p-3 transition-all border ${
+                  settings.themeId === t.id
+                    ? "border-white/20 ring-1 ring-white/10"
+                    : "border-white/[0.06] hover:border-white/[0.12]"
+                }`}
+                style={{
+                  background: t.bg,
+                  boxShadow: settings.themeId === t.id ? `0 0 20px ${t.accentGlow}` : undefined,
+                }}
+              >
+                {/* Color preview strip */}
+                <div className="flex gap-1.5 mb-2.5">
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.accent }} />
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.positive }} />
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.negative }} />
+                  <div className="w-4 h-4 rounded-full border border-white/10" style={{ background: t.surface }} />
+                </div>
+                <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: t.text }}>
+                  {t.name}
+                </p>
+                <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: t.textDim }}>
+                  {t.description}
+                </p>
+                {settings.themeId === t.id && (
+                  <div className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full" style={{ backgroundColor: t.accent }} />
+                )}
+              </button>
+            ))}
+          </div>
+        </Section>
 
-          {/* Font size */}
-          <SettingRow label="Reading font size" description="Body text size in the note preview">
+        {/* Reading */}
+        <Section title="Reading">
+          <SettingRow label="Font size" description="Body text size in the note preview">
             <div
               className="flex gap-1 bg-white/[0.05] rounded-xl p-1 border border-white/[0.08]"
               style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
@@ -133,7 +288,6 @@ export function SettingsView() {
             </div>
           </SettingRow>
 
-          {/* Editor width */}
           <SettingRow label="Editor width" description="Maximum width of the reading area">
             <div className="flex items-center gap-3">
               <input
@@ -151,7 +305,6 @@ export function SettingsView() {
             </div>
           </SettingRow>
 
-          {/* Reduce motion */}
           <SettingRow label="Reduce motion" description="Disable transitions and animations">
             <Toggle checked={settings.reduceMotion} onChange={(v) => update({ reduceMotion: v })} />
           </SettingRow>
@@ -159,43 +312,64 @@ export function SettingsView() {
 
         {/* Note list */}
         <Section title="Note List">
-          <SettingRow label="Show preview snippets" description="Display the first lines of each note in the sidebar">
+          <SettingRow label="Preview snippets" description="Show first lines of each note">
             <Toggle checked={settings.showPreviewSnippets} onChange={(v) => update({ showPreviewSnippets: v })} />
           </SettingRow>
-
-          <SettingRow label="Show timestamps" description="Show relative time (e.g. '2h ago') on each note">
+          <SettingRow label="Timestamps" description="Show relative time on each note">
             <Toggle checked={settings.showTimestamps} onChange={(v) => update({ showTimestamps: v })} />
           </SettingRow>
         </Section>
 
         {/* Server */}
         <Section title="Server">
-          {serverInfo ? (
-            <div className="grid grid-cols-3 gap-3">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <span className={`w-2.5 h-2.5 rounded-full ${online ? "bg-[#4ade80] shadow-sm shadow-[#4ade80]/40" : "bg-[#ff6b6b]/50"}`} />
+              <span className="text-[13px] text-white/70 font-[Geist,sans-serif]">
+                {checking ? "Checking..." : online ? "Server running" : "Server offline"}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={recheckServer}
+                disabled={checking}
+                className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg border border-white/[0.08] text-white/30 hover:text-white/60 hover:bg-white/[0.04] transition-all disabled:opacity-30"
+              >
+                Refresh
+              </button>
+              {online && (
+                <button
+                  onClick={handleStopServer}
+                  disabled={stopping}
+                  className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg border border-[#ff6b6b]/20 text-[#ff6b6b]/60 hover:text-[#ff6b6b] hover:bg-[#ff6b6b]/[0.06] transition-all disabled:opacity-30"
+                >
+                  {stopping ? "Stopping..." : "Stop Server"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {serverInfo && (
+            <div className="grid grid-cols-3 gap-3 mb-4">
               <InfoCard label="Brain" value={serverInfo.brain} />
               <InfoCard label="Notes" value={String(serverInfo.notes)} />
               <InfoCard label="Connections" value={String(serverInfo.connections)} />
             </div>
-          ) : (
-            <p className="text-white/20 text-[13px] font-[Geist,sans-serif]">
-              Server not connected
-            </p>
           )}
-          <div className="mt-4">
-            <SettingRow label="Server address" description="The Python backend address">
-              <span className="text-[13px] text-white/30 font-mono font-[Geist,sans-serif]">
-                127.0.0.1:8765
-              </span>
-            </SettingRow>
-            <SettingRow label="Data directory" description="Where your notes and database are stored">
-              <span className="text-[13px] text-white/30 font-mono font-[Geist,sans-serif] truncate max-w-[200px] block">
-                ~/.neurovault/
-              </span>
-            </SettingRow>
-          </div>
+
+          <SettingRow label="Address" description="Python backend address">
+            <span className="text-[13px] text-white/30 font-mono font-[Geist,sans-serif]">
+              127.0.0.1:8765
+            </span>
+          </SettingRow>
+          <SettingRow label="Data" description="Notes and database location">
+            <span className="text-[12px] text-white/30 font-mono font-[Geist,sans-serif]">
+              ~/.neurovault/
+            </span>
+          </SettingRow>
         </Section>
 
-        {/* Keyboard shortcuts */}
+        {/* Shortcuts */}
         <Section title="Keyboard Shortcuts">
           <div className="space-y-2">
             <ShortcutRow keys="Ctrl+K" action="Command palette" />
@@ -212,21 +386,19 @@ export function SettingsView() {
 
         {/* About */}
         <Section title="About">
-          <div className="space-y-1">
-            <p className="text-[13px] text-white/40 font-[Geist,sans-serif]">
-              NeuroVault v0.1.0
-            </p>
-            <p className="text-[12px] text-white/20 font-[Geist,sans-serif]">
-              Local-first AI memory system. Your data never leaves your machine.
-            </p>
-          </div>
+          <p className="text-[13px] text-white/40 font-[Geist,sans-serif]">
+            NeuroVault v0.1.0
+          </p>
+          <p className="text-[12px] text-white/20 font-[Geist,sans-serif] mt-1">
+            Local-first AI memory system. Your data never leaves your machine.
+          </p>
         </Section>
       </div>
     </div>
   );
 }
 
-// --- Sub-components ---
+// --- Sub-components ---------------------------------------------------------
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -281,7 +453,7 @@ function InfoCard({ label, value }: { label: string; value: string }) {
       className="bg-white/[0.04] rounded-xl px-3 py-2.5 border border-white/[0.06]"
       style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.03)" }}
     >
-      <p className="text-[15px] font-semibold text-white/80 font-[Geist,sans-serif]">{value}</p>
+      <p className="text-[15px] font-semibold text-white/80 font-[Geist,sans-serif] truncate">{value}</p>
       <p className="text-[10px] text-white/25 font-[Geist,sans-serif] mt-0.5">{label}</p>
     </div>
   );

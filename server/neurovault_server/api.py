@@ -68,6 +68,16 @@ def create_api(manager) -> FastAPI:
     def _ctx():
         return manager.get_active()
 
+    @app.post("/api/shutdown")
+    def shutdown_endpoint():
+        """Gracefully shut down the server. Used by the Settings UI."""
+        import os, signal, threading
+        def _do_shutdown():
+            os.kill(os.getpid(), signal.SIGTERM)
+        # Delay so the response can be sent first
+        threading.Timer(0.5, _do_shutdown).start()
+        return {"status": "shutting_down"}
+
     # --- Brain Management ---
 
     @app.get("/api/brains")
