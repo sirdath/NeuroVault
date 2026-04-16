@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useCompilationStore } from "../stores/compilationStore";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { toast } from "../stores/toastStore";
@@ -181,10 +181,46 @@ export function CompilationReview() {
     toast.success(`Rejected "${activeDetail.topic}"`);
   };
 
+  // Resizable panels
+  const [listWidth, setListWidth] = useState(260);
+  const [changelogWidth, setChangelogWidth] = useState(300);
+  const resizingList = useRef(false);
+  const resizingChangelog = useRef(false);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (resizingList.current) {
+        setListWidth(Math.max(180, Math.min(450, e.clientX)));
+      }
+      if (resizingChangelog.current) {
+        setChangelogWidth(Math.max(200, Math.min(500, window.innerWidth - e.clientX)));
+      }
+    };
+    const onMouseUp = () => {
+      resizingList.current = false;
+      resizingChangelog.current = false;
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
   return (
     <div className={`flex-1 flex ${BG} overflow-hidden`}>
       {/* Left: compilation list */}
-      <div className={`w-[260px] min-w-[260px] border-r ${BORDER} flex flex-col bg-white/[0.02]`}>
+      <div
+        className={`border-r ${BORDER} flex flex-col bg-white/[0.02] relative`}
+        style={{ width: listWidth, minWidth: listWidth }}
+      >
+        {/* Resize handle */}
+        <div
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+          onMouseDown={() => { resizingList.current = true; document.body.style.cursor = "col-resize"; }}
+        />
         <div className={`px-4 py-3 border-b ${BORDER}`}>
           <div className="flex items-center justify-between mb-1">
             <h2 className={`text-sm font-semibold ${TEXT} font-[Geist,sans-serif]`}>
@@ -412,8 +448,16 @@ export function CompilationReview() {
                 )}
               </div>
 
-              {/* Changelog sidebar */}
-              <div className={`w-[300px] min-w-[300px] border-l ${BORDER} flex flex-col bg-white/[0.02]`}>
+              {/* Changelog sidebar — resizable */}
+              <div
+                className={`border-l ${BORDER} flex flex-col bg-white/[0.02] relative`}
+                style={{ width: changelogWidth, minWidth: changelogWidth }}
+              >
+                {/* Resize handle (left edge) */}
+                <div
+                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+                  onMouseDown={() => { resizingChangelog.current = true; document.body.style.cursor = "col-resize"; }}
+                />
                 <div className={`px-4 py-3 border-b ${BORDER}`}>
                   <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif]`}>
                     Changelog ({activeDetail.changelog.length})
