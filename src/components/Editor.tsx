@@ -78,18 +78,18 @@ export function Editor() {
       <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: "var(--nv-bg)" }}>
         <div className="text-center max-w-xs">
           <div
-            className="w-14 h-14 mx-auto mb-5 rounded-2xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center"
-            style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
+            className="w-14 h-14 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+            style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
           >
-            <svg className="w-6 h-6 text-white/15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <svg className="w-6 h-6" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
             </svg>
           </div>
-          <p className="text-white/30 text-[15px] font-[Geist,sans-serif]">
+          <p className="text-[15px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
             Select a note to start reading
           </p>
-          <p className="text-white/15 text-[13px] mt-2 font-[Geist,sans-serif]">
-            or press <kbd className="px-1.5 py-0.5 bg-white/[0.04] rounded-md text-white/30 text-[12px] font-mono border border-white/[0.06]">Ctrl+N</kbd> to create one
+          <p className="text-[13px] mt-2 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+            or press <kbd className="px-1.5 py-0.5 rounded-md text-[12px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>Ctrl+N</kbd> to create one
           </p>
         </div>
       </div>
@@ -115,27 +115,35 @@ export function Editor() {
                 "Untitled"}
             </span>
             {mode === "edit" && (
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-lg bg-white/[0.06] text-white/40 font-[Geist,sans-serif] font-medium border border-white/[0.06]">
+              <span
+                className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-lg font-[Geist,sans-serif] font-medium"
+                style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
+              >
                 editing
               </span>
             )}
             {isDirty && (
-              <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-pulse" title="Saving..." />
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--nv-accent)" }} title="Saving..." />
             )}
           </div>
           <div className="flex items-center gap-2">
             {mode === "edit" ? (
               <button
                 onClick={() => setMode("preview")}
-                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg bg-white/[0.12] text-white/90 hover:bg-white/[0.18] transition-all border border-white/[0.1]"
-                style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.08)" }}
+                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all"
+                style={{
+                  background: "var(--nv-accent)",
+                  color: "var(--nv-bg)",
+                  boxShadow: "inset 0 1px 1px rgba(255,255,255,0.15)",
+                }}
               >
                 Done
               </button>
             ) : (
               <button
                 onClick={() => setMode("edit")}
-                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg border border-white/[0.08] text-white/30 hover:text-white/60 hover:bg-white/[0.04] hover:border-white/[0.12] transition-all"
+                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all"
+                style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
               >
                 Edit
               </button>

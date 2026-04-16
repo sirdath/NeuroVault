@@ -207,16 +207,37 @@ export default function App() {
       className="flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]"
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
-      {/* Server-down banner */}
+      {/* Server-down banner with start button */}
       {serverDown && (
         <div
-          className="px-5 py-2 flex items-center gap-2.5 flex-shrink-0 backdrop-blur-[10px]"
+          className="px-5 py-2.5 flex items-center justify-between flex-shrink-0 backdrop-blur-[10px]"
           style={{ background: `${theme.negative}10`, borderBottom: `1px solid ${theme.negative}20` }}
         >
-          <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: theme.negative }} />
-          <span className="text-[12px]" style={{ color: `${theme.negative}aa` }}>
-            Server offline — search, graph, and memory features unavailable
-          </span>
+          <div className="flex items-center gap-2.5">
+            <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: theme.negative }} />
+            <span className="text-[12px]" style={{ color: `${theme.negative}aa` }}>
+              Server offline — start it to enable search, graph, and memory
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              // Try to start the server via the sidecar, or show instructions
+              const cmd = "cd server && uv run python -m neurovault_server --http-only";
+              navigator.clipboard.writeText(cmd).then(() => {
+                alert("Command copied to clipboard! Paste it in a terminal to start the server:\n\n" + cmd);
+              }).catch(() => {
+                alert("Start the server by running this in a terminal:\n\n" + cmd);
+              });
+            }}
+            className="text-[11px] font-medium px-3 py-1 rounded-lg transition-all"
+            style={{
+              background: `${theme.negative}15`,
+              color: `${theme.negative}cc`,
+              border: `1px solid ${theme.negative}30`,
+            }}
+          >
+            Start Server
+          </button>
         </div>
       )}
 

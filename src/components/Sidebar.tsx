@@ -153,7 +153,8 @@ export function Sidebar({
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="w-7 h-7 flex items-center justify-center rounded-xl bg-white/[0.07] text-white/50 hover:bg-white/[0.12] hover:text-white/80 transition-all text-lg leading-none border border-white/[0.06]"
+            className="w-7 h-7 flex items-center justify-center rounded-xl transition-all text-lg leading-none"
+            style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
             title="New note (Ctrl+N)"
           >
             +
@@ -167,10 +168,15 @@ export function Sidebar({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search notes..."
-            className="w-full bg-white/[0.06] text-white/90 text-[13px] pl-8 pr-3 py-2 rounded-xl border border-white/[0.08] focus:border-white/[0.15] focus:bg-white/[0.08] focus:outline-none font-[Geist,sans-serif] placeholder:text-white/20 transition-all"
-            style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
+            className="w-full text-[13px] pl-8 pr-3 py-2 rounded-xl focus:outline-none font-[Geist,sans-serif] transition-all"
+            style={{
+              background: "var(--nv-surface)",
+              color: "var(--nv-text)",
+              border: "1px solid var(--nv-border)",
+              boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
+            }}
           />
-          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
@@ -199,7 +205,8 @@ export function Sidebar({
                 if (!newTitle.trim()) setIsCreating(false);
               }}
               placeholder="Note title..."
-              className="w-full bg-white/[0.06] text-white/90 text-[13px] px-3 py-2 rounded-xl border border-white/[0.12] focus:border-white/[0.2] focus:outline-none font-[Geist,sans-serif] placeholder:text-white/20"
+              className="w-full text-[13px] px-3 py-2 rounded-xl focus:outline-none font-[Geist,sans-serif]"
+              style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
               autoFocus
             />
           </form>
