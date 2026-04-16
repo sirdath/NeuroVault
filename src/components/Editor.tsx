@@ -7,17 +7,7 @@ import { useNoteStore } from "../stores/noteStore";
 import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
-import { fetchNote, fetchBacklinks } from "../lib/api";
-import type { Backlink } from "../lib/api";
 import { MarkdownPreview } from "./MarkdownPreview";
-
-interface NoteMetadata {
-  strength: number;
-  state: string;
-  access_count: number;
-  connections: { engram_id: string; title: string; similarity: number; link_type: string }[];
-  entities: { name: string; type: string }[];
-}
 
 export function Editor() {
   const activeFilename = useNoteStore((s) => s.activeFilename);
@@ -25,15 +15,10 @@ export function Editor() {
   const isDirty = useNoteStore((s) => s.isDirty);
   const updateContent = useNoteStore((s) => s.updateContent);
   const saveNote = useNoteStore((s) => s.saveNote);
-  const selectNote = useNoteStore((s) => s.selectNote);
   const notes = useNoteStore((s) => s.notes);
 
-  const [metadata, setMetadata] = useState<NoteMetadata | null>(null);
-  const [backlinks, setBacklinks] = useState<Backlink[]>([]);
-  const [showMeta, setShowMeta] = useState(false);
-  // Preview mode is the default when opening a note (Obsidian-style Reader
-  // mode). Clicking anywhere inside the preview flips to raw CodeMirror
-  // edit mode. Escape (outside an input) flips back to preview after save.
+  // Reader mode by default. Only switches to raw CodeMirror when the user
+  // explicitly clicks "Edit". Escape flips back to preview.
   const [mode, setMode] = useState<"preview" | "edit">("preview");
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,69 +68,10 @@ export function Editor() {
     return () => window.removeEventListener("keydown", handler);
   }, [mode]);
 
-  // Load metadata when note changes
-  useEffect(() => {
-    if (!activeFilename) {
-      setMetadata(null);
-      setBacklinks([]);
-      return;
-    }
-    // Find engram ID from notes list (match by filename)
-    const note = notes.find((n) => n.filename === activeFilename);
-    if (!note) return;
-
-    // Try loading from API (server might not be running)
-    fetchNote(note.filename.replace(".md", ""))
-      .catch(() => null)
-      .then(() => {
-        // Use the /api/notes endpoint which lists all notes with IDs
-        // We need to find the engram_id for this file
-      });
-
-    // Fetch via the notes list from API
-    fetch(`http://127.0.0.1:8765/api/notes`)
-      .then((r) => r.json())
-      .then((apiNotes: Array<{ id: string; filename: string; strength: number; state: string; access_count: number }>) => {
-        const match = apiNotes.find((n) => n.filename === activeFilename);
-        if (!match) return;
-
-        // Load full note detail
-        fetch(`http://127.0.0.1:8765/api/notes/${match.id}`)
-          .then((r) => r.json())
-          .then((detail) => {
-            setMetadata({
-              strength: detail.strength,
-              state: detail.state,
-              access_count: detail.access_count,
-              connections: detail.connections || [],
-              entities: detail.entities || [],
-            });
-          })
-          .catch(() => setMetadata(null));
-
-        // Load backlinks
-        fetchBacklinks(match.id)
-          .then(setBacklinks)
-          .catch(() => setBacklinks([]));
-      })
-      .catch(() => {
-        setMetadata(null);
-        setBacklinks([]);
-      });
-  }, [activeFilename, notes]);
-
   const onChange = useCallback(
     (value: string) => { updateContent(value); },
     [updateContent]
   );
-
-  // Navigate to a connected note
-  const navigateTo = (title: string) => {
-    const match = notes.find(
-      (n) => n.title.toLowerCase() === title.toLowerCase()
-    );
-    if (match) selectNote(match.filename);
-  };
 
   if (!activeFilename) {
     return (
@@ -169,67 +95,34 @@ export function Editor() {
     <div className="flex-1 flex bg-[#0b0b12] overflow-hidden">
       {/* Main editor area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Status bar */}
+        {/* Header — reader-first: title + edit button. No toggle pill. */}
         <div className="flex items-center justify-between px-6 py-2 border-b border-[#1f1f2e]">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="text-[#e8e6f0] text-xs font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
+            <span className="text-[#e8e6f0] text-sm font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
               {notes.find((n) => n.filename === activeFilename)?.title ??
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}
             </span>
-            {metadata && (
-              <span
-                className={`inline-block w-2 h-2 rounded-full ${
-                  metadata.strength > 0.7 ? "bg-[#f0a500]"
-                    : metadata.strength > 0.3 ? "bg-[#00c9b1]"
-                    : "bg-[#35335a]"
-                }`}
-                title={`Memory strength: ${Math.round(metadata.strength * 100)}%`}
-              />
+            {isDirty && (
+              <span className="text-[10px] text-[#f0a500] font-[Geist,sans-serif]">saving</span>
             )}
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-[Geist,sans-serif]">
-              {isDirty ? (
-                <span className="text-[#f0a500]">Saving...</span>
-              ) : (
-                <span className="text-[#35335a]">Saved</span>
-              )}
-            </span>
-            <div className="flex items-center gap-0.5 bg-[#1a1a28] rounded p-0.5">
+          <div className="flex items-center gap-2">
+            {mode === "edit" ? (
               <button
                 onClick={() => setMode("preview")}
-                title="Reader mode (Esc)"
-                className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
-                  mode === "preview"
-                    ? "bg-[#1f1f2e] text-[#e8e6f0]"
-                    : "text-[#8a88a0] hover:text-[#e8e6f0]"
-                }`}
+                className="text-[10px] font-[Geist,sans-serif] px-3 py-1 rounded bg-[#1f1f2e] text-[#e8e6f0] hover:bg-[#2a2a3e] transition-colors uppercase tracking-wider"
               >
-                preview
+                Done
               </button>
+            ) : (
               <button
                 onClick={() => setMode("edit")}
-                title="Raw edit mode"
-                className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
-                  mode === "edit"
-                    ? "bg-[#1f1f2e] text-[#e8e6f0]"
-                    : "text-[#8a88a0] hover:text-[#e8e6f0]"
-                }`}
+                className="text-[10px] font-[Geist,sans-serif] px-3 py-1 rounded border border-[#1f1f2e] text-[#8a88a0] hover:text-[#e8e6f0] hover:border-[#3a3a4e] transition-colors uppercase tracking-wider"
               >
-                edit
+                Edit
               </button>
-            </div>
-            <button
-              onClick={() => setShowMeta((v) => !v)}
-              className={`text-[10px] font-[Geist,sans-serif] px-2 py-0.5 rounded transition-colors ${
-                showMeta
-                  ? "bg-[#1f1f2e] text-[#e8e6f0]"
-                  : "text-[#8a88a0] hover:text-[#e8e6f0]"
-              }`}
-            >
-              info
-            </button>
+            )}
           </div>
         </div>
 
@@ -262,110 +155,7 @@ export function Editor() {
         )}
       </div>
 
-      {/* Metadata sidebar (toggleable) */}
-      {showMeta && metadata && (
-        <div className="w-[240px] min-w-[240px] border-l border-[#1f1f2e] bg-[#12121c] overflow-y-auto">
-          <div className="p-4 space-y-5">
-            {/* Memory strength */}
-            <MetaSection title="Memory Strength">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 h-1.5 bg-[#1a1a28] rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${metadata.strength * 100}%`,
-                      backgroundColor:
-                        metadata.strength > 0.7 ? "#f0a500"
-                          : metadata.strength > 0.3 ? "#00c9b1"
-                          : "#6a6880",
-                    }}
-                  />
-                </div>
-              </div>
-              <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] mt-1">
-                {metadata.access_count === 0
-                  ? "Not yet accessed"
-                  : metadata.access_count === 1
-                    ? "Accessed once"
-                    : `Accessed ${metadata.access_count} times`}
-              </p>
-            </MetaSection>
-
-            {/* Connections */}
-            {metadata.connections.length > 0 && (
-              <MetaSection title={`Connections (${metadata.connections.length})`}>
-                <div className="space-y-1">
-                  {metadata.connections.map((c) => (
-                    <button
-                      key={c.engram_id}
-                      onClick={() => navigateTo(c.title)}
-                      className="w-full text-left text-xs text-[#00c9b1] hover:text-[#e8e6f0] font-[Geist,sans-serif] truncate py-0.5 transition-colors"
-                    >
-                      {c.title}
-                    </button>
-                  ))}
-                </div>
-              </MetaSection>
-            )}
-
-            {/* Backlinks */}
-            {backlinks.length > 0 && (
-              <MetaSection title={`Backlinks (${backlinks.length})`}>
-                <div className="space-y-1">
-                  {backlinks.map((b) => (
-                    <button
-                      key={b.engram_id}
-                      onClick={() => navigateTo(b.title)}
-                      className="w-full text-left text-xs text-[#8b7cf8] hover:text-[#e8e6f0] font-[Geist,sans-serif] truncate py-0.5 transition-colors"
-                    >
-                      {b.title}
-                    </button>
-                  ))}
-                </div>
-              </MetaSection>
-            )}
-
-            {/* Entities */}
-            {metadata.entities.length > 0 && (
-              <MetaSection title={`Entities (${metadata.entities.length})`}>
-                <div className="flex flex-wrap gap-1">
-                  {metadata.entities.map((e) => (
-                    <span
-                      key={e.name}
-                      className={`text-[10px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded ${
-                        e.type === "technology"
-                          ? "bg-[#8b7cf8]/10 text-[#8b7cf8]"
-                          : e.type === "person"
-                            ? "bg-[#f0a500]/10 text-[#f0a500]"
-                            : "bg-[#00c9b1]/10 text-[#00c9b1]"
-                      }`}
-                    >
-                      {e.name}
-                    </span>
-                  ))}
-                </div>
-              </MetaSection>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function MetaSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <h4 className="text-[10px] font-medium text-[#8a88a0] font-[Geist,sans-serif] uppercase tracking-wider mb-1.5">
-        {title}
-      </h4>
-      {children}
-    </div>
-  );
-}

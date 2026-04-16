@@ -1017,6 +1017,41 @@ def create_api(manager) -> FastAPI:
         from neurovault_server.hooks import list_session_observations
         return list_session_observations(_ctx(), session_id, limit=limit)
 
+    @app.get("/api/audit/recent")
+    def recent_audit_endpoint(limit: int = 10):
+        """Return the last N audit log entries for the AI activity feed.
+
+        Reads from the tail of audit.jsonl (append-only log). Skips
+        polling endpoints (/api/status, /api/brains/active) that would
+        flood the feed with noise. Returns newest-first.
+        """
+        import json as _json
+        ctx = _ctx()
+        audit_path = ctx.vault_dir.parent / "audit.jsonl"
+        if not audit_path.exists():
+            return []
+        try:
+            lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
+            # Read from the end, skip noise, collect up to limit
+            results = []
+            noise = {
+                "http:GET:/api/status",
+                "http:GET:/api/brains/active",
+                "http:GET:/api/audit/recent",
+            }
+            for line in reversed(lines):
+                if len(results) >= limit:
+                    break
+                try:
+                    entry = _json.loads(line)
+                    if entry.get("tool") not in noise:
+                        results.append(entry)
+                except _json.JSONDecodeError:
+                    continue
+            return results
+        except Exception:
+            return []
+
     @app.get("/api/feedback/stats")
     def feedback_stats_endpoint():
         """Observability for the self-improving retrieval feedback loop."""

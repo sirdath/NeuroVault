@@ -35,7 +35,7 @@ function preprocessWikiLinks(md: string): string {
   });
 }
 
-export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProps) {
+export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   const notes = useNoteStore((s) => s.notes);
   const selectNote = useNoteStore((s) => s.selectNote);
 
@@ -54,18 +54,7 @@ export function MarkdownPreview({ content, onSwitchToEdit }: MarkdownPreviewProp
   };
 
   return (
-    <div
-      onClick={(e) => {
-        if (!onSwitchToEdit) return;
-        // If the click was on a link/button, let it handle itself and don't
-        // flip into edit mode.
-        const target = e.target as HTMLElement;
-        if (target.closest("a") || target.closest("button")) return;
-        onSwitchToEdit();
-      }}
-      className={`flex-1 overflow-y-auto ${onSwitchToEdit ? "cursor-text" : "cursor-default"}`}
-      title={onSwitchToEdit ? "Click to edit" : undefined}
-    >
+    <div className="flex-1 overflow-y-auto cursor-default">
       <div className="mx-auto max-w-[760px] px-10 py-8 prose-neurovault font-[Geist,sans-serif]">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
