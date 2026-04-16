@@ -25,7 +25,7 @@ function useServerStatus() {
 }
 
 export function SettingsView() {
-  const { themeId, fontSize, showPreviewSnippets, showTimestamps, editorMaxWidth, reduceMotion, update } = useSettingsStore();
+  const { themeId, fontSize, update } = useSettingsStore();
   const { online, checking, check: recheckServer } = useServerStatus();
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -108,29 +108,6 @@ export function SettingsView() {
             </div>
           </SettingRow>
 
-          <SettingRow label="Editor width" description="Maximum width of the reading area">
-            <div className="flex items-center gap-3">
-              <input type="range" min={520} max={960} step={20} value={editorMaxWidth}
-                onChange={(e) => update({ editorMaxWidth: Number(e.target.value) })} className="w-32" />
-              <span className="text-[12px] font-mono font-[Geist,sans-serif] w-12 text-right" style={{ color: "var(--nv-text-dim)" }}>
-                {editorMaxWidth}px
-              </span>
-            </div>
-          </SettingRow>
-
-          <SettingRow label="Reduce motion" description="Disable transitions and animations">
-            <Toggle checked={reduceMotion} onChange={(v) => update({ reduceMotion: v })} />
-          </SettingRow>
-        </Section>
-
-        {/* Note list */}
-        <Section title="Note List">
-          <SettingRow label="Preview snippets" description="Show first lines of each note">
-            <Toggle checked={showPreviewSnippets} onChange={(v) => update({ showPreviewSnippets: v })} />
-          </SettingRow>
-          <SettingRow label="Timestamps" description="Show relative time on each note">
-            <Toggle checked={showTimestamps} onChange={(v) => update({ showTimestamps: v })} />
-          </SettingRow>
         </Section>
 
         {/* Server */}
@@ -220,17 +197,6 @@ function SettingRow({ label, description, children }: { label: string; descripti
       </div>
       <div className="flex-shrink-0">{children}</div>
     </div>
-  );
-}
-
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button onClick={() => onChange(!checked)}
-      className="w-10 h-6 rounded-full transition-all relative"
-      style={{ background: checked ? "var(--nv-accent)" : "var(--nv-surface)", border: `1px solid ${checked ? "transparent" : "var(--nv-border)"}` }}>
-      <div className={`w-4 h-4 rounded-full bg-white/80 absolute top-1 transition-all ${checked ? "left-5" : "left-1"}`}
-        style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }} />
-    </button>
   );
 }
 

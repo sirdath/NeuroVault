@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useNoteStore } from "../stores/noteStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { WikiLink } from "./WikiLink";
 
 /**
@@ -35,9 +36,15 @@ function preprocessWikiLinks(md: string): string {
   });
 }
 
+const FONT_SIZE_MAP = { small: "14px", medium: "16px", large: "18px" } as const;
+const LINE_HEIGHT_MAP = { small: "1.7", medium: "1.75", large: "1.8" } as const;
+
 export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   const notes = useNoteStore((s) => s.notes);
   const selectNote = useNoteStore((s) => s.selectNote);
+  const fontSize = useSettingsStore((s) => s.fontSize);
+  const bodySize = FONT_SIZE_MAP[fontSize];
+  const bodyLineHeight = LINE_HEIGHT_MAP[fontSize];
 
   const processed = preprocessWikiLinks(content || "");
 
@@ -74,7 +81,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
             ),
             // --- Body text: readable, spacious ----------------------------
             p: ({ node, ...props }) => (
-              <p className="text-[#d0cce6] text-[16px] leading-[1.75] mb-4 font-[Geist,sans-serif]" {...props} />
+              <p className="text-[#d0cce6] mb-4 font-[Geist,sans-serif]" style={{ fontSize: bodySize, lineHeight: bodyLineHeight }} {...props} />
             ),
             // --- Links: wiki-links vs external ----------------------------
             a: ({ node, href, children, ...props }) => {
@@ -106,12 +113,12 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
             },
             // --- Lists: comfortable spacing --------------------------------
             ul: ({ node, ...props }) => (
-              <ul className="list-disc pl-6 text-[#d0cce6] mb-4 space-y-1.5 text-[16px] font-[Geist,sans-serif]" {...props} />
+              <ul className="list-disc pl-6 text-[#d0cce6] mb-4 space-y-1.5 font-[Geist,sans-serif]" style={{ fontSize: bodySize }} {...props} />
             ),
             ol: ({ node, ...props }) => (
-              <ol className="list-decimal pl-6 text-[#d0cce6] mb-4 space-y-1.5 text-[16px] font-[Geist,sans-serif]" {...props} />
+              <ol className="list-decimal pl-6 text-[#d0cce6] mb-4 space-y-1.5 font-[Geist,sans-serif]" style={{ fontSize: bodySize }} {...props} />
             ),
-            li: ({ node, ...props }) => <li className="leading-[1.7]" {...props} />,
+            li: ({ node, ...props }) => <li style={{ lineHeight: bodyLineHeight }} {...props} />,
             // --- Blockquotes: prominent left border -----------------------
             blockquote: ({ node, ...props }) => (
               <blockquote
