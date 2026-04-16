@@ -76,15 +76,12 @@ export function Editor() {
   if (!activeFilename) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[#0b0b12]">
-        <div className="text-center">
-          <p className="text-[#8a88a0] text-lg font-[Geist,sans-serif]">
-            Select or create a note
+        <div className="text-center max-w-xs">
+          <p className="text-[#6a6880] text-base font-[Geist,sans-serif]">
+            Select a note to start reading
           </p>
-          <p className="text-[#35335a] text-sm mt-2 font-[Geist,sans-serif]">
-            Your memories live here
-          </p>
-          <p className="text-[#35335a] text-xs mt-4 font-[Geist,sans-serif]">
-            Ctrl+N to create &middot; Ctrl+P to toggle graph
+          <p className="text-[#3a3858] text-[13px] mt-2 font-[Geist,sans-serif]">
+            or press <kbd className="px-1.5 py-0.5 bg-[#16162a] rounded text-[#b592ff] text-[12px] font-mono">Ctrl+N</kbd> to create one
           </p>
         </div>
       </div>
@@ -93,37 +90,36 @@ export function Editor() {
 
   return (
     <div className="flex-1 flex bg-[#0b0b12] overflow-hidden">
-      {/* Main editor area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header — reader-first: title + edit button. No toggle pill. */}
-        <div className="flex items-center justify-between px-6 py-2 border-b border-[#1f1f2e]">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="text-[#e8e6f0] text-sm font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
+        {/* Header — title + mode indicator + edit/done button */}
+        <div className="flex items-center justify-between px-6 py-2.5 border-b border-[#1a1a2e]/60">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="text-[#e8e6f0] text-[14px] font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
               {notes.find((n) => n.filename === activeFilename)?.title ??
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}
             </span>
             {mode === "edit" && (
-              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#f0a500]/10 text-[#f0a500] font-[Geist,sans-serif]">
+              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-[#b592ff]/10 text-[#b592ff] font-[Geist,sans-serif] font-medium">
                 editing
               </span>
             )}
             {isDirty && (
-              <span className="text-[10px] text-[#f0a500]/60 font-[Geist,sans-serif]">saving</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-[#f0a500]/60" title="Saving..." />
             )}
           </div>
           <div className="flex items-center gap-2">
             {mode === "edit" ? (
               <button
                 onClick={() => setMode("preview")}
-                className="text-[10px] font-[Geist,sans-serif] px-3 py-1 rounded bg-[#1f1f2e] text-[#e8e6f0] hover:bg-[#2a2a3e] transition-colors uppercase tracking-wider"
+                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-md bg-[#b592ff] text-[#0b0b12] hover:bg-[#c9a8ff] transition-colors"
               >
                 Done
               </button>
             ) : (
               <button
                 onClick={() => setMode("edit")}
-                className="text-[10px] font-[Geist,sans-serif] px-3 py-1 rounded border border-[#1f1f2e] text-[#8a88a0] hover:text-[#e8e6f0] hover:border-[#3a3a4e] transition-colors uppercase tracking-wider"
+                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-md border border-[#1f1f2e]/60 text-[#6a6880] hover:text-[#c9c4e0] hover:border-[#3a3a4e] transition-all"
               >
                 Edit
               </button>

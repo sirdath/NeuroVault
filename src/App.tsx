@@ -198,23 +198,23 @@ export default function App() {
         </div>
       )}
 
-      {/* Top bar — minimal: tabs + status dot */}
-      <div className="h-10 min-h-[40px] flex items-center justify-between px-4 bg-[#12121c] border-b border-[#1f1f2e]">
-        <div className="flex items-center gap-1 bg-[#1a1a28] rounded p-0.5">
+      {/* Top bar — clean, minimal */}
+      <div className="h-11 min-h-[44px] flex items-center justify-between px-5 bg-[#0e0e18] border-b border-[#1a1a2e]/60">
+        <div className="flex items-center gap-1 bg-[#16162a] rounded-lg p-1">
           <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" />
           <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" />
           <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           {noteCount > 0 && (
-            <span className="text-[10px] text-[#6a6880] font-[Geist,sans-serif]">
+            <span className="text-[11px] text-[#4a4870] font-[Geist,sans-serif]">
               {noteCount} {noteCount === 1 ? "note" : "notes"}
             </span>
           )}
           <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#ff6b6b]"}`} />
-            <span className="text-[10px] font-[Geist,sans-serif] text-[#6a6880]">
+            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#ff6b6b]/80"}`} />
+            <span className="text-[11px] font-[Geist,sans-serif] text-[#4a4870]">
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
@@ -255,8 +255,10 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1 text-xs font-[Geist,sans-serif] rounded transition-colors ${
-        active ? "bg-[#1f1f2e] text-[#e8e6f0]" : "text-[#8a88a0] hover:text-[#e8e6f0]"
+      className={`px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-md transition-all duration-150 ${
+        active
+          ? "bg-[#1f1f38] text-[#e8e6f0] shadow-sm shadow-black/20"
+          : "text-[#6a6880] hover:text-[#c9c4e0]"
       }`}
     >
       {label}

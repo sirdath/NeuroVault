@@ -98,23 +98,45 @@ export function Sidebar({
   );
 
   return (
-    <div className="w-[260px] min-w-[260px] h-full flex flex-col bg-[#12121c] border-r border-[#1f1f2e]">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-[#1f1f2e] flex-shrink-0">
-        <h1 className="text-lg font-semibold font-[Geist,sans-serif] text-[#f0a500] tracking-tight">
-          neurovault
-        </h1>
+    <div className="w-[280px] min-w-[280px] h-full flex flex-col bg-[#0e0e18] border-r border-[#1a1a2e]/60">
+      {/* Header — logo + new note button */}
+      <div className="px-5 pt-5 pb-3 flex-shrink-0">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-base font-bold font-[Geist,sans-serif] text-[#e8e6f0] tracking-tight">
+            NeuroVault
+          </h1>
+          <button
+            onClick={() => setIsCreating(true)}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-[#b592ff]/10 text-[#b592ff] hover:bg-[#b592ff]/20 transition-colors text-lg leading-none"
+            title="New note (Ctrl+N)"
+          >
+            +
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <input
+            ref={searchRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search notes..."
+            className="w-full bg-[#16162a] text-[#e8e6f0] text-[13px] pl-8 pr-3 py-2 rounded-lg border border-[#1f1f2e]/60 focus:border-[#b592ff]/40 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#4a4870] transition-colors"
+          />
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#4a4870]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
       </div>
 
-      {/* New Note */}
-      <div className="px-3 py-2 border-b border-[#1f1f2e] flex-shrink-0">
-        {isCreating ? (
+      {/* New note input (expands when creating) */}
+      {isCreating && (
+        <div className="px-4 pb-3 flex-shrink-0">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleCreate();
             }}
-            className="flex gap-1"
           >
             <input
               ref={inputRef}
@@ -130,35 +152,12 @@ export function Sidebar({
                 if (!newTitle.trim()) setIsCreating(false);
               }}
               placeholder="Note title..."
-              className="flex-1 bg-[#1a1a28] text-[#e8e6f0] text-sm px-2 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
+              className="w-full bg-[#16162a] text-[#e8e6f0] text-[13px] px-3 py-2 rounded-lg border border-[#b592ff]/30 focus:border-[#b592ff] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#4a4870]"
+              autoFocus
             />
-            <button
-              type="submit"
-              className="text-[#f0a500] text-sm px-2 py-1 hover:bg-[#1a1a28] rounded font-[Geist,sans-serif]"
-            >
-              +
-            </button>
           </form>
-        ) : (
-          <button
-            onClick={() => setIsCreating(true)}
-            className="w-full text-left text-sm text-[#8a88a0] hover:text-[#f0a500] px-2 py-1.5 hover:bg-[#1a1a28] rounded transition-colors font-[Geist,sans-serif]"
-          >
-            + New note
-          </button>
-        )}
-      </div>
-
-      {/* Search */}
-      <div className="px-3 py-2 flex-shrink-0">
-        <input
-          ref={searchRef}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search... (Ctrl+K)"
-          className="w-full bg-[#1a1a28] text-[#e8e6f0] text-sm px-3 py-1.5 rounded border border-[#1f1f2e] focus:border-[#f0a500]/50 focus:outline-none font-[Geist,sans-serif] placeholder:text-[#35335a]"
-        />
-      </div>
+        </div>
+      )}
 
       {/* Note List — virtualized via @tanstack/react-virtual.
            Row heights vary (with/without preview/strength bar), so we let
@@ -173,31 +172,34 @@ export function Sidebar({
         onDelete={handleDelete}
       />
 
-      <div className="flex-shrink-0">
+      <div className="flex-shrink-0 px-4">
         {filtered.length === 0 && notes.length > 0 && (
-          <p className="text-[#35335a] text-xs text-center mt-8 font-[Geist,sans-serif]">
-            No matching notes
+          <p className="text-[#4a4870] text-[13px] text-center mt-12 font-[Geist,sans-serif]">
+            No results
           </p>
         )}
 
         {notes.length === 0 && (
-          <div className="mt-8 px-4">
-            <p className="text-[#8a88a0] text-sm font-[Geist,sans-serif] text-center">
+          <div className="mt-12 text-center">
+            <div className="w-10 h-10 mx-auto mb-4 rounded-xl bg-[#16162a] flex items-center justify-center">
+              <span className="text-[#b592ff] text-lg">+</span>
+            </div>
+            <p className="text-[#8a88a0] text-[13px] font-[Geist,sans-serif] mb-1">
               No notes yet
             </p>
-            <p className="text-[#6a6880] text-xs mt-2 font-[Geist,sans-serif] text-center mb-4">
-              Press <kbd className="px-1 py-0.5 bg-[#1a1a28] rounded text-[#a8a6c0] text-[10px]">Ctrl+N</kbd> to create your first note
+            <p className="text-[#4a4870] text-[12px] font-[Geist,sans-serif] mb-6">
+              Press <kbd className="px-1.5 py-0.5 bg-[#16162a] rounded text-[#b592ff] text-[11px] font-mono">Ctrl+N</kbd> to start
             </p>
-            <div className="bg-[#121220] rounded-lg p-3 border border-[#1f1f2e]">
-              <p className="text-[10px] uppercase tracking-wider text-[#6a6880] font-[Geist,sans-serif] mb-2">
-                Tips
+            <div className="text-left space-y-2">
+              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
+                <span className="text-[#b592ff] font-mono">[[</span> link notes together
               </p>
-              <ul className="text-[11px] text-[#8a88a0] font-[Geist,sans-serif] space-y-1.5 leading-relaxed">
-                <li>Type <code className="text-[#b592ff] bg-[#1a1a28] px-1 rounded text-[10px]">[[</code> to link notes together</li>
-                <li>Press <kbd className="px-1 py-0.5 bg-[#1a1a28] rounded text-[#a8a6c0] text-[10px]">Ctrl+K</kbd> to search everything</li>
-                <li>Switch to <span className="text-[#a8a6c0]">Graph</span> to see connections</li>
-                <li>Notes auto-save as you type</li>
-              </ul>
+              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
+                <kbd className="text-[#6a6880] font-mono">Ctrl+K</kbd> search everything
+              </p>
+              <p className="text-[12px] text-[#4a4870] font-[Geist,sans-serif]">
+                Auto-saves as you type
+              </p>
             </div>
           </div>
         )}
@@ -276,45 +278,45 @@ function NoteList({
                 left: 0,
                 width: "100%",
                 transform: `translateY(${virtualRow.start}px)`,
-                paddingLeft: "var(--pad-x)",
-                paddingRight: "var(--pad-x)",
-                paddingTop: "var(--pad-y)",
-                paddingBottom: "var(--pad-y)",
               }}
-              className={`group cursor-pointer border-l-2 transition-colors ${
-                isActive
-                  ? "border-[#f0a500] bg-[#1a1a28]"
-                  : "border-transparent hover:bg-[#12121c]/80"
-              }`}
+              className="px-3 py-0.5"
             >
-              <div className="flex items-start justify-between gap-2">
-                <h3
-                  className={`text-sm font-medium truncate font-[Geist,sans-serif] ${
-                    isActive ? "text-[#e8e6f0]" : "text-[#e8e6f0]/80"
-                  }`}
-                >
-                  {note.title}
-                </h3>
-                <span className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
-                  {relativeTime(note.modified)}
-                </span>
-              </div>
-
-              {preview && (
-                <p className="text-xs text-[#6a6880] mt-1 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
-                  {preview}
-                </p>
-              )}
-
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(note.filename, note.title);
-                }}
-                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#8a88a0] hover:text-[#ff6b6b] transition-opacity text-xs p-1 rounded hover:bg-[#1a1a28]"
+              <div
+                className={`group relative cursor-pointer rounded-lg px-3 py-2.5 transition-all duration-150 ${
+                  isActive
+                    ? "bg-[#1a1a30] ring-1 ring-[#b592ff]/20"
+                    : "hover:bg-[#14142a]"
+                }`}
               >
-                ×
-              </button>
+                <div className="flex items-start justify-between gap-2">
+                  <h3
+                    className={`text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug ${
+                      isActive ? "text-[#e8e6f0]" : "text-[#c9c4e0]"
+                    }`}
+                  >
+                    {note.title}
+                  </h3>
+                  <span className="text-[10px] text-[#4a4870] font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
+                    {relativeTime(note.modified)}
+                  </span>
+                </div>
+
+                {preview && (
+                  <p className="text-[12px] text-[#5a587a] mt-1 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
+                    {preview}
+                  </p>
+                )}
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(note.filename, note.title);
+                  }}
+                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[#6a6880] hover:text-[#ff6b6b] transition-opacity text-xs w-5 h-5 flex items-center justify-center rounded"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           );
         })}
