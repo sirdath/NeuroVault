@@ -41,8 +41,9 @@ export function TopBar({ view, onViewChange, onMemoryPanelToggle, serverUp, memo
         <button
           onClick={onMemoryPanelToggle}
           className="text-xs font-[Geist,sans-serif] text-[#8a88a0] hover:text-[#f0a500] transition-colors px-2 py-1 rounded hover:bg-[#1a1a28]"
+          title="View brain status, memory health, and session context"
         >
-          brain
+          status
         </button>
       </div>
     </div>

@@ -103,8 +103,13 @@ export function Editor() {
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}
             </span>
+            {mode === "edit" && (
+              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#f0a500]/10 text-[#f0a500] font-[Geist,sans-serif]">
+                editing
+              </span>
+            )}
             {isDirty && (
-              <span className="text-[10px] text-[#f0a500] font-[Geist,sans-serif]">saving</span>
+              <span className="text-[10px] text-[#f0a500]/60 font-[Geist,sans-serif]">saving</span>
             )}
           </div>
           <div className="flex items-center gap-2">

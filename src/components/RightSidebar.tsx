@@ -61,10 +61,10 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
   };
   const [openSections, setOpenSections] = useState<SectionState>(() => {
     const defaults: SectionState = {
-      workingMemory: false,   // power-user: hidden by default
-      contradictions: false,  // power-user: hidden by default
-      outline: true,
-      backlinks: true,
+      workingMemory: false,
+      contradictions: false,
+      outline: false,         // all closed — let users open what they want
+      backlinks: false,
       unlinked: false,
       connections: false,
       entities: false,
