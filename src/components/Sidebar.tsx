@@ -5,12 +5,6 @@ import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
 import type { NoteMeta } from "../lib/tauri";
 
-interface NoteStrength {
-  strength: number;
-  state: string;
-  connections: number;
-  kind?: string;
-}
 
 // Virtualized row estimate. Rows with previews run ~72px, without ~48px.
 // The virtualizer uses this as a bootstrap and then refines per-row once
@@ -18,14 +12,6 @@ interface NoteStrength {
 const ESTIMATED_ROW_HEIGHT = 68;
 const VIRTUAL_OVERSCAN = 6;
 
-type KindFilter = "all" | "note" | "source" | "quote" | "draft" | "question";
-
-const KIND_TABS: Array<{ id: KindFilter; label: string; color: string }> = [
-  { id: "all", label: "All", color: "#a8a6c0" },
-  { id: "note", label: "Notes", color: "#f0a500" },
-  { id: "source", label: "Sources", color: "#00c9b1" },
-  { id: "quote", label: "Quotes", color: "#8b7cf8" },
-];
 
 export function Sidebar({
   triggerNewNote = 0,
@@ -43,10 +29,8 @@ export function Sidebar({
   const deleteNoteAction = useNoteStore((s) => s.deleteNote);
 
   const [previews, setPreviews] = useState<Record<string, string>>({});
-  const [strengths, setStrengths] = useState<Record<string, NoteStrength>>({});
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
-  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -70,36 +54,6 @@ export function Sidebar({
     if (notes.length > 0) loadPreviews();
   }, [notes]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load strength data from API (single batch, no race condition)
-  useEffect(() => {
-    const loadStrengths = async () => {
-      try {
-        const res = await fetch("http://127.0.0.1:8765/api/notes");
-        if (!res.ok) return;
-        const apiNotes: Array<{
-          filename: string;
-          strength: number;
-          state: string;
-          id: string;
-          kind?: string;
-        }> = await res.json();
-
-        const map: Record<string, NoteStrength> = {};
-        for (const n of apiNotes) {
-          map[n.filename] = {
-            strength: n.strength,
-            state: n.state,
-            connections: 0,
-            kind: n.kind,
-          };
-        }
-        setStrengths(map);
-      } catch {
-        // Server not running — ok
-      }
-    };
-    if (notes.length > 0) loadStrengths();
-  }, [notes]);
 
   // Keyboard: Ctrl+N
   useEffect(() => {
@@ -117,31 +71,14 @@ export function Sidebar({
   }, [isCreating]);
 
   const filtered = notes.filter((note) => {
-    // Search filter
     if (
       searchQuery !== "" &&
       !note.title.toLowerCase().includes(searchQuery.toLowerCase())
     ) {
       return false;
     }
-    // Kind filter
-    if (kindFilter !== "all") {
-      const s = strengths[note.filename];
-      const kind = s?.kind ?? "note";
-      if (kind !== kindFilter) return false;
-    }
     return true;
   });
-
-  const kindCounts = notes.reduce<Record<string, number>>(
-    (acc, note) => {
-      const kind = strengths[note.filename]?.kind ?? "note";
-      acc[kind] = (acc[kind] ?? 0) + 1;
-      acc.all = (acc.all ?? 0) + 1;
-      return acc;
-    },
-    { all: 0 }
-  );
 
   const handleCreate = useCallback(async () => {
     const title = newTitle.trim();
@@ -223,31 +160,6 @@ export function Sidebar({
         />
       </div>
 
-      {/* Kind tabs */}
-      <div className="px-2 pb-1 flex-shrink-0 flex gap-0.5 overflow-x-auto">
-        {KIND_TABS.map((tab) => {
-          const count = kindCounts[tab.id] ?? 0;
-          const active = kindFilter === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setKindFilter(tab.id)}
-              className={`flex-shrink-0 px-2 py-1 rounded text-[10px] font-[Geist,sans-serif] font-medium transition-colors ${
-                active
-                  ? "bg-[#1a1a28] text-[#e8e6f0]"
-                  : "text-[#8a88a0] hover:text-[#e8e6f0] hover:bg-[#1a1a28]/50"
-              }`}
-              style={active ? { borderBottom: `1px solid ${tab.color}` } : undefined}
-            >
-              {tab.label}
-              {count > 0 && (
-                <span className="ml-1 text-[9px] text-[#6a6880]">{count}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
       {/* Note List — virtualized via @tanstack/react-virtual.
            Row heights vary (with/without preview/strength bar), so we let
            the virtualizer measure each row after first paint via
@@ -255,7 +167,6 @@ export function Sidebar({
            (flex-1 + min-h-0 provides that inside the flex column). */}
       <NoteList
         filtered={filtered}
-        strengths={strengths}
         previews={previews}
         activeFilename={activeFilename}
         onSelect={(fn) => selectNote(fn)}
@@ -299,7 +210,6 @@ export function Sidebar({
 
 interface NoteListProps {
   filtered: NoteMeta[];
-  strengths: Record<string, NoteStrength>;
   previews: Record<string, string>;
   activeFilename: string | null;
   onSelect: (filename: string) => void;
@@ -318,7 +228,6 @@ interface NoteListProps {
  */
 function NoteList({
   filtered,
-  strengths,
   previews,
   activeFilename,
   onSelect,
@@ -352,13 +261,6 @@ function NoteList({
         {virtualItems.map((virtualRow) => {
           const note = filtered[virtualRow.index];
           if (!note) return null;
-          const s = strengths[note.filename];
-          const stateColor =
-            s?.state === "active" || s?.state === "fresh"
-              ? "#f0a500"
-              : s?.state === "connected"
-                ? "#00c9b1"
-                : "#35335a";
           const isActive = activeFilename === note.filename;
           const preview = previews[note.filename];
 
@@ -399,23 +301,9 @@ function NoteList({
               </div>
 
               {preview && (
-                <p className="text-xs text-[#8a88a0] mt-1 line-clamp-2 font-[Geist,sans-serif]">
+                <p className="text-xs text-[#6a6880] mt-1 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
                   {preview}
                 </p>
-              )}
-
-              {s && (
-                <div className="flex items-center gap-2 mt-1.5">
-                  <div className="flex-1 h-[2px] bg-[#1a1a28] rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${s.strength * 100}%`,
-                        backgroundColor: stateColor,
-                      }}
-                    />
-                  </div>
-                </div>
               )}
 
               <button
