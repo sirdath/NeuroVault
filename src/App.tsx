@@ -14,7 +14,7 @@ import { SettingsView } from "./components/SettingsView";
 import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { fetchStatus } from "./lib/api";
 
-type View = "editor" | "graph" | "compile" | "settings";
+type View = "editor" | "graph" | "compile";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -66,8 +66,10 @@ export default function App() {
     };
   }, []);
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const toggleView = useCallback(() => {
-    setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : v === "compile" ? "settings" : "editor"));
+    setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : "editor"));
   }, []);
 
   // Command palette — the ONLY way to access power features
@@ -283,12 +285,12 @@ export default function App() {
             </span>
           </div>
           <button
-            onClick={() => setView("settings")}
+            onClick={() => setSettingsOpen((o) => !o)}
             className="w-7 h-7 flex items-center justify-center rounded-lg transition-all"
             style={{
-              background: view === "settings" ? theme.surface : undefined,
-              color: view === "settings" ? theme.text : theme.textDim,
-              border: view === "settings" ? `1px solid ${theme.border}` : undefined,
+              background: settingsOpen ? theme.surface : undefined,
+              color: settingsOpen ? theme.text : theme.textDim,
+              border: settingsOpen ? `1px solid ${theme.border}` : undefined,
             }}
             title="Settings"
           >
@@ -311,9 +313,28 @@ export default function App() {
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
           {view === "compile" && <CompilationReview />}
-          {view === "settings" && <SettingsView />}
         </div>
       </div>
+
+      {/* Settings slide-over */}
+      {settingsOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSettingsOpen(false)} />
+          <div
+            className="fixed top-0 right-0 h-full w-[420px] z-50 overflow-hidden"
+            style={{ background: theme.bg, borderLeft: `1px solid ${theme.border}` }}
+          >
+            <button
+              onClick={() => setSettingsOpen(false)}
+              className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-lg z-10 text-lg"
+              style={{ color: theme.textMuted }}
+            >
+              ×
+            </button>
+            <SettingsView />
+          </div>
+        </>
+      )}
 
       {/* Overlays — only visible when triggered */}
       <CommandPalette
