@@ -51,10 +51,11 @@ export function BrainSelector() {
       {/* Trigger button */}
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-[Geist,sans-serif] rounded transition-colors bg-[#1a1a28] text-[#e8e6f0] hover:bg-[#1f1f2e]"
+        className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-[Geist,sans-serif] rounded-lg transition-all"
+        style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
         disabled={loading}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-[#f0a500]" />
+        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: "var(--nv-accent)" }} />
         <span className="max-w-[120px] truncate">
           {loading ? "Switching..." : activeBrainName}
         </span>
@@ -70,7 +71,10 @@ export function BrainSelector() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-[240px] bg-[#12121c] border border-[#1f1f2e] rounded-lg shadow-xl z-50 overflow-hidden">
+        <div
+          className="absolute top-full left-0 mt-1 w-[240px] rounded-xl shadow-xl z-50 overflow-hidden backdrop-blur-[12px]"
+          style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)" }}
+        >
           {/* Brain list */}
           <div className="max-h-[240px] overflow-y-auto">
             {brains.map((brain) => (

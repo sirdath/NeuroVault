@@ -217,7 +217,7 @@ export function SettingsView() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#08080f]">
+    <div className="flex-1 overflow-y-auto" style={{ background: "var(--nv-bg)" }}>
       <div className="mx-auto max-w-[580px] px-8 py-12">
         <h1 className="text-[20px] font-semibold text-white/90 font-[Geist,sans-serif] mb-8">
           Settings

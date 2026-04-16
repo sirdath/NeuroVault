@@ -7,7 +7,8 @@ import type { CompilationChangelogEntry } from "../lib/api";
 // Vault Noir palette anchors (kept local to this file — same values the
 // other panels use, imported via CSS custom properties elsewhere but
 // inlined here for Tailwind arbitrary-value syntax).
-const BG = "bg-[#08080f]";
+// Internal Tailwind fragments. Main containers use inline styles from
+// CSS variables (--nv-bg, --nv-surface, --nv-border) for theme support.
 const BORDER = "border-white/[0.06]";
 const TEXT = "text-white/90";
 const TEXT_MUTED = "text-white/40";
@@ -60,7 +61,7 @@ function CompareView({ oldContent, newContent }: { oldContent: string; newConten
   return (
     <div className="flex h-full min-h-0">
       <div className={`flex-1 overflow-y-auto border-r ${BORDER}`}>
-        <div className={`sticky top-0 ${BG} px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
+        <div className={`sticky top-0  px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
           <div className={`text-[10px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif]`}>
             Before · previous wiki page
           </div>
@@ -70,7 +71,7 @@ function CompareView({ oldContent, newContent }: { oldContent: string; newConten
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className={`sticky top-0 ${BG} px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
+        <div className={`sticky top-0  px-6 pt-5 pb-2 border-b ${BORDER} z-10`}>
           <div className={`text-[10px] uppercase tracking-wider ${ACCENT} font-[Geist,sans-serif]`}>
             After · compiled version
           </div>
@@ -210,7 +211,7 @@ export function CompilationReview() {
   }, []);
 
   return (
-    <div className={`flex-1 flex ${BG} overflow-hidden`}>
+    <div className="flex-1 flex overflow-hidden" style={{ background: "var(--nv-bg)" }}>
       {/* Left: compilation list */}
       <div
         className={`border-r ${BORDER} flex flex-col bg-white/[0.02] relative`}

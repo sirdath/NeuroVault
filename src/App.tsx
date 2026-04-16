@@ -195,7 +195,7 @@ export default function App() {
   // Disappears the moment the first successful health check comes back.
   if (firstBoot && !serverUp) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-[#0b0b12] text-[#e8e6f0]">
+      <div className="flex flex-col items-center justify-center h-screen" style={{ backgroundColor: theme.bg, color: theme.text }}>
         <h1 className="text-2xl font-bold font-[Geist,sans-serif] mb-3 tracking-tight">
           NeuroVault
         </h1>

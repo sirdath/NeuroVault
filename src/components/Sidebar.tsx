@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNoteStore } from "../stores/noteStore";
 import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
+import { BrainSelector } from "./BrainSelector";
 import type { NoteMeta } from "../lib/tauri";
 
 
@@ -142,9 +143,14 @@ export function Sidebar({
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-5">
-          <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] tracking-tight" style={{ color: "var(--nv-text)" }}>
-            NeuroVault
-          </h1>
+          <div>
+            <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] tracking-tight" style={{ color: "var(--nv-text)" }}>
+              NeuroVault
+            </h1>
+            <div className="mt-1.5">
+              <BrainSelector />
+            </div>
+          </div>
           <button
             onClick={() => setIsCreating(true)}
             className="w-7 h-7 flex items-center justify-center rounded-xl bg-white/[0.07] text-white/50 hover:bg-white/[0.12] hover:text-white/80 transition-all text-lg leading-none border border-white/[0.06]"

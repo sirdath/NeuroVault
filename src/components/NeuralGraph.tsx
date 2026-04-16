@@ -437,7 +437,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [hoverCard]);
 
   return (
-    <div ref={containerRef} className="flex-1 relative bg-[#0b0b12] overflow-hidden">
+    <div ref={containerRef} className="flex-1 relative overflow-hidden" style={{ background: "var(--nv-bg)" }}>
       <canvas
         ref={canvasRef}
         onMouseMove={onMouseMove}
