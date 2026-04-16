@@ -225,18 +225,47 @@ pub fn run() {
                 ),
             }
 
-            // The Python MCP server runs as an external process. See
-            // docs/BUILDING_SIDECAR.md for how to build a packaged
-            // PyInstaller sidecar locally (275 MB, not checked into git).
-            // When a sidecar binary exists at src-tauri/binaries/, we'll
-            // spawn it automatically; otherwise the desktop app assumes
-            // the user has already started the server via:
-            //     cd server && uv run python -m neurovault_server --http-only
-            let _ = app;
-            eprintln!(
-                "[neurovault] assumes the Python server is running on 127.0.0.1:8765 \
-                 (start it via: cd server && uv run python -m neurovault_server --http-only)"
-            );
+            // Spawn the Python MCP server as a sidecar process. The binary
+            // is built via PyInstaller (see server/neurovault_server.spec) and
+            // lives at src-tauri/binaries/neurovault-server-{target_triple}.exe.
+            //
+            // If the binary isn't present (dev mode without a built sidecar),
+            // we log a warning and assume the developer started the server
+            // manually. The frontend's server-down banner will show if 8765
+            // isn't responding.
+            use tauri_plugin_shell::ShellExt;
+
+            match app.shell().sidecar("neurovault-server") {
+                Ok(cmd) => {
+                    match cmd.args(["--http-only"]).spawn() {
+                        Ok((_rx, child)) => {
+                            eprintln!(
+                                "[neurovault] sidecar started (pid {})",
+                                child.pid()
+                            );
+                            // Store the child handle so it gets killed on app exit.
+                            // Tauri 2.0 manages sidecar lifecycle automatically when
+                            // the binary is declared in externalBin — the OS cleans
+                            // up the child when the parent exits. But keeping the
+                            // handle in managed state is belt-and-suspenders.
+                            app.manage(child);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[neurovault] sidecar spawn failed: {e}. \
+                                 Start manually: cd server && uv run python -m neurovault_server --http-only"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[neurovault] sidecar binary not found: {e}. \
+                         Running in dev mode — start the server manually."
+                    );
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
