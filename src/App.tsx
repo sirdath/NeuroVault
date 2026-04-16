@@ -214,20 +214,20 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#0b0b12] text-[#e8e6f0] overflow-hidden">
-      {/* Server-down banner (only after initial boot) */}
+    <div className="flex flex-col h-screen bg-[#0a0a12] text-[#e8e6f0] overflow-hidden">
+      {/* Server-down banner */}
       {serverDown && (
-        <div className="bg-[#3a1f1f] border-b border-[#ff6b6b]/30 px-4 py-2 flex items-center gap-2 flex-shrink-0">
-          <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse" />
-          <span className="text-xs text-[#ff8a8a] font-[Geist,sans-serif]">
+        <div className="bg-[#ff6b6b]/5 border-b border-[#ff6b6b]/10 px-5 py-2 flex items-center gap-2.5 flex-shrink-0">
+          <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse shadow-sm shadow-[#ff6b6b]/30" />
+          <span className="text-[12px] text-[#ff8a8a]/80 font-[Geist,sans-serif]">
             Server offline — search, graph, and memory features unavailable
           </span>
         </div>
       )}
 
-      {/* Top bar — clean, minimal */}
-      <div className="h-11 min-h-[44px] flex items-center justify-between px-5 bg-[#0e0e18] border-b border-[#1a1a2e]/60">
-        <div className="flex items-center gap-1 bg-[#16162a] rounded-lg p-1">
+      {/* Top bar */}
+      <div className="h-11 min-h-[44px] flex items-center justify-between px-5 bg-[#0c0c16]/80 backdrop-blur-sm border-b border-[#ffffff06]">
+        <div className="flex items-center gap-1 bg-[#ffffff05] rounded-xl p-1 border border-[#ffffff06]">
           <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" />
           <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" />
           <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" />
@@ -235,13 +235,13 @@ export default function App() {
 
         <div className="flex items-center gap-4">
           {noteCount > 0 && (
-            <span className="text-[11px] text-[#4a4870] font-[Geist,sans-serif]">
+            <span className="text-[11px] text-[#3a3858] font-[Geist,sans-serif]">
               {noteCount} {noteCount === 1 ? "note" : "notes"}
             </span>
           )}
           <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80]" : "bg-[#ff6b6b]/80"}`} />
-            <span className="text-[11px] font-[Geist,sans-serif] text-[#4a4870]">
+            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80] shadow-sm shadow-[#4ade80]/30" : "bg-[#ff6b6b]/60"}`} />
+            <span className="text-[11px] font-[Geist,sans-serif] text-[#3a3858]">
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
@@ -282,10 +282,10 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-md transition-all duration-150 ${
+      className={`px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200 ${
         active
-          ? "bg-[#1f1f38] text-[#e8e6f0] shadow-sm shadow-black/20"
-          : "text-[#6a6880] hover:text-[#c9c4e0]"
+          ? "bg-gradient-to-b from-[#222240] to-[#1a1a35] text-[#e8e6f0] shadow-sm shadow-black/30 border border-[#ffffff08]"
+          : "text-[#5a587a] hover:text-[#b8b4d0] hover:bg-[#ffffff04]"
       }`}
     >
       {label}

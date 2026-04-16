@@ -75,13 +75,18 @@ export function Editor() {
 
   if (!activeFilename) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[#0b0b12]">
+      <div className="flex-1 flex items-center justify-center bg-[#0a0a12]">
         <div className="text-center max-w-xs">
-          <p className="text-[#6a6880] text-base font-[Geist,sans-serif]">
+          <div className="w-12 h-12 mx-auto mb-5 rounded-2xl bg-gradient-to-br from-[#b592ff]/10 to-[#7c5ce0]/5 border border-[#b592ff]/10 flex items-center justify-center">
+            <svg className="w-5 h-5 text-[#b592ff]/50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+            </svg>
+          </div>
+          <p className="text-[#6a6880] text-[15px] font-[Geist,sans-serif]">
             Select a note to start reading
           </p>
           <p className="text-[#3a3858] text-[13px] mt-2 font-[Geist,sans-serif]">
-            or press <kbd className="px-1.5 py-0.5 bg-[#16162a] rounded text-[#b592ff] text-[12px] font-mono">Ctrl+N</kbd> to create one
+            or press <kbd className="px-1.5 py-0.5 bg-[#ffffff06] rounded-md text-[#b592ff] text-[12px] font-mono border border-[#ffffff08]">Ctrl+N</kbd> to create one
           </p>
         </div>
       </div>
@@ -89,10 +94,10 @@ export function Editor() {
   }
 
   return (
-    <div className="flex-1 flex bg-[#0b0b12] overflow-hidden">
+    <div className="flex-1 flex bg-[#0a0a12] overflow-hidden">
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header — title + mode indicator + edit/done button */}
-        <div className="flex items-center justify-between px-6 py-2.5 border-b border-[#1a1a2e]/60">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-2.5 border-b border-[#ffffff06] bg-[#0c0c16]/60">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <span className="text-[#e8e6f0] text-[14px] font-semibold font-[Geist,sans-serif] truncate" title={activeFilename ?? undefined}>
               {notes.find((n) => n.filename === activeFilename)?.title ??
