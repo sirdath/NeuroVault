@@ -61,8 +61,8 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
   };
   const [openSections, setOpenSections] = useState<SectionState>(() => {
     const defaults: SectionState = {
-      workingMemory: true,
-      contradictions: true,  // auto-rendered only when there are any
+      workingMemory: false,   // power-user: hidden by default
+      contradictions: false,  // power-user: hidden by default
       outline: true,
       backlinks: true,
       unlinked: false,
@@ -285,31 +285,30 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
 
         {activeFilename && (
           <>
-            {/* Strength card */}
+            {/* Memory strength — visual bar only, no raw numbers */}
             {detail && (
               <div className="px-4 py-3 border-b border-[#1f1f2e]">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex-1 h-1 bg-[#1a1a28] rounded-full overflow-hidden">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#6a6880] font-[Geist,sans-serif]">Strength</span>
+                  <div className="flex-1 h-1.5 bg-[#1a1a28] rounded-full overflow-hidden">
                     <div
-                      className="h-full rounded-full"
+                      className="h-full rounded-full transition-all"
                       style={{
                         width: `${detail.strength * 100}%`,
                         backgroundColor:
-                          detail.state === "active" || detail.state === "fresh"
-                            ? "#f0a500"
-                            : detail.state === "connected"
-                              ? "#00c9b1"
-                              : "#6a6880",
+                          detail.strength > 0.7 ? "#f0a500"
+                            : detail.strength > 0.3 ? "#00c9b1"
+                            : "#6a6880",
                       }}
                     />
                   </div>
-                  <span className="text-[10px] text-[#a8a6c0] font-[Geist,sans-serif]">
-                    {Math.round(detail.strength * 100)}%
+                  <span className="text-[10px] text-[#6a6880] font-[Geist,sans-serif] whitespace-nowrap">
+                    {detail.access_count === 0
+                      ? "Not yet accessed"
+                      : detail.access_count === 1
+                        ? "Accessed once"
+                        : `Accessed ${detail.access_count} times`}
                   </span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-[#6a6880] font-[Geist,sans-serif]">
-                  <span className="capitalize">{detail.state}</span>
-                  <span>{detail.access_count} accesses</span>
                 </div>
               </div>
             )}
@@ -358,11 +357,6 @@ export function RightSidebar({ open, onClose }: { open: boolean; onClose: () => 
                       <HoverableTitle
                         title={bl.title}
                         onClick={() => navigateTo(bl.title)}
-                        trailing={
-                          <span className="text-[9px] text-[#6a6880] flex-shrink-0">
-                            {Math.round(bl.similarity * 100)}%
-                          </span>
-                        }
                       />
 
                       {/* Paragraph context — the killer feature */}

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useNoteStore } from "./stores/noteStore";
 import { Sidebar } from "./components/Sidebar";
@@ -13,11 +13,10 @@ import { HoverPreview } from "./components/HoverPreview";
 import { RightSidebar } from "./components/RightSidebar";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
-import { DraftsView } from "./components/DraftsView";
-import { IntelligenceView } from "./components/IntelligenceView";
 import { CompilationReview } from "./components/CompilationReview";
+import { fetchStatus } from "./lib/api";
 
-type View = "editor" | "graph" | "drafts" | "intelligence" | "compile";
+type View = "editor" | "graph" | "compile";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -31,10 +30,32 @@ export default function App() {
   const [focusMode, setFocusMode] = useState(false);
   const [triggerNewNote, setTriggerNewNote] = useState(0);
   const [triggerSearch, setTriggerSearch] = useState(0);
+  const [serverDown, setServerDown] = useState(false);
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     initVault();
   }, [initVault]);
+
+  // Server health monitor — show a non-blocking banner after 3 consecutive
+  // failures. The banner clears itself the moment the server comes back.
+  // Doesn't block interaction: the user can still browse local files.
+  useEffect(() => {
+    const check = () => {
+      fetchStatus()
+        .then(() => {
+          failCountRef.current = 0;
+          setServerDown(false);
+        })
+        .catch(() => {
+          failCountRef.current += 1;
+          if (failCountRef.current >= 3) setServerDown(true);
+        });
+    };
+    check();
+    const id = setInterval(check, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   // Global-shortcut bridge: Rust registers Ctrl/Cmd+Shift+Space at the OS
   // level and emits `quick-capture-shortcut` when pressed, so the overlay
@@ -51,15 +72,7 @@ export default function App() {
   }, []);
 
   const toggleView = useCallback(() => {
-    setView((v) =>
-      v === "editor"
-        ? "graph"
-        : v === "graph"
-        ? "drafts"
-        : v === "drafts"
-        ? "intelligence"
-        : "editor"
-    );
+    setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : "editor"));
   }, []);
 
   // Build the command palette command list
@@ -97,18 +110,6 @@ export default function App() {
         title: "Switch to Graph view",
         category: "View",
         action: () => setView("graph"),
-      },
-      {
-        id: "view-drafts",
-        title: "Switch to Drafts view",
-        category: "View",
-        action: () => setView("drafts"),
-      },
-      {
-        id: "view-intelligence",
-        title: "Switch to Intelligence view",
-        category: "View",
-        action: () => setView("intelligence"),
       },
       {
         id: "view-compile",
@@ -245,6 +246,21 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-[#0b0b12] text-[#e8e6f0] overflow-hidden">
+      {/* Server-down banner — non-blocking, auto-clears when server comes back */}
+      {serverDown && (
+        <div className="bg-[#3a1f1f] border-b border-[#ff6b6b]/30 px-4 py-2 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse" />
+            <span className="text-xs text-[#ff8a8a] font-[Geist,sans-serif]">
+              Server offline — search, graph, and memory features are unavailable
+            </span>
+          </div>
+          <span className="text-[10px] text-[#ff6b6b]/60 font-mono font-[Geist,sans-serif]">
+            127.0.0.1:8765
+          </span>
+        </div>
+      )}
+
       {!focusMode && (
         <TopBar
           view={view}
@@ -263,8 +279,6 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
-          {view === "drafts" && <DraftsView />}
-          {view === "intelligence" && <IntelligenceView />}
           {view === "compile" && <CompilationReview />}
           <RightSidebar
             open={rightSidebarOpen && view === "editor" && !focusMode}

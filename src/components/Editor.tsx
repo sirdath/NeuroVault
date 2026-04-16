@@ -187,16 +187,13 @@ export function Editor() {
             </span>
             {metadata && (
               <span
-                className={`text-[10px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded ${
-                  metadata.state === "active" || metadata.state === "fresh"
-                    ? "bg-[#f0a500]/10 text-[#f0a500]"
-                    : metadata.state === "connected"
-                      ? "bg-[#00c9b1]/10 text-[#00c9b1]"
-                      : "bg-[#35335a]/30 text-[#8a88a0]"
+                className={`inline-block w-2 h-2 rounded-full ${
+                  metadata.strength > 0.7 ? "bg-[#f0a500]"
+                    : metadata.strength > 0.3 ? "bg-[#00c9b1]"
+                    : "bg-[#35335a]"
                 }`}
-              >
-                {Math.round(metadata.strength * 100)}% {metadata.state}
-              </span>
+                title={`Memory strength: ${Math.round(metadata.strength * 100)}%`}
+              />
             )}
           </div>
           <div className="flex items-center gap-3">
@@ -277,29 +274,28 @@ export function Editor() {
       {showMeta && metadata && (
         <div className="w-[240px] min-w-[240px] border-l border-[#1f1f2e] bg-[#12121c] overflow-y-auto">
           <div className="p-4 space-y-5">
-            {/* Strength */}
-            <MetaSection title="Strength">
+            {/* Memory strength */}
+            <MetaSection title="Memory Strength">
               <div className="flex items-center gap-2">
                 <div className="flex-1 h-1.5 bg-[#1a1a28] rounded-full overflow-hidden">
                   <div
-                    className="h-full rounded-full"
+                    className="h-full rounded-full transition-all"
                     style={{
                       width: `${metadata.strength * 100}%`,
                       backgroundColor:
-                        metadata.state === "active" || metadata.state === "fresh"
-                          ? "#f0a500"
-                          : metadata.state === "connected"
-                            ? "#00c9b1"
-                            : "#35335a",
+                        metadata.strength > 0.7 ? "#f0a500"
+                          : metadata.strength > 0.3 ? "#00c9b1"
+                          : "#6a6880",
                     }}
                   />
                 </div>
-                <span className="text-xs text-[#e8e6f0] font-[Geist,sans-serif]">
-                  {Math.round(metadata.strength * 100)}%
-                </span>
               </div>
               <p className="text-[10px] text-[#8a88a0] font-[Geist,sans-serif] mt-1">
-                {metadata.access_count} accesses
+                {metadata.access_count === 0
+                  ? "Not yet accessed"
+                  : metadata.access_count === 1
+                    ? "Accessed once"
+                    : `Accessed ${metadata.access_count} times`}
               </p>
             </MetaSection>
 
@@ -313,12 +309,7 @@ export function Editor() {
                       onClick={() => navigateTo(c.title)}
                       className="w-full text-left text-xs text-[#00c9b1] hover:text-[#e8e6f0] font-[Geist,sans-serif] truncate py-0.5 transition-colors"
                     >
-                      {c.link_type === "manual" ? "[[" : ""}
                       {c.title}
-                      {c.link_type === "manual" ? "]]" : ""}
-                      <span className="text-[#35335a] ml-1">
-                        {Math.round(c.similarity * 100)}%
-                      </span>
                     </button>
                   ))}
                 </div>

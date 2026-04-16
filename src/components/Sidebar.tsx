@@ -271,13 +271,24 @@ export function Sidebar({
         )}
 
         {notes.length === 0 && (
-          <div className="text-center mt-8 px-4">
-            <p className="text-[#8a88a0] text-sm font-[Geist,sans-serif]">
+          <div className="mt-8 px-4">
+            <p className="text-[#8a88a0] text-sm font-[Geist,sans-serif] text-center">
               No notes yet
             </p>
-            <p className="text-[#35335a] text-xs mt-1 font-[Geist,sans-serif]">
-              Start the server, then create your first note
+            <p className="text-[#6a6880] text-xs mt-2 font-[Geist,sans-serif] text-center mb-4">
+              Press <kbd className="px-1 py-0.5 bg-[#1a1a28] rounded text-[#a8a6c0] text-[10px]">Ctrl+N</kbd> to create your first note
             </p>
+            <div className="bg-[#121220] rounded-lg p-3 border border-[#1f1f2e]">
+              <p className="text-[10px] uppercase tracking-wider text-[#6a6880] font-[Geist,sans-serif] mb-2">
+                Tips
+              </p>
+              <ul className="text-[11px] text-[#8a88a0] font-[Geist,sans-serif] space-y-1.5 leading-relaxed">
+                <li>Type <code className="text-[#b592ff] bg-[#1a1a28] px-1 rounded text-[10px]">[[</code> to link notes together</li>
+                <li>Press <kbd className="px-1 py-0.5 bg-[#1a1a28] rounded text-[#a8a6c0] text-[10px]">Ctrl+K</kbd> to search everything</li>
+                <li>Switch to <span className="text-[#a8a6c0]">Graph</span> to see connections</li>
+                <li>Notes auto-save as you type</li>
+              </ul>
+            </div>
           </div>
         )}
       </div>
