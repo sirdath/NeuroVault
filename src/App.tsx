@@ -28,7 +28,6 @@ export default function App() {
   const [serverDown, setServerDown] = useState(false);
   const [serverUp, setServerUp] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
-  const [firstBoot, setFirstBoot] = useState(true);
   const failCountRef = useRef(0);
 
   useEffect(() => {
@@ -43,7 +42,6 @@ export default function App() {
           failCountRef.current = 0;
           setServerDown(false);
           setServerUp(true);
-          setFirstBoot(false);
           setNoteCount(s.memories);
         })
         .catch(() => {
@@ -189,31 +187,6 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [saveNote, toggleView]);
-
-  // First-boot loading screen — shows while the sidecar server is starting
-  // up (and potentially downloading the ONNX model on first install).
-  // Disappears the moment the first successful health check comes back.
-  if (firstBoot && !serverUp) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen" style={{ backgroundColor: theme.bg, color: theme.text }}>
-        <h1 className="text-2xl font-bold font-[Geist,sans-serif] mb-3 tracking-tight">
-          NeuroVault
-        </h1>
-        <p className="text-[13px] text-[#6a6880] font-[Geist,sans-serif] mb-6">
-          Starting up...
-        </p>
-        <div className="w-48 h-1 bg-[#16162a] rounded-full overflow-hidden">
-          <div className="h-full w-1/3 bg-[#b592ff] rounded-full animate-[shimmer_1.5s_ease-in-out_infinite]" />
-        </div>
-        <style>{`
-          @keyframes shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(400%); }
-          }
-        `}</style>
-      </div>
-    );
-  }
 
   // Inject theme as CSS custom properties so every component can read them
   const themeVars: React.CSSProperties & Record<string, string> = {
