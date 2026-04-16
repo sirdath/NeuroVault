@@ -23,6 +23,34 @@ const STATE_COLORS: Record<string, string> = {
   consolidated: "#1f1f2e",
 };
 
+/** Edge color by link_type. The typed-wikilink vocabulary gets distinct
+ *  colors so the graph instantly communicates relationship semantics.
+ *  Grouped by intent: structural (blue/purple), dependency (green/teal),
+ *  conflict (red/orange), and the default semantic/manual fallbacks. */
+function edgeColor(linkType: string, alpha: number): string {
+  switch (linkType) {
+    // Existing types
+    case "manual":      return `rgba(139, 124, 248, ${alpha})`;  // violet
+    case "entity":      return `rgba(0, 201, 177, ${alpha})`;    // teal
+    // Structural relationships
+    case "defines":     return `rgba(139, 124, 248, ${alpha})`;  // violet (same as manual)
+    case "part_of":     return `rgba(100, 140, 240, ${alpha})`;  // blue
+    case "extends":     return `rgba(120, 160, 255, ${alpha})`;  // light blue
+    // Dependencies + causal
+    case "depends_on":  return `rgba(0, 201, 177, ${alpha})`;    // teal
+    case "uses":        return `rgba(80, 220, 160, ${alpha})`;   // green
+    case "caused_by":   return `rgba(60, 200, 140, ${alpha})`;   // emerald
+    case "works_at":    return `rgba(40, 190, 180, ${alpha})`;   // cyan
+    // Conflict / supersession
+    case "contradicts": return `rgba(255, 100, 100, ${alpha})`;  // red
+    case "supersedes":  return `rgba(255, 165, 80, ${alpha})`;   // orange
+    // Neutral
+    case "mentions":    return `rgba(150, 150, 170, ${alpha})`;  // grey
+    // Fallback (semantic, unknown)
+    default:            return `rgba(122, 119, 154, ${alpha})`;  // muted purple
+  }
+}
+
 function nodeRadius(accessCount: number): number {
   return Math.min(MAX_NODE_RADIUS, MIN_NODE_RADIUS + Math.sqrt(accessCount) * 2);
 }
@@ -362,11 +390,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         ctx.lineTo(b.x * w, b.y * h);
         ctx.strokeStyle = isHov
           ? `rgba(240, 165, 0, ${alpha + 0.3})`
-          : edge.link_type === "manual"
-            ? `rgba(139, 124, 248, ${alpha})`
-            : edge.link_type === "entity"
-              ? `rgba(0, 201, 177, ${alpha})`
-              : `rgba(122, 119, 154, ${alpha})`;
+          : edgeColor(edge.link_type, alpha);
         ctx.lineWidth = isHov ? 2 : 0.7;
         ctx.stroke();
       }

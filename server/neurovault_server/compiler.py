@@ -109,14 +109,34 @@ Given:
 
 produce two things:
 
-  1. A new canonical wiki page in markdown.
+  1. A new canonical wiki page in markdown (COMPILED TRUTH section only — see format below).
   2. A structured changelog describing every semantic change.
+
+PAGE FORMAT (dual-section — you write the top, the system manages the bottom):
+
+  ---
+  title: <Topic>
+  last_compiled_at: <ISO timestamp>
+  sources_count: <N>
+  ---
+
+  # <Topic>
+
+  <compiled truth section — current best understanding>
+
+  ---
+
+  ## Timeline
+  <DO NOT write this section. The system appends to it automatically.
+   If a Timeline section already exists in the current page, ignore it —
+   the system will preserve and extend it.>
 
 RULES:
   - Preserve facts that are still valid. Only change what the sources require.
   - When sources conflict, pick the most recent, most-sourced, or most strongly stated fact. Explain the pick in the changelog.
   - Every factual claim in the wiki page must be traceable to a source. Use footnote-style references inline: "We chose sqlite-vec [src:a3f2c1]".
-  - Wiki page format: YAML frontmatter (title, last_compiled_at, sources_count), then body with ## sections. Keep prose tight. No filler.
+  - Keep prose tight. No filler.
+  - Do NOT include the Timeline section in your output. Stop before the `---` separator. The system splices it in.
   - End your output with a fenced JSON block labeled `json changelog` and nothing after it. The JSON is a list of change objects.
 
 CHANGELOG ITEM SHAPE:
@@ -403,10 +423,134 @@ def _ensure_wiki_dir(vault_dir: Path) -> Path:
     return wiki_dir
 
 
-def _write_wiki_file(vault_dir: Path, topic: str, body: str) -> Path:
+# --- Dual-section page format: compiled truth + append-only Timeline --------
+#
+# Every compiled wiki page follows this convention:
+#
+#   <compiled truth section — rewritten each compile>
+#   ---
+#   ## Timeline
+#   - 2026-04-15 — src:abc123 "Note title" → added claim X
+#   - 2026-04-14 — src:def456 "Other note" → superseded claim Y with Z
+#
+# The truth section is regenerated. The Timeline is STRICTLY APPEND-ONLY:
+# every compile appends new entries and never rewrites or deletes old ones.
+# This solves the "compiler rewrites destroy evidence" problem.
+
+_TIMELINE_SEPARATOR = "\n---\n\n## Timeline\n"
+
+
+def _extract_timeline(existing_content: str) -> str:
+    """Extract the Timeline section from an existing wiki page, if any.
+
+    Returns the raw lines below `## Timeline` (including the entries),
+    or an empty string if no Timeline section exists yet.
+    """
+    # Look for the --- + ## Timeline marker
+    idx = existing_content.find("---\n\n## Timeline")
+    if idx == -1:
+        # Try alternate spacing
+        idx = existing_content.find("---\n## Timeline")
+    if idx == -1:
+        return ""
+    # Everything from "## Timeline\n" onward (skip the --- and header line)
+    timeline_start = existing_content.find("## Timeline", idx)
+    # Skip "## Timeline\n"
+    after_header = existing_content.find("\n", timeline_start)
+    if after_header == -1:
+        return ""
+    return existing_content[after_header + 1:].rstrip()
+
+
+def _build_timeline_entry(
+    sources: list[dict[str, Any]],
+    changelog: list[dict[str, Any]],
+    model: str,
+) -> str:
+    """Build a single Timeline entry for this compile run.
+
+    Format:
+      - 2026-04-15 (claude-code-manual) — src:abc123 "Title", src:def456 "Title" → 3 added, 1 updated, 1 removed
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    # Source citations
+    src_parts = []
+    for s in sources[:5]:  # cap at 5 to keep entries readable
+        sid = s.get("short_id") or s.get("id", "?")[:6]
+        title = s.get("title", "untitled")
+        src_parts.append(f'src:{sid} "{title}"')
+    src_str = ", ".join(src_parts)
+    if len(sources) > 5:
+        src_str += f" (+{len(sources) - 5} more)"
+
+    # Change summary
+    counts: dict[str, int] = {}
+    for c in changelog:
+        change_type = c.get("change", "other")
+        counts[change_type] = counts.get(change_type, 0) + 1
+    change_str = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+
+    return f"- {now} ({model}) — {src_str} → {change_str}"
+
+
+def _merge_with_timeline(
+    compiled_truth: str,
+    existing_content: str,
+    sources: list[dict[str, Any]],
+    changelog: list[dict[str, Any]],
+    model: str,
+) -> str:
+    """Merge the compiled truth section with the preserved + extended Timeline.
+
+    1. Takes the LLM's output (compiled truth only, no Timeline).
+    2. Extracts any existing Timeline from the previous wiki page.
+    3. Appends a new entry for this compile run.
+    4. Joins them with the `---` separator.
+    """
+    # Strip any accidental Timeline section the LLM might have included
+    truth = compiled_truth
+    for marker in ("---\n\n## Timeline", "---\n## Timeline"):
+        idx = truth.find(marker)
+        if idx != -1:
+            truth = truth[:idx].rstrip()
+
+    # Build the timeline
+    old_timeline = _extract_timeline(existing_content)
+    new_entry = _build_timeline_entry(sources, changelog, model)
+
+    if old_timeline:
+        timeline_body = old_timeline.rstrip() + "\n" + new_entry
+    else:
+        timeline_body = new_entry
+
+    return truth.rstrip() + _TIMELINE_SEPARATOR + timeline_body + "\n"
+
+
+def _write_wiki_file(
+    vault_dir: Path,
+    topic: str,
+    body: str,
+    *,
+    existing_content: str = "",
+    sources: list[dict[str, Any]] | None = None,
+    changelog: list[dict[str, Any]] | None = None,
+    model: str = "unknown",
+) -> Path:
+    """Write a wiki page with the dual-section format.
+
+    If `sources` and `changelog` are provided, merges the compiled truth
+    with an append-only Timeline section (preserving any existing Timeline
+    from `existing_content`). Otherwise writes `body` as-is (backward compat).
+    """
     wiki_dir = _ensure_wiki_dir(vault_dir)
     path = wiki_dir / _wiki_filename(topic)
-    path.write_text(body, encoding="utf-8")
+
+    if sources is not None and changelog is not None:
+        final = _merge_with_timeline(body, existing_content, sources, changelog, model)
+    else:
+        final = body
+
+    path.write_text(final, encoding="utf-8")
     return path
 
 

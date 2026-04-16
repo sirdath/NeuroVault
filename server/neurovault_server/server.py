@@ -83,12 +83,69 @@ def tiered(*tiers: str):
     never ships to the client. Functions stripped out of the active tier are
     still callable internally (they just lose their MCP registration), which
     keeps the HTTP API and tests intact regardless of tier.
+
+    Every registered tool call is automatically logged to the query audit
+    trail (``audit.jsonl``) via the audit module. The wrapper captures the
+    function name, arguments, and a lightweight result summary (counts +
+    IDs if the result is a list of dicts with ``engram_id`` keys).
     """
+    import functools
+    from neurovault_server.audit import log_tool_call
+
     def decorator(fn):
+        @functools.wraps(fn)
+        def audited(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            # Best-effort audit — never crash the tool call
+            try:
+                _audit_result(fn.__name__, kwargs or _positional_to_kwargs(fn, args), result)
+            except Exception as e:
+                logger.debug("audit wrapper skipped for {}: {}", fn.__name__, e)
+            return result
+
         if any(t in _ACTIVE_TIERS for t in tiers):
-            return mcp.tool()(fn)
+            return mcp.tool()(audited)
         return fn
     return decorator
+
+
+def _positional_to_kwargs(fn, args: tuple) -> dict:
+    """Best-effort conversion of positional args to a kwargs dict for logging."""
+    import inspect
+    params = list(inspect.signature(fn).parameters.keys())
+    return {params[i]: v for i, v in enumerate(args) if i < len(params)}
+
+
+def _audit_result(tool_name: str, arguments: dict, result) -> None:
+    """Extract a lightweight summary from the tool result and log it."""
+    from neurovault_server.audit import log_tool_call
+
+    result_ids = None
+    result_count = None
+    modified_ids = None
+
+    if isinstance(result, list):
+        result_count = len(result)
+        ids = [r.get("engram_id") for r in result if isinstance(r, dict) and "engram_id" in r]
+        if ids:
+            result_ids = ids
+    elif isinstance(result, dict):
+        eid = result.get("engram_id")
+        if eid:
+            modified_ids = [eid]
+
+    # Strip large content from logged arguments
+    logged_args = {k: v for k, v in arguments.items() if k not in ("content",)}
+    if "content" in arguments:
+        logged_args["content_length"] = len(str(arguments["content"]))
+
+    log_tool_call(
+        tool_name,
+        logged_args,
+        result_ids=result_ids,
+        result_count=result_count,
+        modified_ids=modified_ids,
+    )
 
 
 def _ctx(brain: str | None = None) -> BrainContext:
@@ -2107,6 +2164,10 @@ def main() -> None:
     logger.info("Starting NeuroVault MCP server")
     logger.info("Active brain: {} ({})", active.name, active.brain_id)
     logger.info("Vault: {}", active.vault_dir)
+
+    # Init query audit log for the active brain
+    from neurovault_server.audit import init_audit_log
+    init_audit_log(active.vault_dir.parent)
 
     _warm_embedder()
 

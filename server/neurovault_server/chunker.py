@@ -110,7 +110,49 @@ def hierarchical_chunk(content: str, engram_id: str) -> list[dict]:
 
 
 def extract_wikilinks(content: str) -> list[str]:
-    """Extract [[wikilink]] references from markdown content."""
-    pattern = r'\[\[([^\]]+)\]\]'
-    matches = re.findall(pattern, content)
-    return [m.strip().lower() for m in matches if m.strip()]
+    """Extract [[wikilink]] references from markdown content.
+
+    Returns a flat list of lowercased target names. For typed links like
+    ``[[Target|uses]]`` this returns just the target (``"target"``).
+    Use `extract_typed_wikilinks()` when you need the link types.
+    """
+    return [target for target, _type in extract_typed_wikilinks(content)]
+
+
+# Allowed typed-link vocabulary. Unknown types are logged as warnings
+# (not hard errors) so authors can experiment, but the canonical set
+# is what the graph UI colorizes and the compiler uses for traversal.
+LINK_TYPES = frozenset({
+    "works_at",
+    "uses",
+    "extends",
+    "depends_on",
+    "supersedes",
+    "contradicts",
+    "mentions",
+    "defines",
+    "part_of",
+    "caused_by",
+})
+
+# Regex: [[Target]] or [[Target|link_type]]
+_WIKILINK_RE = re.compile(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]')
+
+
+def extract_typed_wikilinks(content: str) -> list[tuple[str, str | None]]:
+    """Extract wikilinks with optional type annotations.
+
+    Handles both ``[[Target]]`` (returns target, None) and
+    ``[[Target|uses]]`` (returns target, "uses").
+
+    Unknown types are kept (not dropped) so callers can decide how to
+    handle them — the lint pass logs a warning, the ingest pipeline
+    stores whatever it gets.
+    """
+    results: list[tuple[str, str | None]] = []
+    for m in _WIKILINK_RE.finditer(content):
+        target = m.group(1).strip().lower()
+        link_type = m.group(2).strip().lower() if m.group(2) else None
+        if target:
+            results.append((target, link_type))
+    return results

@@ -12,7 +12,7 @@ from loguru import logger
 
 from neurovault_server.database import Database
 from neurovault_server.embeddings import Embedder
-from neurovault_server.chunker import hierarchical_chunk, extract_wikilinks
+from neurovault_server.chunker import hierarchical_chunk, extract_typed_wikilinks, LINK_TYPES
 from neurovault_server.entities import extract_entities, store_entities
 from neurovault_server.bm25_index import BM25Index
 
@@ -236,33 +236,49 @@ def _update_semantic_links(
 
 
 def _process_wikilinks(db: Database, engram_id: str, content: str) -> None:
-    """Parse [[wikilinks]] and create explicit links between notes."""
-    linked_titles = extract_wikilinks(content)
-    if not linked_titles:
+    """Parse [[wikilinks]] (including typed ``[[Target|uses]]``) and create links.
+
+    Typed links get their ``link_type`` set to the annotation (e.g. ``"uses"``).
+    Untyped ``[[Target]]`` links default to ``"manual"`` as before.
+    Unknown types are stored as-is but logged so the lint pass can flag them.
+    """
+    typed_links = extract_typed_wikilinks(content)
+    if not typed_links:
         return
 
-    for title in linked_titles:
+    for title, link_type in typed_links:
         target = db.conn.execute(
             "SELECT id FROM engrams WHERE lower(title) = ? AND state != 'dormant'",
             (title,),
         ).fetchone()
 
-        if target:
-            target_id = target[0]
-            # Create manual link (won't overwrite semantic links due to link_type)
-            db.conn.execute(
-                """INSERT OR REPLACE INTO engram_links (from_engram, to_engram, similarity, link_type)
-                   VALUES (?, ?, 1.0, 'manual')""",
-                (engram_id, target_id),
-            )
-            db.conn.execute(
-                """INSERT OR REPLACE INTO engram_links (from_engram, to_engram, similarity, link_type)
-                   VALUES (?, ?, 1.0, 'manual')""",
-                (target_id, engram_id),
+        if not target:
+            continue
+
+        target_id = target[0]
+        resolved_type = link_type or "manual"
+
+        if link_type and link_type not in LINK_TYPES:
+            logger.warning(
+                "Unknown wikilink type '{}' in [[{}|{}]] (engram {}). "
+                "Storing as-is; add to LINK_TYPES to suppress this warning.",
+                link_type, title, link_type, engram_id[:8],
             )
 
+        # Bidirectional link — both directions get the same type
+        db.conn.execute(
+            """INSERT OR REPLACE INTO engram_links (from_engram, to_engram, similarity, link_type)
+               VALUES (?, ?, 1.0, ?)""",
+            (engram_id, target_id, resolved_type),
+        )
+        db.conn.execute(
+            """INSERT OR REPLACE INTO engram_links (from_engram, to_engram, similarity, link_type)
+               VALUES (?, ?, 1.0, ?)""",
+            (target_id, engram_id, resolved_type),
+        )
+
     db.conn.commit()
-    logger.debug("Processed {} wikilinks for engram {}", len(linked_titles), engram_id[:8])
+    logger.debug("Processed {} wikilinks for engram {}", len(typed_links), engram_id[:8])
 
 
 def sqlite_vec_serialize(embedding: list[float]) -> bytes:

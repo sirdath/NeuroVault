@@ -26,10 +26,12 @@ interface MarkdownPreviewProps {
 // Rewrite [[Target]] into [Target](#wiki:Target) so ReactMarkdown treats it
 // as a regular link. We use the fragment scheme so the onClick handler can
 // recognise it and route through the note store instead of opening a URL.
+// Supports both [[Target]] and typed [[Target|uses]] syntax.
 function preprocessWikiLinks(md: string): string {
-  return md.replace(/\[\[([^\]]+)\]\]/g, (_, target: string) => {
+  return md.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, linkType?: string) => {
     const clean = target.trim();
-    return `[${clean}](#wiki:${encodeURIComponent(clean)})`;
+    const label = linkType ? `${clean} (${linkType.trim()})` : clean;
+    return `[${label}](#wiki:${encodeURIComponent(clean)})`;
   });
 }
 

@@ -30,6 +30,38 @@ def create_api(manager) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # --- Query audit middleware ------------------------------------------------
+    # Logs every API request to the brain's audit.jsonl. Lightweight — fires
+    # after the response so it doesn't slow the actual request path. Covers
+    # both MCP-proxied and HTTP-direct endpoints uniformly.
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    class _AuditMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response: Response = await call_next(request)
+            # Audit /api/* paths. Skip high-frequency polling endpoints
+            # (status, brains/active) that the TopBar hits every 5s — those
+            # would flood the log with ~17k lines/day of zero-signal entries.
+            path = request.url.path
+            if path.startswith("/api/") and path not in (
+                "/api/status",
+                "/api/brains/active",
+            ):
+                try:
+                    from neurovault_server.audit import log_tool_call
+                    log_tool_call(
+                        f"http:{request.method}:{path}",
+                        dict(request.query_params),
+                        result_count=None,
+                    )
+                except Exception:
+                    pass  # best-effort
+            return response
+
+    app.add_middleware(_AuditMiddleware)
+
     def _db():
         return manager.get_active().db
 
