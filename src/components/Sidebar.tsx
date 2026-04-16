@@ -98,21 +98,16 @@ export function Sidebar({
   );
 
   return (
-    <div className="w-[280px] min-w-[280px] h-full flex flex-col bg-gradient-to-b from-[#0c0c16] to-[#0a0a14] border-r border-[#ffffff08]">
-      {/* Header — logo + new note button */}
+    <div className="w-[280px] min-w-[280px] h-full flex flex-col bg-white/[0.03] backdrop-blur-[10px] border-r border-white/[0.06]">
+      {/* Header */}
       <div className="px-5 pt-5 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#b592ff] to-[#7c5ce0] flex items-center justify-center shadow-lg shadow-[#b592ff]/10">
-              <span className="text-white text-[10px] font-bold">N</span>
-            </div>
-            <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] text-[#e8e6f0] tracking-tight">
-              NeuroVault
-            </h1>
-          </div>
+          <h1 className="text-[15px] font-semibold font-[Geist,sans-serif] text-white/90 tracking-tight">
+            NeuroVault
+          </h1>
           <button
             onClick={() => setIsCreating(true)}
-            className="w-7 h-7 flex items-center justify-center rounded-lg bg-[#b592ff]/10 text-[#b592ff] hover:bg-[#b592ff]/25 hover:shadow-sm hover:shadow-[#b592ff]/10 transition-all text-lg leading-none"
+            className="w-7 h-7 flex items-center justify-center rounded-xl bg-white/[0.07] text-white/50 hover:bg-white/[0.12] hover:text-white/80 transition-all text-lg leading-none border border-white/[0.06]"
             title="New note (Ctrl+N)"
           >
             +
@@ -126,9 +121,10 @@ export function Sidebar({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search notes..."
-            className="w-full bg-[#ffffff05] text-[#e8e6f0] text-[13px] pl-8 pr-3 py-2 rounded-xl border border-[#ffffff08] focus:border-[#b592ff]/30 focus:bg-[#ffffff08] focus:outline-none focus:shadow-sm focus:shadow-[#b592ff]/5 font-[Geist,sans-serif] placeholder:text-[#3a3858] transition-all"
+            className="w-full bg-white/[0.06] text-white/90 text-[13px] pl-8 pr-3 py-2 rounded-xl border border-white/[0.08] focus:border-white/[0.15] focus:bg-white/[0.08] focus:outline-none font-[Geist,sans-serif] placeholder:text-white/20 transition-all"
+            style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
           />
-          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#3a3858]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
@@ -157,7 +153,7 @@ export function Sidebar({
                 if (!newTitle.trim()) setIsCreating(false);
               }}
               placeholder="Note title..."
-              className="w-full bg-[#16162a] text-[#e8e6f0] text-[13px] px-3 py-2 rounded-lg border border-[#b592ff]/30 focus:border-[#b592ff] focus:outline-none font-[Geist,sans-serif] placeholder:text-[#4a4870]"
+              className="w-full bg-white/[0.06] text-white/90 text-[13px] px-3 py-2 rounded-xl border border-white/[0.12] focus:border-white/[0.2] focus:outline-none font-[Geist,sans-serif] placeholder:text-white/20"
               autoFocus
             />
           </form>
@@ -287,27 +283,30 @@ function NoteList({
               className="px-3 py-0.5"
             >
               <div
-                className={`group relative cursor-pointer rounded-xl px-3.5 py-3 transition-all duration-200 ${
+                className={`group relative cursor-pointer rounded-2xl px-3.5 py-3 transition-all duration-200 ${
                   isActive
-                    ? "bg-gradient-to-r from-[#b592ff]/8 to-[#7c5ce0]/5 border border-[#b592ff]/15 shadow-sm shadow-[#b592ff]/5"
-                    : "border border-transparent hover:bg-[#ffffff04] hover:border-[#ffffff06]"
+                    ? "bg-white/[0.08] border border-white/[0.12]"
+                    : "border border-transparent hover:bg-white/[0.04] hover:border-white/[0.06]"
                 }`}
+                style={isActive ? {
+                  boxShadow: "inset 0 1px 1px rgba(255,255,255,0.08), 0 4px 16px rgba(0,0,0,0.15)"
+                } : undefined}
               >
                 <div className="flex items-start justify-between gap-2">
                   <h3
                     className={`text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug ${
-                      isActive ? "text-[#e8e6f0]" : "text-[#b8b4d0]"
+                      isActive ? "text-white/90" : "text-white/60"
                     }`}
                   >
                     {note.title}
                   </h3>
-                  <span className="text-[10px] text-[#3a3858] font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
+                  <span className="text-[10px] text-white/15 font-[Geist,sans-serif] whitespace-nowrap mt-0.5">
                     {relativeTime(note.modified)}
                   </span>
                 </div>
 
                 {preview && (
-                  <p className="text-[11.5px] text-[#4a4870] mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
+                  <p className="text-[11.5px] text-white/25 mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed">
                     {preview}
                   </p>
                 )}
@@ -317,7 +316,7 @@ function NoteList({
                     e.stopPropagation();
                     onDelete(note.filename, note.title);
                   }}
-                  className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 text-[#4a4870] hover:text-[#ff6b6b] transition-all text-xs w-5 h-5 flex items-center justify-center rounded-md hover:bg-[#ff6b6b]/10"
+                  className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 text-white/20 hover:text-[#ff6b6b] transition-all text-xs w-5 h-5 flex items-center justify-center rounded-lg hover:bg-white/[0.06]"
                 >
                   ×
                 </button>

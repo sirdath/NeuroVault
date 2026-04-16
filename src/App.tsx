@@ -214,20 +214,26 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#0a0a12] text-[#e8e6f0] overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#08080f] text-white/90 overflow-hidden">
       {/* Server-down banner */}
       {serverDown && (
-        <div className="bg-[#ff6b6b]/5 border-b border-[#ff6b6b]/10 px-5 py-2 flex items-center gap-2.5 flex-shrink-0">
+        <div className="bg-[#ff6b6b]/[0.04] border-b border-[#ff6b6b]/10 px-5 py-2 flex items-center gap-2.5 flex-shrink-0 backdrop-blur-[10px]">
           <span className="w-2 h-2 rounded-full bg-[#ff6b6b] animate-pulse shadow-sm shadow-[#ff6b6b]/30" />
-          <span className="text-[12px] text-[#ff8a8a]/80 font-[Geist,sans-serif]">
+          <span className="text-[12px] text-[#ff8a8a]/60 font-[Geist,sans-serif]">
             Server offline — search, graph, and memory features unavailable
           </span>
         </div>
       )}
 
-      {/* Top bar */}
-      <div className="h-11 min-h-[44px] flex items-center justify-between px-5 bg-[#0c0c16]/80 backdrop-blur-sm border-b border-[#ffffff06]">
-        <div className="flex items-center gap-1 bg-[#ffffff05] rounded-xl p-1 border border-[#ffffff06]">
+      {/* Top bar — Apple glass */}
+      <div
+        className="h-11 min-h-[44px] flex items-center justify-between px-5 backdrop-blur-[10px] bg-white/[0.03] border-b border-white/[0.06]"
+        style={{ boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)" }}
+      >
+        <div
+          className="flex items-center gap-0.5 bg-white/[0.05] rounded-xl p-1 border border-white/[0.08]"
+          style={{ boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
+        >
           <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" />
           <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" />
           <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" />
@@ -235,13 +241,13 @@ export default function App() {
 
         <div className="flex items-center gap-4">
           {noteCount > 0 && (
-            <span className="text-[11px] text-[#3a3858] font-[Geist,sans-serif]">
+            <span className="text-[11px] text-white/20 font-[Geist,sans-serif]">
               {noteCount} {noteCount === 1 ? "note" : "notes"}
             </span>
           )}
           <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80] shadow-sm shadow-[#4ade80]/30" : "bg-[#ff6b6b]/60"}`} />
-            <span className="text-[11px] font-[Geist,sans-serif] text-[#3a3858]">
+            <span className={`w-1.5 h-1.5 rounded-full ${serverUp ? "bg-[#4ade80] shadow-sm shadow-[#4ade80]/40" : "bg-[#ff6b6b]/50"}`} />
+            <span className="text-[11px] font-[Geist,sans-serif] text-white/20">
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
@@ -284,9 +290,10 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
       onClick={onClick}
       className={`px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200 ${
         active
-          ? "bg-gradient-to-b from-[#222240] to-[#1a1a35] text-[#e8e6f0] shadow-sm shadow-black/30 border border-[#ffffff08]"
-          : "text-[#5a587a] hover:text-[#b8b4d0] hover:bg-[#ffffff04]"
+          ? "bg-white/[0.1] text-white/90 border border-white/[0.1]"
+          : "text-white/30 hover:text-white/60 hover:bg-white/[0.04] border border-transparent"
       }`}
+      style={active ? { boxShadow: "inset 0 1px 1px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.2)" } : undefined}
     >
       {label}
     </button>
