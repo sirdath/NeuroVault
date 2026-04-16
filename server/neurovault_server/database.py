@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS engrams (
     state        TEXT DEFAULT 'fresh',
     strength     REAL DEFAULT 1.0,
     access_count INTEGER DEFAULT 0,
+    agent_id     TEXT,                 -- which agent wrote this (claude-code, cursor, claude-desktop, user, etc.)
     created_at   TEXT DEFAULT (datetime('now')),
     updated_at   TEXT DEFAULT (datetime('now')),
     accessed_at  TEXT DEFAULT (datetime('now'))
@@ -303,6 +304,7 @@ CREATE INDEX IF NOT EXISTS idx_feedback_time     ON retrieval_feedback(retrieved
 CREATE INDEX IF NOT EXISTS idx_feedback_accessed ON retrieval_feedback(was_accessed);
 CREATE INDEX IF NOT EXISTS idx_affinity_query   ON query_affinity(query_text COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_affinity_engram  ON query_affinity(engram_id);
+CREATE INDEX IF NOT EXISTS idx_engrams_agent     ON engrams(agent_id);
 CREATE INDEX IF NOT EXISTS idx_compilations_status ON compilations(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_compilations_topic  ON compilations(topic);
 CREATE INDEX IF NOT EXISTS idx_compilations_wiki   ON compilations(wiki_engram_id);
@@ -332,6 +334,7 @@ class Database:
         self._migrate_add_removed_at()
         self._migrate_add_query_embedding()
         self._migrate_add_review_comment()
+        self._migrate_add_agent_id()
 
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
@@ -340,6 +343,28 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_agent_id(self) -> None:
+        """Add `agent_id` column to engrams for multi-agent scoping.
+
+        Tags every memory with which agent wrote it (claude-code, cursor,
+        claude-desktop, user, etc.) so recall can filter by 'what does
+        Claude Code know vs what does Cursor know?'
+        """
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='engrams'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(engrams)").fetchall()]
+            if "agent_id" in cols:
+                return
+            logger.info("Migrating engrams: adding agent_id column")
+            self.conn.execute("ALTER TABLE engrams ADD COLUMN agent_id TEXT")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("agent_id migration skipped: {}", e)
 
     def _migrate_add_review_comment(self) -> None:
         """Add `review_comment` column to existing compilations tables.

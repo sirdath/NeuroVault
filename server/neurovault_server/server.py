@@ -176,7 +176,7 @@ def _write_md_file(vault_dir: Path, filename: str, title: str, content: str) -> 
 
 
 @tiered("core")
-def remember(title: str, content: str, brain: str | None = None) -> dict:
+def remember(title: str, content: str, brain: str | None = None, agent_id: str | None = None) -> dict:
     """Create or update a memory. Saves as a markdown file and indexes it.
 
     Notes are automatically interconnected with related memories via semantic
@@ -186,6 +186,9 @@ def remember(title: str, content: str, brain: str | None = None) -> dict:
         title: Short descriptive title for the memory
         content: The content to remember (supports markdown, [[wikilinks]])
         brain: Target brain ID (uses active brain if not specified)
+        agent_id: Which agent is writing this memory (e.g. "claude-code",
+            "cursor", "claude-desktop", "user"). Enables multi-agent scoping
+            so recall can filter by agent source.
     """
     ctx = _ctx(brain)
 
@@ -203,7 +206,15 @@ def remember(title: str, content: str, brain: str | None = None) -> dict:
     filepath = _write_md_file(ctx.vault_dir, filename, title, content)
     ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25)
 
-    logger.info("{} memory: {} ({}) in brain '{}'", status.capitalize(), title, engram_id[:8], ctx.name)
+    # Tag with agent identity if provided
+    if agent_id:
+        ctx.db.conn.execute(
+            "UPDATE engrams SET agent_id = ? WHERE filename = ?",
+            (agent_id, filename),
+        )
+        ctx.db.conn.commit()
+
+    logger.info("{} memory: {} ({}) in brain '{}' agent={}", status.capitalize(), title, engram_id[:8], ctx.name, agent_id or "unknown")
 
     # Return connection info
     links = ctx.db.conn.execute(
@@ -235,6 +246,7 @@ def recall(
     max_tokens: int | None = None,
     as_of: str | None = None,
     include_observations: bool = False,
+    agent_id: str | None = None,
     brain: str | None = None,
 ) -> list[dict]:
     """Search memory with hybrid retrieval (semantic + BM25 + knowledge graph).
@@ -269,14 +281,30 @@ def recall(
         as_of: Optional ISO timestamp for time-travel queries
         include_observations: Set True to include auto-captured tool-call
             observations in the result set (default False keeps them out).
+        agent_id: Filter results to only memories written by this agent
+            (e.g. "claude-code"). Pass None to search all agents.
         brain: Target brain ID (uses active brain if not specified)
     """
     ctx = _ctx(brain)
     exclude_kinds = [] if include_observations else ["observation"]
     raw_results = hybrid_retrieve(
         query, ctx.db, manager.embedder, ctx.bm25,
-        top_k=limit, as_of=as_of, exclude_kinds=exclude_kinds,
+        top_k=limit * 2 if agent_id else limit,  # over-fetch when filtering
+        as_of=as_of, exclude_kinds=exclude_kinds,
     )
+
+    # Filter by agent_id if specified
+    if agent_id and raw_results:
+        agent_ids_map: dict[str, str | None] = {}
+        eids = [r["engram_id"] for r in raw_results]
+        placeholders = ",".join("?" * len(eids))
+        rows = ctx.db.conn.execute(
+            f"SELECT id, agent_id FROM engrams WHERE id IN ({placeholders})", eids
+        ).fetchall()
+        for r in rows:
+            agent_ids_map[r[0]] = r[1]
+        raw_results = [r for r in raw_results if agent_ids_map.get(r["engram_id"]) == agent_id]
+        raw_results = raw_results[:limit]
 
     # Log retrieval for the self-improving feedback loop (stage 1).
     # Every returned engram gets a row; subsequent explicit fetches will

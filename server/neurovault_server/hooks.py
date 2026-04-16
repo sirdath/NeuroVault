@@ -250,13 +250,15 @@ def capture_observation(
 
     if engram_id:
         try:
+            # Tag as observation + stamp the agent that produced it.
+            # All hook events come from Claude Code's lifecycle hooks.
             ctx.db.conn.execute(
-                "UPDATE engrams SET kind = 'observation' WHERE id = ?",
+                "UPDATE engrams SET kind = 'observation', agent_id = 'claude-code' WHERE id = ?",
                 (engram_id,),
             )
             ctx.db.conn.commit()
         except Exception as e:
-            logger.debug("hooks: kind tag failed: {}", e)
+            logger.debug("hooks: kind/agent tag failed: {}", e)
 
     # Stage 5: silently extract factual claims from UserPromptSubmit events
     # and promote them to first-class insight engrams. Runs in real time so
