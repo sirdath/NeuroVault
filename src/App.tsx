@@ -321,7 +321,7 @@ export default function App() {
         <>
           <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSettingsOpen(false)} />
           <div
-            className="fixed top-0 right-0 h-full w-[420px] z-50 overflow-hidden"
+            className="fixed top-0 right-0 h-full w-[420px] z-50 overflow-y-auto"
             style={{ background: theme.bg, borderLeft: `1px solid ${theme.border}` }}
           >
             <button
