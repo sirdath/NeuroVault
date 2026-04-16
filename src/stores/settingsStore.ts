@@ -107,6 +107,21 @@ export const THEMES: Theme[] = [
     positive: "#a3be8c",
     negative: "#bf616a",
   },
+  {
+    id: "obsidian",
+    name: "Obsidian",
+    description: "Warm dark grey — matches Obsidian's default dark theme",
+    bg: "#1e1e1e",
+    surface: "rgba(255,255,255,0.04)",
+    border: "rgba(255,255,255,0.12)",
+    text: "rgba(220,221,222,0.95)",
+    textMuted: "rgba(153,153,153,0.9)",
+    textDim: "rgba(102,102,102,0.8)",
+    accent: "#7f6df2",
+    accentGlow: "rgba(127,109,242,0.15)",
+    positive: "#4ade80",
+    negative: "#ff6b6b",
+  },
 ];
 
 interface AppSettings {

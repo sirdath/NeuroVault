@@ -15,7 +15,27 @@ export function Editor() {
   const isDirty = useNoteStore((s) => s.isDirty);
   const updateContent = useNoteStore((s) => s.updateContent);
   const saveNote = useNoteStore((s) => s.saveNote);
+  const selectNote = useNoteStore((s) => s.selectNote);
   const notes = useNoteStore((s) => s.notes);
+
+  // Tab system — track open tabs as filenames
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+
+  // When a note is selected, add it to tabs if not already there
+  useEffect(() => {
+    if (activeFilename && !openTabs.includes(activeFilename)) {
+      setOpenTabs((t) => [...t, activeFilename]);
+    }
+  }, [activeFilename]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const closeTab = (filename: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = openTabs.filter((f) => f !== filename);
+    setOpenTabs(next);
+    if (filename === activeFilename && next.length > 0) {
+      selectNote(next[next.length - 1]!);
+    }
+  };
 
   // Reader mode by default. Only switches to raw CodeMirror when the user
   // explicitly clicks "Edit". Escape flips back to preview.
@@ -99,6 +119,41 @@ export function Editor() {
   return (
     <div className="flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Tab bar */}
+        {openTabs.length > 1 && (
+          <div
+            className="flex items-center overflow-x-auto flex-shrink-0"
+            style={{ background: "var(--nv-surface)", borderBottom: "1px solid var(--nv-border)" }}
+          >
+            {openTabs.map((filename) => {
+              const note = notes.find((n) => n.filename === filename);
+              const title = note?.title ?? filename.replace(/\.md$/, "");
+              const isActive = filename === activeFilename;
+              return (
+                <button
+                  key={filename}
+                  onClick={() => selectNote(filename)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-[Geist,sans-serif] whitespace-nowrap transition-all flex-shrink-0 max-w-[180px]"
+                  style={{
+                    color: isActive ? "var(--nv-text)" : "var(--nv-text-dim)",
+                    borderBottom: isActive ? `2px solid var(--nv-accent)` : "2px solid transparent",
+                    background: isActive ? "var(--nv-surface)" : undefined,
+                  }}
+                >
+                  <span className="truncate">{title}</span>
+                  <span
+                    onClick={(e) => closeTab(filename, e)}
+                    className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-[10px] w-4 h-4 flex items-center justify-center rounded flex-shrink-0"
+                    style={{ color: "var(--nv-text-dim)" }}
+                  >
+                    ×
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Header */}
         <div
           className="flex items-center justify-between px-6 py-2.5"

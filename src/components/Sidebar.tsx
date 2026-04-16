@@ -153,7 +153,7 @@ export function Sidebar({
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="w-7 h-7 flex items-center justify-center rounded-xl transition-all text-lg leading-none"
+            className="w-7 h-7 flex items-center justify-center rounded-md transition-all text-lg leading-none"
             style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
             title="New note (Ctrl+N)"
           >
@@ -168,7 +168,7 @@ export function Sidebar({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search notes..."
-            className="w-full text-[13px] pl-8 pr-3 py-2 rounded-xl focus:outline-none font-[Geist,sans-serif] transition-all"
+            className="w-full text-[13px] pl-8 pr-3 py-2 rounded-md focus:outline-none font-[Geist,sans-serif] transition-all"
             style={{
               background: "var(--nv-surface)",
               color: "var(--nv-text)",
@@ -205,7 +205,7 @@ export function Sidebar({
                 if (!newTitle.trim()) setIsCreating(false);
               }}
               placeholder="Note title..."
-              className="w-full text-[13px] px-3 py-2 rounded-xl focus:outline-none font-[Geist,sans-serif]"
+              className="w-full text-[13px] px-3 py-2 rounded-md focus:outline-none font-[Geist,sans-serif]"
               style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
               autoFocus
             />
@@ -235,7 +235,7 @@ export function Sidebar({
 
         {notes.length === 0 && (
           <div className="mt-12 text-center">
-            <div className="w-10 h-10 mx-auto mb-4 rounded-xl bg-[#16162a] flex items-center justify-center">
+            <div className="w-10 h-10 mx-auto mb-4 rounded-md bg-[#16162a] flex items-center justify-center">
               <span className="text-[#b592ff] text-lg">+</span>
             </div>
             <p className="text-[#8a88a0] text-[13px] font-[Geist,sans-serif] mb-1">
@@ -336,7 +336,7 @@ function NoteList({
               className="px-3 py-0.5"
             >
               <div
-                className="group relative cursor-pointer rounded-2xl px-3.5 py-3 transition-all duration-200"
+                className="group relative cursor-pointer rounded-lg px-3.5 py-3 transition-all duration-200"
                 style={isActive ? {
                   background: "var(--nv-surface)",
                   border: `1px solid var(--nv-border)`,
