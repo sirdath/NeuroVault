@@ -21,6 +21,11 @@
           "name": "binaries/neurovault-server",
           "sidecar": true,
           "args": true
+        },
+        {
+          "name": "neurovault-server",
+          "sidecar": true,
+          "args": true
         }
       ]
     },
@@ -29,6 +34,11 @@
       "allow": [
         {
           "name": "binaries/neurovault-server",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "neurovault-server",
           "sidecar": true,
           "args": true
         }
