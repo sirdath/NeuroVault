@@ -229,10 +229,11 @@ export default function App() {
             onClick={async () => {
               try {
                 const { invoke } = await import("@tauri-apps/api/core");
-                const result = await invoke<string>("start_server");
-                console.log("[start_server]", result);
-                // Re-check status after a short delay to let it boot
-                setTimeout(() => failCountRef.current = 0, 500);
+                await invoke<string>("start_server");
+                // The server-health polling in App.tsx will pick it up
+                // automatically within 5s once the sidecar binds 8765.
+                // First boot takes 10-30s (ONNX load + vault ingest).
+                failCountRef.current = 0;
               } catch (e) {
                 alert(
                   `Failed to start server: ${e}\n\n` +

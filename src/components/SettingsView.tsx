@@ -49,9 +49,29 @@ export function SettingsView() {
       await invoke<string>("start_server");
     } catch (e) {
       alert(`Failed to start server: ${e}`);
+      setStarting(false);
+      return;
     }
-    // Give the sidecar ~2s to bind the port before re-checking
-    setTimeout(() => { recheckServer(); setStarting(false); }, 2500);
+    // Poll for up to 60s — first boot takes 10-30s (ONNX model load + vault
+    // ingest of all existing notes). Re-check every 2s until it responds.
+    const deadline = Date.now() + 60_000;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/brains/active`, { signal: AbortSignal.timeout(1500) });
+        if (r.ok) {
+          recheckServer();
+          setStarting(false);
+          return;
+        }
+      } catch { /* not ready yet */ }
+      if (Date.now() < deadline) {
+        setTimeout(poll, 2000);
+      } else {
+        setStarting(false);
+        alert("Server didn't start within 60 seconds. Check the log or try again.");
+      }
+    };
+    setTimeout(poll, 1000);
   };
 
   const handleStopServer = async () => {
