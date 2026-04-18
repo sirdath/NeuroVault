@@ -281,8 +281,19 @@ def create_api(manager) -> FastAPI:
 
         title = (body.get("title") or "").strip()
         content = body.get("content") or ""
+        # Auto-derive title from first sentence/line of content when the
+        # caller omitted it — mirrors the MCP remember() tool so agents
+        # can POST {"content": "..."} in one shot.
         if not title:
-            return {"error": "title is required"}
+            first = content.strip().split("\n", 1)[0].strip()
+            for sep in (". ", "? ", "! "):
+                if sep in first:
+                    first = first.split(sep, 1)[0] + sep.strip()
+                    break
+            first = first.lstrip("#").strip()
+            title = first[:60] if first else "Untitled"
+        if not content.strip():
+            return {"error": "content is required"}
 
         ctx = _ctx()
 

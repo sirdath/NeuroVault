@@ -27,7 +27,7 @@ mcp = FastMCP(
         "CORE WORKFLOW:\n"
         "1. BEFORE answering questions: call `recall(query, mode='preview')` to check memory\n"
         "2. WHEN user mentions a named thing: call `about(entity)` for targeted lookup\n"
-        "3. WHEN user shares a decision/learning: call `remember(title, content)` immediately\n"
+        "3. WHEN user shares a decision/learning: call `remember(content)` immediately (title auto-derived)\n"
         "4. AFTER meaningful exchanges: call `save_conversation_insights(...)` to grow the brain\n"
         "5. FOR broad topics: call `explore(topic, depth=2)` — one call, full context\n\n"
         "TOKEN EFFICIENCY:\n"
@@ -177,21 +177,26 @@ def _write_md_file(vault_dir: Path, filename: str, title: str, content: str) -> 
 
 
 @tiered("core")
-def remember(title: str, content: str, brain: str | None = None, agent_id: str | None = None) -> dict:
-    """Create or update a memory. Saves as a markdown file and indexes it.
+def remember(content: str, title: str = "", brain: str | None = None, agent_id: str | None = None) -> dict:
+    """Save a memory. Supports markdown + [[wikilinks]]; auto-linked to related notes.
 
-    Notes are automatically interconnected with related memories via semantic
-    similarity and shared entities.
-
-    Args:
-        title: Short descriptive title for the memory
-        content: The content to remember (supports markdown, [[wikilinks]])
-        brain: Target brain ID (uses active brain if not specified)
-        agent_id: Which agent is writing this memory (e.g. "claude-code",
-            "cursor", "claude-desktop", "user"). Enables multi-agent scoping
-            so recall can filter by agent source.
+    If `title` is omitted it's derived from the first sentence of `content`.
+    Pass `agent_id` (e.g. "claude-code") for multi-agent scoping.
     """
     ctx = _ctx(brain)
+
+    # Derive title from content when the caller didn't supply one —
+    # makes remember(content="user prefers pnpm over npm") work.
+    # First sentence or first line, capped at 60 chars.
+    if not (title or "").strip():
+        first = content.strip().split("\n", 1)[0].strip()
+        for sep in (". ", "? ", "! "):
+            if sep in first:
+                first = first.split(sep, 1)[0] + sep.strip()
+                break
+        # Strip markdown heading prefix if the caller wrote "# X"
+        first = first.lstrip("#").strip()
+        title = first[:60] if first else "Untitled"
 
     existing = ctx.db.get_engram_by_title(title)
     if existing:
@@ -260,46 +265,13 @@ def recall(
     brain: str | None = None,
     include_meta: bool = False,
 ) -> list[dict]:
-    """Search memory with hybrid retrieval (semantic + BM25 + knowledge graph).
+    """Hybrid search across memory (semantic + BM25 + knowledge graph). Call
+    BEFORE answering anything the user might have told you before.
 
-    USE WHEN: the user asks about past decisions, preferences, projects, learnings,
-    or anything they might have told you before. Call this BEFORE answering any
-    question that could benefit from context.
-
-    Token-efficient modes:
-      - "titles" (~20 tokens/result): just titles and scores — for quick scans
-      - "preview" (~70 tokens/result): title + 200-char snippet — for most uses (DEFAULT)
-      - "full" (~400 tokens/result): full content — only when you need deep context
-
-    Set include_meta=True to also receive each memory's decay `strength`
-    (0-1) and lifecycle `state` (active/fresh/connected/dormant). Default
-    false because those internals are useful for debugging but rarely
-    need to appear in an answer to the user.
-
-    Time travel: pass `as_of` (ISO timestamp like "2026-03-30T00:00:00Z") to
-    query the brain *as it was* at that moment. Engrams created after the
-    timestamp are excluded, and temporal facts that became invalid before
-    the timestamp are penalized correctly. Use this to answer:
-      - "what did you know about X last week?"
-      - "why did you give me a different answer two weeks ago?"
-
-    Observations: by default this tool excludes auto-captured Claude Code
-    tool-call observations so they don't drown out real memories. Pass
-    `include_observations=True` when the user explicitly asks "what did
-    you do yesterday", "show me that edit", or similar session-replay
-    questions. For full session replay use `replay_session(session_id)`.
-
-    Args:
-        query: Natural language query (e.g. "what did I decide about testing?")
-        limit: Max results (default 10)
-        mode: "titles" | "preview" | "full" — trade precision for token cost
-        max_tokens: Optional budget — stops adding results once this is hit
-        as_of: Optional ISO timestamp for time-travel queries
-        include_observations: Set True to include auto-captured tool-call
-            observations in the result set (default False keeps them out).
-        agent_id: Filter results to only memories written by this agent
-            (e.g. "claude-code"). Pass None to search all agents.
-        brain: Target brain ID (uses active brain if not specified)
+    mode: "titles" (~20 tok) | "preview" (~70 tok, default) | "full" (~400 tok).
+    as_of: ISO timestamp for time-travel ("what did I know on 2026-03-30?").
+    include_observations=True only for session-replay questions.
+    Prefer `recall_and_read(query)` if you want the top result's full body.
     """
     ctx = _ctx(brain)
     exclude_kinds = [] if include_observations else ["observation"]
@@ -508,31 +480,64 @@ def save_conversation_insights(
 
 @tiered("core")
 def list_brains() -> list[dict]:
-    """List all available brains with their active status."""
+    """List all brains with their active flag. Use when the user asks which
+    project/vault we're in or to pick the right scope for a task."""
     return manager.list_brains()
 
 
 @tiered("core")
 def switch_brain(brain_id: str) -> dict:
-    """Switch the active brain context.
-
-    Args:
-        brain_id: ID of the brain to activate
-    """
+    """Activate a different brain. Subsequent remember/recall target it until
+    switched again. Get IDs from list_brains()."""
     ctx = manager.switch_brain(brain_id)
     return {"status": "switched", "brain_id": ctx.brain_id, "name": ctx.name}
 
 
 @tiered("core")
 def create_brain(name: str, description: str = "") -> dict:
-    """Create a new brain for a project or context.
-
-    Args:
-        name: Display name for the brain
-        description: Optional description
-    """
+    """Create a new brain (isolated vault + index). Use for a new project
+    or context. Does NOT switch — call switch_brain next if you want to use it."""
     ctx = manager.create_brain(name, description)
     return {"status": "created", "brain_id": ctx.brain_id, "name": ctx.name}
+
+
+@tiered("core")
+def remember_batch(items: list[dict], brain: str | None = None, agent_id: str | None = None) -> list[dict]:
+    """Save many memories in one call. `items` is a list of {title?, content}
+    dicts. Same behavior as remember() per item but one round trip.
+    """
+    return [
+        remember(
+            content=item.get("content", ""),
+            title=item.get("title", ""),
+            brain=brain,
+            agent_id=item.get("agent_id", agent_id),
+        )
+        for item in items
+    ]
+
+
+@tiered("core")
+def recall_and_read(
+    query: str,
+    top_k: int = 1,
+    as_of: str | None = None,
+    brain: str | None = None,
+) -> list[dict]:
+    """Hybrid search + return FULL content of the top_k hits in one call.
+    Use instead of recall() when you want to read the body, not just scan
+    titles. top_k=1 is the common "give me the best match" shape.
+    """
+    # Reuse the recall() pipeline with mode='full' so we get the same
+    # ranking, scoring, and filters — just skip the title/preview split
+    # and hand back the full engram body.
+    return recall(
+        query=query,
+        limit=top_k,
+        mode="full",
+        as_of=as_of,
+        brain=brain,
+    )
 
 
 @tiered("core")
@@ -2154,7 +2159,7 @@ def usage_guide() -> str:
 **User mentions a specific name/thing?** → `about(entity)` — entity-first lookup
 **User wants deep context on a topic?** → `explore(query, depth=2)` — one call, full context
 **User wants to know across many topics?** → `context_for(topic, token_budget=2000)` — fit to budget
-**User shares a decision/learning?** → `remember(title, content)` right away
+**User shares a decision/learning?** → `remember(content)` right away (title is auto-derived; use `remember_batch` for multiple facts in one call)
 **Meaningful exchange happened?** → `save_conversation_insights(...)` at end of turn
 **User says "X is no longer true"?** → `forget(engram_id)` for the old one, then `remember()` the new
 
