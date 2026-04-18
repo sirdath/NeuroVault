@@ -231,7 +231,33 @@ def remember(content: str, title: str = "", brain: str | None = None, agent_id: 
 
     logger.info("{} memory: {} ({}) in brain '{}' agent={}", status.capitalize(), title, engram_id[:8], ctx.name, agent_id or "unknown")
 
-    # Return connection info
+    # Duplicate hint — quick knn against the just-stored embedding, excluding
+    # self. If another engram has very high similarity (>= 0.92) we surface
+    # it in the response so the agent knows it may have just created a
+    # near-duplicate. Non-blocking: the write already happened; the hint is
+    # advisory. Cheap because the fast-phase embedding is already in
+    # sqlite-vec by the time we're here.
+    likely_duplicate = None
+    try:
+        q_emb = manager.embedder.encode(content[:2000])
+        hits = ctx.db.knn_search(q_emb, limit=5)
+        for h in hits:
+            if h["engram_id"] == engram_id:
+                continue
+            d = float(h.get("distance") or 0.0)
+            sim = max(0.0, min(1.0, 1.0 - d / 2.0))
+            if sim >= 0.92:
+                likely_duplicate = {
+                    "engram_id": h["engram_id"],
+                    "title": h.get("title"),
+                    "similarity": round(sim, 3),
+                }
+                break
+    except Exception as e:
+        logger.debug("remember: dup check skipped: {}", e)
+
+    # Return connection info (best-effort — engram_links is populated by the
+    # slow ingest phase, may be empty on fresh writes that just returned)
     links = ctx.db.conn.execute(
         """SELECT e.title, l.similarity, l.link_type
            FROM engram_links l
@@ -241,7 +267,7 @@ def remember(content: str, title: str = "", brain: str | None = None, agent_id: 
         (filename,),
     ).fetchall()
 
-    return {
+    resp: dict = {
         "engram_id": engram_id,
         "status": status,
         "title": title,
@@ -251,6 +277,9 @@ def remember(content: str, title: str = "", brain: str | None = None, agent_id: 
             for r in links
         ],
     }
+    if likely_duplicate is not None:
+        resp["likely_duplicate"] = likely_duplicate
+    return resp
 
 
 @tiered("core")
@@ -502,6 +531,51 @@ def create_brain(name: str, description: str = "") -> dict:
     or context. Does NOT switch — call switch_brain next if you want to use it."""
     ctx = manager.create_brain(name, description)
     return {"status": "created", "brain_id": ctx.brain_id, "name": ctx.name}
+
+
+@tiered("core")
+def check_duplicate(
+    content: str,
+    threshold: float = 0.85,
+    limit: int = 5,
+    brain: str | None = None,
+) -> list[dict]:
+    """Read-only dedup check — find memories similar to `content` before
+    deciding whether to call `remember()`. Returns up to `limit` matches
+    with similarity >= threshold, sorted best-first.
+
+    Typical threshold values:
+      0.70 — loosely related (same topic area)
+      0.85 — near-paraphrase (DEFAULT — useful for "did I say this already?")
+      0.92 — likely duplicate (same fact, different words)
+      0.95 — essentially identical
+    """
+    ctx = _ctx(brain)
+    q_emb = manager.embedder.encode(content[:2000])
+    hits = ctx.db.knn_search(q_emb, limit=limit * 3)  # oversample for dedup
+    # knn_search returns L2-ish distance; convert to a [0,1] similarity. The
+    # ONNX embeddings are L2-normalized so distance d relates to cosine as
+    # sim ≈ 1 - d/2. Clip to [0,1] for the caller.
+    seen: set[str] = set()
+    out: list[dict] = []
+    for h in hits:
+        eid = h["engram_id"]
+        if eid in seen:
+            continue
+        seen.add(eid)
+        d = float(h.get("distance") or 0.0)
+        sim = max(0.0, min(1.0, 1.0 - d / 2.0))
+        if sim < threshold:
+            continue
+        out.append({
+            "engram_id": eid,
+            "title": h.get("title"),
+            "similarity": round(sim, 3),
+            "preview": (h.get("content") or "")[:200],
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 @tiered("core")

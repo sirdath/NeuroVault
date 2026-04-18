@@ -1024,6 +1024,19 @@ def create_api(manager) -> FastAPI:
             "source_count": len(sources),
         }
 
+    @app.post("/api/check_duplicate")
+    def check_duplicate_endpoint(body: dict):
+        """Read-only dedup check. Body: {content, threshold?, limit?}.
+        Returns memories similar to `content` with sim >= threshold.
+        Use before writing a new memory to decide update-vs-create."""
+        from neurovault_server.server import check_duplicate as _cd
+        content = (body.get("content") or "").strip()
+        if not content:
+            return {"error": "content is required"}
+        threshold = float(body.get("threshold") or 0.85)
+        limit = int(body.get("limit") or 5)
+        return _cd(content=content, threshold=threshold, limit=limit)
+
     @app.get("/api/session_start")
     def session_start_endpoint(agent_id: str | None = None, since: str | None = None):
         """One-call session wake-up. Packs brain info, stats, L0 identity
