@@ -43,21 +43,37 @@ export function BrainSelector() {
 
   const handleOpenFolder = async () => {
     try {
-      // Use Tauri's file dialog to pick a folder
       const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
       const selected = await openDialog({ directory: true, title: "Open folder as vault" });
-      if (selected) {
-        // Create a brain pointing to this folder
-        const folderName = String(selected).split(/[\\/]/).pop() || "Imported";
-        const result = await createBrain(folderName, `Imported from: ${selected}`);
-        if (result) {
-          setOpen(false);
-          await switchBrain(result.brain_id);
-        }
+      if (!selected) return;
+
+      const folderPath = String(selected);
+      const folderName = folderPath.split(/[\\/]/).pop() || "Imported";
+
+      // Step 1: create a new brain
+      const result = await createBrain(folderName, `Imported from: ${folderPath}`);
+      if (!result) {
+        alert("Failed to create vault. Is the server running?");
+        return;
       }
-    } catch {
-      // Dialog plugin not available or user cancelled
-      alert("Open folder requires the Tauri dialog plugin. For now, create a new vault and move your markdown files into ~/.neurovault/brains/{name}/vault/");
+
+      // Step 2: copy all .md files from the folder into the new brain
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const count = await invoke<number>("import_folder_as_vault", {
+          source: folderPath,
+          targetBrainId: result.brain_id,
+        });
+        alert(`Imported ${count} markdown file${count === 1 ? "" : "s"} from ${folderName}`);
+      } catch (e) {
+        alert(`Brain created but file import failed: ${e}`);
+      }
+
+      // Step 3: switch to the new brain
+      setOpen(false);
+      await switchBrain(result.brain_id);
+    } catch (e) {
+      alert(`Could not open folder: ${e}`);
     }
   };
 

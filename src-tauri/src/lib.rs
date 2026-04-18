@@ -219,6 +219,55 @@ fn delete_note(filename: String) -> Result<(), String> {
     }
 }
 
+/// Import an external folder as a NeuroVault vault. Copies all .md files
+/// from the source folder (recursively) into the target brain's vault/
+/// directory. Returns the number of files imported.
+#[tauri::command]
+fn import_folder_as_vault(source: String, target_brain_id: String) -> Result<usize, String> {
+    let src_path = PathBuf::from(&source);
+    if !src_path.exists() || !src_path.is_dir() {
+        return Err(format!("Source folder not found: {source}"));
+    }
+
+    let home = dirs::home_dir().ok_or_else(|| "home dir not found".to_string())?;
+    let nv_home = {
+        let n = home.join(".neurovault");
+        if n.exists() { n } else { home.join(".engram") }
+    };
+    let target_vault = nv_home.join("brains").join(&target_brain_id).join("vault");
+    fs::create_dir_all(&target_vault)
+        .map_err(|e| format!("Could not create target vault dir: {e}"))?;
+
+    // Walk the source folder, copy every .md file into target/vault/
+    fn copy_md_files(src: &PathBuf, dst: &PathBuf, count: &mut usize) -> Result<(), String> {
+        let entries = fs::read_dir(src).map_err(|e| format!("read_dir {src:?}: {e}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Recurse but flatten into dst (no subdir nesting)
+                copy_md_files(&path, dst, count)?;
+            } else if path.extension().and_then(|x| x.to_str()) == Some("md") {
+                let filename = path.file_name().and_then(|x| x.to_str()).unwrap_or("note.md");
+                let target = dst.join(filename);
+                // If filename already exists, suffix with counter
+                let target = if target.exists() {
+                    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("note");
+                    dst.join(format!("{stem}-imported-{count}.md"))
+                } else {
+                    target
+                };
+                fs::copy(&path, &target).map_err(|e| format!("copy {path:?}: {e}"))?;
+                *count += 1;
+            }
+        }
+        Ok(())
+    }
+
+    let mut count: usize = 0;
+    copy_md_files(&src_path, &target_vault, &mut count)?;
+    Ok(count)
+}
+
 /// Start the bundled Python MCP server as a sidecar process.
 /// Returns Err if already running, or if the sidecar binary can't be spawned.
 #[tauri::command]
@@ -336,7 +385,7 @@ pub fn run() {
         .manage(ServerState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
-            start_server, stop_server, server_status,
+            start_server, stop_server, server_status, import_folder_as_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
