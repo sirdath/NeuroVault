@@ -6,7 +6,7 @@
 
 ## 🎯 Download & Install
 
-**Windows**: [NeuroVault_0.1.0_x64-setup.exe](https://github.com/daththeanalyst/NeuroVault/releases/latest) — 68 MB installer
+**Windows**: [NeuroVault_0.1.0_x64-setup.exe](https://github.com/daththeanalyst/NeuroVault/releases/latest) — ~76 MB installer
 
 1. Download the installer
 2. Double-click to install
@@ -17,19 +17,33 @@
 
 ## What you get
 
-- 📝 **Beautiful markdown editor** with live preview, auto-save, and `[[wikilinks]]`
-- 🎨 **6 themes** — Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord, Obsidian
+- 📝 **Markdown editor** with live preview, auto-save, tabs, and `[[wikilinks]]`
+- 🎨 **7 themes** — Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord, Obsidian
 - 🌐 **Knowledge graph view** showing how your notes connect
-- 🔍 **Hybrid search** — semantic + keyword + knowledge graph (when server is on)
+- 🔍 **Hybrid search** — semantic + keyword + knowledge graph when the server is on
 - 🧠 **Compilation loop** — AI maintains canonical wiki pages from your raw notes
-- 📂 **Multi-vault support** — switch between projects (bottom-left picker)
+  (drives Claude Code directly via the copy-pack flow, no API key needed)
+- 📂 **Multi-vault support** — switch, rename, delete via the dropdown (bottom-left)
+- 📁 **Open a folder as vault** — point NeuroVault at an existing Obsidian vault
+  and the folder stays in place; deleting the brain never touches the folder
+- 🗂️ **Folders in the sidebar** — rename a note to `projects/foo.md` and it moves
+  into a folder tree (created automatically)
+- ⚡ **Fast-switch** — Ctrl+K → type a brain name → Enter. Per-brain entries in
+  the palette
 - 🔒 **100% local** — your notes never leave your machine
 - 🎚️ **Resizable panels** — drag to customize layout
-- 📑 **Tabs** — open multiple notes at once (click Note A → click Note B → tabs appear)
 
 ## For AI agents (MCP setup)
 
-NeuroVault exposes 9 MCP tools Claude can use directly. Add to Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`):
+**If you installed NeuroVault from the release:**
+Open the app → **Settings → Connect Claude Desktop**. It generates the exact
+JSON for your install path with a one-click copy button, and a "Show in
+folder" button for `claude_desktop_config.json`. Restart Claude Desktop after
+saving.
+
+**If you're running from source**, paste this into Claude Desktop's config
+(`%APPDATA%\Claude\claude_desktop_config.json` on Windows,
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -292,7 +306,7 @@ Every memory tool accepts an optional `brain` parameter to target a specific bra
 ```
 ┌─────────────────────────────────────────────────┐
 │  Tauri Desktop App (React + TypeScript)         │
-│  Editor · Graph View · Memory Panel · Sidebar   │
+│  Editor · Graph · Compile · Sidebar · Palette   │
 └──────────────────────┬──────────────────────────┘
                        │ HTTP :8765
 ┌──────────────────────▼──────────────────────────┐

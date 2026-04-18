@@ -119,6 +119,10 @@ export default function App() {
   }, []);
 
   // Command palette — the ONLY way to access power features
+  const brains = useBrainStore((s) => s.brains);
+  const activeBrainId = useBrainStore((s) => s.activeBrainId);
+  const switchBrain = useBrainStore((s) => s.switchBrain);
+
   const commands: Command[] = useMemo(
     () => [
       {
@@ -205,8 +209,19 @@ export default function App() {
         shortcut: "?",
         action: () => setShortcutHelpOpen(true),
       },
+      // One entry per brain — lets users fuzzy-search the palette for a
+      // vault name instead of mousing down to the dropdown. The active
+      // brain is omitted to avoid a no-op "Switch to [current]" row.
+      ...brains
+        .filter((b) => b.id !== activeBrainId)
+        .map((b) => ({
+          id: `switch-brain-${b.id}`,
+          title: `Switch to ${b.name}`,
+          category: "Vault",
+          action: () => { void switchBrain(b.id); },
+        })),
     ],
-    [saveNote, toggleView]
+    [saveNote, toggleView, brains, activeBrainId, switchBrain]
   );
 
   // Global keyboard shortcuts
