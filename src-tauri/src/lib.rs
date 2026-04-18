@@ -404,6 +404,92 @@ fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
+/// Return the resolved absolute path to the `neurovault-server` sidecar
+/// binary so the Settings UI can render a Claude Desktop MCP config
+/// pointing at it. We check both the target-triple-suffixed name (how
+/// PyInstaller ships it) and the plain name (how Tauri copies it into
+/// the install dir). Returns an empty string if neither exists — the UI
+/// then shows a friendly "install the server first" message instead.
+#[tauri::command]
+fn mcp_sidecar_path() -> String {
+    use std::env;
+    let exe_dir = match env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        Some(d) => d,
+        None => return String::new(),
+    };
+    let suffix = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let candidates = [
+        format!("neurovault-server{suffix}"),
+        #[cfg(target_os = "windows")]
+        format!("neurovault-server-x86_64-pc-windows-msvc{suffix}"),
+        #[cfg(target_os = "macos")]
+        format!("neurovault-server-aarch64-apple-darwin{suffix}"),
+        #[cfg(target_os = "macos")]
+        format!("neurovault-server-x86_64-apple-darwin{suffix}"),
+    ];
+    for name in candidates.iter() {
+        let p = exe_dir.join(name);
+        if p.exists() {
+            return p.display().to_string();
+        }
+    }
+    String::new()
+}
+
+/// Return the OS-specific path to Claude Desktop's MCP config file.
+/// Returns the path even if the file doesn't exist yet — the user may
+/// need to create it on first setup.
+#[tauri::command]
+fn mcp_config_path() -> String {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return String::new(),
+    };
+    let p = if cfg!(target_os = "windows") {
+        dirs::config_dir()
+            .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+            .join("Claude")
+            .join("claude_desktop_config.json")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library")
+            .join("Application Support")
+            .join("Claude")
+            .join("claude_desktop_config.json")
+    } else {
+        home.join(".config").join("Claude").join("claude_desktop_config.json")
+    };
+    p.display().to_string()
+}
+
+/// Reveal the MCP config file in the OS file manager so the user can
+/// open/edit it quickly. On Windows uses `explorer /select,`; on macOS
+/// uses `open -R`. No-op on Linux (most distros' file managers vary).
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("explorer failed: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("open failed: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = path;
+        Err("reveal_in_file_manager not supported on this platform".into())
+    }
+}
+
 /// Hide the main window without quitting the app. The sidecar keeps running
 /// and the user can restore via Ctrl+Shift+Space (the quick-capture shortcut
 /// also unhides/focuses the window).
@@ -528,6 +614,7 @@ pub fn run() {
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
             hide_to_background, brain_storage_stats,
+            mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

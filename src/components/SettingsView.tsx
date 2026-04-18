@@ -215,6 +215,8 @@ export function SettingsView() {
           </SettingRow>
         </Section>
 
+        <McpSection />
+
         {/* Shortcuts */}
         <Section title="Keyboard Shortcuts">
           <div className="space-y-2">
@@ -238,6 +240,129 @@ export function SettingsView() {
         </Section>
       </div>
     </div>
+  );
+}
+
+/**
+ * MCP setup card — shows the user how to wire NeuroVault into Claude
+ * Desktop / Cursor as an MCP server. Auto-detects the sidecar path and
+ * the OS-specific Claude config location. The JSON block is kept
+ * minimal (just `command`) since more keys are optional and would
+ * distract from the copy-paste target.
+ */
+function McpSection() {
+  const [sidecarPath, setSidecarPath] = useState<string>("");
+  const [configPath, setConfigPath] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const [s, c] = await Promise.all([
+          invoke<string>("mcp_sidecar_path"),
+          invoke<string>("mcp_config_path"),
+        ]);
+        setSidecarPath(s || "");
+        setConfigPath(c || "");
+      } catch {
+        // Web fallback — nothing to detect
+      }
+    })();
+  }, []);
+
+  const configJson = sidecarPath
+    ? JSON.stringify(
+        { mcpServers: { neurovault: { command: sidecarPath } } },
+        null, 2,
+      )
+    : "";
+
+  const handleCopy = async () => {
+    if (!configJson) return;
+    try {
+      await navigator.clipboard.writeText(configJson);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleReveal = async () => {
+    if (!configPath) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reveal_in_file_manager", { path: configPath });
+    } catch {
+      /* ignore — some platforms don't support reveal */
+    }
+  };
+
+  return (
+    <Section title="Connect Claude Desktop (MCP)">
+      {!sidecarPath ? (
+        <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+          Sidecar binary not found next to the app. Rebuild and reinstall NeuroVault, then reopen this dialog.
+        </p>
+      ) : (
+        <>
+          <div>
+            <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
+              Paste the snippet below into your Claude Desktop config so Claude can call <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault.
+            </p>
+            <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+              Restart Claude Desktop after saving. If the key <span className="font-mono">mcpServers</span> already exists, merge the <span className="font-mono">neurovault</span> entry into it instead of replacing the whole block.
+            </p>
+          </div>
+
+          <div className="relative">
+            <pre
+              className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
+              style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+            >{configJson}</pre>
+            <button
+              onClick={handleCopy}
+              className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
+              style={{
+                background: copied ? "var(--nv-positive)" : "var(--nv-surface)",
+                color: copied ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                border: "1px solid var(--nv-border)",
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+
+          <SettingRow
+            label="Config file"
+            description={
+              configPath
+                ? `Claude Desktop reads this on startup — create it if missing`
+                : "Open Claude Desktop once so it creates the config file"
+            }
+          >
+            <button
+              onClick={handleReveal}
+              disabled={!configPath}
+              className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all disabled:opacity-30"
+              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+            >
+              Show in folder
+            </button>
+          </SettingRow>
+          {configPath && (
+            <p
+              className="text-[11px] font-mono truncate -mt-2"
+              style={{ color: "var(--nv-text-dim)", direction: "rtl", textAlign: "left" }}
+              title={configPath}
+            >
+              {configPath}
+            </p>
+          )}
+        </>
+      )}
+    </Section>
   );
 }
 

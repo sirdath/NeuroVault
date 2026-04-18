@@ -14,6 +14,7 @@ import { SettingsView } from "./components/SettingsView";
 import { ActivityBar } from "./components/ActivityBar";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { useSettingsStore, type Theme } from "./stores/settingsStore";
+import { useBrainStore } from "./stores/brainStore";
 import { fetchStatus } from "./lib/api";
 
 type View = "editor" | "graph" | "compile";
@@ -264,6 +265,8 @@ export default function App() {
       className={`flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
+      <IngestBanner />
+
       {/* Server status banner — different content for starting vs offline */}
       {(serverDown || starting) && (
         <div
@@ -453,6 +456,68 @@ export default function App() {
         onClose={() => setShortcutHelpOpen(false)}
       />
       <Toasts />
+    </div>
+  );
+}
+
+/**
+ * Progress banner shown while a brain-switch is in flight. Visible only
+ * when the brain store's `ingest` field is populated (i.e. during a
+ * switch that's running the server's ingest pipeline). Obsidian-sized
+ * vaults take 30-60s on first load; without this the UI froze silently.
+ */
+function IngestBanner() {
+  const ingest = useBrainStore((s) => s.ingest);
+  const theme = useSettingsStore((s) => s.theme);
+  if (!ingest || ingest.phase === "ready" || ingest.phase === "idle" || ingest.phase === "unknown") {
+    return null;
+  }
+  const total = ingest.files_total || 0;
+  const done = ingest.files_done || 0;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const phaseLabel: Record<string, string> = {
+    starting: "Preparing vault…",
+    ingesting: total > 0 ? `Indexing ${done} of ${total}` : "Scanning vault…",
+    linking: "Computing note connections…",
+    indexing: "Rebuilding search index…",
+  };
+  return (
+    <div
+      className="px-5 py-2 flex items-center gap-3 flex-shrink-0 backdrop-blur-[10px]"
+      style={{
+        background: `${theme.accent}10`,
+        borderBottom: `1px solid ${theme.accent}25`,
+      }}
+    >
+      <span className="relative flex h-2 w-2">
+        <span className="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping" style={{ backgroundColor: theme.accent }} />
+        <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: theme.accent }} />
+      </span>
+      <span className="text-[12px] font-medium" style={{ color: theme.accent }}>
+        {phaseLabel[ingest.phase] ?? ingest.phase}
+      </span>
+      {ingest.phase === "ingesting" && total > 0 && (
+        <>
+          <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: `${theme.accent}20` }}>
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{ width: `${pct}%`, background: theme.accent }}
+            />
+          </div>
+          <span className="text-[11px] font-mono tabular-nums" style={{ color: `${theme.accent}aa` }}>
+            {pct}%
+          </span>
+        </>
+      )}
+      {ingest.current_file && ingest.phase === "ingesting" && (
+        <span
+          className="text-[11px] font-mono truncate max-w-[280px]"
+          style={{ color: `${theme.accent}80`, direction: "rtl", textAlign: "left" }}
+          title={ingest.current_file}
+        >
+          {ingest.current_file}
+        </span>
+      )}
     </div>
   );
 }

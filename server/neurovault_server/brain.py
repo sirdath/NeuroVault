@@ -133,7 +133,7 @@ class BrainContext:
         self.db = Database(self.db_path)
         self.bm25 = BM25Index()
 
-    def _load_index_and_maybe_ingest(self, embedder: Embedder) -> None:
+    def _load_index_and_maybe_ingest(self, embedder: Embedder, progress: dict | None = None) -> None:
         """Phase 2: best-effort ingest + BM25 build.
 
         Compares the vault fingerprint against the last-seen fingerprint
@@ -159,7 +159,7 @@ class BrainContext:
                     "Vault fingerprint changed for {} ({} -> {}), running ingest",
                     self.brain_id, cached_fp or "<new>", current_fp,
                 )
-                ingest_vault(self.db, embedder, self.bm25, self.vault_dir)
+                ingest_vault(self.db, embedder, self.bm25, self.vault_dir, progress=progress)
                 try:
                     fingerprint_path.write_text(current_fp, encoding="utf-8")
                 except OSError as e:
@@ -167,6 +167,8 @@ class BrainContext:
             else:
                 logger.debug("Vault fingerprint unchanged for {}, skipping ingest", self.brain_id)
 
+            if progress is not None:
+                progress["phase"] = "indexing"
             # Always rebuild BM25 from DB — cheap, keeps index live even
             # when ingest was skipped. Fixes the "empty BM25 after restart"
             # bug where ingest_vault only rebuilt BM25 when count > 0.
@@ -243,6 +245,12 @@ class BrainManager:
         self._contexts: dict[str, BrainContext] = {}
         self._active_id: str = "default"
         self._registry: list[dict] = []
+        # Live ingest progress, keyed by brain_id. Written by
+        # _load_index_and_maybe_ingest (via ingest_vault's progress dict),
+        # read by the /api/brains/{id}/ingest_status endpoint. A plain
+        # dict is fine — concurrent reads of a running counter only need
+        # approximate freshness, not transactional consistency.
+        self._ingest_progress: dict[str, dict] = {}
 
         # Shared resources (loaded once)
         self.embedder = Embedder.get()
@@ -568,8 +576,17 @@ class BrainManager:
         with self._lock:
             self._contexts[brain_id] = ctx
 
-        # Phase 2 (best-effort): ingest + BM25 build + karpathy + git
-        ctx._load_index_and_maybe_ingest(self.embedder)
+        # Phase 2 (best-effort): ingest + BM25 build + karpathy + git. Write
+        # progress into self._ingest_progress[brain_id] so the UI can poll
+        # /api/brains/{id}/ingest_status during a switch that would
+        # otherwise freeze silently for 30-60s on a large Obsidian vault.
+        progress = self._ingest_progress.setdefault(brain_id, {})
+        progress.update({"phase": "starting", "files_done": 0, "files_total": 0, "current_file": ""})
+        try:
+            ctx._load_index_and_maybe_ingest(self.embedder, progress=progress)
+        finally:
+            progress["phase"] = "ready"
+            progress["current_file"] = ""
 
         if activate:
             ctx.activate(self.embedder)

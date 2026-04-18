@@ -304,22 +304,50 @@ def ingest_vault(
     embedder: Embedder,
     bm25: BM25Index,
     vault_dir: Path,
+    progress: dict | None = None,
 ) -> int:
-    """Ingest all markdown files in the vault. Returns count of newly ingested files."""
+    """Ingest all markdown files in the vault. Returns count of newly ingested files.
+
+    If `progress` is provided it's mutated in-place with live ingest state:
+    {phase, files_total, files_done, current_file}. A concurrent reader
+    (typically the /api/brains/{id}/ingest_status endpoint) can read it
+    without coordination — reads of a running counter are fine because we
+    never need perfect consistency for a progress bar.
+    """
     vault = vault_dir
-    count = 0
 
     # rglob walks subdirectories so notes organized into folders
     # (`agent/`, `user/`, etc.) are picked up too. Files live at paths
     # relative to the vault root; ingest_file receives vault_root so it
     # can store the relative path as the filename.
-    for filepath in sorted(vault.rglob("*.md")):
+    files = sorted(vault.rglob("*.md"))
+    count = 0
+
+    if progress is not None:
+        progress["phase"] = "ingesting"
+        progress["files_total"] = len(files)
+        progress["files_done"] = 0
+        progress["current_file"] = ""
+
+    for i, filepath in enumerate(files):
+        if progress is not None:
+            progress["files_done"] = i
+            try:
+                progress["current_file"] = filepath.relative_to(vault).as_posix()
+            except ValueError:
+                progress["current_file"] = filepath.name
         result = ingest_file(filepath, db, embedder, bm25, vault_root=vault)
         if result:
             count += 1
 
+    if progress is not None:
+        progress["files_done"] = len(files)
+
     # After full vault ingest, recompute all semantic links
     if count > 0:
+        if progress is not None:
+            progress["phase"] = "linking"
+            progress["current_file"] = ""
         _recompute_all_semantic_links(db, embedder)
         bm25.build(db)
 

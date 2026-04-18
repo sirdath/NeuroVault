@@ -3,6 +3,7 @@ import { useGraphStore } from "../stores/graphStore";
 import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
+import { useBrainStore } from "../stores/brainStore";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -195,10 +196,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     settledRef.current = true;
   }, [nodes, edges]);
 
-  // Load graph on mount
+  // Load graph on mount, and re-load when the active brain changes or when
+  // any write path refreshes the notes list (create / save / delete all
+  // call loadNotes which replaces the array reference). Without this the
+  // graph showed stale nodes/edges until the user toggled tabs.
+  const activeBrainId = useBrainStore((s) => s.activeBrainId);
+  const notes = useNoteStore((s) => s.notes);
   useEffect(() => {
     loadGraph();
-  }, [loadGraph]);
+  }, [loadGraph, activeBrainId, notes]);
 
   // Resize canvas
   useEffect(() => {

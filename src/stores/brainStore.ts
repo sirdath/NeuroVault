@@ -10,6 +10,13 @@ export interface BrainInfo {
   vault_path?: string;
 }
 
+export interface IngestProgress {
+  phase: "starting" | "ingesting" | "linking" | "indexing" | "ready" | "idle" | "unknown";
+  files_done: number;
+  files_total: number;
+  current_file: string;
+}
+
 const API = "http://127.0.0.1:8765";
 
 interface BrainStore {
@@ -17,6 +24,7 @@ interface BrainStore {
   activeBrainId: string | null;
   activeBrainName: string;
   loading: boolean;
+  ingest: IngestProgress | null;
 
   loadBrains: () => Promise<void>;
   switchBrain: (brainId: string) => Promise<void>;
@@ -34,6 +42,7 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   activeBrainId: null,
   activeBrainName: "Default",
   loading: false,
+  ingest: null,
 
   loadBrains: async () => {
     try {
@@ -52,7 +61,23 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   },
 
   switchBrain: async (brainId: string) => {
-    set({ loading: true });
+    set({ loading: true, ingest: { phase: "starting", files_done: 0, files_total: 0, current_file: "" } });
+
+    // The activate call blocks on ingest (30-60s for a fresh Obsidian
+    // vault). Poll /ingest_status in parallel so the UI can show live
+    // progress instead of freezing silently. Both run concurrently —
+    // FastAPI handles sync endpoints in a thread pool so the poll
+    // doesn't stall behind the activate.
+    const poller = window.setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/api/brains/${brainId}/ingest_status`);
+        if (!r.ok) return;
+        const p = await r.json();
+        set({ ingest: p });
+        if (p.phase === "ready") window.clearInterval(poller);
+      } catch { /* ignore — will retry */ }
+    }, 500);
+
     try {
       const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
         method: "POST",
@@ -81,7 +106,8 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       await get().loadBrains();
       await useNoteStore.getState().initVault();
     } finally {
-      set({ loading: false });
+      window.clearInterval(poller);
+      set({ loading: false, ingest: null });
     }
   },
 

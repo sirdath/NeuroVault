@@ -152,6 +152,27 @@ def create_api(manager) -> FastAPI:
             return {"status": "deleted"}
         return {"status": "error", "message": "Cannot delete active brain"}
 
+    @app.get("/api/brains/{brain_id}/ingest_status")
+    def ingest_status(brain_id: str):
+        """Return live ingest progress so the UI can show a progress bar
+        during a brain switch that would otherwise freeze silently.
+
+        Phases: starting → ingesting → linking → indexing → ready. Missing
+        brain_id returns {phase: "unknown"} — harmless for the frontend
+        poll loop that just wants to know when to stop spinning.
+        """
+        p = manager._ingest_progress.get(brain_id)
+        if not p:
+            return {"phase": "unknown"}
+        # Return a snapshot copy so the client sees consistent values even
+        # if ingest_vault mutates the dict mid-read.
+        return {
+            "phase": p.get("phase", "idle"),
+            "files_done": int(p.get("files_done", 0) or 0),
+            "files_total": int(p.get("files_total", 0) or 0),
+            "current_file": p.get("current_file", ""),
+        }
+
     @app.get("/api/brains/{brain_id}/stats")
     def brain_stats(brain_id: str):
         """Disk footprint for a brain: markdown file count + total bytes.
