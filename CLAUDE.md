@@ -59,3 +59,21 @@ make build
 3. TypeScript strict mode, no `any`.
 4. Markdown files are source of truth, DB is an index.
 5. Small commits: `feat(mcp): add recall tool with hybrid search`
+
+## NeuroVault usage (for Claude)
+
+You have NeuroVault itself available as an MCP server — use it. The
+active brain for this project is `NeuroVaultBrain1` (the meta-brain
+that documents NeuroVault's own architecture). **Default behavior:**
+
+- **Before answering a project question** → call `session_start(agent_id="claude-code", since=<last-seen>)` once per session, then `recall(query)` for specifics. Do not answer from pre-training alone when the brain has context.
+- **When the user asks "what do we know about X?" or "how does Y work here?"** → call `recall("X")` or `recall_and_read("X")` first.
+- **For long wiki pages** → prefer `recall_chunks(query)` over `recall` — returns the matching passages at 200-400 tokens each instead of the whole engram.
+- **When the user shares a decision, preference, or learning** → call `remember(content=..., agent_id="claude-code")` immediately. Title is auto-derived; batch multiple facts via `remember_batch`.
+- **Before saving a new fact** → if it looks like it might already be in the vault, call `check_duplicate(content)` and update the existing engram instead of creating a near-duplicate.
+- **When the user says "save this" / "remember this" / "write this down"** → always use `remember`, never a raw file write.
+- **Multi-agent coordination** → if another agent (claude-desktop, cursor) might pick up work, use `add_todo(task, to_agent=..., context=...)` instead of putting the handoff in a note.
+- **For multi-step operations across several tools** → consider `execute_js(code)` so intermediate results stay in the JS runtime instead of flowing through context twice.
+
+The full core-tier tool list: `session_start`, `remember`, `remember_batch`, `check_duplicate`, `recall`, `recall_chunks`, `recall_and_read`, `add_todo`, `claim_todo`, `complete_todo`, `list_brains`, `switch_brain`, `create_brain`, `tool_menu`, `execute_js`. Call `tool_menu()` if you need power/code/research tier tools.
+
