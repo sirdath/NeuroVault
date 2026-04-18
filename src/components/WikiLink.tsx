@@ -24,8 +24,8 @@ export function WikiLink({ title: _title, filename, onClick, children }: WikiLin
       onMouseLeave={hover.onMouseLeave}
       className={
         filename
-          ? "text-[#8b7cf8] hover:text-[#a998ff] underline decoration-dotted cursor-pointer"
-          : "text-[#8b7cf8]/60 underline decoration-dotted decoration-wavy cursor-help"
+          ? "[color:var(--nv-accent)] hover:brightness-125 underline decoration-dotted cursor-pointer transition-all"
+          : "[color:var(--nv-accent)] opacity-60 underline decoration-dotted decoration-wavy cursor-help"
       }
     >
       {children}

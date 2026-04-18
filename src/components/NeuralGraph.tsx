@@ -455,22 +455,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {/* Hover preview card */}
       {hoverCard && (
         <div
-          className="absolute bg-[#12121c] border border-[#1f1f2e] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
+          className="absolute [background-color:var(--nv-bg)] border [border-color:var(--nv-border)] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
           style={{ left: hoverCard.x, top: hoverCard.y }}
           onMouseEnter={cancelClose}
           onMouseLeave={() => scheduleClose()}
         >
           <div className="flex items-start justify-between gap-2 mb-2">
-            <h3 className="text-sm font-semibold text-[#e8e6f0] font-[Geist,sans-serif] leading-tight">
+            <h3 className="text-sm font-semibold [color:var(--nv-text)] font-[Geist,sans-serif] leading-tight">
               {hoverCard.node.title}
             </h3>
+            {/* Strength badge keeps its semantic color (gold = strong,
+                teal = linked, grey = fading) — those map to memory state,
+                not theme chrome. */}
             <span
               className={`text-[9px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded flex-shrink-0 ${
                 hoverCard.node.state === "active" || hoverCard.node.state === "fresh"
                   ? "bg-[#f0a500]/15 text-[#f0a500]"
                   : hoverCard.node.state === "connected"
                     ? "bg-[#00c9b1]/15 text-[#00c9b1]"
-                    : "bg-[#35335a]/30 text-[#8a88a0]"
+                    : "[background-color:var(--nv-surface)] [color:var(--nv-text-muted)]"
               }`}
             >
               {Math.round(hoverCard.node.strength * 100)}%
@@ -478,27 +481,28 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           </div>
 
           {hoverCard.preview && (
-            <p className="text-xs text-[#8a88a0] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
+            <p className="text-xs [color:var(--nv-text-muted)] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
               {hoverCard.preview}
             </p>
           )}
 
-          <div className="flex items-center justify-between text-[10px] text-[#35335a] font-[Geist,sans-serif] mb-3">
+          <div className="flex items-center justify-between text-[10px] [color:var(--nv-text-dim)] font-[Geist,sans-serif] mb-3">
             <span>{hoverCard.node.access_count} accesses</span>
             <span className="capitalize">{hoverCard.node.state}</span>
           </div>
 
           <button
             onClick={() => handleViewNote(hoverCard.node)}
-            className="w-full text-xs font-medium font-[Geist,sans-serif] bg-[#f0a500] text-[#0b0b12] py-1.5 rounded hover:bg-[#f0a500]/90 transition-colors"
+            className="w-full text-xs font-medium font-[Geist,sans-serif] [background-color:var(--nv-accent)] [color:var(--nv-bg)] py-1.5 rounded hover:brightness-110 transition-all"
           >
             View note
           </button>
         </div>
       )}
 
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] text-[#8a88a0] pointer-events-none">
+      {/* Legend — color swatches match the canvas node colors (semantic,
+          not theme chrome) so stay as fixed hex values. */}
+      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] [color:var(--nv-text-muted)] pointer-events-none">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> strong
         </span>
@@ -506,16 +510,16 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           <span className="w-2 h-2 rounded-full bg-[#00c9b1]" /> linked
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#35335a]" /> fading
+          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: "var(--nv-text-dim)" }} /> fading
         </span>
-        <span className="flex items-center gap-1 ml-2 text-[#35335a]">
+        <span className="flex items-center gap-1 ml-2 [color:var(--nv-text-dim)]">
           click a node to open
         </span>
       </div>
 
       {nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-[#6a6880] text-sm font-[Geist,sans-serif]">
+          <p className="[color:var(--nv-text-muted)] text-sm font-[Geist,sans-serif]">
             Create a few notes to see your knowledge graph
           </p>
         </div>

@@ -456,6 +456,40 @@ class BrainManager:
             for b in self._registry
         ]
 
+    def update_brain(
+        self,
+        brain_id: str,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> bool:
+        """Rename or re-describe a brain. Updates display fields only —
+        the brain_id (slug, directory name, DB path) never changes, so
+        nothing on disk needs to move. Returns False if the brain is
+        unknown.
+        """
+        found = False
+        with self._lock:
+            for b in self._registry:
+                if b["id"] == brain_id:
+                    if name is not None:
+                        b["name"] = name
+                    if description is not None:
+                        b["description"] = description
+                    found = True
+                    break
+            if found:
+                self._save_registry()
+
+        # Update in-memory context display fields too so the active brain
+        # reflects the change without requiring a reload.
+        if found and brain_id in self._contexts:
+            ctx = self._contexts[brain_id]
+            if name is not None:
+                ctx.name = name
+            if description is not None:
+                ctx.description = description
+        return found
+
     def switch_brain(self, brain_id: str) -> BrainContext:
         """Switch the active brain."""
         # Validate brain exists

@@ -157,7 +157,7 @@ export function Sidebar({
     >
       {/* Resize handle */}
       <div
-        className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+        className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:[background-color:var(--nv-border)] active:[background-color:var(--nv-accent-glow)] transition-colors"
         onMouseDown={() => { resizing.current = true; document.body.style.cursor = "col-resize"; }}
       />
       {/* Header — search + new note on same line */}
@@ -417,7 +417,7 @@ function NoteList({
               >
                 <button
                   onClick={() => onToggleFolder(row.name)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:bg-white/[0.03]"
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:[background-color:var(--nv-surface)]"
                   style={{ color: "var(--nv-text-muted)" }}
                 >
                   <svg
@@ -498,7 +498,7 @@ function NoteList({
                     e.stopPropagation();
                     onDelete(note.filename, note.title);
                   }}
-                  className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 text-white/20 hover:text-[#ff6b6b] transition-all text-xs w-5 h-5 flex items-center justify-center rounded-lg hover:bg-white/[0.06]"
+                  className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 [color:var(--nv-text-dim)] hover:[color:var(--nv-negative)] transition-all text-xs w-5 h-5 flex items-center justify-center rounded-lg hover:[background-color:var(--nv-surface)]"
                 >
                   ×
                 </button>

@@ -4,24 +4,31 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { toast } from "../stores/toastStore";
 import type { CompilationChangelogEntry } from "../lib/api";
 
-// Vault Noir palette anchors (kept local to this file — same values the
-// other panels use, imported via CSS custom properties elsewhere but
-// inlined here for Tailwind arbitrary-value syntax).
-// Internal Tailwind fragments. Main containers use inline styles from
-// CSS variables (--nv-bg, --nv-surface, --nv-border) for theme support.
-const BORDER = "border-white/[0.06]";
-const TEXT = "text-white/90";
-const TEXT_MUTED = "text-white/40";
-const TEXT_DIM = "text-white/20";
-const ACCENT = "text-[#b592ff]";
-const ACCENT_BG = "bg-white/[0.12]";
-const POSITIVE = "text-[#4ade80]";
-const NEGATIVE = "text-[#ff6b6b]";
+// Theme-aware Tailwind fragments. Uses arbitrary-property syntax so
+// switching the active theme (Midnight / Claude / Rosé Pine / …) flows
+// through every pixel — no hardcoded hex values.
+const BORDER = "[border-color:var(--nv-border)]";
+const TEXT = "[color:var(--nv-text)]";
+const TEXT_MUTED = "[color:var(--nv-text-muted)]";
+const TEXT_DIM = "[color:var(--nv-text-dim)]";
+const ACCENT = "[color:var(--nv-accent)]";
+const ACCENT_BG = "[background-color:var(--nv-accent-glow)]";
+const POSITIVE = "[color:var(--nv-positive)]";
+const NEGATIVE = "[color:var(--nv-negative)]";
 
 function statusBadge(status: string): { label: string; color: string } {
-  if (status === "approved") return { label: "APPROVED", color: "bg-[#4ade80]/10 text-[#4ade80] border border-[#4ade80]/15" };
-  if (status === "rejected") return { label: "REJECTED", color: "bg-[#ff6b6b]/10 text-[#ff6b6b] border border-[#ff6b6b]/15" };
-  return { label: "PENDING", color: "bg-white/[0.06] text-white/50 border border-white/[0.08]" };
+  if (status === "approved") return {
+    label: "APPROVED",
+    color: "[background-color:var(--nv-accent-glow)] [color:var(--nv-positive)] border [border-color:var(--nv-border)]",
+  };
+  if (status === "rejected") return {
+    label: "REJECTED",
+    color: "[background-color:var(--nv-accent-glow)] [color:var(--nv-negative)] border [border-color:var(--nv-border)]",
+  };
+  return {
+    label: "PENDING",
+    color: "[background-color:var(--nv-surface)] [color:var(--nv-text-muted)] border [border-color:var(--nv-border)]",
+  };
 }
 
 /** Short relative timestamp — "2 min ago", "3 hours ago", "yesterday".
@@ -86,7 +93,7 @@ function CompareView({ oldContent, newContent }: { oldContent: string; newConten
 
 function ChangelogEntry({ entry }: { entry: CompilationChangelogEntry }) {
   return (
-    <div className={`border-l-2 ${BORDER} pl-3 py-2 hover:bg-[#15152a] transition-colors`}>
+    <div className={`border-l-2 ${BORDER} pl-3 py-2 hover:[background-color:var(--nv-surface)] transition-colors`}>
       <div className="flex items-center gap-2 mb-1">
         <span
           className={`text-[10px] uppercase tracking-wider font-semibold ${changeBadge(
@@ -214,12 +221,12 @@ export function CompilationReview() {
     <div className="flex-1 flex overflow-hidden" style={{ background: "var(--nv-bg)" }}>
       {/* Left: compilation list */}
       <div
-        className={`border-r ${BORDER} flex flex-col bg-white/[0.02] relative`}
+        className={`border-r ${BORDER} flex flex-col [background-color:var(--nv-surface)] relative`}
         style={{ width: listWidth, minWidth: listWidth }}
       >
         {/* Resize handle */}
         <div
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:[background-color:var(--nv-border)] active:[background-color:var(--nv-border)] transition-colors"
           onMouseDown={() => { resizingList.current = true; document.body.style.cursor = "col-resize"; }}
         />
         <div className={`px-4 py-3 border-b ${BORDER}`}>
@@ -289,8 +296,8 @@ export function CompilationReview() {
               <button
                 key={c.id}
                 onClick={() => selectCompilation(c.id)}
-                className={`w-full text-left px-4 py-3 border-b ${BORDER} hover:bg-[#15152a] transition-colors ${
-                  isActive ? "bg-[#1a1a2e]" : ""
+                className={`w-full text-left px-4 py-3 border-b ${BORDER} hover:[background-color:var(--nv-surface)] transition-colors ${
+                  isActive ? "[background-color:var(--nv-surface)]" : ""
                 }`}
               >
                 <div className="flex items-start justify-between gap-2 mb-1">
@@ -374,7 +381,7 @@ export function CompilationReview() {
                       </button>
                       <button
                         onClick={handleApprove}
-                        className={`px-3 py-1 text-[11px] ${ACCENT_BG} text-[#0b0b12] rounded uppercase tracking-wider font-semibold font-[Geist,sans-serif] hover:brightness-110`}
+                        className={`px-3 py-1 text-[11px] ${ACCENT_BG} [color:var(--nv-bg)] rounded uppercase tracking-wider font-semibold font-[Geist,sans-serif] hover:brightness-110`}
                       >
                         approve
                       </button>
@@ -417,7 +424,7 @@ export function CompilationReview() {
                       ? "border-[#8cd98c]"
                       : activeDetail.status === "rejected"
                       ? "border-[#ff8a8a]"
-                      : "border-[#b592ff]"
+                      : "[border-color:var(--nv-accent)]"
                   } pl-3 py-1`}
                 >
                   <div className={`text-[9px] uppercase tracking-wider ${TEXT_DIM} font-[Geist,sans-serif] mb-0.5`}>
@@ -453,12 +460,12 @@ export function CompilationReview() {
 
               {/* Changelog sidebar — resizable */}
               <div
-                className={`border-l ${BORDER} flex flex-col bg-white/[0.02] relative`}
+                className={`border-l ${BORDER} flex flex-col [background-color:var(--nv-surface)] relative`}
                 style={{ width: changelogWidth, minWidth: changelogWidth }}
               >
                 {/* Resize handle (left edge) */}
                 <div
-                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize z-10 hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors"
+                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize z-10 hover:[background-color:var(--nv-border)] active:[background-color:var(--nv-border)] transition-colors"
                   onMouseDown={() => { resizingChangelog.current = true; document.body.style.cursor = "col-resize"; }}
                 />
                 <div className={`px-4 py-3 border-b ${BORDER}`}>
@@ -626,12 +633,12 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
               onChange={(e) => setTopic(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !busy) prepare(); }}
               placeholder="Topic (e.g. NeuroVault)"
-              className={`flex-1 text-[12px] px-3 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif] bg-white/[0.03] border ${BORDER} ${TEXT} placeholder:text-white/25`}
+              className={`flex-1 text-[12px] px-3 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif] [background-color:var(--nv-surface)] border ${BORDER} ${TEXT} placeholder:[color:var(--nv-text-dim)]`}
             />
             <button
               onClick={prepare}
               disabled={busy || !topic.trim()}
-              className={`text-[11px] font-[Geist,sans-serif] px-3 py-1.5 rounded-md bg-white/[0.05] ${TEXT_MUTED} hover:${TEXT} border ${BORDER} disabled:opacity-40 transition-colors`}
+              className={`text-[11px] font-[Geist,sans-serif] px-3 py-1.5 rounded-md [background-color:var(--nv-surface)] ${TEXT_MUTED} hover:${TEXT} border ${BORDER} disabled:opacity-40 transition-colors`}
             >
               {busy && !pack ? "…" : "Prepare"}
             </button>
@@ -644,7 +651,7 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
           {pack && (
             <div className="space-y-2.5 pt-1">
               <div className={`flex items-center gap-2 text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif]`}>
-                <span className={`w-1 h-1 rounded-full bg-[#b592ff]`} />
+                <span className={`w-1 h-1 rounded-full [background-color:var(--nv-accent)]`} />
                 <span>
                   {pack.sources.length} source{pack.sources.length === 1 ? "" : "s"}
                   {pack.existing_wiki ? " · updating" : " · new page"}
@@ -653,7 +660,7 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
 
               <button
                 onClick={copyPack}
-                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md bg-white/[0.04] ${TEXT} hover:bg-white/[0.07] border ${BORDER} transition-colors flex items-center justify-center gap-2`}
+                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md [background-color:var(--nv-surface)] ${TEXT} hover:brightness-110 border ${BORDER} transition-colors flex items-center justify-center gap-2`}
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
@@ -670,13 +677,13 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
                 onChange={(e) => setWikiDraft(e.target.value)}
                 placeholder="# Topic&#10;&#10;Paste the wiki markdown returned by the agent…"
                 rows={8}
-                className={`w-full text-[11.5px] px-3 py-2 rounded-md focus:outline-none font-mono bg-white/[0.03] border ${BORDER} ${TEXT} resize-y leading-relaxed placeholder:text-white/20`}
+                className={`w-full text-[11.5px] px-3 py-2 rounded-md focus:outline-none font-mono [background-color:var(--nv-surface)] border ${BORDER} ${TEXT} resize-y leading-relaxed placeholder:[color:var(--nv-text-dim)]`}
               />
 
               <button
                 onClick={submit}
                 disabled={busy || !wikiDraft.trim()}
-                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md ${ACCENT_BG} ${ACCENT} hover:bg-white/[0.16] disabled:opacity-40 transition-colors font-medium`}
+                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md ${ACCENT_BG} ${ACCENT} hover:brightness-110 disabled:opacity-40 transition-colors font-medium`}
               >
                 {busy ? "Submitting…" : "Submit wiki for review"}
               </button>

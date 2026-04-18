@@ -64,7 +64,7 @@ export function ActivityBar({ onExpand, serverUp }: ActivityBarProps) {
   return (
     <button
       onClick={onExpand}
-      className="h-6 min-h-[24px] flex items-center justify-between px-4 flex-shrink-0 transition-colors hover:bg-white/[0.03] cursor-pointer w-full"
+      className="h-6 min-h-[24px] flex items-center justify-between px-4 flex-shrink-0 transition-colors hover:[background-color:var(--nv-surface)] cursor-pointer w-full"
       style={{ borderTop: "1px solid var(--nv-border)" }}
       title="Click to view full activity feed"
     >

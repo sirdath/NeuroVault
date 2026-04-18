@@ -179,3 +179,16 @@ html[data-density="compact"] {
 .fade-in {
   animation: fadeIn 150ms ease-out;
 }
+
+/* Reduce Motion — flipped on via the `.nv-reduce-motion` class on the
+   root <div>. Kills animations and transitions for users who enable
+   the setting, per WCAG 2.3.3. Keeps animations technically running
+   (some rely on end events) but shortens them to ~0. */
+.nv-reduce-motion *,
+.nv-reduce-motion *::before,
+.nv-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

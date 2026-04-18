@@ -22,7 +22,23 @@ export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
   const theme = useSettingsStore((s) => s.theme);
-  const [view, setView] = useState<View>("editor");
+  const reduceMotion = useSettingsStore((s) => s.reduceMotion);
+  // Persist the active tab across reloads — users expect their last view
+  // (Editor / Graph / Compile) to still be selected when they re-open.
+  const [view, setViewState] = useState<View>(() => {
+    try {
+      const v = localStorage.getItem("nv.view");
+      if (v === "editor" || v === "graph" || v === "compile") return v;
+    } catch { /* quota / disabled storage */ }
+    return "editor";
+  });
+  const setView = useCallback((v: View | ((prev: View) => View)) => {
+    setViewState((prev) => {
+      const next = typeof v === "function" ? (v as (p: View) => View)(prev) : v;
+      try { localStorage.setItem("nv.view", next); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -195,6 +211,15 @@ export default function App() {
         e.preventDefault();
         toggleView();
       }
+      // Ctrl+1/2/3 — jump straight to Editor / Graph / Compile. The
+      // number-row key doesn't vary by keyboard layout on Windows/Mac so
+      // checking e.key is fine; don't trigger when a modifier chord
+      // collides with a browser shortcut (e.g. Ctrl+Shift+1).
+      if (ctrl && !e.shiftKey && !e.altKey) {
+        if (e.key === "1") { e.preventDefault(); setView("editor"); return; }
+        if (e.key === "2") { e.preventDefault(); setView("graph"); return; }
+        if (e.key === "3") { e.preventDefault(); setView("compile"); return; }
+      }
       if (ctrl && e.key === "/") {
         e.preventDefault();
         setTriggerSearch((n) => n + 1);
@@ -236,7 +261,7 @@ export default function App() {
 
   return (
     <div
-      className="flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]"
+      className={`flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
       {/* Server status banner — different content for starting vs offline */}

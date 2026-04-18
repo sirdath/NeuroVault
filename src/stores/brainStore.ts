@@ -25,6 +25,7 @@ interface BrainStore {
     description: string,
     vaultPath?: string,
   ) => Promise<{ brain_id: string; name: string; vault_path?: string; is_external?: boolean } | null>;
+  updateBrain: (brainId: string, patch: { name?: string; description?: string }) => Promise<boolean>;
   deleteBrain: (brainId: string) => Promise<boolean>;
 }
 
@@ -100,6 +101,32 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       return data;
     } catch {
       return null;
+    }
+  },
+
+  updateBrain: async (brainId: string, patch: { name?: string; description?: string }) => {
+    try {
+      const res = await fetch(`${API}/api/brains/${brainId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.error) return false;
+      // Optimistically update the local list so the UI doesn't flicker
+      // back to the old name between the PATCH and the next loadBrains.
+      set((state) => ({
+        brains: state.brains.map((b) =>
+          b.id === brainId ? { ...b, ...patch } : b,
+        ),
+        activeBrainName:
+          state.activeBrainId === brainId && patch.name ? patch.name : state.activeBrainName,
+      }));
+      await get().loadBrains();
+      return true;
+    } catch {
+      return false;
     }
   },
 

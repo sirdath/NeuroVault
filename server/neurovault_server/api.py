@@ -128,6 +128,23 @@ def create_api(manager) -> FastAPI:
         ctx = manager.switch_brain(brain_id)
         return {"status": "switched", "brain_id": ctx.brain_id, "name": ctx.name}
 
+    @app.patch("/api/brains/{brain_id}")
+    def update_brain_endpoint(brain_id: str, body: dict):
+        """Rename or re-describe a brain. Accepts {name?, description?}.
+
+        The brain_id never changes — it's the stable slug that keeps
+        brains.json, on-disk folders, and references in the DB consistent.
+        """
+        b = body or {}
+        name = b.get("name")
+        desc = b.get("description")
+        if name is None and desc is None:
+            return {"error": "nothing to update"}
+        ok = manager.update_brain(brain_id, name=name, description=desc)
+        if not ok:
+            return {"error": "brain not found"}
+        return {"status": "updated", "brain_id": brain_id}
+
     @app.delete("/api/brains/{brain_id}")
     def delete_brain(brain_id: str):
         success = manager.delete_brain(brain_id)

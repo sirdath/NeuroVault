@@ -120,13 +120,10 @@ export function SettingsView() {
               <button
                 key={t.id}
                 onClick={() => update({ themeId: t.id })}
-                className={`relative text-left rounded-xl p-3 transition-all border ${
-                  themeId === t.id
-                    ? "border-white/20 ring-1 ring-white/10"
-                    : "border-white/[0.06] hover:border-white/[0.12]"
-                }`}
+                className="relative text-left rounded-xl p-3 transition-all border"
                 style={{
                   background: t.bg,
+                  borderColor: themeId === t.id ? t.accent : t.border,
                   boxShadow: themeId === t.id ? `0 0 20px ${t.accentGlow}` : undefined,
                 }}
               >
@@ -134,7 +131,7 @@ export function SettingsView() {
                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.accent }} />
                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.positive }} />
                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.negative }} />
-                  <div className="w-4 h-4 rounded-full border border-white/10" style={{ background: t.surface }} />
+                  <div className="w-4 h-4 rounded-full border" style={{ background: t.surface, borderColor: t.border }} />
                 </div>
                 <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: t.text }}>{t.name}</p>
                 <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: t.textDim }}>{t.description}</p>
