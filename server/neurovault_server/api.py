@@ -1024,6 +1024,18 @@ def create_api(manager) -> FastAPI:
             "source_count": len(sources),
         }
 
+    @app.post("/api/execute_js")
+    def execute_js_endpoint(body: dict):
+        """Run a JS snippet that can call the NeuroVault SDK to chain
+        operations in a single round trip. Body: {code, timeout_ms?}.
+        Requires Node.js on the host PATH."""
+        from neurovault_server.server import execute_js as _ej
+        code = (body.get("code") or "").strip()
+        if not code:
+            return {"error": "code is required"}
+        timeout_ms = int(body.get("timeout_ms") or 15000)
+        return _ej(code=code, timeout_ms=timeout_ms)
+
     @app.post("/api/check_duplicate")
     def check_duplicate_endpoint(body: dict):
         """Read-only dedup check. Body: {content, threshold?, limit?}.

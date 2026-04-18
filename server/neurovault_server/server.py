@@ -810,6 +810,100 @@ def session_start(
 
 
 @tiered("core")
+def execute_js(code: str, timeout_ms: int = 15000) -> dict:
+    """Run JavaScript that uses the NeuroVault SDK (auto-generated at boot).
+    Lets you chain operations — recall, filter in code, fetch bodies,
+    remember derived facts — in a single tool call instead of many.
+
+    Requires Node.js on the host PATH. Script runs unsandboxed under the
+    server user (same trust as the MCP server itself). Anything written
+    to stdout is returned as `result`; if stdout parses as JSON, a
+    parsed `value` is also included.
+
+    Pattern:
+      import * as nv from './neurovault.mjs';
+      const hits = await nv.recall('token efficiency', { limit: 5 });
+      const ids = hits.map(h => h.engram_id);
+      const bodies = await Promise.all(ids.map(id => nv.getNote(id)));
+      nv.out(bodies.map(b => ({ id: b.id, title: b.title })));
+
+    Returns: {exit_code, result (stdout), stderr, value? (parsed JSON)}.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+    from neurovault_server.js_sdk import sdk_path as _sdk_path
+    from neurovault_server.config import NEUROVAULT_HOME, SERVER_PORT
+
+    node = shutil.which("node")
+    if not node:
+        return {
+            "error": "node not found on PATH",
+            "hint": "install Node.js 18+ and restart the server",
+        }
+
+    sdk_file = _sdk_path(NEUROVAULT_HOME)
+    if not sdk_file.exists():
+        return {"error": f"SDK not emitted at {sdk_file}; restart the server"}
+
+    # Stage the user code as a sibling module next to the SDK so the
+    # relative import `./neurovault.mjs` resolves without path gymnastics.
+    script_dir = sdk_file.parent
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".mjs", delete=False, dir=str(script_dir), encoding="utf-8",
+    ) as f:
+        # Wrap the user code so top-level await works even on older Node
+        # and so uncaught rejections surface as non-zero exits.
+        f.write(
+            "import * as nv from './neurovault.mjs';\n"
+            "(async () => {\n"
+            "  try {\n"
+            f"    {code}\n"
+            "  } catch (e) {\n"
+            "    console.error(String(e && e.stack || e));\n"
+            "    process.exit(1);\n"
+            "  }\n"
+            "})();\n"
+        )
+        script_path = f.name
+
+    try:
+        import os
+        env = os.environ.copy()
+        env["NV_API_URL"] = f"http://127.0.0.1:{SERVER_PORT}"
+        proc = subprocess.run(
+            [node, script_path],
+            capture_output=True, text=True, timeout=max(1, timeout_ms) / 1000.0,
+            env=env, encoding="utf-8", errors="replace",
+        )
+        stdout = (proc.stdout or "").rstrip()
+        stderr = (proc.stderr or "").rstrip()
+        out: dict = {
+            "exit_code": proc.returncode,
+            "result": stdout,
+            "stderr": stderr,
+        }
+        # Best-effort JSON parse so callers can use the structured value
+        # without re-parsing themselves.
+        if stdout:
+            try:
+                import json as _json
+                out["value"] = _json.loads(stdout)
+            except Exception:
+                pass
+        return out
+    except subprocess.TimeoutExpired:
+        return {"error": f"timed out after {timeout_ms}ms", "exit_code": -1}
+    except Exception as e:
+        return {"error": str(e), "exit_code": -1}
+    finally:
+        try:
+            __import__("os").unlink(script_path)
+        except OSError:
+            pass
+
+
+@tiered("core")
 def tool_menu() -> dict:
     """List extra capabilities available in other tool tiers without loading
     their schemas into context. Returns a short map of tier → [tool_name: one-
@@ -2539,6 +2633,17 @@ def main() -> None:
     init_audit_log(active.vault_dir.parent)
 
     _warm_embedder()
+
+    # Emit the JS SDK so execute_js() has something to import. Idempotent —
+    # safe to run every boot; the file is overwritten with the current
+    # canonical shape.
+    try:
+        from neurovault_server.js_sdk import write_sdk
+        from neurovault_server.config import NEUROVAULT_HOME
+        sdk = write_sdk(NEUROVAULT_HOME)
+        logger.info("JS SDK emitted at {}", sdk)
+    except Exception as e:
+        logger.debug("JS SDK emission skipped: {}", e)
 
     if "--http-only" in sys.argv:
         import uvicorn
