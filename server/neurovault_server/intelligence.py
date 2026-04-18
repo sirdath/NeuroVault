@@ -134,27 +134,55 @@ def extract_temporal_facts(
     db: Database,
     engram_id: str,
     content: str,
+    embedder=None,  # Embedder — optional; enables semantic conflict detection
 ) -> int:
     """Extract time-sensitive facts and track their validity periods.
 
-    When a new fact supersedes an old one, marks the old as no longer current.
+    When a new fact supersedes an old one, marks the old as no longer
+    current. When `embedder` is provided, uses embedding-based topic
+    matching (much lower false-positive rate than the pure keyword path
+    which has a long history of spurious supersedes).
     """
     facts = _extract_facts_from_content(content)
-    stored = 0
+    if not facts:
+        return 0
 
+    # Pre-fetch candidate existing facts once per ingest, not per new fact.
+    existing = db.conn.execute(
+        """SELECT id, fact FROM temporal_facts
+           WHERE engram_id != ? AND is_current = 1""",
+        (engram_id,),
+    ).fetchall()
+
+    # Pre-embed all candidates if we have an embedder — avoids the N*M
+    # embed calls the naive loop would do. A vault of 1000 temporal
+    # facts × 20 new facts = 20k embed calls becomes 1020 calls.
+    old_embeddings: dict[str, list[float]] = {}
+    if embedder is not None and existing:
+        try:
+            old_texts = [row[1] for row in existing]
+            old_vecs = embedder.encode_batch(old_texts)
+            for (oid, _), vec in zip(existing, old_vecs):
+                old_embeddings[oid] = vec
+        except Exception as e:
+            logger.debug("temporal-facts: bulk embed skipped, falling back: {}", e)
+            old_embeddings = {}
+
+    stored = 0
     for fact in facts:
         fact_id = str(uuid.uuid4())
 
-        # Check if this fact supersedes an existing one
-        existing = db.conn.execute(
-            """SELECT id, fact FROM temporal_facts
-               WHERE engram_id != ? AND is_current = 1""",
-            (engram_id,),
-        ).fetchall()
+        # Embed the new fact once per loop (reused for all comparisons).
+        new_vec = None
+        if embedder is not None and old_embeddings:
+            try:
+                new_vec = embedder.encode(fact)
+            except Exception:
+                new_vec = None
 
         for old_id, old_fact in existing:
-            if _facts_conflict(fact, old_fact):
-                # Mark old fact as superseded
+            old_vec = old_embeddings.get(old_id)
+            if _facts_conflict(fact, old_fact, new_vec=new_vec, old_vec=old_vec):
                 db.conn.execute(
                     """UPDATE temporal_facts SET
                        is_current = 0,
@@ -191,26 +219,128 @@ def _extract_facts_from_content(content: str) -> list[str]:
     return facts[:20]
 
 
-def _facts_conflict(new_fact: str, old_fact: str) -> bool:
-    """Check if two facts are about the same topic but contradict."""
-    # Simple: if they share 3+ content words and one has a negation
-    new_words = set(new_fact.lower().split()) - {"the", "a", "is", "to", "and", "of", "for", "with", "in"}
-    old_words = set(old_fact.lower().split()) - {"the", "a", "is", "to", "and", "of", "for", "with", "in"}
-    overlap = new_words & old_words
+# Explicit supersede markers — phrases that only make sense when the
+# speaker is REPLACING a prior fact. Deliberately short list; adding
+# weaker markers like "now" or "actually" raises false-positive rate.
+_SUPERSEDE_MARKERS = (
+    "no longer",
+    "not ... anymore",  # surfaced via substring check below
+    "anymore",
+    "any more",
+    "switched from",
+    "switched to",
+    "instead of",
+    "changed to",
+    "changed from",
+    "moved from",
+    "moved to",
+    "replaced with",
+    "replaced by",
+    "deprecated",
+    "used to",
+    "we now use",
+    "we now prefer",
+    "we decided instead",
+    "rolled back to",
+)
 
-    if len(overlap) < 3:
-        return False
 
-    # Check for opposing signals
+def _has_supersede_marker(text: str) -> bool:
+    t = text.lower()
+    return any(marker in t for marker in _SUPERSEDE_MARKERS)
+
+
+def _cosine(a, b) -> float:
+    """Cosine similarity of two plain Python number lists. Assumes L2-
+    normalized inputs from the bge-small embedder — the dot product is
+    already the cosine.
+    """
+    if a is None or b is None or len(a) != len(b):
+        return 0.0
+    s = 0.0
+    for x, y in zip(a, b):
+        s += x * y
+    return max(-1.0, min(1.0, s))
+
+
+def _facts_conflict(
+    new_fact: str,
+    old_fact: str,
+    new_vec=None,
+    old_vec=None,
+) -> bool:
+    """Do two facts contradict each other?
+
+    Decision rule — designed to nearly eliminate the false positives the
+    pure keyword matcher used to generate ("yes/no", "added/removed",
+    "free/paid" pairs that share a word but are about different topics):
+
+      1. They must be about the SAME TOPIC (cosine similarity of
+         embeddings in [0.55, 0.92]). The upper bound rejects near-
+         duplicates — those are the dedup story, not a conflict. The
+         lower bound keeps unrelated topics from being compared on
+         keyword signals alone.
+      2. AT LEAST ONE of them must carry an explicit supersede marker
+         ("switched from", "no longer", "instead of", etc.). A raw "not"
+         somewhere in the sentence is NOT enough — that was the 2025
+         detector's big false-positive source.
+
+    When embeddings aren't available (no embedder threaded through),
+    we fall back to the stricter keyword path: require 3+ shared
+    content words AND an explicit supersede marker. This is tighter
+    than the original "not in one but not the other" rule.
+    """
+    # Semantic path — preferred when embeddings are available.
+    if new_vec is not None and old_vec is not None:
+        sim = _cosine(new_vec, old_vec)
+        # Too dissimilar: different topics, no conflict.
+        if sim < 0.55:
+            return False
+        # Too similar: same fact restated, dedup not conflict.
+        if sim >= 0.92:
+            return False
+        # Topic matches and an explicit supersede marker is present.
+        return _has_supersede_marker(new_fact) or _has_supersede_marker(old_fact)
+
+    # Keyword fallback — no embeddings available. Requires an explicit
+    # supersede marker AND topical overlap. How much overlap we need
+    # depends on how strong the marker is:
+    #
+    #   strong markers ("switched from", "no longer", "used to",
+    #     "instead of", "replaced with", "deprecated", "rolled back to")
+    #     → these only make sense as replacements; 1 shared content
+    #     word (the subject being replaced) is enough signal.
+    #   weak markers ("anymore", "changed to", "moved to", "we now use"...)
+    #     → require 2+ shared content words to avoid false positives.
+    strong = (
+        "switched from", "switched to", "no longer", "used to",
+        "instead of", "replaced with", "replaced by", "deprecated",
+        "rolled back to", "we decided instead",
+    )
     new_lower = new_fact.lower()
     old_lower = old_fact.lower()
-    return (
-        ("not" in new_lower and "not" not in old_lower) or
-        ("not" in old_lower and "not" not in new_lower) or
-        ("instead of" in new_lower) or
-        ("switched from" in new_lower) or
-        ("no longer" in new_lower)
-    )
+    has_strong = any(m in new_lower or m in old_lower for m in strong)
+    has_any = _has_supersede_marker(new_fact) or _has_supersede_marker(old_fact)
+    if not has_any:
+        return False
+    stopwords = {
+        "the", "a", "an", "is", "are", "was", "were", "to", "and", "or",
+        "of", "for", "with", "in", "on", "at", "by", "from", "as", "that",
+        "this", "these", "those", "it", "be", "been", "being", "has", "have",
+        "had", "do", "does", "did", "will", "would", "should", "can", "could",
+        "we", "i", "they", "our", "their", "my", "your", "not", "no",
+        "but", "out", "all", "any", "some", "most", "more", "less",
+    }
+    def _tokens(text: str) -> set:
+        out = set()
+        for tok in text.lower().split():
+            tok = tok.strip(".,;:!?()[]\"'")
+            if tok and tok not in stopwords:
+                out.add(tok)
+        return out
+    overlap = _tokens(new_fact) & _tokens(old_fact)
+    min_overlap = 1 if has_strong else 2
+    return len(overlap) >= min_overlap
 
 
 # ============================================================

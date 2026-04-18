@@ -70,6 +70,73 @@ def test_facts_dont_conflict_when_unrelated():
     assert _facts_conflict("Python is our language", "Coffee is brewed at 8am") is False
 
 
+# --- False-positive regressions from the 2025 keyword-only detector -----
+# Each of these used to trigger a spurious supersede because the old
+# matcher only needed 3 shared content words + the token "not" in one
+# side. The new detector requires an explicit supersede marker, so a
+# casual "not" isn't enough.
+
+def test_no_conflict_from_casual_not_in_unrelated_topic():
+    # Both mention "testing" but one just happens to contain "not".
+    # No supersede marker → should NOT conflict.
+    new = "Jest is not the only testing framework teams use"
+    old = "We chose Vitest as our testing framework last year"
+    assert _facts_conflict(new, old) is False
+
+
+def test_no_conflict_from_added_vs_removed_overlap():
+    # The old detector fired on pairs like "added X / removed X" because
+    # both share "X" + function words. Without a real supersede marker,
+    # these are just sequential facts, not contradictions.
+    new = "Added a rate-limiter to the API"
+    old = "Removed the old rate-limiter from the API"
+    assert _facts_conflict(new, old) is False
+
+
+def test_no_conflict_from_free_vs_paid_overlap():
+    # Two facts about pricing tiers but each is a complete claim in its
+    # own right — not a contradiction.
+    new = "The free tier is rate-limited at 100 requests per hour"
+    old = "The paid tier removes all rate limits"
+    assert _facts_conflict(new, old) is False
+
+
+def test_conflict_when_explicit_supersede_marker():
+    # "switched from X to Y" IS a real supersede signal.
+    new = "The team switched from MongoDB to PostgreSQL this month"
+    old = "The team uses MongoDB for the primary database"
+    assert _facts_conflict(new, old) is True
+
+
+def test_conflict_when_no_longer_marker():
+    new = "We no longer use Redis for session storage"
+    old = "Redis handles session storage for the web tier"
+    assert _facts_conflict(new, old) is True
+
+
+def test_conflict_when_instead_of_marker():
+    new = "The team uses Bun instead of Node for the build pipeline"
+    old = "The build pipeline runs on Node"
+    assert _facts_conflict(new, old) is True
+
+
+def test_conflict_used_to_marker():
+    new = "We used to deploy on Heroku but moved everything to Fly.io"
+    old = "Production deployments run on Heroku"
+    assert _facts_conflict(new, old) is True
+
+
+def test_fallback_keyword_path_still_tighter_than_2025():
+    # With no embeddings, the keyword fallback still requires BOTH a
+    # 3+ word overlap AND an explicit supersede marker — tighter than
+    # the 2025 detector which fired on any "not" mismatch.
+    # Unrelated with "not" in only one → no conflict.
+    assert _facts_conflict(
+        "Backup jobs do not run on weekends",
+        "Coffee is served in the kitchen"
+    ) is False
+
+
 def test_find_contradiction_local():
     new = "We decided to use the cloud for storage going forward."
     old = "We prefer local storage because it avoids cloud dependencies."

@@ -226,7 +226,7 @@ def _run_slow_phase(
                 extract_temporal_facts, classify_memory
             )
             classify_memory(db, engram_id, content)
-            extract_temporal_facts(db, engram_id, content)
+            extract_temporal_facts(db, engram_id, content, embedder=embedder)
         except Exception as e:
             logger.debug("Intelligence features skipped: {}", e)
 
