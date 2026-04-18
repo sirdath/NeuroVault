@@ -373,6 +373,94 @@ def create_api(manager) -> FastAPI:
         ok = db.soft_delete(engram_id)
         return {"status": "forgotten" if ok else "not_found", "engram_id": engram_id}
 
+    @app.patch("/api/notes/{engram_id}")
+    def rename_note(engram_id: str, body: dict):
+        """Rename a note's filename (which may include a folder prefix) and/or
+        its title. Moving between folders is just a filename change — no
+        separate 'move' endpoint needed.
+
+        Body: {filename?: str, title?: str}
+
+        Safety: rejects absolute paths, `..` segments, and non-.md endings.
+        Moves the file on disk, updates the DB row, and rewrites the vault
+        fingerprint so the next boot doesn't treat the rename as a
+        deleted-plus-new-file pair (which would orphan connections).
+        """
+        ctx = _ctx()
+        row = ctx.db.conn.execute(
+            "SELECT id, filename, title FROM engrams WHERE id = ?", (engram_id,),
+        ).fetchone()
+        if not row:
+            return {"error": "not found"}
+        old_filename = row["filename"] if hasattr(row, "keys") else row[1]
+        old_title = row["title"] if hasattr(row, "keys") else row[2]
+
+        new_filename_raw = (body.get("filename") or "").strip()
+        new_title = (body.get("title") or "").strip() or old_title
+
+        # Filename is optional — allow title-only edits.
+        if new_filename_raw:
+            # Normalize to posix, strip leading slashes, reject traversal.
+            candidate = new_filename_raw.replace("\\", "/").lstrip("/")
+            if ".." in candidate.split("/"):
+                return {"error": "'..' not allowed in filename"}
+            if not candidate.endswith(".md"):
+                candidate = candidate + ".md"
+            new_filename = candidate
+        else:
+            new_filename = old_filename
+
+        if new_filename != old_filename:
+            src = ctx.vault_dir / old_filename
+            dst = ctx.vault_dir / new_filename
+            if not src.exists():
+                return {"error": f"source file missing: {old_filename}"}
+            if dst.exists():
+                return {"error": f"destination exists: {new_filename}"}
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+
+        # Rewrite H1 if the title changed so the rendered note header
+        # matches the DB row. We only rewrite when we own the file
+        # (already moved if needed) and the first line is an H1.
+        if new_title != old_title and new_filename:
+            path = ctx.vault_dir / new_filename
+            try:
+                text = path.read_text(encoding="utf-8")
+                lines = text.split("\n", 1)
+                if lines and lines[0].startswith("#"):
+                    lines[0] = f"# {new_title}"
+                    path.write_text("\n".join(lines), encoding="utf-8")
+                else:
+                    # No H1 — prepend one rather than silently losing the
+                    # new title on disk.
+                    path.write_text(f"# {new_title}\n\n{text}", encoding="utf-8")
+            except OSError as e:
+                logger.warning("rename_note: could not rewrite H1 for {}: {}", new_filename, e)
+
+        ctx.db.conn.execute(
+            "UPDATE engrams SET filename = ?, title = ? WHERE id = ?",
+            (new_filename, new_title, engram_id),
+        )
+        ctx.db.conn.commit()
+
+        # Refresh the vault fingerprint so next boot doesn't re-ingest
+        # (which would see the old filename as deleted + new as added).
+        from neurovault_server.brain import _compute_vault_fingerprint
+        from neurovault_server.config import BRAINS_DIR
+        fp_path = BRAINS_DIR / ctx.brain_id / ".vault_fingerprint"
+        try:
+            fp_path.write_text(_compute_vault_fingerprint(ctx.vault_dir), encoding="utf-8")
+        except OSError:
+            pass  # best-effort; a stale fingerprint just triggers a no-op ingest
+
+        return {
+            "status": "renamed",
+            "engram_id": engram_id,
+            "filename": new_filename,
+            "title": new_title,
+        }
+
     @app.get("/api/notes/{engram_id}")
     def get_note(engram_id: str):
         db = _db()
@@ -1351,8 +1439,26 @@ def create_api(manager) -> FastAPI:
             q, ctx.db, manager.embedder, ctx.bm25, top_k=limit, as_of=as_of
         )
         if mode == "titles":
+            # Enrich with filename so the frontend sidebar can map recall
+            # results → its local notes array (which is keyed on filename)
+            # without a second round trip. Cheap: a single DB lookup.
+            ids = [r["engram_id"] for r in results]
+            fn_map: dict[str, str] = {}
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                rows = ctx.db.conn.execute(
+                    f"SELECT id, filename FROM engrams WHERE id IN ({placeholders})",
+                    tuple(ids),
+                ).fetchall()
+                for row in rows:
+                    fn_map[row[0]] = row[1]
             return [
-                {"engram_id": r["engram_id"], "title": r["title"], "score": r["score"]}
+                {
+                    "engram_id": r["engram_id"],
+                    "title": r["title"],
+                    "filename": fn_map.get(r["engram_id"], ""),
+                    "score": r["score"],
+                }
                 for r in results
             ]
         if mode == "full":

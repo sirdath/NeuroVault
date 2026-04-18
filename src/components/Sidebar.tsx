@@ -41,6 +41,12 @@ export function Sidebar({
   );
   const createNote = useNoteStore((s) => s.createNote);
   const deleteNoteAction = useNoteStore((s) => s.deleteNote);
+  const renameNoteAction = useNoteStore((s) => s.renameNote);
+
+  // Inline rename — populated with the note's current filename when the
+  // user clicks the pencil icon on a row. The corresponding row renders
+  // an input instead of the title. Enter commits; Esc cancels.
+  const [renamingFilename, setRenamingFilename] = useState<string | null>(null);
 
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [isCreating, setIsCreating] = useState(false);
@@ -84,15 +90,29 @@ export function Sidebar({
     if (isCreating && inputRef.current) inputRef.current.focus();
   }, [isCreating]);
 
-  const filtered = notes.filter((note) => {
-    if (
-      searchQuery !== "" &&
-      !note.title.toLowerCase().includes(searchQuery.toLowerCase())
-    ) {
-      return false;
+  // Full-text search via /api/recall when the server is up; local title
+  // substring match as a fallback when it's not. noteStore.setSearchQuery
+  // populates searchResults async, so a fresh keystroke may briefly
+  // filter by title before the server reply lands — intentional; avoids
+  // the sidebar going blank while we wait.
+  const searchResults = useNoteStore((s) => s.searchResults);
+  const filtered = (() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return notes;
+    if (searchResults.length > 0) {
+      const rank = new Map(searchResults.map((fn, i) => [fn, i]));
+      return notes
+        .filter((n) => rank.has(n.filename))
+        .sort((a, b) => (rank.get(a.filename)! - rank.get(b.filename)!));
     }
-    return true;
-  });
+    // Local fallback: match title OR filename path substring. Adding
+    // filename lets users find notes by folder name too ("agent/…").
+    return notes.filter(
+      (n) =>
+        n.title.toLowerCase().includes(q) ||
+        n.filename.toLowerCase().includes(q),
+    );
+  })();
 
   // Folder tree state — first path segment of filename groups notes.
   // Notes with no slash in filename live at root (they render directly).
@@ -234,6 +254,16 @@ export function Sidebar({
         onSelect={(fn) => selectNote(fn)}
         onDelete={handleDelete}
         onToggleFolder={toggleFolder}
+        renamingFilename={renamingFilename}
+        onStartRename={setRenamingFilename}
+        onCommitRename={async (oldFn, newFn) => {
+          if (newFn.trim() === oldFn || !newFn.trim()) {
+            setRenamingFilename(null);
+            return;
+          }
+          const ok = await renameNoteAction(oldFn, newFn.trim());
+          if (ok) setRenamingFilename(null);
+        }}
       />
 
       {/* Empty states */}
@@ -296,6 +326,61 @@ export function Sidebar({
   );
 }
 
+// --- Inline rename input --------------------------------------------------
+
+/**
+ * Autofocused filename input used when a note row enters rename mode.
+ * The filename is a relative path (e.g. `agent/foo.md`); editing the
+ * path prefix effectively MOVES the note across folders — one primitive
+ * covers rename + move + manual folder creation.
+ */
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    // Select only the stem — not the folder prefix or the .md extension —
+    // so the common case (renaming inside the current folder) is one
+    // keystroke: start typing and the stem gets replaced.
+    const slash = initial.lastIndexOf("/");
+    const dot = initial.lastIndexOf(".md");
+    const from = slash + 1;
+    const to = dot > from ? dot : initial.length;
+    try { ref.current?.setSelectionRange(from, to); } catch { /* ignore */ }
+  }, [initial]);
+
+  return (
+    <input
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") onCommit(value);
+        else if (e.key === "Escape") onCancel();
+      }}
+      onBlur={() => onCommit(value)}
+      className="w-full text-[13px] px-2 py-1 rounded-md focus:outline-none font-mono"
+      style={{
+        background: "var(--nv-bg)",
+        color: "var(--nv-text)",
+        border: "1px solid var(--nv-accent)",
+      }}
+      placeholder="folder/name.md"
+    />
+  );
+}
+
 // --- Folder tree helpers --------------------------------------------------
 
 type Row =
@@ -345,6 +430,9 @@ interface NoteListProps {
   onSelect: (filename: string) => void;
   onDelete: (filename: string, title: string) => void;
   onToggleFolder: (name: string) => void;
+  renamingFilename: string | null;
+  onStartRename: (filename: string | null) => void;
+  onCommitRename: (oldFilename: string, newFilename: string) => void;
 }
 
 /**
@@ -364,6 +452,9 @@ function NoteList({
   onSelect,
   onDelete,
   onToggleFolder,
+  renamingFilename,
+  onStartRename,
+  onCommitRename,
 }: NoteListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -451,13 +542,14 @@ function NoteList({
           const note = row.note;
           const isActive = activeFilename === note.filename;
           const preview = previews[note.filename];
+          const isRenaming = renamingFilename === note.filename;
 
           return (
             <div
               key={virtualRow.key}
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
-              onClick={() => onSelect(note.filename)}
+              onClick={() => !isRenaming && onSelect(note.filename)}
               style={positioning}
               className="py-0.5"
             >
@@ -475,33 +567,55 @@ function NoteList({
                   }),
                 }}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <h3
-                    className="text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug"
-                    style={{ color: isActive ? "var(--nv-text)" : "var(--nv-text-muted)" }}
-                  >
-                    {note.title}
-                  </h3>
-                  <span className="text-[10px] font-[Geist,sans-serif] whitespace-nowrap mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
-                    {relativeTime(note.modified)}
-                  </span>
-                </div>
+                {isRenaming ? (
+                  <RenameInput
+                    initial={note.filename}
+                    onCommit={(next) => onCommitRename(note.filename, next)}
+                    onCancel={() => onStartRename(null)}
+                  />
+                ) : (
+                  <>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3
+                        className="text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug"
+                        style={{ color: isActive ? "var(--nv-text)" : "var(--nv-text-muted)" }}
+                      >
+                        {note.title}
+                      </h3>
+                      <span className="text-[10px] font-[Geist,sans-serif] whitespace-nowrap mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
+                        {relativeTime(note.modified)}
+                      </span>
+                    </div>
 
-                {preview && (
-                  <p className="text-[11.5px] mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
-                    {preview}
-                  </p>
+                    {preview && (
+                      <p className="text-[11.5px] mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+                        {preview}
+                      </p>
+                    )}
+
+                    {/* Hover toolbar: rename + delete. Pencil opens the
+                        inline filename editor; × goes straight to trash
+                        (already confirmed via window.confirm upstream). */}
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onStartRename(note.filename); }}
+                        className="w-5 h-5 flex items-center justify-center rounded-md transition-colors [color:var(--nv-text-dim)] hover:[color:var(--nv-text)] hover:[background-color:var(--nv-surface)]"
+                        title="Rename (change name or move folder)"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDelete(note.filename, note.title); }}
+                        className="w-5 h-5 flex items-center justify-center rounded-md transition-colors text-xs [color:var(--nv-text-dim)] hover:[color:var(--nv-negative)] hover:[background-color:var(--nv-surface)]"
+                        title="Move to trash"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </>
                 )}
-
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(note.filename, note.title);
-                  }}
-                  className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 [color:var(--nv-text-dim)] hover:[color:var(--nv-negative)] transition-all text-xs w-5 h-5 flex items-center justify-center rounded-lg hover:[background-color:var(--nv-surface)]"
-                >
-                  ×
-                </button>
               </div>
             </div>
           );
