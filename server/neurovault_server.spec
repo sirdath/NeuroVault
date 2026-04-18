@@ -37,8 +37,9 @@ hidden = []
 datas = []
 binaries = []
 
-# fastembed + onnxruntime (the new lightweight embedding stack)
-for pkg in ('fastembed', 'onnxruntime', 'huggingface_hub', 'tokenizers'):
+# fastembed + onnxruntime + PIL (fastembed imports PIL.Image unconditionally
+# even for text-only embeddings, so Pillow must be bundled)
+for pkg in ('fastembed', 'onnxruntime', 'huggingface_hub', 'tokenizers', 'PIL'):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -113,9 +114,10 @@ a = Analysis(
         # --- Stuff we never used ---
         'tkinter',
         'matplotlib',
-        'PIL',
+        # PIL/pillow is required by fastembed (even for text-only embeddings —
+        # fastembed's __init__.py imports the image module unconditionally).
+        # Keep it bundled or the sidecar crashes on boot with ModuleNotFoundError.
         'PIL.ImageTk',
-        'pillow',
         'PyQt5',
         'PyQt6',
         'PySide2',
