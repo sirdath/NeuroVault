@@ -112,19 +112,28 @@ fn seed_welcome_note(vault: &PathBuf) {
     let welcome = "# Welcome to NeuroVault\n\n\
 **Your AI memory system.**\n\n\
 Claude forgets you after every conversation. NeuroVault doesn't.\n\n\
-## How it works\n\n\
-- **Notes live here as plain markdown files** — you own them forever\n\
-- Type `[[` to link notes together\n\
-- Press `Ctrl+N` to create a new note\n\
-- Press `Ctrl+K` to search everything\n\
-- Switch to the **Graph** tab to see connections\n\
-- Click the **gear** icon (bottom-left) to customize themes\n\n\
-## Memory features (requires server)\n\n\
+## Quick start\n\n\
+- **Ctrl+N** — new note\n\
+- **Ctrl+K** — command palette (everything lives here)\n\
+- **Ctrl+/** — search inside notes\n\
+- **?** — full shortcut list\n\
+- Type `[[` in the editor to link notes together\n\
+- Press **Ctrl+2** to see connections in the graph\n\n\
+## Organizing notes\n\n\
+Hover any note in the sidebar and click the pencil to rename. Type a\n\
+slash in the name (e.g. `projects/kickoff.md`) to move it into a\n\
+folder — the folder is created on the fly.\n\n\
+## Your data\n\n\
+Notes live as plain markdown files at **~/.neurovault/**. Point\n\
+NeuroVault at an existing Obsidian vault via the dropdown (bottom-left)\n\
+→ \"Open folder as vault\" and the folder stays in place.\n\n\
+## Memory features (requires the server)\n\n\
 Start the server from Settings to enable:\n\
 - **Search** that understands meaning, not just keywords\n\
 - **Connections** between related notes, automatically\n\
 - **Knowledge graph** visualization\n\
-- **Compilations** — AI-maintained canonical wiki pages\n\n\
+- **Compilations** — AI-maintained canonical wiki pages\n\
+- **Claude Desktop integration** — Settings → Connect Claude Desktop\n\n\
 Delete this note when you're ready to start your own.\n";
     let path = vault.join("welcome.md");
     let _ = fs::write(&path, welcome);

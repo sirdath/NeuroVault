@@ -176,6 +176,29 @@ export default function App() {
         action: () => setTriggerSearch((n) => n + 1),
       },
       {
+        id: "open-settings",
+        title: "Open settings",
+        category: "Action",
+        action: () => setSettingsOpen(true),
+      },
+      {
+        id: "mcp-setup",
+        title: "Connect Claude Desktop (MCP setup)",
+        category: "Action",
+        action: () => setSettingsOpen(true),
+      },
+      {
+        id: "hide-window",
+        title: "Hide window (keep server running)",
+        category: "Action",
+        action: async () => {
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("hide_to_background");
+          } catch { /* web fallback */ }
+        },
+      },
+      {
         id: "help",
         title: "Keyboard shortcuts",
         category: "Help",
