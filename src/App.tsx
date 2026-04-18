@@ -31,13 +31,15 @@ export default function App() {
   const [serverDown, setServerDown] = useState(false);
   const [serverUp, setServerUp] = useState(false);
   const [noteCount, setNoteCount] = useState(0);
+  const [starting, setStarting] = useState(false);
+  const [startElapsed, setStartElapsed] = useState(0);
   const failCountRef = useRef(0);
 
   useEffect(() => {
     initVault();
   }, [initVault]);
 
-  // Server health monitor
+  // Server health monitor — polls faster while booting for snappy feedback
   useEffect(() => {
     const check = () => {
       fetchStatus()
@@ -45,6 +47,7 @@ export default function App() {
           failCountRef.current = 0;
           setServerDown(false);
           setServerUp(true);
+          setStarting(false); // server is up, clear starting state
           setNoteCount(s.memories);
         })
         .catch(() => {
@@ -54,9 +57,26 @@ export default function App() {
         });
     };
     check();
-    const id = setInterval(check, 5000);
+    const id = setInterval(check, starting ? 1500 : 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [starting]);
+
+  // Tick an elapsed-seconds counter while starting so the banner can show it
+  useEffect(() => {
+    if (!starting) { setStartElapsed(0); return; }
+    const begin = Date.now();
+    const id = setInterval(() => {
+      setStartElapsed(Math.floor((Date.now() - begin) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [starting]);
+
+  // Safety timeout: if it takes more than 90s, clear the starting state
+  useEffect(() => {
+    if (!starting) return;
+    const id = setTimeout(() => setStarting(false), 90_000);
+    return () => clearTimeout(id);
+  }, [starting]);
 
   // Global shortcut bridge (Rust → frontend)
   useEffect(() => {
@@ -213,44 +233,73 @@ export default function App() {
       className="flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]"
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
-      {/* Server-down banner with start button */}
-      {serverDown && (
+      {/* Server status banner — different content for starting vs offline */}
+      {(serverDown || starting) && (
         <div
           className="px-5 py-2.5 flex items-center justify-between flex-shrink-0 backdrop-blur-[10px]"
-          style={{ background: `${theme.negative}10`, borderBottom: `1px solid ${theme.negative}20` }}
+          style={starting ? {
+            background: `${theme.accent}10`,
+            borderBottom: `1px solid ${theme.accent}25`,
+          } : {
+            background: `${theme.negative}10`,
+            borderBottom: `1px solid ${theme.negative}20`,
+          }}
         >
           <div className="flex items-center gap-2.5">
-            <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: theme.negative }} />
-            <span className="text-[12px]" style={{ color: `${theme.negative}aa` }}>
-              Server offline — start it to enable search, graph, and memory
-            </span>
+            {starting ? (
+              <>
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping" style={{ backgroundColor: theme.accent }} />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5" style={{ backgroundColor: theme.accent }} />
+                </span>
+                <span className="text-[12px] font-medium" style={{ color: theme.accent }}>
+                  Starting server… {startElapsed > 0 ? `${startElapsed}s` : ""}
+                </span>
+                <span className="text-[11px]" style={{ color: `${theme.accent}80` }}>
+                  {startElapsed < 5 ? "Loading embeddings…" :
+                   startElapsed < 15 ? "Opening database…" :
+                   startElapsed < 45 ? "Indexing your notes…" :
+                   "Almost there…"}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: theme.negative }} />
+                <span className="text-[12px]" style={{ color: `${theme.negative}aa` }}>
+                  Server offline — start it to enable search, graph, and memory
+                </span>
+              </>
+            )}
           </div>
-          <button
-            onClick={async () => {
-              try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                await invoke<string>("start_server");
-                // The server-health polling in App.tsx will pick it up
-                // automatically within 5s once the sidecar binds 8765.
-                // First boot takes 10-30s (ONNX load + vault ingest).
-                failCountRef.current = 0;
-              } catch (e) {
-                alert(
-                  `Failed to start server: ${e}\n\n` +
-                  "If this keeps happening, start manually:\n" +
-                  "cd server && uv run python -m neurovault_server --http-only"
-                );
-              }
-            }}
-            className="text-[11px] font-medium px-3 py-1 rounded-lg transition-all"
-            style={{
-              background: `${theme.accent}20`,
-              color: theme.accent,
-              border: `1px solid ${theme.accent}40`,
-            }}
-          >
-            Start Server
-          </button>
+          {!starting && (
+            <button
+              onClick={async () => {
+                try {
+                  const { invoke } = await import("@tauri-apps/api/core");
+                  setStarting(true);
+                  failCountRef.current = 0;
+                  await invoke<string>("start_server");
+                  // The health monitor polls every 1.5s while starting;
+                  // it'll clear `starting` automatically when the server responds.
+                } catch (e) {
+                  setStarting(false);
+                  alert(
+                    `Failed to start server: ${e}\n\n` +
+                    "If this keeps happening, start manually:\n" +
+                    "cd server && uv run python -m neurovault_server --http-only"
+                  );
+                }
+              }}
+              className="text-[11px] font-medium px-3 py-1 rounded-lg transition-all"
+              style={{
+                background: `${theme.accent}20`,
+                color: theme.accent,
+                border: `1px solid ${theme.accent}40`,
+              }}
+            >
+              Start Server
+            </button>
+          )}
         </div>
       )}
 
