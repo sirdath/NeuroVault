@@ -2,8 +2,13 @@ use serde::Serialize;
 use slug::slugify;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::SystemTime;
+use tauri_plugin_shell::process::CommandChild;
 use uuid::Uuid;
+
+/// Shared state holding the Python sidecar child process (if running).
+struct ServerState(Mutex<Option<CommandChild>>);
 
 #[derive(Debug, Serialize, Clone)]
 pub struct NoteMeta {
@@ -50,6 +55,7 @@ fn vault_dir() -> PathBuf {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
                     let vault = nv_home.join("brains").join(active_id).join("vault");
                     fs::create_dir_all(&vault).ok();
+                    seed_welcome_note(&vault);
                     return vault;
                 }
             }
@@ -65,7 +71,43 @@ fn vault_dir() -> PathBuf {
     // Fresh install fallback: create default brain vault
     let default_vault = nv_home.join("brains").join("default").join("vault");
     fs::create_dir_all(&default_vault).expect("Could not create vault directory");
+    seed_welcome_note(&default_vault);
     default_vault
+}
+
+/// Drop a welcome note into an empty vault so new users have something
+/// to read when they first open the app. Does nothing if the vault
+/// already has any .md files.
+fn seed_welcome_note(vault: &PathBuf) {
+    let has_notes = fs::read_dir(vault)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                e.path().extension().and_then(|x| x.to_str()) == Some("md")
+            })
+        })
+        .unwrap_or(true); // if we can't read the dir, don't seed
+    if has_notes {
+        return;
+    }
+    let welcome = "# Welcome to NeuroVault\n\n\
+**Your AI memory system.**\n\n\
+Claude forgets you after every conversation. NeuroVault doesn't.\n\n\
+## How it works\n\n\
+- **Notes live here as plain markdown files** — you own them forever\n\
+- Type `[[` to link notes together\n\
+- Press `Ctrl+N` to create a new note\n\
+- Press `Ctrl+K` to search everything\n\
+- Switch to the **Graph** tab to see connections\n\
+- Click the **gear** icon (bottom-left) to customize themes\n\n\
+## Memory features (requires server)\n\n\
+Start the server from Settings to enable:\n\
+- **Search** that understands meaning, not just keywords\n\
+- **Connections** between related notes, automatically\n\
+- **Knowledge graph** visualization\n\
+- **Compilations** — AI-maintained canonical wiki pages\n\n\
+Delete this note when you're ready to start your own.\n";
+    let path = vault.join("welcome.md");
+    let _ = fs::write(&path, welcome);
 }
 
 fn trash_dir() -> PathBuf {
@@ -177,6 +219,57 @@ fn delete_note(filename: String) -> Result<(), String> {
     }
 }
 
+/// Start the bundled Python MCP server as a sidecar process.
+/// Returns Err if already running, or if the sidecar binary can't be spawned.
+#[tauri::command]
+fn start_server(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ServerState>,
+) -> Result<String, String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+    if guard.is_some() {
+        return Err("Server is already running".into());
+    }
+
+    let cmd = app
+        .shell()
+        .sidecar("neurovault-server")
+        .map_err(|e| format!("sidecar binary not found: {e}"))?;
+
+    let (_rx, child) = cmd
+        .args(["--http-only"])
+        .spawn()
+        .map_err(|e| format!("failed to spawn: {e}"))?;
+
+    let pid = child.pid();
+    *guard = Some(child);
+    Ok(format!("Server started (pid {})", pid))
+}
+
+/// Stop the running sidecar server. Returns Ok whether or not anything
+/// was actually running (idempotent).
+#[tauri::command]
+fn stop_server(state: tauri::State<'_, ServerState>) -> Result<String, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+    if let Some(child) = guard.take() {
+        child.kill().map_err(|e| format!("failed to kill: {e}"))?;
+        Ok("Server stopped".into())
+    } else {
+        Ok("Server was not running".into())
+    }
+}
+
+/// Report whether the sidecar is currently running (from the Tauri side).
+/// The frontend also polls the HTTP endpoint, but this tells you if WE
+/// spawned the server vs someone else started it externally.
+#[tauri::command]
+fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
+    let guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+    Ok(guard.is_some())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::Emitter;
@@ -240,8 +333,10 @@ pub fn run() {
 
             Ok(())
         })
+        .manage(ServerState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
+            start_server, stop_server, server_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

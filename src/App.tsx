@@ -223,20 +223,26 @@ export default function App() {
             </span>
           </div>
           <button
-            onClick={() => {
-              // Try to start the server via the sidecar, or show instructions
-              const cmd = "cd server && uv run python -m neurovault_server --http-only";
-              navigator.clipboard.writeText(cmd).then(() => {
-                alert("Command copied to clipboard! Paste it in a terminal to start the server:\n\n" + cmd);
-              }).catch(() => {
-                alert("Start the server by running this in a terminal:\n\n" + cmd);
-              });
+            onClick={async () => {
+              try {
+                const { invoke } = await import("@tauri-apps/api/core");
+                const result = await invoke<string>("start_server");
+                console.log("[start_server]", result);
+                // Re-check status after a short delay to let it boot
+                setTimeout(() => failCountRef.current = 0, 500);
+              } catch (e) {
+                alert(
+                  `Failed to start server: ${e}\n\n` +
+                  "If this keeps happening, start manually:\n" +
+                  "cd server && uv run python -m neurovault_server --http-only"
+                );
+              }
             }}
             className="text-[11px] font-medium px-3 py-1 rounded-lg transition-all"
             style={{
-              background: `${theme.negative}15`,
-              color: `${theme.negative}cc`,
-              border: `1px solid ${theme.negative}30`,
+              background: `${theme.accent}20`,
+              color: theme.accent,
+              border: `1px solid ${theme.accent}40`,
             }}
           >
             Start Server

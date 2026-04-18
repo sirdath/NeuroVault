@@ -40,9 +40,30 @@ export function SettingsView() {
       .catch(() => setServerInfo(null));
   }, [online]);
 
+  const [starting, setStarting] = useState(false);
+
+  const handleStartServer = async () => {
+    setStarting(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<string>("start_server");
+    } catch (e) {
+      alert(`Failed to start server: ${e}`);
+    }
+    // Give the sidecar ~2s to bind the port before re-checking
+    setTimeout(() => { recheckServer(); setStarting(false); }, 2500);
+  };
+
   const handleStopServer = async () => {
     setStopping(true);
-    try { await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST" }).catch(() => null); } catch {}
+    try {
+      // Prefer the Tauri-native stop (kills the sidecar we spawned)
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<string>("stop_server").catch(async () => {
+        // Fallback: HTTP shutdown (works even if someone else started it)
+        await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST" }).catch(() => null);
+      });
+    } catch { /* expected — server closes the connection */ }
     setTimeout(() => { recheckServer(); setStopping(false); }, 1500);
   };
 
@@ -125,6 +146,13 @@ export function SettingsView() {
                 style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}>
                 Refresh
               </button>
+              {!online && (
+                <button onClick={handleStartServer} disabled={starting}
+                  className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all disabled:opacity-30"
+                  style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}>
+                  {starting ? "Starting..." : "Start Server"}
+                </button>
+              )}
               {online && (
                 <button onClick={handleStopServer} disabled={stopping}
                   className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all disabled:opacity-30"

@@ -1,5 +1,53 @@
 # NeuroVault
 
+**A local-first AI memory system.** Claude forgets you after every conversation. NeuroVault doesn't.
+
+---
+
+## 🎯 Download & Install
+
+**Windows**: [NeuroVault_0.1.0_x64-setup.exe](https://github.com/daththeanalyst/NeuroVault/releases/latest) — 68 MB installer
+
+1. Download the installer
+2. Double-click to install
+3. Open NeuroVault from your Start menu or desktop shortcut
+4. Start taking notes — they're saved as plain markdown files in `~/.neurovault/`
+
+> **Note on Windows SmartScreen**: The app isn't code-signed yet. You'll see a "Windows protected your PC" warning on first launch. Click **More info → Run anyway**.
+
+## What you get
+
+- 📝 **Beautiful markdown editor** with live preview, auto-save, and `[[wikilinks]]`
+- 🎨 **6 themes** — Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord, Obsidian
+- 🌐 **Knowledge graph view** showing how your notes connect
+- 🔍 **Hybrid search** — semantic + keyword + knowledge graph (when server is on)
+- 🧠 **Compilation loop** — AI maintains canonical wiki pages from your raw notes
+- 📂 **Multi-vault support** — switch between projects (bottom-left picker)
+- 🔒 **100% local** — your notes never leave your machine
+- 🎚️ **Resizable panels** — drag to customize layout
+- 📑 **Tabs** — open multiple notes at once (click Note A → click Note B → tabs appear)
+
+## For AI agents (MCP setup)
+
+NeuroVault exposes 9 MCP tools Claude can use directly. Add to Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "neurovault": {
+      "command": "uv",
+      "args": ["--directory", "C:\\path\\to\\NeuroVault\\server", "run", "python", "-m", "neurovault_server"]
+    }
+  }
+}
+```
+
+Claude now has persistent memory across conversations. Say things like *"remember that I prefer Rust over Go"* — NeuroVault saves it. Weeks later, ask *"what do I prefer for backend work?"* — Claude recalls it instantly.
+
+---
+
+## For developers
+
 **A local-first knowledge layer for AI agents. Not RAG. A living internal wiki.**
 
 Most "agent memory" products today are retrieval pipelines in a trench coat —
