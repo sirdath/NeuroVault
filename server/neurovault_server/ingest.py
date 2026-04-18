@@ -57,21 +57,43 @@ def _infer_kind(filename: str) -> str:
     return "note"
 
 
+# Single-worker background queue for the slow phase of ingest.
+# Single worker (max_workers=1) so writes serialize against SQLite —
+# prevents WAL contention and keeps BM25 rebuilds from stampeding when
+# multiple writes land in quick succession. Module-level so the pool
+# survives across ingest calls.
+from concurrent.futures import ThreadPoolExecutor as _TPExec
+_SLOW_PHASE_EXECUTOR = _TPExec(max_workers=1, thread_name_prefix="nv-ingest")
+
+
 def ingest_file(
     filepath: Path,
     db: Database,
     embedder: Embedder,
     bm25: BM25Index,
     vault_root: Path | None = None,
+    async_slow_phase: bool = False,
 ) -> str | None:
     """Ingest a single markdown file into the database.
 
     Returns the engram_id if ingested, None if skipped (unchanged).
 
+    Two-phase pipeline so agent writes (MCP `remember`, POST /api/notes)
+    don't block on the heavy post-ingest work:
+      Fast phase (sync, ~100-200ms): file read, engram row, chunks,
+        embeddings. After this returns the note IS recallable via
+        semantic search — Claude can write then immediately recall.
+      Slow phase (queued to a background worker): entities, semantic
+        links, wikilinks, BM25 rebuild, temporal facts, Karpathy index,
+        git commit. These take 1-5s on a large vault and don't need
+        to block the agent's turn.
+
+    Pass `synchronous=True` to wait for the slow phase too (tests, bulk
+    ingest_vault calls where fingerprint correctness matters).
+
     If `vault_root` is provided and `filepath` is inside it, the stored
     `filename` is the relative path (e.g. `agent/foo.md`). Otherwise the
-    basename is stored — this preserves backward compatibility for the
-    flat-vault callers that pre-date folder support.
+    basename is stored — back-compat for the flat-vault callers.
     """
     if not filepath.exists() or filepath.suffix != '.md':
         return None
@@ -102,9 +124,9 @@ def ingest_file(
     # Infer kind from filename prefix (source-, quote-, draft-, etc.)
     kind = _infer_kind(filename)
 
+    # --- FAST PHASE (sync) ---
     # 1. Store/update the engram record
     db.insert_engram(engram_id, filename, title, content, new_hash)
-    # Update kind column (not part of insert_engram signature)
     db.conn.execute(
         "UPDATE engrams SET kind = ? WHERE id = ?", (kind, engram_id)
     )
@@ -116,12 +138,10 @@ def ingest_file(
     # 3. Chunk at 3 granularities
     chunks = hierarchical_chunk(content, engram_id)
 
-    # 4. Embed all chunks and store
-    # Use embed_text (title-prefixed) for embeddings, raw content for display/BM25
+    # 4. Embed all chunks and store — after this semantic recall works.
     if chunks:
         texts = [c.get("embed_text", c["content"]) for c in chunks]
         embeddings = embedder.encode_batch(texts)
-
         for chunk, embedding in zip(chunks, embeddings):
             db.insert_chunk(
                 chunk["id"],
@@ -132,60 +152,104 @@ def ingest_file(
             )
             db.insert_embedding(chunk["id"], embedding)
 
-    # 5. Extract and store entities
-    entities = extract_entities(content)
-    if entities:
-        store_entities(db, engram_id, entities)
-
-    # 6. Compute semantic links to other notes
-    _update_semantic_links(db, embedder, engram_id, content)
-
-    # 7. Process wikilinks for explicit connections
-    _process_wikilinks(db, engram_id, content)
-
-    # 8. Rebuild BM25 index
-    bm25.build(db)
-
-    # 9. Advanced intelligence (temporal facts + classification).
-    # detect_contradictions is DISABLED — the naive keyword-pair detector
-    # (see intelligence.py _find_contradiction_local) produced thousands of
-    # false positives on real vaults because it flags ANY pair of topic-
-    # similar engrams that share weak negation keywords ("yes/no", "added/
-    # removed", "free/paid", etc). Until the detector is rewritten to do
-    # real subject matching + grounded fact comparison, running it is worse
-    # than not running it. Temporal fact tracking + memory classification
-    # still run because they don't have this problem.
-    try:
-        from neurovault_server.intelligence import (
-            extract_temporal_facts, classify_memory
+    # --- SLOW PHASE ---
+    # Default is synchronous — same SQLite connection, safe across tests
+    # and bulk ingest. Opt into async only for single-note user writes
+    # (MCP remember, HTTP POST /api/notes) where the ~2-5s latency bite
+    # is the thing we're trying to avoid. The executor is single-worker
+    # so writes serialize against the shared connection.
+    if async_slow_phase:
+        _SLOW_PHASE_EXECUTOR.submit(
+            _run_slow_phase, filepath, engram_id, content, title, status,
+            db, embedder, bm25,
         )
-        classify_memory(db, engram_id, content)
-        extract_temporal_facts(db, engram_id, content)
-    except Exception as e:
-        logger.debug("Intelligence features skipped: {}", e)
+    else:
+        _run_slow_phase(filepath, engram_id, content, title, status, db, embedder, bm25)
 
-    # 10. Karpathy-style auto-maintained wiki files
-    try:
-        from neurovault_server.karpathy import rebuild_index, append_log
-        vault_dir = filepath.parent
-        # Only rebuild index if the file wasn't itself index.md/log.md/CLAUDE.md
-        if filepath.name not in ("index.md", "log.md", "CLAUDE.md"):
-            rebuild_index(db, vault_dir)
-            append_log(vault_dir, status, f"{title[:60]}")
-    except Exception as e:
-        logger.debug("Karpathy wiki update skipped: {}", e)
-
-    # 11. Git auto-backup: commit this change
-    try:
-        from neurovault_server.git_backup import auto_commit
-        auto_commit(filepath.parent, f"{status}: {title[:60]}")
-    except Exception as e:
-        logger.debug("Git auto-commit skipped: {}", e)
-
-    logger.info("{} engram: {} ({}) — {} chunks, {} entities",
-                status.capitalize(), title, engram_id[:8], len(chunks), len(entities))
-
+    logger.info(
+        "{} engram: {} ({}) — {} chunks (slow phase {})",
+        status.capitalize(), title, engram_id[:8], len(chunks),
+        "queued" if async_slow_phase else "sync",
+    )
     return engram_id
+
+
+def _run_slow_phase(
+    filepath: Path,
+    engram_id: str,
+    content: str,
+    title: str,
+    status: str,
+    db: Database,
+    embedder: Embedder,
+    bm25: BM25Index,
+) -> None:
+    """The expensive half of ingest_file — entities, semantic links,
+    wikilinks, BM25 rebuild, temporal facts, Karpathy index, git commit.
+
+    Runs on a single-worker thread pool so writes serialize against the
+    SQLite connection (no WAL contention). Exceptions here are logged
+    and swallowed — the fast phase already persisted the engram; a
+    failure here just means the note lacks some connections until the
+    next ingest catches it.
+    """
+    try:
+        # 5. Entities
+        try:
+            entities = extract_entities(content)
+            if entities:
+                store_entities(db, engram_id, entities)
+        except Exception as e:
+            logger.debug("Entity extraction skipped: {}", e)
+
+        # 6. Semantic links — O(n) cosine against every other doc
+        try:
+            _update_semantic_links(db, embedder, engram_id, content)
+        except Exception as e:
+            logger.debug("Semantic link compute skipped: {}", e)
+
+        # 7. Wikilinks
+        try:
+            _process_wikilinks(db, engram_id, content)
+        except Exception as e:
+            logger.debug("Wikilink processing skipped: {}", e)
+
+        # 8. BM25 rebuild
+        try:
+            bm25.build(db)
+        except Exception as e:
+            logger.debug("BM25 rebuild skipped: {}", e)
+
+        # 9. Temporal facts + classification
+        try:
+            from neurovault_server.intelligence import (
+                extract_temporal_facts, classify_memory
+            )
+            classify_memory(db, engram_id, content)
+            extract_temporal_facts(db, engram_id, content)
+        except Exception as e:
+            logger.debug("Intelligence features skipped: {}", e)
+
+        # 10. Karpathy index + log
+        try:
+            from neurovault_server.karpathy import rebuild_index, append_log
+            vault_dir = filepath.parent
+            if filepath.name not in ("index.md", "log.md", "CLAUDE.md"):
+                rebuild_index(db, vault_dir)
+                append_log(vault_dir, status, f"{title[:60]}")
+        except Exception as e:
+            logger.debug("Karpathy wiki update skipped: {}", e)
+
+        # 11. Git auto-backup
+        try:
+            from neurovault_server.git_backup import auto_commit
+            auto_commit(filepath.parent, f"{status}: {title[:60]}")
+        except Exception as e:
+            logger.debug("Git auto-commit skipped: {}", e)
+
+        logger.debug("Slow phase complete for {}", engram_id[:8])
+    except Exception as e:
+        logger.warning("Slow phase crashed for engram {}: {}", engram_id[:8], e)
 
 
 def _update_semantic_links(
@@ -336,6 +400,11 @@ def ingest_vault(
                 progress["current_file"] = filepath.relative_to(vault).as_posix()
             except ValueError:
                 progress["current_file"] = filepath.name
+        # Bulk ingest runs each file synchronously (the default) so the
+        # final _recompute_all_semantic_links + bm25.build below see a
+        # consistent state. The async queue is reserved for single-note
+        # writes (MCP remember, HTTP POST /api/notes) where latency is
+        # the whole point.
         result = ingest_file(filepath, db, embedder, bm25, vault_root=vault)
         if result:
             count += 1

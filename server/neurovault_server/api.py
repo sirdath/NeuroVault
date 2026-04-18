@@ -332,7 +332,10 @@ def create_api(manager) -> FastAPI:
         filepath.write_text(f"{header}\n{content}", encoding="utf-8")
 
         try:
-            stored_id = ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25, vault_root=ctx.vault_dir)
+            stored_id = ingest_file(
+                filepath, ctx.db, manager.embedder, ctx.bm25,
+                vault_root=ctx.vault_dir, async_slow_phase=True,
+            )
         except Exception as e:
             logger.warning("POST /api/notes ingest failed: {}", e)
             return {"error": f"ingest failed: {e}", "filename": filename}
