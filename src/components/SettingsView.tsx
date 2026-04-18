@@ -76,15 +76,34 @@ export function SettingsView() {
 
   const handleStopServer = async () => {
     setStopping(true);
+    // Try BOTH methods — Tauri kills the child we spawned (works for
+    // sidecars we started). HTTP /api/shutdown works regardless of who
+    // started the server (terminal, external, Tauri-spawned after the
+    // app was reopened with a stale state). Running both is safe:
+    // whichever actually killed the process wins, the other no-ops.
     try {
-      // Prefer the Tauri-native stop (kills the sidecar we spawned)
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("stop_server").catch(async () => {
-        // Fallback: HTTP shutdown (works even if someone else started it)
-        await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST" }).catch(() => null);
-      });
-    } catch { /* expected — server closes the connection */ }
-    setTimeout(() => { recheckServer(); setStopping(false); }, 1500);
+      await invoke<string>("stop_server").catch(() => null);
+    } catch { /* ignore */ }
+    try {
+      await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST", signal: AbortSignal.timeout(2000) });
+    } catch { /* server already down or closed the connection — both fine */ }
+
+    // Poll until the port is actually closed (up to 10s — usually <2s)
+    const deadline = Date.now() + 10_000;
+    const poll = async () => {
+      try {
+        await fetch(`${SERVER_URL}/api/brains/active`, { signal: AbortSignal.timeout(500) });
+        // Still responding — keep polling
+        if (Date.now() < deadline) setTimeout(poll, 500);
+        else { recheckServer(); setStopping(false); }
+      } catch {
+        // Connection refused = server is down
+        recheckServer();
+        setStopping(false);
+      }
+    };
+    setTimeout(poll, 500);
   };
 
   return (
