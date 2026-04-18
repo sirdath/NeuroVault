@@ -1024,6 +1024,94 @@ def create_api(manager) -> FastAPI:
             "source_count": len(sources),
         }
 
+    @app.get("/api/todos")
+    def list_todos_endpoint(status: str | None = None, agent_id: str | None = None, limit: int = 50):
+        """Multi-agent todo list for the active brain. Filter by status
+        (open/claimed/done) or by agent_id (claimed_by or to_agent match)."""
+        from neurovault_server import todos as _todos
+        ctx = _ctx()
+        brain_dir = ctx.vault_dir.parent
+        return _todos.list_todos(brain_dir, status=status, agent_id=agent_id, limit=limit)
+
+    @app.post("/api/todos")
+    def add_todo_endpoint(body: dict):
+        """Body: {task, context?, to_agent?, from_agent?}"""
+        from neurovault_server import todos as _todos
+        ctx = _ctx()
+        brain_dir = ctx.vault_dir.parent
+        task = (body.get("task") or "").strip()
+        if not task:
+            return {"error": "task is required"}
+        return _todos.add_todo(
+            brain_dir, task,
+            context=(body.get("context") or ""),
+            to_agent=(body.get("to_agent") or "any"),
+            from_agent=body.get("from_agent"),
+        )
+
+    @app.post("/api/todos/{todo_id}/claim")
+    def claim_todo_endpoint(todo_id: str, body: dict):
+        """Body: {agent_id}. Note the todo_id in the URL is advisory — the
+        claim operation always picks the oldest matching open todo for the
+        given agent_id, not necessarily the one named in the path. Pass the
+        sentinel "next" to make that explicit."""
+        from neurovault_server import todos as _todos
+        ctx = _ctx()
+        brain_dir = ctx.vault_dir.parent
+        agent_id = (body.get("agent_id") or "").strip()
+        if not agent_id:
+            return {"error": "agent_id is required"}
+        _ = todo_id  # claim is FIFO by agent match; explicit id-claim would need a new helper
+        result = _todos.claim_todo(brain_dir, agent_id)
+        if result is None:
+            return {"status": "no_open_todos"}
+        return result
+
+    @app.post("/api/todos/{todo_id}/complete")
+    def complete_todo_endpoint(todo_id: str, body: dict | None = None):
+        """Body: {result?}"""
+        from neurovault_server import todos as _todos
+        ctx = _ctx()
+        brain_dir = ctx.vault_dir.parent
+        result = ((body or {}).get("result") or "")
+        ok = _todos.complete_todo(brain_dir, todo_id, result=result)
+        return {"status": "completed" if ok else "not_found_or_done", "todo_id": todo_id}
+
+    @app.get("/api/changes")
+    def changes_since(since: str, limit: int = 100):
+        """Cheap diff feed — engrams touched since an ISO timestamp. Meant
+        for long-running agents to poll instead of re-running a broad
+        recall() just to find out what moved. Returns newest first."""
+        db = _db()
+        try:
+            # Let SQLite do the ISO string comparison directly — our
+            # updated_at is stored as ISO8601 which sorts lexicographically.
+            rows = db.conn.execute(
+                """SELECT id, filename, title, kind, state, updated_at
+                   FROM engrams
+                   WHERE updated_at > ? AND state != 'dormant'
+                   ORDER BY updated_at DESC
+                   LIMIT ?""",
+                (since, max(1, min(limit, 500))),
+            ).fetchall()
+        except Exception as e:
+            return {"error": f"query failed: {e}"}
+        return {
+            "since": since,
+            "count": len(rows),
+            "changes": [
+                {
+                    "engram_id": r[0],
+                    "filename": r[1],
+                    "title": r[2],
+                    "kind": r[3],
+                    "state": r[4],
+                    "updated_at": r[5],
+                }
+                for r in rows
+            ],
+        }
+
     @app.get("/api/timeline")
     def get_timeline():
         """Temporal fact timeline — what was true when."""

@@ -541,6 +541,64 @@ def recall_and_read(
 
 
 @tiered("core")
+def add_todo(
+    task: str,
+    context: str = "",
+    to_agent: str = "any",
+    from_agent: str | None = None,
+    brain: str | None = None,
+) -> dict:
+    """Post a task for another agent (or yourself later) to pick up. Stored
+    durably in the brain so sessions don't lose handoffs. `to_agent="any"`
+    lets any agent claim it; set to a specific id (e.g. "claude-code") to
+    target one.
+    """
+    from neurovault_server import todos as _todos
+    ctx = _ctx(brain)
+    brain_dir = ctx.vault_dir.parent  # brain_dir = <nv_home>/brains/<id>/
+    return _todos.add_todo(
+        brain_dir, task, context=context, to_agent=to_agent, from_agent=from_agent,
+    )
+
+
+@tiered("core")
+def claim_todo(agent_id: str, brain: str | None = None) -> dict | None:
+    """Claim the oldest open todo for this agent. Returns None if nothing's
+    open. Use at session start to pick up work another agent left behind.
+    """
+    from neurovault_server import todos as _todos
+    ctx = _ctx(brain)
+    brain_dir = ctx.vault_dir.parent
+    return _todos.claim_todo(brain_dir, agent_id)
+
+
+@tiered("core")
+def complete_todo(todo_id: str, result: str = "", brain: str | None = None) -> dict:
+    """Mark a todo done, optionally with a short result note.
+    """
+    from neurovault_server import todos as _todos
+    ctx = _ctx(brain)
+    brain_dir = ctx.vault_dir.parent
+    ok = _todos.complete_todo(brain_dir, todo_id, result=result)
+    return {"status": "completed" if ok else "not_found_or_done", "todo_id": todo_id}
+
+
+@tiered("power")
+def list_todos(
+    status: str | None = None,
+    agent_id: str | None = None,
+    limit: int = 50,
+    brain: str | None = None,
+) -> list[dict]:
+    """List todos optionally filtered by status (open/claimed/done) and agent.
+    """
+    from neurovault_server import todos as _todos
+    ctx = _ctx(brain)
+    brain_dir = ctx.vault_dir.parent
+    return _todos.list_todos(brain_dir, status=status, agent_id=agent_id, limit=limit)
+
+
+@tiered("core")
 def tool_menu() -> dict:
     """List extra capabilities available in other tool tiers without loading
     their schemas into context. Returns a short map of tier → [tool_name: one-
