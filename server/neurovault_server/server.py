@@ -264,6 +264,7 @@ def recall(
     agent_id: str | None = None,
     brain: str | None = None,
     include_meta: bool = False,
+    rerank: bool = False,
 ) -> list[dict]:
     """Hybrid search across memory (semantic + BM25 + knowledge graph). Call
     BEFORE answering anything the user might have told you before.
@@ -271,6 +272,8 @@ def recall(
     mode: "titles" (~20 tok) | "preview" (~70 tok, default) | "full" (~400 tok).
     as_of: ISO timestamp for time-travel ("what did I know on 2026-03-30?").
     include_observations=True only for session-replay questions.
+    rerank=True runs a cross-encoder second pass on the top 20 candidates
+      (~50ms extra; silently skipped in installs without sentence-transformers).
     Prefer `recall_and_read(query)` if you want the top result's full body.
     """
     ctx = _ctx(brain)
@@ -278,7 +281,7 @@ def recall(
     raw_results = hybrid_retrieve(
         query, ctx.db, manager.embedder, ctx.bm25,
         top_k=limit * 2 if agent_id else limit,  # over-fetch when filtering
-        as_of=as_of, exclude_kinds=exclude_kinds,
+        as_of=as_of, exclude_kinds=exclude_kinds, use_reranker=rerank,
     )
 
     # Filter by agent_id if specified
@@ -619,6 +622,117 @@ def list_todos(
     ctx = _ctx(brain)
     brain_dir = ctx.vault_dir.parent
     return _todos.list_todos(brain_dir, status=status, agent_id=agent_id, limit=limit)
+
+
+@tiered("core")
+def session_start(
+    agent_id: str | None = None,
+    since: str | None = None,
+    brain: str | None = None,
+) -> dict:
+    """One-call session wake-up — collapses the startup round-trips you'd
+    otherwise make (which brain? what changed? any todos for me? top
+    memories?) into a single response. Use at the start of every
+    conversation to ground yourself.
+
+    Args:
+      agent_id: Your agent identity (e.g. "claude-code"). Used to pull
+        todos targeted at you.
+      since: ISO timestamp; if provided, include engrams changed since.
+        Skip for a fresh session; pass your last-seen timestamp to get
+        a diff feed when resuming.
+
+    Returns:
+      {
+        brain: {id, name, description, vault_path, is_external},
+        stats: {memories, connections, entities},
+        l0: [{title, summary}],       // top identity facts (~100 tok)
+        top_memories: [{id, title, preview}],  // top 5 by strength
+        open_todos: [{id, task, context, to_agent}],  // for this agent
+        changes: [{engram_id, title, updated_at}] | null,  // since arg
+      }
+    """
+    ctx = _ctx(brain)
+    from neurovault_server.write_back import build_session_context
+    from neurovault_server import todos as _todos
+
+    # Brain + counts
+    total = ctx.db.conn.execute(
+        "SELECT COUNT(*) FROM engrams WHERE state != 'dormant'"
+    ).fetchone()[0]
+    entities = ctx.db.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+    connections = ctx.db.conn.execute("SELECT COUNT(*) FROM engram_links").fetchone()[0]
+
+    # L0 identity facts (top access_count + strength) — reuses existing helper.
+    try:
+        session_ctx = build_session_context(ctx.db)
+    except Exception as e:
+        logger.debug("session_start: L0 build skipped: {}", e)
+        session_ctx = {"l0": "", "l1": ""}
+
+    # Top 5 memories by strength — the always-relevant anchors.
+    top_rows = ctx.db.conn.execute(
+        """SELECT id, title, content FROM engrams
+           WHERE state IN ('fresh', 'active', 'connected')
+           ORDER BY strength DESC LIMIT 5"""
+    ).fetchall()
+    top_memories = [
+        {"id": r[0], "title": r[1], "preview": (r[2] or "")[:200]}
+        for r in top_rows
+    ]
+
+    # Open todos — targeted specifically at this agent OR 'any'.
+    brain_dir = ctx.vault_dir.parent if ctx.external_vault_path is None else (
+        __import__("neurovault_server.config", fromlist=["BRAINS_DIR"]).BRAINS_DIR / ctx.brain_id
+    )
+    open_todos_raw = _todos.list_todos(brain_dir, status="open", limit=20)
+    if agent_id:
+        open_todos_raw = [
+            t for t in open_todos_raw
+            if (t.get("to_agent") or "any") in ("any", agent_id)
+        ]
+    open_todos = [
+        {"id": t["id"], "task": t["task"], "context": t.get("context", ""),
+         "to_agent": t.get("to_agent", "any"), "from_agent": t.get("from_agent")}
+        for t in open_todos_raw[:10]
+    ]
+
+    # Recent changes since `since` (if provided). Cheap engram-table query.
+    changes = None
+    if since:
+        try:
+            rows = ctx.db.conn.execute(
+                """SELECT id, title, updated_at FROM engrams
+                   WHERE updated_at > ? AND state != 'dormant'
+                   ORDER BY updated_at DESC LIMIT 20""",
+                (since,),
+            ).fetchall()
+            changes = [
+                {"engram_id": r[0], "title": r[1], "updated_at": r[2]}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.debug("session_start: changes query skipped: {}", e)
+            changes = []
+
+    return {
+        "brain": {
+            "id": ctx.brain_id,
+            "name": ctx.name,
+            "description": ctx.description,
+            "vault_path": str(ctx.vault_dir),
+            "is_external": ctx.external_vault_path is not None,
+        },
+        "stats": {
+            "memories": total,
+            "entities": entities,
+            "connections": connections,
+        },
+        "l0": session_ctx.get("l0", ""),
+        "top_memories": top_memories,
+        "open_todos": open_todos,
+        "changes": changes,
+    }
 
 
 @tiered("core")

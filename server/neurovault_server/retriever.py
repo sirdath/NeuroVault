@@ -633,13 +633,27 @@ def hybrid_retrieve(
                 c["decision_bonus"] = 0.0
 
     # --- Optional cross-encoder reranking ---
+    # Graceful fallback: the bundled sidecar excludes sentence-transformers
+    # (cuts ~80 MB off the binary), so use_reranker=True silently degrades
+    # to plain RRF scoring in that deployment. Dev server (uv-run) has the
+    # dep and the rerank actually runs.
+    reranker_used = False
     if use_reranker and len(candidates) > 1:
-        reranker = _get_reranker()
-        pairs = [[query, c["content"]] for c in candidates[:20]]
-        rerank_scores = reranker.predict(pairs).tolist()
-        for i, score in enumerate(rerank_scores):
-            if i < len(candidates):
-                candidates[i]["rerank_score"] = float(score)
+        try:
+            reranker = _get_reranker()
+            pairs = [[query, c["content"]] for c in candidates[:20]]
+            rerank_scores = reranker.predict(pairs).tolist()
+            for i, score in enumerate(rerank_scores):
+                if i < len(candidates):
+                    candidates[i]["rerank_score"] = float(score)
+            # Candidates past the top 20 keep their RRF score as a fallback.
+            for c in candidates[20:]:
+                c["rerank_score"] = c["rrf_score"]
+            reranker_used = True
+        except (ImportError, Exception) as e:  # noqa: BLE001
+            logger.debug("Cross-encoder reranking unavailable: {}", e)
+            for c in candidates:
+                c["rerank_score"] = c["rrf_score"]
     else:
         for c in candidates:
             c["rerank_score"] = c["rrf_score"]
@@ -679,7 +693,7 @@ def hybrid_retrieve(
         "Hybrid retrieval: {} results for '{}' (type={}, intent={}, semantic={}, bm25={}, graph={}, titles={}, reranker={})",
         len(results), query[:50], query_type, temporal_intent,
         len(semantic_ranked), len(bm25_ranked), len(graph_ranked), len(title_matches),
-        "on" if use_reranker else "off",
+        "on" if reranker_used else ("requested-but-unavailable" if use_reranker else "off"),
     )
     return results
 

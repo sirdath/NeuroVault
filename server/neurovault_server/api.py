@@ -1024,6 +1024,16 @@ def create_api(manager) -> FastAPI:
             "source_count": len(sources),
         }
 
+    @app.get("/api/session_start")
+    def session_start_endpoint(agent_id: str | None = None, since: str | None = None):
+        """One-call session wake-up. Packs brain info, stats, L0 identity
+        memories, top-5 by strength, open todos for this agent, and
+        (optional) engrams changed since a timestamp — all in one reply.
+        Meant to replace the 3-4 cold-start round-trips an agent would
+        otherwise make on session resume."""
+        from neurovault_server.server import session_start as _ss
+        return _ss(agent_id=agent_id, since=since)
+
     @app.get("/api/recall/chunks")
     def recall_chunks_endpoint(q: str, top_k: int = 10, granularity: str = "paragraph"):
         """Chunk-level hybrid retrieval. Returns the matching passages from
@@ -1545,12 +1555,16 @@ def create_api(manager) -> FastAPI:
         limit: int = 10,
         mode: str = "preview",
         as_of: str | None = None,
+        rerank: bool = False,
     ):
-        """Hybrid retrieval over the active brain. Pass as_of (ISO) for time travel."""
+        """Hybrid retrieval over the active brain. Pass as_of (ISO) for time
+        travel; rerank=true runs a cross-encoder second pass (silently
+        skipped if sentence-transformers isn't installed)."""
         from neurovault_server.retriever import hybrid_retrieve
         ctx = _ctx()
         results = hybrid_retrieve(
-            q, ctx.db, manager.embedder, ctx.bm25, top_k=limit, as_of=as_of
+            q, ctx.db, manager.embedder, ctx.bm25,
+            top_k=limit, as_of=as_of, use_reranker=rerank,
         )
         if mode == "titles":
             # Enrich with filename so the frontend sidebar can map recall
