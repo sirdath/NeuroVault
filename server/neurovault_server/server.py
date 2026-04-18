@@ -167,6 +167,7 @@ def _slugify(text: str) -> str:
 
 def _write_md_file(vault_dir: Path, filename: str, title: str, content: str) -> Path:
     path = vault_dir / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
     md_content = f"# {title}\n\n{content}"
     path.write_text(md_content, encoding="utf-8")
     return path
@@ -200,11 +201,15 @@ def remember(title: str, content: str, brain: str | None = None, agent_id: str |
     else:
         engram_id = str(uuid.uuid4())
         slug = _slugify(title)
-        filename = f"{slug}-{engram_id[:8]}.md"
+        leaf = f"{slug}-{engram_id[:8]}.md"
+        # Auto-route MCP writes (from agents) into agent/ so they don't
+        # clutter the root alongside human-written notes.
+        folder = "agent" if (agent_id and agent_id != "user") else ""
+        filename = f"{folder}/{leaf}" if folder else leaf
         status = "created"
 
     filepath = _write_md_file(ctx.vault_dir, filename, title, content)
-    ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25)
+    ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25, vault_root=ctx.vault_dir)
 
     # Tag with agent identity if provided
     if agent_id:

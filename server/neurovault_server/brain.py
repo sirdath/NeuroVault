@@ -26,17 +26,19 @@ from neurovault_server.consolidation import ConsolidationScheduler
 
 
 def _compute_vault_fingerprint(vault_dir: Path) -> str:
-    """Hash of (filename, mtime, size) for every .md in the vault.
+    """Hash of (relpath, mtime, size) for every .md in the vault.
 
-    Cheap — only stats, no reads. Used to short-circuit ingest_vault when
-    nothing on disk has changed since the last run.
+    Walks subdirectories so external folders with nested structure (an
+    Obsidian vault opened in-place) trigger re-ingest when any file
+    changes, not just root-level edits. Cheap — only stats, no reads.
     """
     parts: list[str] = []
     try:
-        for p in sorted(vault_dir.glob("*.md")):
+        for p in sorted(vault_dir.rglob("*.md")):
             try:
                 st = p.stat()
-                parts.append(f"{p.name}:{int(st.st_mtime)}:{st.st_size}")
+                rel = p.relative_to(vault_dir).as_posix()
+                parts.append(f"{rel}:{int(st.st_mtime)}:{st.st_size}")
             except OSError:
                 continue
     except OSError:
@@ -64,6 +66,12 @@ class BrainContext:
     brain_id: str
     name: str
     description: str = ""
+    # When set (Obsidian-style external-folder brains), the vault points at
+    # an arbitrary absolute path outside ~/.neurovault/. The DB, raw/, etc.
+    # still live internally under brains/{id}/ — we never write SQLite or
+    # scratch files into user folders. On delete, external vaults are
+    # preserved; only internal scratch + registry entry are removed.
+    external_vault_path: Path | None = None
     vault_dir: Path = field(default_factory=Path)
     trash_dir: Path = field(default_factory=Path)
     raw_dir: Path = field(default_factory=Path)
@@ -96,8 +104,13 @@ class BrainContext:
         """
         brain_dir = BRAINS_DIR / self.brain_id
 
-        # Processed brain (what Claude sees)
-        self.vault_dir = brain_dir / "vault"
+        # Processed brain (what Claude sees). External-folder brains point
+        # vault_dir at the user-chosen path; we don't mkdir because it
+        # already exists and isn't ours to touch.
+        if self.external_vault_path is not None:
+            self.vault_dir = self.external_vault_path
+        else:
+            self.vault_dir = brain_dir / "vault"
         self.trash_dir = brain_dir / "trash"
 
         # Raw inputs (never modified, permanent record)
@@ -108,8 +121,10 @@ class BrainContext:
 
         self.db_path = brain_dir / "brain.db"
 
-        # Create all directories
-        self.vault_dir.mkdir(parents=True, exist_ok=True)
+        # Create internal scratch dirs. External vaults are user-owned —
+        # we expect them to exist; we never mkdir them.
+        if self.external_vault_path is None:
+            self.vault_dir.mkdir(parents=True, exist_ok=True)
         self.trash_dir.mkdir(parents=True, exist_ok=True)
         self.consolidated_dir.mkdir(parents=True, exist_ok=True)
         for subdir in ("pdfs", "conversations", "clips", "pastes", "imports"):
@@ -344,37 +359,76 @@ class BrainManager:
 
     # --- Brain CRUD ---
 
-    def create_brain(self, name: str, description: str = "") -> BrainContext:
-        """Create a new brain."""
+    def create_brain(
+        self,
+        name: str,
+        description: str = "",
+        vault_path: str | None = None,
+    ) -> BrainContext:
+        """Create a new brain.
+
+        If `vault_path` is provided, the brain's vault is treated as an
+        external folder (Obsidian-style in-place opening). The DB and
+        other scratch dirs still live under ~/.neurovault/brains/{id}/;
+        only the vault/ points at the user's folder. On delete, the
+        external folder is preserved.
+        """
         brain_id = name.lower().replace(" ", "-").replace("/", "-")[:30]
         # Ensure unique
         existing_ids = {b["id"] for b in self._registry}
         if brain_id in existing_ids:
             brain_id = f"{brain_id}-{uuid.uuid4().hex[:6]}"
 
+        external: Path | None = None
+        if vault_path:
+            p = Path(vault_path).expanduser().resolve()
+            if not p.is_dir():
+                raise ValueError(f"vault_path is not a directory: {p}")
+            external = p
+
+        entry: dict = {
+            "id": brain_id,
+            "name": name,
+            "description": description,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if external is not None:
+            entry["vault_path"] = str(external)
+
         with self._lock:
-            self._registry.append({
-                "id": brain_id,
-                "name": name,
-                "description": description,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            self._registry.append(entry)
             self._save_registry()
 
-        ctx = BrainContext(brain_id=brain_id, name=name, description=description)
+        ctx = BrainContext(
+            brain_id=brain_id,
+            name=name,
+            description=description,
+            external_vault_path=external,
+        )
         ctx.initialize(self.embedder, activate=False)
 
         with self._lock:
             self._contexts[brain_id] = ctx
 
-        logger.info("Created brain: {} ({})", name, brain_id)
+        logger.info("Created brain: {} ({}) vault={}", name, brain_id, external or "internal")
         return ctx
 
     def delete_brain(self, brain_id: str) -> bool:
-        """Delete a brain. Cannot delete the active brain."""
+        """Delete a brain. Cannot delete the active brain.
+
+        For external-folder brains (registry has `vault_path`), we remove
+        the DB + scratch dirs + registry entry but leave the user's
+        folder completely untouched — they opened it, we only borrowed it.
+        """
         if brain_id == self._active_id:
             logger.warning("Cannot delete the active brain")
             return False
+
+        # Snapshot whether this brain is external before we drop the entry.
+        is_external = any(
+            b.get("id") == brain_id and b.get("vault_path")
+            for b in self._registry
+        )
 
         with self._lock:
             # Shutdown context if loaded
@@ -386,12 +440,13 @@ class BrainManager:
             self._registry = [b for b in self._registry if b["id"] != brain_id]
             self._save_registry()
 
-        # Remove files
+        # Remove internal scratch dir (DB, trash, raw/, consolidated/). The
+        # external vault — if any — is never touched.
         brain_dir = BRAINS_DIR / brain_id
         if brain_dir.exists():
             shutil.rmtree(str(brain_dir))
 
-        logger.info("Deleted brain: {}", brain_id)
+        logger.info("Deleted brain: {} (external={})", brain_id, is_external)
         return True
 
     def list_brains(self) -> list[dict]:
@@ -447,10 +502,29 @@ class BrainManager:
         if not entry:
             raise ValueError(f"Brain not found: {brain_id}")
 
+        raw_vault_path = entry.get("vault_path")
+        external_vault: Path | None = None
+        if raw_vault_path:
+            try:
+                candidate = Path(raw_vault_path).expanduser()
+                if candidate.is_dir():
+                    external_vault = candidate
+                else:
+                    # Folder moved/deleted by the user. Log + fall back to
+                    # an internal vault so the brain still loads instead of
+                    # raising. The user can re-point via the UI later.
+                    logger.warning(
+                        "Brain {} references missing vault_path {} — falling back to internal vault",
+                        brain_id, candidate,
+                    )
+            except (OSError, ValueError) as e:
+                logger.warning("Invalid vault_path for brain {}: {}", brain_id, e)
+
         ctx = BrainContext(
             brain_id=brain_id,
             name=entry["name"],
             description=entry.get("description", ""),
+            external_vault_path=external_vault,
         )
 
         # Phase 1 (must succeed): dirs + DB + BM25 object

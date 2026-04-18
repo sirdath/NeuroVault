@@ -94,6 +94,24 @@ export function Sidebar({
     return true;
   });
 
+  // Folder tree state — first path segment of filename groups notes.
+  // Notes with no slash in filename live at root (they render directly).
+  // Expanded state persists in localStorage so collapses survive reloads.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("nv.folders.expanded");
+      if (raw) return JSON.parse(raw);
+    } catch { /* corrupt */ }
+    return { agent: true, user: true };
+  });
+  useEffect(() => {
+    try { localStorage.setItem("nv.folders.expanded", JSON.stringify(expanded)); }
+    catch { /* quota */ }
+  }, [expanded]);
+  const toggleFolder = useCallback((name: string) => {
+    setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
+  }, []);
+
   const handleCreate = useCallback(async () => {
     const title = newTitle.trim();
     if (!title) return;
@@ -210,11 +228,12 @@ export function Sidebar({
            measureElement. The scroll container MUST have a fixed height
            (flex-1 + min-h-0 provides that inside the flex column). */}
       <NoteList
-        filtered={filtered}
+        rows={buildFolderRows(filtered, expanded)}
         previews={previews}
         activeFilename={activeFilename}
         onSelect={(fn) => selectNote(fn)}
         onDelete={handleDelete}
+        onToggleFolder={toggleFolder}
       />
 
       {/* Empty states */}
@@ -236,10 +255,31 @@ export function Sidebar({
 
       {/* Bottom bar — Obsidian-style: brain selector + settings */}
       <div
-        className="flex-shrink-0 flex items-center justify-between px-3 py-2"
+        className="flex-shrink-0 flex items-center justify-between px-3 py-2 gap-2"
         style={{ borderTop: "1px solid var(--nv-border)" }}
       >
         <BrainSelector />
+        {/* Small NeuroVault mark — three connected nodes, a neural-graph
+            motif that matches the product's memory-as-graph framing. */}
+        <svg
+          viewBox="0 0 24 24"
+          className="w-4 h-4 flex-shrink-0"
+          style={{ color: "var(--nv-accent)", opacity: 0.6 }}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.4}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-label="NeuroVault"
+        >
+          <path d="M7 8l5 4 5-4" />
+          <path d="M7 8v8l5 4" />
+          <path d="M17 8v8l-5 4" />
+          <circle cx="7" cy="8" r="1.5" fill="currentColor" />
+          <circle cx="17" cy="8" r="1.5" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+          <circle cx="12" cy="20" r="1.5" fill="currentColor" />
+        </svg>
         <button
           onClick={() => onSettingsOpen?.()}
           className="w-7 h-7 flex items-center justify-center rounded-md transition-all"
@@ -256,14 +296,55 @@ export function Sidebar({
   );
 }
 
+// --- Folder tree helpers --------------------------------------------------
+
+type Row =
+  | { kind: "folder"; name: string; count: number; expanded: boolean }
+  | { kind: "note"; note: NoteMeta; indent: number };
+
+/**
+ * Flatten notes into a renderable row list grouped by their top-level
+ * folder (first segment of `filename` before `/`). Folders come first in
+ * alphabetical order; root-level notes trail behind. Notes inside a
+ * folder only appear when the folder is expanded.
+ */
+function buildFolderRows(
+  notes: NoteMeta[],
+  expanded: Record<string, boolean>,
+): Row[] {
+  const byFolder: Record<string, NoteMeta[]> = {};
+  const rootNotes: NoteMeta[] = [];
+  for (const n of notes) {
+    const slash = n.filename.indexOf("/");
+    if (slash > 0) {
+      const folder = n.filename.slice(0, slash);
+      (byFolder[folder] ??= []).push(n);
+    } else {
+      rootNotes.push(n);
+    }
+  }
+  const rows: Row[] = [];
+  const folderNames = Object.keys(byFolder).sort((a, b) => a.localeCompare(b));
+  for (const name of folderNames) {
+    const isOpen = expanded[name] !== false;
+    rows.push({ kind: "folder", name, count: byFolder[name]!.length, expanded: isOpen });
+    if (isOpen) {
+      for (const n of byFolder[name]!) rows.push({ kind: "note", note: n, indent: 1 });
+    }
+  }
+  for (const n of rootNotes) rows.push({ kind: "note", note: n, indent: 0 });
+  return rows;
+}
+
 // --- Virtualized note list ------------------------------------------------
 
 interface NoteListProps {
-  filtered: NoteMeta[];
+  rows: Row[];
   previews: Record<string, string>;
   activeFilename: string | null;
   onSelect: (filename: string) => void;
   onDelete: (filename: string, title: string) => void;
+  onToggleFolder: (name: string) => void;
 }
 
 /**
@@ -277,20 +358,25 @@ interface NoteListProps {
  * across filter changes so scroll position isn't reset.
  */
 function NoteList({
-  filtered,
+  rows,
   previews,
   activeFilename,
   onSelect,
   onDelete,
+  onToggleFolder,
 }: NoteListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
-    count: filtered.length,
+    count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    estimateSize: (i) => (rows[i]?.kind === "folder" ? 32 : ESTIMATED_ROW_HEIGHT),
     overscan: VIRTUAL_OVERSCAN,
-    getItemKey: (index) => filtered[index]?.filename ?? index,
+    getItemKey: (i) => {
+      const r = rows[i];
+      if (!r) return i;
+      return r.kind === "folder" ? `folder:${r.name}` : `note:${r.note.filename}`;
+    },
   });
 
   const virtualItems = virtualizer.getVirtualItems();
@@ -309,8 +395,60 @@ function NoteList({
         }}
       >
         {virtualItems.map((virtualRow) => {
-          const note = filtered[virtualRow.index];
-          if (!note) return null;
+          const row = rows[virtualRow.index];
+          if (!row) return null;
+
+          const positioning: React.CSSProperties = {
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            transform: `translateY(${virtualRow.start}px)`,
+          };
+
+          if (row.kind === "folder") {
+            return (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                style={positioning}
+                className="px-3 pt-1"
+              >
+                <button
+                  onClick={() => onToggleFolder(row.name)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:bg-white/[0.03]"
+                  style={{ color: "var(--nv-text-muted)" }}
+                >
+                  <svg
+                    className={`w-[11px] h-[11px] flex-shrink-0 transition-transform duration-150 ${row.expanded ? "rotate-90" : ""}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                  <svg
+                    className="w-[13px] h-[13px] flex-shrink-0"
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
+                    style={{ opacity: 0.7 }}
+                  >
+                    {row.expanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                    )}
+                  </svg>
+                  <span className="text-[12px] font-[Geist,sans-serif] capitalize truncate">
+                    {row.name}
+                  </span>
+                  <span className="ml-auto text-[10px] font-[Geist,sans-serif] tabular-nums" style={{ color: "var(--nv-text-dim)" }}>
+                    {row.count}
+                  </span>
+                </button>
+              </div>
+            );
+          }
+
+          const note = row.note;
           const isActive = activeFilename === note.filename;
           const preview = previews[note.filename];
 
@@ -320,23 +458,21 @@ function NoteList({
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               onClick={() => onSelect(note.filename)}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                transform: `translateY(${virtualRow.start}px)`,
-              }}
-              className="px-3 py-0.5"
+              style={positioning}
+              className="py-0.5"
             >
               <div
                 className="group relative cursor-pointer rounded-lg px-3.5 py-3 transition-all duration-200"
-                style={isActive ? {
-                  background: "var(--nv-surface)",
-                  border: `1px solid var(--nv-border)`,
-                  boxShadow: `inset 0 1px 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.15)`,
-                } : {
-                  border: "1px solid transparent",
+                style={{
+                  marginLeft: 12 + row.indent * 16,
+                  marginRight: 12,
+                  ...(isActive ? {
+                    background: "var(--nv-surface)",
+                    border: `1px solid var(--nv-border)`,
+                    boxShadow: `inset 0 1px 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.15)`,
+                  } : {
+                    border: "1px solid transparent",
+                  }),
                 }}
               >
                 <div className="flex items-start justify-between gap-2">

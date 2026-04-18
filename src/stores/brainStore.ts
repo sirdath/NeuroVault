@@ -7,6 +7,7 @@ export interface BrainInfo {
   description: string;
   created_at: string;
   is_active: boolean;
+  vault_path?: string;
 }
 
 const API = "http://127.0.0.1:8765";
@@ -19,7 +20,11 @@ interface BrainStore {
 
   loadBrains: () => Promise<void>;
   switchBrain: (brainId: string) => Promise<void>;
-  createBrain: (name: string, description: string) => Promise<{ brain_id: string; name: string } | null>;
+  createBrain: (
+    name: string,
+    description: string,
+    vaultPath?: string,
+  ) => Promise<{ brain_id: string; name: string; vault_path?: string; is_external?: boolean } | null>;
   deleteBrain: (brainId: string) => Promise<boolean>;
 }
 
@@ -55,6 +60,22 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       const data = await res.json();
       set({ activeBrainId: data.brain_id, activeBrainName: data.name });
 
+      // Clear state from the previous brain before loading the new one —
+      // the previously-open note, search, and dirty buffer all belong to
+      // a different vault now. Without this, switching could show an
+      // old title with empty content or cross-contaminate the save buffer.
+      useNoteStore.setState({
+        activeFilename: null,
+        activeContent: "",
+        isDirty: false,
+        searchQuery: "",
+        notes: [],
+      });
+
+      // Small delay so the server's brains.json write flushes to disk
+      // before Rust reads it via get_vault_path().
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
       // Reload brains list and notes for the new brain
       await get().loadBrains();
       await useNoteStore.getState().initVault();
@@ -63,15 +84,18 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
     }
   },
 
-  createBrain: async (name: string, description: string) => {
+  createBrain: async (name: string, description: string, vaultPath?: string) => {
     try {
+      const body: Record<string, unknown> = { name, description };
+      if (vaultPath) body.vault_path = vaultPath;
       const res = await fetch(`${API}/api/brains`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) return null;
       const data = await res.json();
+      if (data.error) return null;
       await get().loadBrains();
       return data;
     } catch {

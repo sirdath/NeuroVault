@@ -1,16 +1,51 @@
 import { useState, useRef, useEffect } from "react";
 import { useBrainStore } from "../stores/brainStore";
 
+const API = "http://127.0.0.1:8765";
+
+interface BrainStats { note_count: number; total_bytes: number }
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 export function BrainSelector() {
-  const { brains, activeBrainName, loading, switchBrain, createBrain, loadBrains } =
+  const { brains, activeBrainName, loading, switchBrain, createBrain, deleteBrain, loadBrains } =
     useBrainStore();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [stats, setStats] = useState<Record<string, BrainStats>>({});
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { loadBrains(); }, [loadBrains]);
+
+  useEffect(() => {
+    if (!open || brains.length === 0) return;
+    // Fetch per-brain stats once the dropdown opens. Fire all requests in
+    // parallel — they read from disk so they're cheap.
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, BrainStats> = {};
+      await Promise.all(brains.map(async (b) => {
+        try {
+          const r = await fetch(`${API}/api/brains/${b.id}/stats`);
+          if (!r.ok) return;
+          const s = await r.json();
+          if (s && typeof s.note_count === "number") {
+            next[b.id] = { note_count: s.note_count, total_bytes: s.total_bytes };
+          }
+        } catch { /* server offline — skip */ }
+      }));
+      if (!cancelled) setStats(next);
+    })();
+    return () => { cancelled = true; };
+  }, [open, brains]);
 
   useEffect(() => {
     if (!open) return;
@@ -48,28 +83,18 @@ export function BrainSelector() {
       if (!selected) return;
 
       const folderPath = String(selected);
-      const folderName = folderPath.split(/[\\/]/).pop() || "Imported";
+      const folderName = folderPath.split(/[\\/]/).pop() || "Vault";
 
-      // Step 1: create a new brain
-      const result = await createBrain(folderName, `Imported from: ${folderPath}`);
+      // Obsidian-style: the folder stays in place and IS the vault. We only
+      // register a brain that points at it (vault_path) — no copying. The
+      // server's file watcher ingests the folder's .md files into the brain's
+      // internal DB. Deleting this brain later leaves the folder untouched.
+      const result = await createBrain(folderName, `External folder vault`, folderPath);
       if (!result) {
-        alert("Failed to create vault. Is the server running?");
+        alert("Failed to open folder as vault. Is the server running?");
         return;
       }
 
-      // Step 2: copy all .md files from the folder into the new brain
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const count = await invoke<number>("import_folder_as_vault", {
-          source: folderPath,
-          targetBrainId: result.brain_id,
-        });
-        alert(`Imported ${count} markdown file${count === 1 ? "" : "s"} from ${folderName}`);
-      } catch (e) {
-        alert(`Brain created but file import failed: ${e}`);
-      }
-
-      // Step 3: switch to the new brain
       setOpen(false);
       await switchBrain(result.brain_id);
     } catch (e) {
@@ -111,34 +136,126 @@ export function BrainSelector() {
         >
           {/* Vault list */}
           <div className="max-h-[280px] overflow-y-auto py-1">
-            {brains.map((brain) => (
-              <button
-                key={brain.id}
-                onClick={() => handleSwitch(brain.id)}
-                className="w-full text-left px-3 py-2 flex items-start gap-2.5 transition-colors"
-                style={{
-                  background: brain.is_active ? "var(--nv-surface)" : undefined,
-                }}
-              >
-                <span
-                  className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
-                  style={{ backgroundColor: brain.is_active ? "var(--nv-accent)" : "var(--nv-text-dim)" }}
-                />
-                <div className="min-w-0">
-                  <p className="text-[12px] font-medium font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>
-                    {brain.name}
-                  </p>
-                  {brain.description && (
-                    <p className="text-[10px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text-dim)" }}>
-                      {brain.description}
+            {brains.map((brain) => {
+              const isConfirming = confirmDelete === brain.id;
+              if (isConfirming) {
+                // Inline confirm state. Different copy for external vs
+                // internal so the user knows their folder is safe in the
+                // external case — removing the brain only deletes the
+                // NeuroVault index, never the user's own files.
+                return (
+                  <div
+                    key={brain.id}
+                    className="px-3 py-2.5"
+                    style={{ background: "var(--nv-surface)", borderLeft: "2px solid var(--nv-negative)" }}
+                  >
+                    <p className="text-[11px] font-[Geist,sans-serif] mb-1.5" style={{ color: "var(--nv-text)" }}>
+                      Remove <span className="font-medium">{brain.name}</span>?
                     </p>
+                    <p className="text-[10px] font-[Geist,sans-serif] leading-relaxed mb-2" style={{ color: "var(--nv-text-dim)" }}>
+                      {brain.vault_path
+                        ? "Your folder stays on disk — only the NeuroVault index for it is removed."
+                        : "Permanently deletes all notes in this vault. Cannot be undone."}
+                    </p>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={async () => {
+                          const ok = await deleteBrain(brain.id);
+                          if (ok) setConfirmDelete(null);
+                        }}
+                        className="text-[11px] font-[Geist,sans-serif] px-2.5 py-1 rounded-md"
+                        style={{ background: "var(--nv-negative)", color: "var(--nv-bg)" }}
+                      >
+                        {brain.vault_path ? "Remove" : "Delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(null)}
+                        className="text-[11px] font-[Geist,sans-serif] px-2.5 py-1 rounded-md"
+                        style={{ color: "var(--nv-text-muted)" }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={brain.id}
+                  className="group relative flex items-start gap-2.5 px-3 py-2 transition-colors"
+                  style={{ background: brain.is_active ? "var(--nv-surface)" : undefined }}
+                >
+                  <button
+                    onClick={() => handleSwitch(brain.id)}
+                    className="flex items-start gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
+                      style={{ backgroundColor: brain.is_active ? "var(--nv-accent)" : "var(--nv-text-dim)" }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[12px] font-medium font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>
+                          {brain.name}
+                        </p>
+                        {brain.vault_path && (
+                          <span
+                            className="text-[9px] uppercase tracking-wider font-[Geist,sans-serif] px-1 py-px rounded-sm flex-shrink-0"
+                            style={{ color: "var(--nv-accent)", background: "var(--nv-accent-glow, rgba(181,146,255,0.1))", opacity: 0.9 }}
+                            title={`External folder: ${brain.vault_path}`}
+                          >
+                            folder
+                          </span>
+                        )}
+                      </div>
+                      {brain.vault_path ? (
+                        <p
+                          className="text-[10px] font-mono truncate"
+                          style={{ color: "var(--nv-text-dim)", direction: "rtl", textAlign: "left" }}
+                          title={brain.vault_path}
+                        >
+                          {brain.vault_path}
+                        </p>
+                      ) : (
+                        brain.description && (
+                          <p className="text-[10px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text-dim)" }}>
+                            {brain.description}
+                          </p>
+                        )
+                      )}
+                      {(() => {
+                        const s = stats[brain.id];
+                        if (!s) return null;
+                        return (
+                          <p className="text-[10px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
+                            {s.note_count} {s.note_count === 1 ? "note" : "notes"} · {formatBytes(s.total_bytes)}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  </button>
+                  {brain.is_active ? (
+                    <span className="text-[10px] mt-0.5 flex-shrink-0" style={{ color: "var(--nv-accent)" }}>✓</span>
+                  ) : (
+                    // Delete button — hover-only for non-active brains.
+                    // Active brains can't be deleted (server rejects it)
+                    // so we don't render the control in that state.
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setConfirmDelete(brain.id); }}
+                      className="opacity-0 group-hover:opacity-100 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-all"
+                      style={{ color: "var(--nv-text-dim)" }}
+                      title={brain.vault_path ? "Remove vault (folder preserved)" : "Delete vault"}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-negative)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                      </svg>
+                    </button>
                   )}
                 </div>
-                {brain.is_active && (
-                  <span className="text-[10px] mt-0.5 flex-shrink-0" style={{ color: "var(--nv-accent)" }}>✓</span>
-                )}
-              </button>
-            ))}
+              );
+            })}
           </div>
 
           {/* Divider */}

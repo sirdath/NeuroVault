@@ -47,12 +47,32 @@ fn nv_home() -> PathBuf {
 fn vault_dir() -> PathBuf {
     let nv_home = nv_home();
 
-    // Try brains.json first (multi-brain mode)
+    // Try brains.json first (multi-brain mode). When the active brain has
+    // an explicit `vault_path` (Obsidian-style external folder), honor it —
+    // the user's folder is the vault, we don't create or seed it. Fall back
+    // to the canonical internal path if vault_path is missing or stale.
     let registry_path = nv_home.join("brains.json");
     if registry_path.exists() {
         if let Ok(data) = fs::read_to_string(&registry_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
+                    if let Some(brains) = parsed.get("brains").and_then(|v| v.as_array()) {
+                        for b in brains {
+                            let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            if id != active_id { continue; }
+                            if let Some(ext) = b.get("vault_path").and_then(|v| v.as_str()) {
+                                let p = PathBuf::from(ext);
+                                if p.is_dir() {
+                                    return p;
+                                }
+                                eprintln!(
+                                    "[neurovault] active brain {} has vault_path {:?} but it's missing \u{2014} falling back to internal vault",
+                                    active_id, p
+                                );
+                            }
+                            break;
+                        }
+                    }
                     let vault = nv_home.join("brains").join(active_id).join("vault");
                     fs::create_dir_all(&vault).ok();
                     seed_welcome_note(&vault);
@@ -162,26 +182,41 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
     let vault = vault_dir();
     let mut notes: Vec<NoteMeta> = Vec::new();
 
-    let entries = fs::read_dir(&vault).map_err(|e| format!("Failed to read vault: {e}"))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "md") {
-            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let metadata = fs::metadata(&path).map_err(|e| format!("Failed to read metadata: {e}"))?;
-            let modified = metadata
-                .modified()
-                .unwrap_or(SystemTime::UNIX_EPOCH)
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let size = metadata.len();
-            let content = fs::read_to_string(&path).unwrap_or_default();
-            let title = extract_title(&content, &filename);
-
-            notes.push(NoteMeta { filename, title, modified, size });
+    // Recursively walk subdirectories so notes organized into folders
+    // (`agent/`, `user/`, any user-created folder) are returned too. The
+    // `filename` we return is the POSIX-style relative path from the vault
+    // root (e.g. `agent/foo.md`), which the frontend splits on `/` to
+    // build the folder tree and the same string round-trips unchanged
+    // through read_note / save_note.
+    fn walk(dir: &std::path::Path, vault_root: &std::path::Path, out: &mut Vec<NoteMeta>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, vault_root, out);
+                continue;
+            }
+            if path.extension().map_or(false, |ext| ext == "md") {
+                let rel = path
+                    .strip_prefix(vault_root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let Ok(metadata) = fs::metadata(&path) else { continue };
+                let modified = metadata
+                    .modified()
+                    .unwrap_or(SystemTime::UNIX_EPOCH)
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let size = metadata.len();
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let title = extract_title(&content, &rel);
+                out.push(NoteMeta { filename: rel, title, modified, size });
+            }
         }
     }
+    walk(&vault, &vault, &mut notes);
 
     notes.sort_by(|a, b| b.modified.cmp(&a.modified));
     Ok(notes)
@@ -194,7 +229,11 @@ fn read_note(filename: String) -> Result<String, String> {
 
 #[tauri::command]
 fn save_note(filename: String, content: String) -> Result<(), String> {
-    fs::write(vault_dir().join(&filename), &content).map_err(|e| format!("Failed to save note: {e}"))
+    let path = vault_dir().join(&filename);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create folder: {e}"))?;
+    }
+    fs::write(&path, &content).map_err(|e| format!("Failed to save note: {e}"))
 }
 
 #[tauri::command]
@@ -210,13 +249,29 @@ fn create_note(title: String) -> Result<String, String> {
 
 #[tauri::command]
 fn delete_note(filename: String) -> Result<(), String> {
+    // `filename` may be a nested path like `agent/foo.md` now that notes
+    // live inside folders. Trash is intentionally flat — if the leaf name
+    // collides, suffix with a short uuid so nothing gets clobbered.
     let src = vault_dir().join(&filename);
-    let dst = trash_dir().join(&filename);
-    if src.exists() {
-        fs::rename(&src, &dst).map_err(|e| format!("Failed to move note to trash: {e}"))
-    } else {
-        Err(format!("Note not found: {filename}"))
+    if !src.exists() {
+        return Err(format!("Note not found: {filename}"));
     }
+    let trash = trash_dir();
+    fs::create_dir_all(&trash).map_err(|e| format!("Failed to prep trash: {e}"))?;
+    let leaf = std::path::Path::new(&filename)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or(filename.clone());
+    let mut dst = trash.join(&leaf);
+    if dst.exists() {
+        let stem = std::path::Path::new(&leaf)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| leaf.clone());
+        let id = &Uuid::new_v4().to_string()[..8];
+        dst = trash.join(format!("{stem}-{id}.md"));
+    }
+    fs::rename(&src, &dst).map_err(|e| format!("Failed to move note to trash: {e}"))
 }
 
 /// Import an external folder as a NeuroVault vault. Copies all .md files
@@ -276,23 +331,53 @@ fn start_server(
     state: tauri::State<'_, ServerState>,
 ) -> Result<String, String> {
     use tauri_plugin_shell::ShellExt;
+    use std::env;
 
     let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
     if guard.is_some() {
         return Err("Server is already running".into());
     }
 
+    // Log where we're looking for the sidecar so we can diagnose failures
+    let current_exe = env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".into());
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.display().to_string()))
+        .unwrap_or_else(|| "<unknown>".into());
+    eprintln!("[start_server] main exe: {current_exe}");
+    eprintln!("[start_server] exe dir:  {exe_dir}");
+
+    // Check what files actually exist in the exe directory
+    if let Ok(dir) = fs::read_dir(&exe_dir) {
+        eprintln!("[start_server] files in exe dir:");
+        for entry in dir.flatten() {
+            let name = entry.file_name();
+            eprintln!("[start_server]   - {}", name.to_string_lossy());
+        }
+    }
+
     let cmd = app
         .shell()
         .sidecar("neurovault-server")
-        .map_err(|e| format!("sidecar binary not found: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[start_server] sidecar() returned Err: {e}");
+            format!("sidecar binary not found: {e}")
+        })?;
+
+    eprintln!("[start_server] sidecar command built, spawning with --http-only");
 
     let (_rx, child) = cmd
         .args(["--http-only"])
         .spawn()
-        .map_err(|e| format!("failed to spawn: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[start_server] spawn() failed: {e}");
+            format!("failed to spawn: {e}")
+        })?;
 
     let pid = child.pid();
+    eprintln!("[start_server] spawned successfully, pid={pid}");
     *guard = Some(child);
     Ok(format!("Server started (pid {})", pid))
 }
@@ -317,6 +402,62 @@ fn stop_server(state: tauri::State<'_, ServerState>) -> Result<String, String> {
 fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
     let guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
     Ok(guard.is_some())
+}
+
+/// Hide the main window without quitting the app. The sidecar keeps running
+/// and the user can restore via Ctrl+Shift+Space (the quick-capture shortcut
+/// also unhides/focuses the window).
+#[tauri::command]
+fn hide_to_background(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| format!("hide: {e}"))
+}
+
+#[derive(Debug, Serialize)]
+struct BrainStorageStats {
+    note_count: u64,
+    markdown_bytes: u64,
+    db_bytes: u64,
+    total_bytes: u64,
+}
+
+/// Walk the active brain's vault and report markdown file count + total size.
+/// Also includes the SQLite DB size so the user sees true on-disk footprint.
+#[tauri::command]
+fn brain_storage_stats() -> Result<BrainStorageStats, String> {
+    let vault = vault_dir();
+    let brain_root = vault.parent().map(|p| p.to_path_buf()).unwrap_or(vault.clone());
+
+    let mut note_count: u64 = 0;
+    let mut markdown_bytes: u64 = 0;
+    fn walk(dir: &std::path::Path, count: &mut u64, bytes: &mut u64) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, count, bytes);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(meta) = entry.metadata() {
+                    *count += 1;
+                    *bytes += meta.len();
+                }
+            }
+        }
+    }
+    walk(&vault, &mut note_count, &mut markdown_bytes);
+
+    let mut db_bytes: u64 = 0;
+    for name in ["brain.db", "brain.db-wal", "brain.db-shm"] {
+        if let Ok(meta) = fs::metadata(brain_root.join(name)) {
+            db_bytes += meta.len();
+        }
+    }
+
+    Ok(BrainStorageStats {
+        note_count,
+        markdown_bytes,
+        db_bytes,
+        total_bytes: markdown_bytes + db_bytes,
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -386,7 +527,23 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
+            hide_to_background, brain_storage_stats,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Kill the sidecar when the app exits so the Python server doesn't
+            // linger as an orphan process holding port 8765. Without this the
+            // user sees "already running" errors on next launch.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app.try_state::<ServerState>() {
+                    if let Ok(mut guard) = state.0.lock() {
+                        if let Some(child) = guard.take() {
+                            let _ = child.kill();
+                            eprintln!("[neurovault] killed sidecar on app exit");
+                        }
+                    }
+                }
+            }
+        });
 }

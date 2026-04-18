@@ -4,6 +4,7 @@ Exposes vault data, brain management, indexing status, and graph data.
 """
 
 import threading
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,10 @@ from neurovault_server.config import SERVER_PORT
 class CreateBrainRequest(BaseModel):
     name: str
     description: str = ""
+    # Absolute path to an existing folder. When set, the brain's vault
+    # points at that folder in place (Obsidian-style) instead of creating
+    # a fresh internal vault under ~/.neurovault/brains/{id}/vault/.
+    vault_path: str | None = None
 
 
 def create_api(manager) -> FastAPI:
@@ -48,7 +53,10 @@ def create_api(manager) -> FastAPI:
             # (status, brains/active) that the TopBar hits every 5s — those
             # would flood the log with ~17k lines/day of zero-signal entries.
             path = request.url.path
-            if path.startswith("/api/") and path not in (
+            # Skip polling/read-only endpoints that the UI hits frequently —
+            # they'd flood the audit log with zero-signal entries.
+            is_brain_stats = path.startswith("/api/brains/") and path.endswith("/stats")
+            if path.startswith("/api/") and not is_brain_stats and path not in (
                 "/api/status",
                 "/api/brains/active",
                 "/api/audit/recent",
@@ -93,12 +101,27 @@ def create_api(manager) -> FastAPI:
     @app.get("/api/brains/active")
     def get_active_brain():
         ctx = _ctx()
-        return {"brain_id": ctx.brain_id, "name": ctx.name, "description": ctx.description}
+        return {
+            "brain_id": ctx.brain_id,
+            "name": ctx.name,
+            "description": ctx.description,
+            "vault_path": str(ctx.vault_dir),
+            "is_external": ctx.external_vault_path is not None,
+        }
 
     @app.post("/api/brains")
     def create_brain(body: CreateBrainRequest):
-        ctx = manager.create_brain(body.name, body.description)
-        return {"brain_id": ctx.brain_id, "name": ctx.name, "status": "created"}
+        try:
+            ctx = manager.create_brain(body.name, body.description, body.vault_path)
+        except ValueError as e:
+            return {"error": str(e)}
+        return {
+            "brain_id": ctx.brain_id,
+            "name": ctx.name,
+            "status": "created",
+            "vault_path": str(ctx.vault_dir),
+            "is_external": ctx.external_vault_path is not None,
+        }
 
     @app.post("/api/brains/{brain_id}/activate")
     def activate_brain(brain_id: str):
@@ -111,6 +134,54 @@ def create_api(manager) -> FastAPI:
         if success:
             return {"status": "deleted"}
         return {"status": "error", "message": "Cannot delete active brain"}
+
+    @app.get("/api/brains/{brain_id}/stats")
+    def brain_stats(brain_id: str):
+        """Disk footprint for a brain: markdown file count + total bytes.
+
+        For external-folder brains, counts markdown at the external vault
+        path; the DB always lives under ~/.neurovault/brains/{id}/.
+        """
+        from neurovault_server.config import BRAINS_DIR
+        brain_info = next((b for b in manager.list_brains() if b["id"] == brain_id), None)
+        if brain_info is None:
+            return {"error": "brain not found"}
+
+        brain_root = BRAINS_DIR / brain_id
+        vault_path_str = brain_info.get("vault_path")
+        if vault_path_str:
+            vault = Path(vault_path_str)
+            is_external = True
+        else:
+            vault = brain_root / "vault"
+            is_external = False
+
+        note_count = 0
+        markdown_bytes = 0
+        if vault.exists():
+            for p in vault.rglob("*.md"):
+                try:
+                    markdown_bytes += p.stat().st_size
+                    note_count += 1
+                except OSError:
+                    pass
+        db_bytes = 0
+        for name in ("brain.db", "brain.db-wal", "brain.db-shm"):
+            f = brain_root / name
+            if f.exists():
+                try:
+                    db_bytes += f.stat().st_size
+                except OSError:
+                    pass
+        return {
+            "brain_id": brain_id,
+            "note_count": note_count,
+            "markdown_bytes": markdown_bytes,
+            "db_bytes": db_bytes,
+            "total_bytes": markdown_bytes + db_bytes,
+            "vault_path": str(vault),
+            "is_external": is_external,
+        }
 
     # --- Status ---
 
@@ -186,6 +257,19 @@ def create_api(manager) -> FastAPI:
                     s += "-"
             return s.strip("-")[:60]
 
+        # Folder routing: auto-place notes by source unless caller overrides.
+        # Agents write into `agent/` so human-authored notes stay at the root
+        # and don't get buried under agent traffic. `folder` can be any
+        # relative subpath (no leading slash, no `..`).
+        explicit_folder = (body.get("folder") or "").strip().strip("/")
+        agent_id_for_folder = body.get("agent_id") or "user"
+        if explicit_folder:
+            folder = explicit_folder
+        elif agent_id_for_folder != "user":
+            folder = "agent"
+        else:
+            folder = ""
+
         existing = ctx.db.get_engram_by_title(title)
         if existing:
             filename = existing["filename"]
@@ -194,7 +278,8 @@ def create_api(manager) -> FastAPI:
             # The uuid here is only used to pick a unique filename slug.
             # The actual stored engram_id comes from ingest_file's return.
             tmp_id = str(_uuid.uuid4())
-            filename = f"{_slug(title)}-{tmp_id[:8]}.md"
+            leaf = f"{_slug(title)}-{tmp_id[:8]}.md"
+            filename = f"{folder}/{leaf}" if folder else leaf
             status = "created"
 
         tags = body.get("tags")
@@ -205,10 +290,11 @@ def create_api(manager) -> FastAPI:
                 header += f"\n{tag_line}\n"
 
         filepath = ctx.vault_dir / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(f"{header}\n{content}", encoding="utf-8")
 
         try:
-            stored_id = ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25)
+            stored_id = ingest_file(filepath, ctx.db, manager.embedder, ctx.bm25, vault_root=ctx.vault_dir)
         except Exception as e:
             logger.warning("POST /api/notes ingest failed: {}", e)
             return {"error": f"ingest failed: {e}", "filename": filename}
@@ -222,12 +308,24 @@ def create_api(manager) -> FastAPI:
             stored_id = row[0] if row else None
             status = "unchanged"
 
+        # Tag with agent_id if the caller provided one (multi-agent scoping).
+        # Falls back to "user" for plain HTTP writes with no agent set — this
+        # way recall(agent_id='user') filters cleanly to human-authored notes.
+        agent_id = body.get("agent_id") or "user"
+        if stored_id:
+            ctx.db.conn.execute(
+                "UPDATE engrams SET agent_id = ? WHERE id = ?",
+                (agent_id, stored_id),
+            )
+            ctx.db.conn.commit()
+
         return {
             "status": status,
             "engram_id": stored_id,
             "filename": filename,
             "title": title,
             "brain": ctx.brain_id,
+            "agent_id": agent_id,
         }
 
     @app.delete("/api/notes/{engram_id}")
@@ -677,6 +775,114 @@ def create_api(manager) -> FastAPI:
             payload["preview"] = result.new_content  # the assembled prompt
             payload["preview_chars"] = len(result.new_content)
         return payload
+
+    @app.post("/api/compilations/prepare")
+    def prepare_compilation(body: dict):
+        """Return a source pack for agent-driven compilation.
+
+        No LLM call, no API key needed. The caller (typically a coding agent
+        like Claude Code) uses the returned pack to write the wiki itself,
+        then POSTs the result to /api/compilations/submit. This replaces
+        the server-side Anthropic call for users who want the agent-in-the-loop
+        flow instead of a key-backed automated compile.
+        """
+        from neurovault_server.compiler import (
+            _gather_sources, _fetch_existing_wiki,
+            _fetch_contradictions_for_sources,
+        )
+        topic = (body or {}).get("topic", "").strip()
+        if not topic:
+            return {"error": "missing 'topic' in body"}
+        ctx = _ctx()
+        sources = _gather_sources(ctx.db, topic)
+        if not sources:
+            return {"error": f"no raw sources found for topic {topic!r}", "topic": topic}
+        existing = _fetch_existing_wiki(ctx.db, topic)
+        contradictions = _fetch_contradictions_for_sources(ctx.db, [s["id"] for s in sources])
+        schema_text = ""
+        schema_path = ctx.vault_dir / "CLAUDE.md"
+        if schema_path.exists():
+            try:
+                schema_text = schema_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+        return {
+            "topic": topic,
+            "brain": ctx.brain_id,
+            "existing_wiki": {
+                "id": existing["id"],
+                "content": existing["content"],
+            } if existing else None,
+            "sources": [
+                {"id": s["id"], "title": s["title"], "kind": s["kind"],
+                 "short_id": s["short_id"], "content": s["content"]}
+                for s in sources
+            ],
+            "contradictions": contradictions,
+            "schema": schema_text,
+        }
+
+    @app.post("/api/compilations/submit")
+    def submit_compilation(body: dict):
+        """Persist an agent-written wiki page. Pair with /prepare above.
+
+        Body: { topic, wiki_markdown, source_engram_ids?, changelog? }
+
+        Writes the markdown to disk (file watcher ingests it), records a
+        compilations row with status='pending' so it shows up in the review
+        UI just like an LLM-driven compile would.
+        """
+        from neurovault_server.compiler import (
+            _gather_sources, _fetch_existing_wiki, _diff_text,
+            _write_wiki_file, _write_compilation_row,
+        )
+        b = body or {}
+        topic = (b.get("topic") or "").strip()
+        wiki_markdown = (b.get("wiki_markdown") or "").strip()
+        if not topic or not wiki_markdown:
+            return {"error": "topic and wiki_markdown are required"}
+        changelog = b.get("changelog") or []
+
+        ctx = _ctx()
+        # Sources: if caller passed IDs we trust them; otherwise rederive so
+        # the compilations row still points at the raws we believe it covers.
+        src_ids = b.get("source_engram_ids")
+        if isinstance(src_ids, list) and src_ids:
+            rows = ctx.db.conn.execute(
+                f"SELECT id, title, kind FROM engrams WHERE id IN ({','.join(['?'] * len(src_ids))})",
+                tuple(src_ids),
+            ).fetchall()
+            sources = [{"id": r[0], "title": r[1], "kind": r[2]} for r in rows]
+        else:
+            sources = _gather_sources(ctx.db, topic)
+
+        existing = _fetch_existing_wiki(ctx.db, topic)
+        old_content = existing["content"] if existing else ""
+        wiki_engram_id = existing["id"] if existing else None
+
+        _write_wiki_file(ctx.vault_dir, topic, wiki_markdown)
+        diff = _diff_text(old_content, wiki_markdown, topic)
+
+        cid = _write_compilation_row(
+            ctx.db,
+            topic=topic,
+            wiki_engram_id=wiki_engram_id,
+            old_content=old_content,
+            new_content=wiki_markdown,
+            changelog=changelog,
+            sources=sources,
+            model="agent-driven",
+            input_tokens=0,
+            output_tokens=0,
+            status="pending",
+        )
+        return {
+            "id": cid,
+            "topic": topic,
+            "status": "pending",
+            "diff_lines": diff.count("\n"),
+            "source_count": len(sources),
+        }
 
     @app.get("/api/timeline")
     def get_timeline():

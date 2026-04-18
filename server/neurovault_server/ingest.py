@@ -62,16 +62,28 @@ def ingest_file(
     db: Database,
     embedder: Embedder,
     bm25: BM25Index,
+    vault_root: Path | None = None,
 ) -> str | None:
     """Ingest a single markdown file into the database.
 
     Returns the engram_id if ingested, None if skipped (unchanged).
+
+    If `vault_root` is provided and `filepath` is inside it, the stored
+    `filename` is the relative path (e.g. `agent/foo.md`). Otherwise the
+    basename is stored — this preserves backward compatibility for the
+    flat-vault callers that pre-date folder support.
     """
     if not filepath.exists() or filepath.suffix != '.md':
         return None
 
     content = filepath.read_text(encoding='utf-8')
-    filename = filepath.name
+    if vault_root is not None:
+        try:
+            filename = filepath.resolve().relative_to(vault_root.resolve()).as_posix()
+        except ValueError:
+            filename = filepath.name
+    else:
+        filename = filepath.name
     title = _extract_title_from_md(content, filename)
     new_hash = _content_hash(content)
 
@@ -297,8 +309,12 @@ def ingest_vault(
     vault = vault_dir
     count = 0
 
-    for filepath in sorted(vault.glob("*.md")):
-        result = ingest_file(filepath, db, embedder, bm25)
+    # rglob walks subdirectories so notes organized into folders
+    # (`agent/`, `user/`, etc.) are picked up too. Files live at paths
+    # relative to the vault root; ingest_file receives vault_root so it
+    # can store the relative path as the filename.
+    for filepath in sorted(vault.rglob("*.md")):
+        result = ingest_file(filepath, db, embedder, bm25, vault_root=vault)
         if result:
             count += 1
 

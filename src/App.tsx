@@ -349,6 +349,25 @@ export default function App() {
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
+          <button
+            onClick={async () => {
+              try {
+                const { invoke } = await import("@tauri-apps/api/core");
+                await invoke("hide_to_background");
+              } catch {
+                // Web fallback — nothing to hide
+              }
+            }}
+            title="Hide window (server keeps running — restore with Ctrl+Shift+Space)"
+            className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+            style={{ color: theme.textDim, background: "transparent" }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = theme.surface; e.currentTarget.style.color = theme.textMuted; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = theme.textDim; }}
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
+              <path d="M5 12h14" />
+            </svg>
+          </button>
         </div>
       </div>
 

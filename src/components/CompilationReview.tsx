@@ -240,6 +240,8 @@ export function CompilationReview() {
           </div>
         </div>
 
+        <AgentCompilePanel onSubmitted={() => loadList()} />
+
         <div className="flex-1 overflow-y-auto">
           {loadingList && (
             <div className={`px-4 py-6 text-xs ${TEXT_DIM} font-[Geist,sans-serif]`}>
@@ -495,6 +497,193 @@ export function CompilationReview() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// --- Agent-driven compile panel ------------------------------------------
+
+const API = "http://127.0.0.1:8765";
+
+interface PreparedPack {
+  topic: string;
+  existing_wiki: { id: string; content: string } | null;
+  sources: Array<{ id: string; title: string; kind: string; short_id: string; content: string }>;
+  contradictions: unknown[];
+  schema: string;
+}
+
+/**
+ * Lets the user run compilation through a coding agent (Claude Code,
+ * Cursor, etc.) instead of burning API tokens on the server. The flow:
+ *   1) Enter a topic and hit Prepare — we fetch the source pack.
+ *   2) Copy the pack to clipboard and paste into the agent. The agent
+ *      writes the wiki page directly (it has more context anyway).
+ *   3) Paste the returned markdown into the textarea and hit Submit.
+ *
+ * The submit endpoint persists a compilations row with status='pending'
+ * so the reviewer panel picks it up identical to an LLM-driven compile.
+ */
+function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [topic, setTopic] = useState("");
+  const [pack, setPack] = useState<PreparedPack | null>(null);
+  const [wikiDraft, setWikiDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const prepare = async () => {
+    if (!topic.trim()) return;
+    setBusy(true); setErr(null); setPack(null);
+    try {
+      const r = await fetch(`${API}/api/compilations/prepare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: topic.trim() }),
+      });
+      const data = await r.json();
+      if (data.error) { setErr(data.error); return; }
+      setPack(data);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyPack = async () => {
+    if (!pack) return;
+    const lines: string[] = [];
+    lines.push(`# Compile a NeuroVault wiki page for: ${pack.topic}`, "");
+    lines.push("Write a comprehensive wiki page that synthesizes the sources below.",
+      "Respond with ONLY the final markdown body (no preamble, no code fences).", "");
+    if (pack.existing_wiki) {
+      lines.push("## Existing wiki (update / improve)", "", pack.existing_wiki.content, "");
+    }
+    lines.push(`## Sources (${pack.sources.length})`, "");
+    for (const s of pack.sources) {
+      lines.push(`### ${s.title} — ${s.kind} [${s.short_id}]`, "", s.content, "");
+    }
+    if (pack.schema) {
+      lines.push("## Brain schema (CLAUDE.md)", "", pack.schema, "");
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      toast.success("Pack copied — paste into Claude Code");
+    } catch {
+      toast.error("Copy failed — select the pack manually");
+    }
+  };
+
+  const submit = async () => {
+    if (!pack || !wikiDraft.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/compilations/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: pack.topic,
+          wiki_markdown: wikiDraft,
+          source_engram_ids: pack.sources.map((s) => s.id),
+        }),
+      });
+      const data = await r.json();
+      if (data.error) { setErr(data.error); return; }
+      toast.success(`Wiki submitted — pending review`);
+      setPack(null);
+      setWikiDraft("");
+      setTopic("");
+      onSubmitted();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={`border-b ${BORDER}`}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-[11px] ${TEXT_MUTED} hover:${TEXT} font-[Geist,sans-serif] transition-colors`}
+      >
+        <svg
+          className={`w-3 h-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span>Compile with an agent</span>
+        <span className={`ml-auto text-[10px] ${TEXT_DIM} uppercase tracking-wider`}>no api key</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-2.5">
+          <div className="flex gap-2">
+            <input
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !busy) prepare(); }}
+              placeholder="Topic (e.g. NeuroVault)"
+              className={`flex-1 text-[12px] px-3 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif] bg-white/[0.03] border ${BORDER} ${TEXT} placeholder:text-white/25`}
+            />
+            <button
+              onClick={prepare}
+              disabled={busy || !topic.trim()}
+              className={`text-[11px] font-[Geist,sans-serif] px-3 py-1.5 rounded-md bg-white/[0.05] ${TEXT_MUTED} hover:${TEXT} border ${BORDER} disabled:opacity-40 transition-colors`}
+            >
+              {busy && !pack ? "…" : "Prepare"}
+            </button>
+          </div>
+
+          {err && (
+            <div className={`text-[11px] ${NEGATIVE} font-[Geist,sans-serif]`}>{err}</div>
+          )}
+
+          {pack && (
+            <div className="space-y-2.5 pt-1">
+              <div className={`flex items-center gap-2 text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif]`}>
+                <span className={`w-1 h-1 rounded-full bg-[#b592ff]`} />
+                <span>
+                  {pack.sources.length} source{pack.sources.length === 1 ? "" : "s"}
+                  {pack.existing_wiki ? " · updating" : " · new page"}
+                </span>
+              </div>
+
+              <button
+                onClick={copyPack}
+                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md bg-white/[0.04] ${TEXT} hover:bg-white/[0.07] border ${BORDER} transition-colors flex items-center justify-center gap-2`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+                </svg>
+                Copy pack to clipboard
+              </button>
+
+              <div className={`text-[10px] ${TEXT_DIM} font-[Geist,sans-serif] px-0.5 leading-relaxed`}>
+                Paste into Claude Code → it writes the wiki → paste result below
+              </div>
+
+              <textarea
+                value={wikiDraft}
+                onChange={(e) => setWikiDraft(e.target.value)}
+                placeholder="# Topic&#10;&#10;Paste the wiki markdown returned by the agent…"
+                rows={8}
+                className={`w-full text-[11.5px] px-3 py-2 rounded-md focus:outline-none font-mono bg-white/[0.03] border ${BORDER} ${TEXT} resize-y leading-relaxed placeholder:text-white/20`}
+              />
+
+              <button
+                onClick={submit}
+                disabled={busy || !wikiDraft.trim()}
+                className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md ${ACCENT_BG} ${ACCENT} hover:bg-white/[0.16] disabled:opacity-40 transition-colors font-medium`}
+              >
+                {busy ? "Submitting…" : "Submit wiki for review"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
