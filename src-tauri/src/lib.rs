@@ -413,6 +413,106 @@ fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
+/// Zip up a brain's vault + DB into a single archive at `dest_path`.
+/// Internal brains get bundled complete (DB + vault/ + raw/ +
+/// consolidated/); external-folder brains get just vault/ + DB since
+/// the vault lives outside our tree anyway. The user picks the
+/// destination via a Tauri save dialog on the frontend.
+#[tauri::command]
+fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, String> {
+    use std::io::{Read, Write};
+    let nv_home = nv_home();
+    let brain_root = nv_home.join("brains").join(&brain_id);
+    if !brain_root.is_dir() {
+        return Err(format!("brain not found: {brain_id}"));
+    }
+
+    // Resolve the external vault_path if this is an external-folder brain
+    // so we can include the user's markdown alongside the internal DB.
+    let registry = nv_home.join("brains.json");
+    let external_vault: Option<PathBuf> = fs::read_to_string(&registry)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("brains").and_then(|a| a.as_array()).and_then(|brains| {
+                brains.iter().find_map(|b| {
+                    if b.get("id").and_then(|x| x.as_str()) == Some(&brain_id) {
+                        b.get("vault_path").and_then(|x| x.as_str()).map(PathBuf::from)
+                    } else {
+                        None
+                    }
+                })
+            })
+        });
+
+    let file = fs::File::create(&dest_path).map_err(|e| format!("create zip: {e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut count: usize = 0;
+
+    // Recursive file walker: adds every file under `src_root` into the
+    // zip at `zip_prefix/<relative path>`. Skips symlinks to avoid
+    // escaping the tree and silently swallows unreadable files so one
+    // corrupt DB-wal shard doesn't abort the whole export.
+    fn add_tree<W: Write + std::io::Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        src_root: &std::path::Path,
+        zip_prefix: &str,
+        options: zip::write::SimpleFileOptions,
+        count: &mut usize,
+    ) -> Result<(), String> {
+        let mut stack: Vec<PathBuf> = vec![src_root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_symlink() { continue; }
+                if ft.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if ft.is_file() {
+                    let Ok(rel) = path.strip_prefix(src_root) else { continue };
+                    let name = format!(
+                        "{}/{}",
+                        zip_prefix.trim_end_matches('/'),
+                        rel.to_string_lossy().replace('\\', "/"),
+                    );
+                    zip.start_file(&name, options)
+                        .map_err(|e| format!("zip entry {name}: {e}"))?;
+                    let mut f = match fs::File::open(&path) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let mut buf = Vec::new();
+                    if f.read_to_end(&mut buf).is_err() { continue; }
+                    zip.write_all(&buf).map_err(|e| format!("zip write: {e}"))?;
+                    *count += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Internal scratch (DB, fingerprint, trash, raw, consolidated, and
+    // — for non-external brains — vault/).
+    add_tree(&mut zip, &brain_root, &brain_id, options, &mut count)?;
+
+    // External vault markdown goes under `<brain_id>/external_vault/`
+    // so the archive is self-describing when the user unzips it.
+    if let Some(ext) = external_vault {
+        if ext.is_dir() {
+            let prefix = format!("{brain_id}/external_vault");
+            add_tree(&mut zip, &ext, &prefix, options, &mut count)?;
+        }
+    }
+
+    zip.finish().map_err(|e| format!("finalize zip: {e}"))?;
+    Ok(count)
+}
+
 /// Return the resolved absolute path to the `neurovault-server` sidecar
 /// binary so the Settings UI can render a Claude Desktop MCP config
 /// pointing at it. We check both the target-triple-suffixed name (how
@@ -624,6 +724,7 @@ pub fn run() {
             start_server, stop_server, server_status, import_folder_as_vault,
             hide_to_background, brain_storage_stats,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
+            export_brain_as_zip,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

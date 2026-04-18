@@ -105,6 +105,30 @@ export function BrainSelector() {
     }
   };
 
+  const handleExport = async (brainId: string, brainName: string) => {
+    try {
+      const [{ save }, { invoke }] = await Promise.all([
+        import("@tauri-apps/plugin-dialog"),
+        import("@tauri-apps/api/core"),
+      ]);
+      const slug = brainName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const stamp = new Date().toISOString().slice(0, 10);
+      const destPath = await save({
+        title: "Export vault as .zip",
+        defaultPath: `neurovault-${slug}-${stamp}.zip`,
+        filters: [{ name: "Zip archive", extensions: ["zip"] }],
+      });
+      if (!destPath) return;
+      const count = await invoke<number>("export_brain_as_zip", {
+        brainId,
+        destPath: String(destPath),
+      });
+      alert(`Exported ${count} file${count === 1 ? "" : "s"} to:\n${destPath}`);
+    } catch (e) {
+      alert(`Export failed: ${e}`);
+    }
+  };
+
   return (
     <div className="relative" ref={dropdownRef}>
       {/* Trigger — shows current brain name */}
@@ -317,6 +341,18 @@ export function BrainSelector() {
                       >
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleExport(brain.id, brain.name); }}
+                        className="w-5 h-5 flex items-center justify-center rounded transition-colors"
+                        style={{ color: "var(--nv-text-dim)" }}
+                        title="Export vault as .zip"
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-text)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
                         </svg>
                       </button>
                       {/* Delete — only non-active brains; server rejects

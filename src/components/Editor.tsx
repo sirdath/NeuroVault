@@ -233,8 +233,55 @@ export function Editor() {
             />
           </div>
         )}
+
+        <EditorStats content={activeContent} />
       </div>
 
+    </div>
+  );
+}
+
+/**
+ * Small footer showing word count + reading time + char count for the
+ * active note. Recomputes from `content` which is cheap even at 100k
+ * chars (regex split + divide). Hidden on empty notes so the welcome
+ * screen stays minimal.
+ */
+function EditorStats({ content }: { content: string }) {
+  const stats = useMemo(() => {
+    if (!content) return null;
+    // Strip frontmatter + heading markup + code fences + wikilinks for a
+    // reading-oriented count (matches what a reader actually processes,
+    // not raw markdown syntax).
+    const stripped = content
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`]*`/g, " ")
+      .replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, "$1")
+      .replace(/[#*_>`]/g, " ");
+    const words = stripped.trim().split(/\s+/).filter(Boolean).length;
+    const chars = content.length;
+    // 238 wpm is the mean adult reading speed for prose
+    // (Trauzettel-Klosinski & Dietz 2012). Round up to keep short
+    // snippets from flashing "0 min".
+    const minutes = Math.max(1, Math.round(words / 238));
+    return { words, chars, minutes };
+  }, [content]);
+
+  if (!stats) return null;
+  return (
+    <div
+      className="flex items-center gap-4 px-6 py-1.5 text-[11px] font-[Geist,sans-serif] flex-shrink-0 tabular-nums"
+      style={{
+        background: "var(--nv-surface)",
+        borderTop: "1px solid var(--nv-border)",
+        color: "var(--nv-text-dim)",
+      }}
+    >
+      <span>{stats.words.toLocaleString()} {stats.words === 1 ? "word" : "words"}</span>
+      <span style={{ color: "var(--nv-text-dim)", opacity: 0.5 }}>·</span>
+      <span>{stats.chars.toLocaleString()} chars</span>
+      <span style={{ color: "var(--nv-text-dim)", opacity: 0.5 }}>·</span>
+      <span>{stats.minutes} min read</span>
     </div>
   );
 }

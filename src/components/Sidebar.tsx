@@ -264,6 +264,20 @@ export function Sidebar({
           const ok = await renameNoteAction(oldFn, newFn.trim());
           if (ok) setRenamingFilename(null);
         }}
+        onDropToFolder={async (fromFilename, folder) => {
+          // Derive target path by swapping the folder prefix. Folder of ""
+          // moves to root. Leaf name is preserved — rename-as-move.
+          const slash = fromFilename.indexOf("/");
+          const leaf = slash >= 0 ? fromFilename.slice(slash + 1) : fromFilename;
+          // If a note is inside nested folders (agent/sub/foo.md), we only
+          // replace the TOP-level folder since that's what the tree UI
+          // shows anyway. For root moves, we want the original leaf.
+          const lastSlash = fromFilename.lastIndexOf("/");
+          const tailLeaf = lastSlash >= 0 ? fromFilename.slice(lastSlash + 1) : fromFilename;
+          const target = folder ? `${folder}/${tailLeaf}` : leaf.includes("/") ? tailLeaf : leaf;
+          if (target === fromFilename) return;
+          await renameNoteAction(fromFilename, target);
+        }}
       />
 
       {/* Empty states */}
@@ -433,6 +447,7 @@ interface NoteListProps {
   renamingFilename: string | null;
   onStartRename: (filename: string | null) => void;
   onCommitRename: (oldFilename: string, newFilename: string) => void;
+  onDropToFolder: (fromFilename: string, folder: string) => void;
 }
 
 /**
@@ -455,7 +470,11 @@ function NoteList({
   renamingFilename,
   onStartRename,
   onCommitRename,
+  onDropToFolder,
 }: NoteListProps) {
+  // Track which folder is being dragged-over so we can highlight it.
+  // `__root__` is the sentinel for the top-of-list root drop zone.
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
@@ -498,6 +517,7 @@ function NoteList({
           };
 
           if (row.kind === "folder") {
+            const isDropHover = dropTarget === row.name;
             return (
               <div
                 key={virtualRow.key}
@@ -505,11 +525,34 @@ function NoteList({
                 ref={virtualizer.measureElement}
                 style={positioning}
                 className="px-3 pt-1"
+                onDragOver={(e) => {
+                  // Only accept drops that carry our filename payload.
+                  // Prevent default to mark this as a valid drop target.
+                  if (e.dataTransfer.types.includes("application/nv-note")) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dropTarget !== row.name) setDropTarget(row.name);
+                  }
+                }}
+                onDragLeave={() => {
+                  if (dropTarget === row.name) setDropTarget(null);
+                }}
+                onDrop={(e) => {
+                  const from = e.dataTransfer.getData("application/nv-note");
+                  setDropTarget(null);
+                  if (!from) return;
+                  e.preventDefault();
+                  onDropToFolder(from, row.name);
+                }}
               >
                 <button
                   onClick={() => onToggleFolder(row.name)}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:[background-color:var(--nv-surface)]"
-                  style={{ color: "var(--nv-text-muted)" }}
+                  style={{
+                    color: "var(--nv-text-muted)",
+                    background: isDropHover ? "var(--nv-accent-glow)" : undefined,
+                    outline: isDropHover ? `1px dashed var(--nv-accent)` : undefined,
+                  }}
                 >
                   <svg
                     className={`w-[11px] h-[11px] flex-shrink-0 transition-transform duration-150 ${row.expanded ? "rotate-90" : ""}`}
@@ -550,6 +593,13 @@ function NoteList({
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               onClick={() => !isRenaming && onSelect(note.filename)}
+              draggable={!isRenaming}
+              onDragStart={(e) => {
+                // Custom MIME so only folder drop zones accept the drag —
+                // the browser won't interpret it as a file link drag.
+                e.dataTransfer.setData("application/nv-note", note.filename);
+                e.dataTransfer.effectAllowed = "move";
+              }}
               style={positioning}
               className="py-0.5"
             >
