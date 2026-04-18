@@ -40,7 +40,10 @@ def create_api(manager) -> FastAPI:
 
     class _AuditMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
+            import time
+            start = time.perf_counter()
             response: Response = await call_next(request)
+            duration_ms = int((time.perf_counter() - start) * 1000)
             # Audit /api/* paths. Skip high-frequency polling endpoints
             # (status, brains/active) that the TopBar hits every 5s — those
             # would flood the log with ~17k lines/day of zero-signal entries.
@@ -48,6 +51,7 @@ def create_api(manager) -> FastAPI:
             if path.startswith("/api/") and path not in (
                 "/api/status",
                 "/api/brains/active",
+                "/api/audit/recent",
             ):
                 try:
                     from neurovault_server.audit import log_tool_call
@@ -55,6 +59,8 @@ def create_api(manager) -> FastAPI:
                         f"http:{request.method}:{path}",
                         dict(request.query_params),
                         result_count=None,
+                        duration_ms=duration_ms,
+                        status_code=response.status_code,
                     )
                 except Exception:
                     pass  # best-effort

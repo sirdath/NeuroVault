@@ -63,6 +63,8 @@ def log_tool_call(
     modified_ids: list[str] | None = None,
     session_id: str | None = None,
     error: str | None = None,
+    duration_ms: int | None = None,
+    status_code: int | None = None,
 ) -> None:
     """Append one JSONL entry for a tool call.
 
@@ -88,6 +90,10 @@ def log_tool_call(
         entry["session_id"] = session_id
     if error is not None:
         entry["error"] = error
+    if duration_ms is not None:
+        entry["duration_ms"] = duration_ms
+    if status_code is not None:
+        entry["status_code"] = status_code
 
     line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
 

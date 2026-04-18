@@ -397,3 +397,22 @@ export const compilationApi = {
       body: JSON.stringify({ review_comment: comment ?? null }),
     }),
 };
+
+// --- Activity / audit log --------------------------------------------------
+
+export interface AuditEntry {
+  ts: string;
+  tool: string;
+  args: Record<string, unknown>;
+  result_ids?: string[];
+  result_count?: number;
+  modified_ids?: string[];
+  session_id?: string;
+  error?: string;
+  duration_ms?: number;
+  status_code?: number;
+}
+
+export const activityApi = {
+  recent: (limit = 50) => jsonReq<AuditEntry[]>(`/api/audit/recent?limit=${limit}`),
+};

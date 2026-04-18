@@ -11,6 +11,8 @@ import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { CompilationReview } from "./components/CompilationReview";
 import { SettingsView } from "./components/SettingsView";
+import { ActivityBar } from "./components/ActivityBar";
+import { ActivityPanel } from "./components/ActivityPanel";
 import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { fetchStatus } from "./lib/api";
 
@@ -67,6 +69,7 @@ export default function App() {
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
 
   const toggleView = useCallback(() => {
     setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : "editor"));
@@ -307,6 +310,12 @@ export default function App() {
           {view === "compile" && <CompilationReview />}
         </div>
       </div>
+
+      {/* Activity bar (bottom status pill, LangSmith-style) */}
+      <ActivityBar onExpand={() => setActivityOpen(true)} serverUp={serverUp} />
+
+      {/* Activity panel (slide-up from bottom) */}
+      <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} />
 
       {/* Settings slide-over */}
       {settingsOpen && (
