@@ -34,6 +34,7 @@ export default function App() {
   const [starting, setStarting] = useState(false);
   const [startElapsed, setStartElapsed] = useState(0);
   const failCountRef = useRef(0);
+  const everConnectedRef = useRef(false);
 
   useEffect(() => {
     initVault();
@@ -49,11 +50,16 @@ export default function App() {
           setServerUp(true);
           setStarting(false); // server is up, clear starting state
           setNoteCount(s.memories);
+          everConnectedRef.current = true;
         })
         .catch(() => {
           failCountRef.current += 1;
           setServerUp(false);
-          if (failCountRef.current >= 3) setServerDown(true);
+          // If we've never connected (cold start), show the banner on the
+          // FIRST failed check — no 15s wait. If we were connected and the
+          // server dropped, wait 3 checks to avoid flashing on blips.
+          const threshold = everConnectedRef.current ? 3 : 1;
+          if (failCountRef.current >= threshold) setServerDown(true);
         });
     };
     check();
