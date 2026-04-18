@@ -6,9 +6,29 @@ on:
       - "v*"
 
 jobs:
+  # --- Build Python sidecars per platform ---------------------------------
   build-sidecar:
-    name: Build Python sidecar
-    runs-on: windows-latest
+    name: Build sidecar (${{ matrix.os-label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os-label: windows
+            target-triple: x86_64-pc-windows-msvc
+            sidecar-src: server/dist/neurovault-server.exe
+            sidecar-ext: ".exe"
+          - os: macos-14   # Apple Silicon (M-series)
+            os-label: macos-arm64
+            target-triple: aarch64-apple-darwin
+            sidecar-src: server/dist/neurovault-server
+            sidecar-ext: ""
+          - os: macos-13   # Intel
+            os-label: macos-x64
+            target-triple: x86_64-apple-darwin
+            sidecar-src: server/dist/neurovault-server
+            sidecar-ext: ""
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,19 +46,39 @@ jobs:
           uv pip install pyinstaller
           uv run pyinstaller neurovault_server.spec --clean --noconfirm
 
-      - name: Stage sidecar binary
+      - name: Stage sidecar binary with target triple
+        shell: bash
         run: |
-          copy server\dist\neurovault-server.exe src-tauri\binaries\neurovault-server-x86_64-pc-windows-msvc.exe
+          mkdir -p src-tauri/binaries
+          cp "${{ matrix.sidecar-src }}" "src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}"
+          chmod +x "src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}" || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sidecar-windows
-          path: src-tauri/binaries/neurovault-server-x86_64-pc-windows-msvc.exe
+          name: sidecar-${{ matrix.os-label }}
+          path: src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}
 
+  # --- Build Tauri app per platform ---------------------------------------
   build-tauri:
-    name: Build Tauri app
+    name: Build app (${{ matrix.os-label }})
     needs: build-sidecar
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os-label: windows
+            sidecar-artifact: sidecar-windows
+            rust-target: x86_64-pc-windows-msvc
+          - os: macos-14
+            os-label: macos-arm64
+            sidecar-artifact: sidecar-macos-arm64
+            rust-target: aarch64-apple-darwin
+          - os: macos-13
+            os-label: macos-x64
+            sidecar-artifact: sidecar-macos-x64
+            rust-target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:
@@ -50,6 +90,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -59,8 +101,12 @@ jobs:
       - name: Download sidecar
         uses: actions/download-artifact@v4
         with:
-          name: sidecar-windows
+          name: ${{ matrix.sidecar-artifact }}
           path: src-tauri/binaries
+
+      - name: Make sidecar executable (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: chmod +x src-tauri/binaries/*
 
       - name: Install frontend deps
         run: npm ci
@@ -72,12 +118,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: --target ${{ matrix.rust-target }}
           tagName: ${{ github.ref_name }}
           releaseName: "NeuroVault ${{ github.ref_name }}"
           releaseBody: |
             ## NeuroVault ${{ github.ref_name }}
 
-            Download **NeuroVault_x64-setup.exe** below to install.
+            **Windows**: Download `NeuroVault_x64-setup.exe` below.
+            **macOS (Apple Silicon)**: Download `NeuroVault_aarch64.dmg` below.
+            **macOS (Intel)**: Download `NeuroVault_x64.dmg` below.
 
             The app auto-updates — future releases will be installed automatically.
           releaseDraft: false
