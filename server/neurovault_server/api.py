@@ -1024,6 +1024,18 @@ def create_api(manager) -> FastAPI:
             "source_count": len(sources),
         }
 
+    @app.get("/api/recall/chunks")
+    def recall_chunks_endpoint(q: str, top_k: int = 10, granularity: str = "paragraph"):
+        """Chunk-level hybrid retrieval. Returns the matching passages from
+        each engram instead of whole notes — useful for "quote the part
+        where we decided X" questions against long wiki pages."""
+        from neurovault_server.retriever import chunk_retrieve
+        ctx = _ctx()
+        return chunk_retrieve(
+            q, ctx.db, manager.embedder, ctx.bm25,
+            top_k=top_k, granularity=granularity,
+        )
+
     @app.get("/api/todos")
     def list_todos_endpoint(status: str | None = None, agent_id: str | None = None, limit: int = 50):
         """Multi-agent todo list for the active brain. Filter by status

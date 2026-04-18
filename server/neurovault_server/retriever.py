@@ -684,6 +684,97 @@ def hybrid_retrieve(
     return results
 
 
+def chunk_retrieve(
+    query: str,
+    db: Database,
+    embedder: Embedder,
+    bm25: BM25Index,
+    top_k: int = 10,
+    granularity: str = "paragraph",
+) -> list[dict]:
+    """Chunk-level hybrid retrieval — returns the actual matching passages,
+    not whole engrams. Use this when the caller wants the slice that's
+    relevant to the query instead of the whole note.
+
+    Pipeline (simpler than hybrid_retrieve — no graph, no reranker, no
+    query expansion): semantic KNN on chunks + BM25 on chunks, fused via
+    RRF. Filtered to the requested granularity (paragraph by default —
+    document chunks are too big for a chunk-level mode, sentence chunks
+    are too small for most uses).
+
+    Returns: [{chunk_id, engram_id, title, content, granularity,
+                score, filename}]
+    """
+    if granularity not in ("document", "paragraph", "sentence"):
+        granularity = "paragraph"
+
+    # Oversample so filtering by granularity + dedup doesn't drain the pool.
+    pool = top_k * 4
+
+    # --- Semantic: KNN over all chunk embeddings ---
+    q_emb = embedder.encode_query(query)
+    sem_hits = db.knn_search(q_emb, limit=pool * 2)  # extra headroom; we'll filter
+
+    # --- BM25: chunk-level already (bm25 stores per-chunk tokens) ---
+    bm25_hits = bm25.search(query, n=pool * 2)
+
+    # RRF fuse chunks. Rank is position in each list.
+    rrf: dict[str, float] = {}
+    for rank, hit in enumerate(sem_hits):
+        cid = hit["chunk_id"]
+        rrf[cid] = rrf.get(cid, 0.0) + _rrf_score(rank) * 0.6  # semantic weight
+    for rank, (cid, _score) in enumerate(bm25_hits):
+        rrf[cid] = rrf.get(cid, 0.0) + _rrf_score(rank) * 0.4  # bm25 weight
+
+    if not rrf:
+        return []
+
+    # Pull chunk rows + engram metadata for the fused top list.
+    cids_sorted = sorted(rrf.keys(), key=lambda c: rrf[c], reverse=True)[:pool]
+    placeholders = ",".join("?" * len(cids_sorted))
+    rows = db.conn.execute(
+        f"""SELECT c.id, c.engram_id, c.content, c.granularity,
+                   e.title, e.filename, e.state
+            FROM chunks c
+            JOIN engrams e ON e.id = c.engram_id
+            WHERE c.id IN ({placeholders})
+              AND c.granularity = ?
+              AND e.state != 'dormant'""",
+        (*cids_sorted, granularity),
+    ).fetchall()
+
+    # Keep RRF order + attach score.
+    by_id = {r[0]: r for r in rows}
+    out: list[dict] = []
+    seen_engrams: set[str] = set()
+    for cid in cids_sorted:
+        r = by_id.get(cid)
+        if r is None:
+            continue
+        # Dedup to at most one chunk per engram — otherwise a single
+        # long note dominates the result set. The top-ranked chunk wins.
+        if r[1] in seen_engrams:
+            continue
+        seen_engrams.add(r[1])
+        out.append({
+            "chunk_id": r[0],
+            "engram_id": r[1],
+            "content": r[2],
+            "granularity": r[3],
+            "title": r[4],
+            "filename": r[5],
+            "score": round(rrf[cid], 4),
+        })
+        if len(out) >= top_k:
+            break
+
+    logger.info(
+        "Chunk retrieval: {} chunks for '{}' (semantic={}, bm25={}, granularity={})",
+        len(out), query[:50], len(sem_hits), len(bm25_hits), granularity,
+    )
+    return out
+
+
 def _graph_retrieve(query: str, db: Database, limit: int = 20) -> list[str]:
     """Knowledge graph traversal: entity match + 2-hop."""
     from neurovault_server.entities import _extract_entities_local

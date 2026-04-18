@@ -518,6 +518,29 @@ def remember_batch(items: list[dict], brain: str | None = None, agent_id: str | 
 
 
 @tiered("core")
+def recall_chunks(
+    query: str,
+    top_k: int = 10,
+    granularity: str = "paragraph",
+    brain: str | None = None,
+) -> list[dict]:
+    """Hybrid search at the CHUNK level — returns the actual passages that
+    matched, not whole engrams. Cheap + precise for "quote the part where
+    we decided X" queries against long notes.
+
+    Returns [{chunk_id, engram_id, title, content, filename, score}].
+    Each chunk is ~200-400 tokens (paragraph granularity by default);
+    typical 10-chunk reply is 2-4k tokens vs 10-40k for full engram recall.
+    """
+    from neurovault_server.retriever import chunk_retrieve
+    ctx = _ctx(brain)
+    return chunk_retrieve(
+        query, ctx.db, manager.embedder, ctx.bm25,
+        top_k=top_k, granularity=granularity,
+    )
+
+
+@tiered("core")
 def recall_and_read(
     query: str,
     top_k: int = 1,
