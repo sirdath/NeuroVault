@@ -15,6 +15,19 @@
 
 > **Note on Windows SmartScreen**: The app isn't code-signed yet. You'll see a "Windows protected your PC" warning on first launch. Click **More info → Run anyway**.
 
+## 🔒 Data safety
+
+NeuroVault is **local-first by design**. Short version:
+
+- **No telemetry.** No analytics, no crash reporter, no phone-home on startup.
+- **No account.** There is no NeuroVault login.
+- **No cloud sync.** Your vault is a folder of markdown files on your machine. Back it up, sync it, or delete it however you want.
+- **The server binds to loopback only** (`127.0.0.1:8765`). It refuses connections from other machines.
+- **Network is only used when you explicitly ask for it** — downloading embedding models on first run, checking for app updates, or calling the Claude API for compile pages (requires you to supply your own API key).
+
+Full details — including what's in `~/.neurovault/`, how to delete data, and
+what the MCP server logs — are in [PRIVACY.md](PRIVACY.md).
+
 ## What you get
 
 - 📝 **Markdown editor** with live preview, auto-save, tabs, and `[[wikilinks]]`
