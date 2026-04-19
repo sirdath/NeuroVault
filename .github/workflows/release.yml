@@ -111,6 +111,29 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Extract CHANGELOG section for this tag
+        id: changelog
+        shell: bash
+        run: |
+          # ref_name looks like "v0.1.2"; CHANGELOG headings use "## [0.1.2]".
+          VERSION="${GITHUB_REF_NAME#v}"
+          body=""
+          if [ -f CHANGELOG.md ]; then
+            body=$(awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+              flag && /^## \[/ { flag=0 }
+              flag { print }
+            ' CHANGELOG.md)
+          fi
+          if [ -z "$body" ]; then
+            body="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full release notes."
+          fi
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "$body"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -124,10 +147,16 @@ jobs:
           releaseBody: |
             ## NeuroVault ${{ github.ref_name }}
 
-            **Windows**: Download `NeuroVault_x64-setup.exe` below.
-            **macOS (Apple Silicon)**: Download `NeuroVault_aarch64.dmg` below.
-            **macOS (Intel)**: Download `NeuroVault_x64.dmg` below.
+            ${{ steps.changelog.outputs.body }}
+
+            ---
+
+            **Windows**: `NeuroVault_x64-setup.exe`
+            **macOS (Apple Silicon)**: `NeuroVault_aarch64.dmg`
+            **macOS (Intel)**: `NeuroVault_x64.dmg`
 
             The app auto-updates — future releases will be installed automatically.
+
+            Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md
           releaseDraft: false
           prerelease: false
