@@ -115,6 +115,21 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
 
+  // Escape closes any of the top-level overlays. Modals that own an
+  // input (QuickCapture, CommandPalette, edit forms) handle Escape
+  // internally; this only covers the dismiss-only slide-overs.
+  useEffect(() => {
+    if (!settingsOpen && !activityOpen && !shortcutHelpOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (shortcutHelpOpen) setShortcutHelpOpen(false);
+      else if (activityOpen) setActivityOpen(false);
+      else if (settingsOpen) setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsOpen, activityOpen, shortcutHelpOpen]);
+
   const toggleView = useCallback(() => {
     setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : "editor"));
   }, []);

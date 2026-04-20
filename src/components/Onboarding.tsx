@@ -29,6 +29,16 @@ export function Onboarding({ onOpenSettings, onCreateFirstNote }: OnboardingProp
     setOpen(false);
   };
 
+  // Escape dismisses the tour at any slide — matches the "Skip" affordance.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   const slides: Slide[] = [
     {
       title: "Welcome to NeuroVault",
