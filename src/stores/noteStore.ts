@@ -47,7 +47,13 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       set({ vaultPath });
       await get().loadNotes();
     } catch (e) {
+      // Surfaced as an error toast (which stays until dismissed) —
+      // a silent failure here leaves the user with an empty sidebar
+      // and no hint why nothing is loading.
       console.error("[neurovault] Failed to init vault:", e);
+      toast.error(
+        `Couldn't open vault: ${e instanceof Error ? e.message : String(e)}`
+      );
     }
   },
 

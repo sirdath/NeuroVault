@@ -19,10 +19,15 @@ export const useToastStore = create<ToastStore>((set) => ({
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const toast: Toast = { id, type, message, createdAt: Date.now() };
     set((s) => ({ toasts: [...s.toasts, toast] }));
-    // Auto-dismiss after 4 seconds
-    setTimeout(() => {
-      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-    }, 4000);
+    // Errors stay until the user dismisses them — losing an error
+    // toast while the user is looking away is a worse failure mode
+    // than a mildly cluttered corner. Info / success / warning auto-
+    // dismiss after a short window since they're disposable signals.
+    if (type !== "error") {
+      setTimeout(() => {
+        set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+      }, 4000);
+    }
   },
   dismiss: (id) => {
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));

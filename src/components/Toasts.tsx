@@ -23,10 +23,17 @@ export function Toasts() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 40, scale: 0.9 }}
             transition={{ type: "spring", damping: 22, stiffness: 300 }}
-            className={`border rounded-md px-3 py-2 backdrop-blur-md shadow-lg cursor-pointer font-[Geist,sans-serif] text-xs ${COLORS[t.type]}`}
-            onClick={() => dismiss(t.id)}
+            className={`border rounded-md px-3 py-2 backdrop-blur-md shadow-lg font-[Geist,sans-serif] text-xs flex items-start gap-2 ${COLORS[t.type]}`}
           >
-            {t.message}
+            <span className="flex-1 break-words">{t.message}</span>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="opacity-60 hover:opacity-100 transition-opacity leading-none -mr-0.5 -mt-0.5"
+              aria-label="Dismiss notification"
+              title={t.type === "error" ? "Dismiss (errors don't auto-close)" : "Dismiss"}
+            >
+              ×
+            </button>
           </motion.div>
         ))}
       </AnimatePresence>

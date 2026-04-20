@@ -23,9 +23,18 @@ jobs:
         working-directory: server
         run: uv sync --extra dev
 
-      - name: Run tests
+      # Cache the HuggingFace model dir so the cross-encoder reranker
+      # test doesn't download ~90MB every CI run. Key includes the
+      # model name so a future swap busts the cache automatically.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cache-cross-encoder-ms-marco-MiniLM-L-6-v2
+
+      - name: Run tests (full suite, reranker included)
         working-directory: server
-        run: uv run pytest tests/ -v -k "not reranker"
+        run: uv run pytest tests/ -v
 
   typecheck:
     name: TypeScript Check
