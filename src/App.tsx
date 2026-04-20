@@ -9,6 +9,7 @@ import { QuickCapture } from "./components/QuickCapture";
 import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
+import { Onboarding } from "./components/Onboarding";
 import { CompilationReview } from "./components/CompilationReview";
 import { SettingsView } from "./components/SettingsView";
 import { ActivityBar } from "./components/ActivityBar";
@@ -492,6 +493,10 @@ export default function App() {
       <ShortcutHelp
         open={shortcutHelpOpen}
         onClose={() => setShortcutHelpOpen(false)}
+      />
+      <Onboarding
+        onOpenSettings={() => setSettingsOpen(true)}
+        onCreateFirstNote={() => setTriggerNewNote((n) => n + 1)}
       />
       <Toasts />
     </div>
