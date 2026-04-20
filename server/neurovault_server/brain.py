@@ -231,8 +231,20 @@ class BrainContext:
         logger.info("Brain deactivated: {} ({})", self.name, self.brain_id)
 
     def shutdown(self) -> None:
-        """Full shutdown — stop services and close DB."""
+        """Full shutdown — stop services, drain bg work, close DB.
+
+        The order matters: deactivate() stops schedulers and the watcher,
+        then we drain anything the slow-phase executor still has queued
+        against *this* db, then close the connection. Closing while a
+        bg task is mid-SQL is an access-violation in sqlite3's C layer
+        on Windows.
+        """
         self.deactivate()
+        try:
+            from neurovault_server.ingest import wait_for_slow_phase_drain
+            wait_for_slow_phase_drain()
+        except Exception as e:
+            logger.debug("slow-phase drain on shutdown skipped: {}", e)
         if self.db:
             self.db.close()
 

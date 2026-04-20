@@ -50,7 +50,10 @@ def api_client(tmp_path, monkeypatch):
     app = create_api(manager)
     with TestClient(app) as client:
         yield client
-    # Tear down background watchers etc.
+    # Tear down background watchers etc. ctx.shutdown() now drains the
+    # slow-phase executor before closing its DB connection — without
+    # that, a pending ingest task would hit a closed sqlite handle and
+    # SIGABRT the whole test process.
     for ctx in list(manager._contexts.values()):
         ctx.shutdown()
 

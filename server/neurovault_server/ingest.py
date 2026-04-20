@@ -66,6 +66,27 @@ from concurrent.futures import ThreadPoolExecutor as _TPExec
 _SLOW_PHASE_EXECUTOR = _TPExec(max_workers=1, thread_name_prefix="nv-ingest")
 
 
+def wait_for_slow_phase_drain(timeout: float | None = 30.0) -> bool:
+    """Block until every already-queued slow-phase task has finished.
+
+    Why this exists: the slow-phase executor writes to the shared SQLite
+    connection long after the ingest API handler has returned. If the
+    brain gets shut down (brain switch, server exit, test teardown) while
+    a task is mid-flight, SQLite's C layer hits a closed connection and
+    access-violations the entire process.
+
+    Trick: the executor is single-worker + FIFO, so a sentinel no-op
+    submitted now can only complete AFTER every earlier task. Waiting on
+    its Future is a free drain-check with no lock or task-tracking.
+    """
+    try:
+        fut = _SLOW_PHASE_EXECUTOR.submit(lambda: None)
+        fut.result(timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def ingest_file(
     filepath: Path,
     db: Database,
@@ -241,9 +262,11 @@ def _run_slow_phase(
         except Exception as e:
             logger.debug("Wikilink processing skipped: {}", e)
 
-        # 8. BM25 rebuild
+        # 8. BM25 rebuild — debounced. Multiple writes landing inside
+        # the 5s window coalesce into a single rebuild at the end.
+        # Prevents sustained CPU during observation-hook bursts.
         try:
-            bm25.build(db)
+            bm25.schedule_rebuild(db)
         except Exception as e:
             logger.debug("BM25 rebuild skipped: {}", e)
 
@@ -257,12 +280,14 @@ def _run_slow_phase(
         except Exception as e:
             logger.debug("Intelligence features skipped: {}", e)
 
-        # 10. Karpathy index + log
+        # 10. Karpathy index + log — debounced rebuild so a burst of
+        # observations doesn't rewrite index.md 20x in 10 seconds.
+        # append_log is cheap (one-line append) so stays synchronous.
         try:
-            from neurovault_server.karpathy import rebuild_index, append_log
+            from neurovault_server.karpathy import schedule_rebuild_index, append_log
             vault_dir = filepath.parent
             if filepath.name not in ("index.md", "log.md", "CLAUDE.md"):
-                rebuild_index(db, vault_dir)
+                schedule_rebuild_index(db, vault_dir)
                 append_log(vault_dir, status, f"{title[:60]}")
         except Exception as e:
             logger.debug("Karpathy wiki update skipped: {}", e)

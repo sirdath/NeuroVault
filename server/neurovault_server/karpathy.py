@@ -14,12 +14,20 @@ and conventions.
 """
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 
 from neurovault_server.database import Database
+
+
+# Per-vault debounce state for schedule_rebuild_index. The key is the
+# stringified vault_dir path so multi-brain setups don't collide.
+_REBUILD_TIMERS: dict[str, threading.Timer] = {}
+_REBUILD_LOCK = threading.Lock()
+_REBUILD_DEBOUNCE_SECONDS = 5.0
 
 
 DEFAULT_CLAUDE_MD = """# Brain: {name}
@@ -176,6 +184,49 @@ def rebuild_index(db: Database, vault_dir: Path) -> Path:
     index_path.write_text("\n".join(lines), encoding="utf-8")
     logger.info("Rebuilt index.md with {} entries", total)
     return index_path
+
+
+def _cancel_pending_rebuilds() -> None:
+    """Cancel every pending debounced rebuild. Called by test teardown —
+    without it, a Timer that was scheduled during a test can fire after
+    the test's DB has been closed, and SQLite's C layer will segfault
+    on the freed connection."""
+    with _REBUILD_LOCK:
+        for t in list(_REBUILD_TIMERS.values()):
+            t.cancel()
+        _REBUILD_TIMERS.clear()
+
+
+def schedule_rebuild_index(db: Database, vault_dir: Path, delay: float | None = None) -> None:
+    """Debounced rebuild — use from hot write paths (slow_phase).
+
+    Multiple calls inside the debounce window collapse into a single
+    rebuild. Prevents the index.md rewrite from running once per
+    observation hook during Claude Code sessions.
+    """
+    wait = delay if delay is not None else _REBUILD_DEBOUNCE_SECONDS
+    key = str(vault_dir)
+
+    def _fire():
+        try:
+            rebuild_index(db, vault_dir)
+        except Exception as e:
+            logger.debug("Karpathy debounced rebuild failed: {}", e)
+        finally:
+            with _REBUILD_LOCK:
+                # Only clear the slot if we're still the registered timer —
+                # a newer schedule_rebuild_index may have already replaced us.
+                if _REBUILD_TIMERS.get(key) is timer_ref:
+                    _REBUILD_TIMERS.pop(key, None)
+
+    with _REBUILD_LOCK:
+        existing = _REBUILD_TIMERS.get(key)
+        if existing is not None:
+            existing.cancel()
+        timer_ref = threading.Timer(wait, _fire)
+        timer_ref.daemon = True
+        _REBUILD_TIMERS[key] = timer_ref
+        timer_ref.start()
 
 
 def _extract_summary(content: str) -> str:

@@ -26,7 +26,10 @@ def test_ingest_single_file(tmp_db: Database, embedder: Embedder, tmp_vault: Pat
     chunks = tmp_db.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     assert chunks >= 1
 
-    # Verify BM25 index was built
+    # BM25 rebuild is debounced now (see bm25_index.schedule_rebuild) so
+    # flush forces the pending timer to run synchronously before we
+    # assert on the index state.
+    bm25.flush(tmp_db)
     assert bm25.size >= 1
 
 

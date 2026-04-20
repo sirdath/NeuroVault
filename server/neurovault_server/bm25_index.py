@@ -8,6 +8,7 @@ Improvements over v1:
 """
 
 import re
+import threading
 from rank_bm25 import BM25Okapi
 from loguru import logger
 
@@ -42,10 +43,20 @@ def _tokenize(text: str) -> list[str]:
 class BM25Index:
     """In-memory BM25 index with stopword removal and proper tokenization."""
 
+    # How long schedule_rebuild waits for quiet before actually rebuilding.
+    # Long enough to coalesce a burst of writes (Claude Code observation
+    # hooks fire 10+/min); short enough that search results aren't stale.
+    _DEBOUNCE_SECONDS = 5.0
+
     def __init__(self) -> None:
         self._corpus: list[list[str]] = []
         self._chunk_ids: list[str] = []
         self._index: BM25Okapi | None = None
+        # Debounce state for schedule_rebuild. _timer is the pending
+        # threading.Timer (None if idle); _lock guards the swap so
+        # concurrent schedule_rebuild calls don't race each other.
+        self._timer: threading.Timer | None = None
+        self._lock = threading.Lock()
 
     def build(self, db) -> None:
         """Rebuild the entire index from the database."""
@@ -74,6 +85,48 @@ class BM25Index:
             self._index = None
 
         logger.info("BM25 index built with {} chunks (stopwords removed)", len(self._corpus))
+
+    def schedule_rebuild(self, db, delay: float | None = None) -> None:
+        """Debounced rebuild — call this from hot write paths (slow_phase,
+        observation ingests). If multiple writes land inside the window,
+        only the last one actually triggers a rebuild.
+
+        The single-worker ingest executor meant pre-debouncing that every
+        observation paid the full O(chunks) tokenization + BM25Okapi
+        construction cost. On a 4000-chunk brain with Claude Code firing
+        10+ observations/min, that sustains CPU long enough to heat-kick
+        unstable iGPU drivers into TDR crashes.
+        """
+        wait = delay if delay is not None else self._DEBOUNCE_SECONDS
+
+        def _fire():
+            try:
+                self.build(db)
+            except Exception as e:
+                logger.debug("BM25 debounced rebuild failed: {}", e)
+            finally:
+                with self._lock:
+                    self._timer = None
+
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            t = threading.Timer(wait, _fire)
+            t.daemon = True
+            self._timer = t
+            t.start()
+
+    def flush(self, db) -> None:
+        """Force any pending debounced rebuild to run synchronously now.
+        Useful for tests and graceful shutdown — otherwise a scheduled
+        rebuild can race with teardown and touch a closed connection.
+        """
+        with self._lock:
+            pending = self._timer
+            self._timer = None
+        if pending is not None:
+            pending.cancel()
+        self.build(db)
 
     def search(self, query: str, n: int = 25) -> list[tuple[str, float]]:
         """Search the index. Returns (chunk_id, score) pairs."""

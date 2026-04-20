@@ -243,7 +243,12 @@ def capture_observation(
     filepath.write_text(f"# {title}\n\n{body}", encoding="utf-8")
 
     try:
-        engram_id = ingest_file(filepath, ctx.db, embedder, ctx.bm25)
+        # async_slow_phase=True so the API handler returns in ms and the
+        # slow work (BM25/Karpathy rebuilds, semantic links, temporal
+        # facts) runs on the single-worker executor. Without this every
+        # Claude Code tool call blocks a handler thread for 1-3s on a
+        # mature brain — sustained CPU → heat → Intel iGPU TDR crashes.
+        engram_id = ingest_file(filepath, ctx.db, embedder, ctx.bm25, async_slow_phase=True)
     except Exception as e:
         logger.warning("hooks: ingest failed for {}: {}", filename, e)
         return {"status": "error", "filename": filename, "error": str(e)}
