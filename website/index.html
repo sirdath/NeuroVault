@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NeuroVault — Local-first AI memory for Claude</title>
+<meta name="description" content="Claude forgets you after every conversation. NeuroVault doesn't. A local-first memory layer for AI agents — semantic + keyword + knowledge-graph retrieval, entirely on your machine." />
+<meta name="theme-color" content="#0b0b12" />
+
+<!-- Open Graph -->
+<meta property="og:title" content="NeuroVault — Local-first AI memory" />
+<meta property="og:description" content="Claude forgets you after every conversation. NeuroVault doesn't." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://github.com/daththeanalyst/NeuroVault" />
+<meta property="og:image" content="./assets/neural-graph.png" />
+
+<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+
+<!-- Grain filter (SVG, used by .grain overlay in CSS) -->
+<svg style="position:absolute;width:0;height:0" aria-hidden="true">
+  <filter id="grain-filter">
+    <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" stitchTiles="stitch" />
+    <feColorMatrix type="saturate" values="0" />
+  </filter>
+</svg>
+
+<!-- Scroll progress bar -->
+<div class="scroll-progress" aria-hidden="true"></div>
+
+<!-- Nav -->
+<header class="nav">
+  <a href="#top" class="nav-logo" aria-label="NeuroVault home">
+    <span class="nav-logo-mark">▮</span>
+    <span class="nav-logo-text">NeuroVault</span>
+  </a>
+  <nav class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#how">How it works</a>
+    <a href="#privacy">Privacy</a>
+    <a href="https://github.com/daththeanalyst/NeuroVault" target="_blank" rel="noopener">GitHub ↗</a>
+  </nav>
+  <a href="#download" class="nav-cta">Download</a>
+</header>
+
+<!-- Hero -->
+<section id="top" class="hero">
+  <div class="aurora">
+    <span class="aurora-blob aurora-blob-1"></span>
+    <span class="aurora-blob aurora-blob-2"></span>
+    <span class="aurora-blob aurora-blob-3"></span>
+  </div>
+  <div class="grid-overlay" aria-hidden="true"></div>
+
+  <div class="hero-inner">
+    <div class="hero-chip">
+      <span class="hero-chip-dot"></span>
+      <span>v0.1.0 · Windows build live · macOS soon</span>
+    </div>
+
+    <img src="./assets/logo.svg" alt="NeuroVault" class="hero-logo" />
+
+    <p class="hero-tagline">
+      Claude forgets you after every conversation.
+      <span class="hero-tagline-accent">NeuroVault doesn't.</span>
+    </p>
+
+    <p class="hero-sub">
+      A local-first memory layer for AI agents. Notes, decisions, people, projects —
+      captured once, recalled whenever any MCP-speaking agent asks.
+    </p>
+
+    <div class="hero-ctas" id="download">
+      <a class="btn btn-primary" href="https://github.com/daththeanalyst/NeuroVault/releases/latest" id="primary-download">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span id="primary-label">Download for Windows</span>
+        <span class="btn-sub" id="primary-sub">~76 MB · x64 installer</span>
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/daththeanalyst/NeuroVault" target="_blank" rel="noopener">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+        <span>View on GitHub</span>
+        <span class="btn-sub">MIT · star the repo</span>
+      </a>
+    </div>
+
+    <div class="hero-alt">
+      <span class="hero-alt-label">Other platforms</span>
+      <a href="#" class="hero-alt-link is-disabled" title="macOS build not yet published">macOS · coming soon</a>
+      <a href="#" class="hero-alt-link is-disabled" title="Linux build not yet published">Linux · coming soon</a>
+      <a href="https://github.com/daththeanalyst/NeuroVault#for-developers" class="hero-alt-link">Build from source ↗</a>
+    </div>
+
+    <!-- Metric badges -->
+    <div class="hero-stats">
+      <div class="stat">
+        <div class="stat-num">90<span class="stat-unit">%</span></div>
+        <div class="stat-label">hit@5 on<br/>long-memory bench</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">0<span class="stat-unit"> ms</span></div>
+        <div class="stat-label">cloud round-trip<br/>(fully local)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">311<span class="stat-unit"></span></div>
+        <div class="stat-label">tests green<br/>on every push</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">1<span class="stat-unit">-click</span></div>
+        <div class="stat-label">install<br/>&amp; Claude integration</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pitch -->
+<section class="pitch">
+  <div class="pitch-inner reveal">
+    <div class="section-kicker">THE PITCH</div>
+    <h2 class="pitch-title">
+      Most "agent memory" products are a RAG pipeline in a trench coat.<br/>
+      <span class="gradient-text">NeuroVault is a living wiki your agent can read, write, and challenge.</span>
+    </h2>
+    <p class="pitch-body">
+      Every memory is a plain <code>.md</code> file on your disk. The database is
+      just an index. If the index ever breaks, we rebuild it from the files.
+      You own your brain.
+    </p>
+  </div>
+</section>
+
+<!-- Features -->
+<section id="features" class="features">
+  <div class="section-head reveal">
+    <div class="section-kicker">WHAT YOU GET</div>
+    <h2 class="section-title">A memory system that doesn't evaporate between sessions.</h2>
+  </div>
+
+  <div class="feature-grid">
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h3>Local-first by design</h3>
+      <p>No telemetry. No account. No cloud sync. The server binds to loopback
+      only — your vault never leaves your machine unless you explicitly ship it.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="m8 7 4 9M16 7l-4 9"/></svg>
+      </div>
+      <h3>Knowledge graph view</h3>
+      <p>Force-directed layout of every note with three automatic link types —
+      semantic, entity, and <code>[[wikilinks]]</code>. Nodes sized by access
+      frequency, colored by strength state.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </div>
+      <h3>Hybrid retrieval engine</h3>
+      <p>Semantic (sqlite-vec) + BM25 + knowledge-graph traversal, fused via
+      Reciprocal Rank Fusion and reranked by a cross-encoder. Ebbinghaus-style
+      strength decay surfaces what's recent.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      </div>
+      <h3>Markdown editor</h3>
+      <p>Live preview, auto-save, tabs, slash commands, <code>[[wikilink]]</code>
+      autocomplete, hover previews with paragraph context, and seven themes —
+      Midnight, Claude, Rosé Pine, and more.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h8M4 12h12M4 18h6"/><path d="m16 8 4 4-4 4"/></svg>
+      </div>
+      <h3>Compilation loop</h3>
+      <p>An AI synthesizes canonical wiki pages from your raw notes, gated
+      behind a diff-based human approval. Use your own API key — or let
+      Claude Code do it for free via the copy-pack flow.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 4-9 4-9-4 9-4Z"/><path d="m3 12 9 4 9-4"/><path d="m3 17 9 4 9-4"/></svg>
+      </div>
+      <h3>Multi-brain</h3>
+      <p>Switch between a "work", "research", and "personal" brain with
+      one keystroke. Point at an existing Obsidian vault and it stays in
+      place — deleting the brain never touches your folder.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+      </div>
+      <h3>MCP server built-in</h3>
+      <p>Drop one JSON snippet into Claude Desktop's config and Claude
+      instantly has persistent memory across every conversation. Works
+      with any MCP-compatible client.</p>
+    </article>
+
+    <article class="feature reveal">
+      <div class="feature-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/></svg>
+      </div>
+      <h3>Spreading activation</h3>
+      <p>Recall doesn't stop at the literal match — it expands to 1-hop
+      graph neighbors with a dampened score, so a query about "MCP" can
+      also surface the project that uses it.</p>
+    </article>
+
+  </div>
+</section>
+
+<!-- Screenshots -->
+<section class="screens">
+  <div class="section-head reveal">
+    <div class="section-kicker">SEE IT</div>
+    <h2 class="section-title">Two views, one memory.</h2>
+  </div>
+
+  <div class="screens-grid">
+    <figure class="screen reveal">
+      <div class="screen-frame">
+        <img src="./assets/neural-graph.png" alt="NeuroVault neural graph — force-directed knowledge graph" loading="lazy" />
+      </div>
+      <figcaption>
+        <strong>Neural graph.</strong>
+        Force-directed layout. Nodes sized by access frequency, colored by
+        strength state (amber = fresh, teal = connected, gray = dormant).
+        Every node is a real markdown file in the vault.
+      </figcaption>
+    </figure>
+
+    <figure class="screen reveal">
+      <div class="screen-frame">
+        <img src="./assets/command-palette.png" alt="NeuroVault command palette — commands, notes, and semantic memory in one prompt" loading="lazy" />
+      </div>
+      <figcaption>
+        <strong>Command palette.</strong>
+        <code>⌘K</code> is the primary nav verb. Three sections in one
+        palette — <em>Commands</em> (fuzzy), <em>Notes</em> (title search),
+        <em>Memory</em> (semantic recall after three characters).
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- How it works -->
+<section id="how" class="how">
+  <div class="section-head reveal">
+    <div class="section-kicker">HOW IT WORKS</div>
+    <h2 class="section-title">Three paths to the same memory.</h2>
+  </div>
+
+  <div class="how-grid">
+    <div class="how-step reveal">
+      <div class="how-num">01</div>
+      <h3>You write a note</h3>
+      <p>Auto-saved as markdown. A file watcher triggers the ingestion pipeline —
+      chunk, embed locally, extract entities, update the knowledge graph.</p>
+    </div>
+    <div class="how-arrow" aria-hidden="true">→</div>
+    <div class="how-step reveal">
+      <div class="how-num">02</div>
+      <h3>You drop a fact in chat</h3>
+      <p>A UserPromptSubmit hook silently runs your message through an extractor.
+      Eight patterns catch preferences, decisions, deadlines, stacks.
+      Each fact becomes a first-class <code>kind='insight'</code> engram
+      with a wikilink back to where you said it.</p>
+    </div>
+    <div class="how-arrow" aria-hidden="true">→</div>
+    <div class="how-step reveal">
+      <div class="how-num">03</div>
+      <h3>The agent asks</h3>
+      <p>Claude calls <code>recall()</code> via MCP. Hybrid search fuses
+      semantic, keyword, and graph hits. Cross-encoder reranks the top
+      candidates. Answers now carry context they couldn't have had before.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Privacy -->
+<section id="privacy" class="privacy">
+  <div class="privacy-inner reveal">
+    <div class="section-kicker">DATA SAFETY</div>
+    <h2 class="section-title">100% local. Actually.</h2>
+    <ul class="privacy-list">
+      <li><span class="privacy-dot"></span><strong>No telemetry.</strong> No analytics, no crash reporter, no phone-home on startup.</li>
+      <li><span class="privacy-dot"></span><strong>No account.</strong> There is no NeuroVault login to create or sign into.</li>
+      <li><span class="privacy-dot"></span><strong>No cloud sync.</strong> Your vault is a folder of markdown files. Back it up, sync it, or delete it however you want.</li>
+      <li><span class="privacy-dot"></span><strong>Loopback only.</strong> The MCP server binds to <code>127.0.0.1:8765</code>. It refuses connections from other machines.</li>
+      <li><span class="privacy-dot"></span><strong>Network only on request.</strong> Downloading embedding models on first run, or the Claude API for compile pages (your own key). Nothing else.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- Final CTA -->
+<section class="cta">
+  <div class="cta-inner reveal">
+    <h2 class="cta-title">Give Claude a memory that survives the window close.</h2>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="https://github.com/daththeanalyst/NeuroVault/releases/latest">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span id="cta-label">Download for Windows</span>
+        <span class="btn-sub" id="cta-sub">Free · MIT-licensed</span>
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/daththeanalyst/NeuroVault" target="_blank" rel="noopener">
+        <span>Star on GitHub</span>
+        <span class="btn-sub">★ open source</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="footer-mark">▮</span>
+      <span>NeuroVault</span>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/daththeanalyst/NeuroVault" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/daththeanalyst/NeuroVault/blob/main/README.md" target="_blank" rel="noopener">Docs</a>
+      <a href="https://github.com/daththeanalyst/NeuroVault/blob/main/PRIVACY.md" target="_blank" rel="noopener">Privacy</a>
+      <a href="https://github.com/daththeanalyst/NeuroVault/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+    <div class="footer-copy">© 2026 NeuroVault contributors · local-first AI memory ✻</div>
+  </div>
+</footer>
+
+<div class="grain-overlay" aria-hidden="true"></div>
+
+<script src="./script.js" defer></script>
+</body>
+</html>
