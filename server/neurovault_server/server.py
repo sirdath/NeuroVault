@@ -298,7 +298,13 @@ def recall(
     """Hybrid search across memory (semantic + BM25 + knowledge graph). Call
     BEFORE answering anything the user might have told you before.
 
-    mode: "titles" (~20 tok) | "preview" (~70 tok, default) | "full" (~400 tok).
+    Tiered output modes (cheapest to richest):
+      - "titles"  (~20 tok/result): title + score only — for quick scans
+      - "preview" (~45 tok, default): title + L0 one-sentence abstract
+      - "summary" (~120 tok): title + L1 paragraph overview — use when L0
+                              doesn't give you enough to decide
+      - "full"    (~400+ tok): title + full content — use sparingly
+
     as_of: ISO timestamp for time-travel ("what did I know on 2026-03-30?").
     include_observations=True only for session-replay questions.
     rerank=True runs a cross-encoder second pass on the top 20 candidates
@@ -345,39 +351,76 @@ def recall(
         except Exception as e:
             logger.debug("Spreading activation skipped: {}", e)
 
+    # Fetch tiered summaries (L0 one-sentence, L1 paragraph) in one batch
+    # so preview / summary modes can return a tighter payload than a
+    # content[:200] truncation. Summaries are populated in the slow-phase
+    # ingest; missing entries fall back to content[:N].
+    summaries: dict[str, tuple[str | None, str | None]] = {}
+    if raw_results and mode != "titles":
+        ids = [r["engram_id"] for r in raw_results]
+        placeholders = ",".join("?" * len(ids))
+        try:
+            rows = ctx.db.conn.execute(
+                f"SELECT id, summary_l0, summary_l1 FROM engrams WHERE id IN ({placeholders})",
+                tuple(ids),
+            ).fetchall()
+            for row in rows:
+                summaries[row[0]] = (row[1], row[2])
+        except Exception as e:
+            logger.debug("Summary lookup skipped: {}", e)
+
     # Format results based on mode. Preview is the default and is tuned
-    # for token-efficiency: dropping `strength` and `state` (internal
-    # signals Claude rarely cites) shaves ~30% off the per-result wire
-    # size. Pass include_meta=True to get them back when needed.
+    # for token-efficiency: returns the engram's L0 (one-sentence
+    # summary, ~10-20 tokens) when available, falling back to the first
+    # 200 chars of content for older engrams that haven't been
+    # backfilled yet.
     results: list[dict] = []
     tokens_used = 0
     for r in raw_results:
+        eid = r["engram_id"]
+        l0, l1 = summaries.get(eid, (None, None))
         if mode == "titles":
             item = {
-                "engram_id": r["engram_id"],
+                "engram_id": eid,
                 "title": r["title"],
                 "score": r["score"],
             }
             if include_meta:
                 item["strength"] = r["strength"]
             tokens_est = 20
+        elif mode == "summary":
+            # L1 paragraph — middle tier. ~50-80 tokens per result.
+            item = {
+                "engram_id": eid,
+                "title": r["title"],
+                "summary": l1 or (r["content"] or "")[:480],
+                "score": r["score"],
+            }
+            if include_meta:
+                item["strength"] = r["strength"]
+                item["state"] = r["state"]
+            tokens_est = 120
         elif mode == "full":
             item = dict(r)
             if not include_meta:
                 item.pop("strength", None)
                 item.pop("state", None)
             tokens_est = len(r["content"]) // 4
-        else:  # preview (default)
+        else:  # preview (default) — L0 one-sentence + title
+            # L0 is ~10-20 tokens. Fallback to content[:200] for engrams
+            # that haven't had summaries generated yet (old data before
+            # the tiered-summary migration).
+            preview = l0 or (r["content"] or "")[:200]
             item = {
-                "engram_id": r["engram_id"],
+                "engram_id": eid,
                 "title": r["title"],
-                "preview": r["content"][:200],
+                "preview": preview,
                 "score": r["score"],
             }
             if include_meta:
                 item["strength"] = r["strength"]
                 item["state"] = r["state"]
-            tokens_est = 70  # smaller with meta dropped by default
+            tokens_est = 45 if l0 else 70
 
         if max_tokens and tokens_used + tokens_est > max_tokens:
             break

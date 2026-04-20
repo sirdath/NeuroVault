@@ -194,7 +194,22 @@ def _run_slow_phase(
     next ingest catches it.
     """
     try:
-        # 5. Entities
+        # 5a. Tiered summaries (L0/L1) — heuristic, fast, no LLM.
+        # Done here rather than in the fast phase because BM25/semantic
+        # recall already works via the full content; the summaries just
+        # let recall's default mode return a tighter payload.
+        try:
+            from neurovault_server.summaries import generate_summaries
+            l0, l1 = generate_summaries(content, title=title)
+            db.conn.execute(
+                "UPDATE engrams SET summary_l0 = ?, summary_l1 = ? WHERE id = ?",
+                (l0 or None, l1 or None, engram_id),
+            )
+            db.conn.commit()
+        except Exception as e:
+            logger.debug("Tiered summary generation skipped: {}", e)
+
+        # 5b. Entities
         try:
             entities = extract_entities(content)
             if entities:

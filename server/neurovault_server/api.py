@@ -1616,11 +1616,42 @@ def create_api(manager) -> FastAPI:
             ]
         if mode == "full":
             return results
+
+        # Batch-fetch tiered summaries for preview/summary modes so we can
+        # return the L0 abstract (preview) or L1 paragraph (summary) in
+        # place of a content[:200] truncation.
+        summaries: dict[str, tuple[str | None, str | None]] = {}
+        if results:
+            sids = [r["engram_id"] for r in results]
+            placeholders = ",".join("?" * len(sids))
+            try:
+                rows = ctx.db.conn.execute(
+                    f"SELECT id, summary_l0, summary_l1 FROM engrams WHERE id IN ({placeholders})",
+                    tuple(sids),
+                ).fetchall()
+                for row in rows:
+                    summaries[row[0]] = (row[1], row[2])
+            except Exception:
+                pass  # columns may not exist yet on old DBs; fall back
+
+        if mode == "summary":
+            return [
+                {
+                    "engram_id": r["engram_id"],
+                    "title": r["title"],
+                    "summary": (summaries.get(r["engram_id"], (None, None))[1]
+                                or (r["content"] or "")[:480]),
+                    "score": r["score"],
+                }
+                for r in results
+            ]
+        # preview (default) — L0 one-sentence, fallback to content[:200]
         return [
             {
                 "engram_id": r["engram_id"],
                 "title": r["title"],
-                "preview": (r["content"] or "")[:200],
+                "preview": (summaries.get(r["engram_id"], (None, None))[0]
+                            or (r["content"] or "")[:200]),
                 "score": r["score"],
             }
             for r in results

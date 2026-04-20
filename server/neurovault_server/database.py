@@ -335,6 +335,7 @@ class Database:
         self._migrate_add_query_embedding()
         self._migrate_add_review_comment()
         self._migrate_add_agent_id()
+        self._migrate_add_summaries()
 
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
@@ -343,6 +344,31 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_summaries(self) -> None:
+        """Add `summary_l0` + `summary_l1` columns — tiered summaries per
+        engram. L0 is a one-sentence abstract (~10-20 tok), L1 is a
+        paragraph overview (~50-80 tok), L2 is the full content column
+        that already exists. OpenViking / ByteDance-Volcengine pattern:
+        recall returns the cheapest layer that answers the query and
+        the agent expands to L2 on demand.
+        """
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='engrams'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(engrams)").fetchall()]
+            if "summary_l0" not in cols:
+                logger.info("Migrating engrams: adding summary_l0 column")
+                self.conn.execute("ALTER TABLE engrams ADD COLUMN summary_l0 TEXT")
+            if "summary_l1" not in cols:
+                logger.info("Migrating engrams: adding summary_l1 column")
+                self.conn.execute("ALTER TABLE engrams ADD COLUMN summary_l1 TEXT")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("summary columns migration skipped: {}", e)
 
     def _migrate_add_agent_id(self) -> None:
         """Add `agent_id` column to engrams for multi-agent scoping.
