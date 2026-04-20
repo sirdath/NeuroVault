@@ -15,6 +15,13 @@ dependencies = [
     "fastapi>=0.135.3",
     "uvicorn>=0.44.0",
     "pymupdf>=1.27.2.2",
+    # Embedding runtime — ONNX-backed bge-small-en-v1.5, replaces
+    # the torch-heavy default of sentence-transformers at ingest time.
+    "fastembed>=0.3",
+    # Direct consumers in ingest.py, intelligence.py, retriever.py.
+    # Already present transitively via fastembed/sentence-transformers,
+    # but declared explicitly so a future dep swap doesn't break us.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
