@@ -156,7 +156,8 @@ CREATE TABLE IF NOT EXISTS temporal_facts (
     valid_from  TEXT DEFAULT (datetime('now')),
     valid_until TEXT,
     superseded_by TEXT,
-    is_current  INTEGER DEFAULT 1
+    is_current  INTEGER DEFAULT 1,
+    expired_at  TEXT                 -- system-time "we retracted this row"
 );
 
 -- Working memory: pinned/recent memories that always appear in context
@@ -336,6 +337,7 @@ class Database:
         self._migrate_add_review_comment()
         self._migrate_add_agent_id()
         self._migrate_add_summaries()
+        self._migrate_add_expired_at()
 
         self.conn.executescript(SCHEMA_SQL)
         # Create vec virtual table if it doesn't exist
@@ -344,6 +346,32 @@ class Database:
             self.conn.execute(
                 f"CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIM}])"
             )
+
+    def _migrate_add_expired_at(self) -> None:
+        """Add `expired_at` to `temporal_facts` for bi-temporal audit trail.
+
+        Semantics (Graphiti pattern):
+          valid_until = world-time: "when did the fact become false in the world"
+          expired_at  = system-time: "when did WE stop trusting this row"
+
+        Distinction matters for "what did my memory think was true on date X"
+        queries — if we retracted a fact on Y, the row before Y should still
+        answer from the old state, not the new one.
+        """
+        try:
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='temporal_facts'"
+            ).fetchone()
+            if not exists:
+                return
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(temporal_facts)").fetchall()]
+            if "expired_at" in cols:
+                return
+            logger.info("Migrating temporal_facts: adding expired_at column")
+            self.conn.execute("ALTER TABLE temporal_facts ADD COLUMN expired_at TEXT")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning("expired_at migration skipped: {}", e)
 
     def _migrate_add_summaries(self) -> None:
         """Add `summary_l0` + `summary_l1` columns — tiered summaries per

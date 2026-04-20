@@ -148,8 +148,11 @@ def extract_temporal_facts(
         return 0
 
     # Pre-fetch candidate existing facts once per ingest, not per new fact.
+    # Include the validity window so we can run an interval-overlap guard
+    # before marking anything superseded — guards against double-
+    # superseding a fact that was already retracted in a prior pass.
     existing = db.conn.execute(
-        """SELECT id, fact FROM temporal_facts
+        """SELECT id, fact, valid_from, valid_until FROM temporal_facts
            WHERE engram_id != ? AND is_current = 1""",
         (engram_id,),
     ).fetchall()
@@ -162,8 +165,8 @@ def extract_temporal_facts(
         try:
             old_texts = [row[1] for row in existing]
             old_vecs = embedder.encode_batch(old_texts)
-            for (oid, _), vec in zip(existing, old_vecs):
-                old_embeddings[oid] = vec
+            for row, vec in zip(existing, old_vecs):
+                old_embeddings[row[0]] = vec
         except Exception as e:
             logger.debug("temporal-facts: bulk embed skipped, falling back: {}", e)
             old_embeddings = {}
@@ -180,18 +183,43 @@ def extract_temporal_facts(
             except Exception:
                 new_vec = None
 
-        for old_id, old_fact in existing:
+        for old_row in existing:
+            old_id, old_fact, old_valid_from, old_valid_until = old_row
             old_vec = old_embeddings.get(old_id)
-            if _facts_conflict(fact, old_fact, new_vec=new_vec, old_vec=old_vec):
-                db.conn.execute(
-                    """UPDATE temporal_facts SET
-                       is_current = 0,
-                       valid_until = datetime('now'),
-                       superseded_by = ?
-                       WHERE id = ?""",
-                    (fact_id, old_id),
-                )
-                logger.debug("Fact superseded: '{}' -> '{}'", old_fact[:50], fact[:50])
+            if not _facts_conflict(fact, old_fact, new_vec=new_vec, old_vec=old_vec):
+                continue
+            # Interval-overlap guard: skip if the old fact's validity
+            # window ended before now (the new fact's valid_from). It
+            # was already retracted earlier — don't double-supersede it.
+            # New fact's interval is [now, ∞); old fact's is
+            # [old_valid_from, old_valid_until). They overlap iff
+            # old_valid_until IS NULL OR old_valid_until > now.
+            if old_valid_until is not None:
+                try:
+                    expired_before_now = db.conn.execute(
+                        "SELECT ? <= datetime('now')", (old_valid_until,),
+                    ).fetchone()[0]
+                except Exception:
+                    expired_before_now = False
+                if expired_before_now:
+                    logger.debug(
+                        "Supersede skipped — old fact already retracted at {}: '{}'",
+                        old_valid_until, old_fact[:50],
+                    )
+                    continue
+            # Real supersession: set bi-temporal timestamps.
+            #   valid_until = now         (world-time of state change)
+            #   expired_at  = now         (system-time of the edit)
+            db.conn.execute(
+                """UPDATE temporal_facts SET
+                   is_current = 0,
+                   valid_until = datetime('now'),
+                   expired_at = datetime('now'),
+                   superseded_by = ?
+                   WHERE id = ?""",
+                (fact_id, old_id),
+            )
+            logger.debug("Fact superseded: '{}' -> '{}'", old_fact[:50], fact[:50])
 
         db.conn.execute(
             """INSERT OR IGNORE INTO temporal_facts (id, engram_id, fact)

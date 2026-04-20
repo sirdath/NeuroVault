@@ -126,6 +126,60 @@ def test_conflict_used_to_marker():
     assert _facts_conflict(new, old) is True
 
 
+def test_expired_at_set_on_real_supersede(tmp_db: Database):
+    """When a fact is superseded, both valid_until (world-time) AND
+    expired_at (system-time) must be set. These are the same moment for
+    us today, but the distinction matters for future time-travel reads.
+    """
+    # Seed an old fact + a new fact that supersedes it. Phrasing chosen
+    # to match the fact extractor's keyword list ("uses", "switched").
+    old_eid = _insert(tmp_db, "Old stack", "The team uses MongoDB for the primary database")
+    extract_temporal_facts(tmp_db, old_eid, "The team uses MongoDB for the primary database")
+    new_eid = _insert(tmp_db, "New stack", "The team switched from MongoDB to Postgres this month")
+    extract_temporal_facts(tmp_db, new_eid, "The team switched from MongoDB to Postgres this month")
+
+    rows = tmp_db.conn.execute(
+        """SELECT fact, is_current, valid_until, expired_at
+           FROM temporal_facts WHERE engram_id = ?""",
+        (old_eid,),
+    ).fetchall()
+    assert rows, "old fact should exist"
+    superseded = [r for r in rows if r[1] == 0]
+    assert superseded, "old fact should be marked not current"
+    row = superseded[0]
+    assert row[2] is not None, "valid_until must be set"
+    assert row[3] is not None, "expired_at must be set"
+
+
+def test_interval_overlap_guard_skips_already_retracted(tmp_db: Database):
+    """An old fact with valid_until already in the past should NOT be
+    re-superseded — its interval doesn't overlap with the new fact's
+    [now, ∞). The row must stay untouched (no new superseded_by link).
+    """
+    import uuid
+    # Seed a fact that was already retracted yesterday.
+    old_eid = _insert(tmp_db, "Ancient stack", "The team uses MongoDB for the primary database")
+    fact_id = str(uuid.uuid4())
+    tmp_db.conn.execute(
+        """INSERT INTO temporal_facts
+             (id, engram_id, fact, valid_from, valid_until, is_current)
+           VALUES (?, ?, ?, datetime('now','-2 days'), datetime('now','-1 day'), 1)""",
+        (fact_id, old_eid, "The team uses MongoDB for the primary database"),
+    )
+    tmp_db.conn.commit()
+    # Now a new fact with the same topic arrives — contradict marker + overlap.
+    new_eid = _insert(tmp_db, "Replacement", "The team switched from MongoDB to Postgres this month")
+    extract_temporal_facts(tmp_db, new_eid, "The team switched from MongoDB to Postgres this month")
+    # The pre-retired row should still have NO expired_at — the guard
+    # prevented the re-write because the old fact's interval
+    # [..., -1 day] doesn't overlap with the new fact's [now, ∞).
+    row = tmp_db.conn.execute(
+        "SELECT is_current, superseded_by, expired_at FROM temporal_facts WHERE id = ?",
+        (fact_id,),
+    ).fetchone()
+    assert row[2] is None, "expired_at must not be written by the guarded path"
+
+
 def test_fallback_keyword_path_still_tighter_than_2025():
     # With no embeddings, the keyword fallback still requires BOTH a
     # 3+ word overlap AND an explicit supersede marker — tighter than
