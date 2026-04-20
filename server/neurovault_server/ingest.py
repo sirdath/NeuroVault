@@ -223,6 +223,18 @@ def _run_slow_phase(
         except Exception as e:
             logger.debug("Semantic link compute skipped: {}", e)
 
+        # 6a. Retroactive entity-link enrichment (A-Mem pattern) —
+        # propagate shared-entity edges to every older engram now, so
+        # the graph evolves on each write instead of waiting for a
+        # full _recompute_all_semantic_links pass. Runs AFTER semantic
+        # so semantic links win the (from, to) primary-key race when
+        # both a semantic cosine match and a shared entity apply to
+        # the same pair (matches _recompute_all_semantic_links order).
+        try:
+            _update_entity_links(db, engram_id)
+        except Exception as e:
+            logger.debug("Retroactive entity-link update skipped: {}", e)
+
         # 7. Wikilinks
         try:
             _process_wikilinks(db, engram_id, content)
@@ -502,6 +514,55 @@ def _recompute_all_semantic_links(db: Database, embedder: Embedder) -> None:
 
     db.conn.commit()
     logger.info("Recomputed semantic links: {} connections (numpy-accelerated)", links_created)
+
+
+def _update_entity_links(db: Database, engram_id: str) -> int:
+    """Incremental version of _compute_entity_links for one new engram.
+
+    A-Mem-style retroactive enrichment: when a new note is ingested,
+    every older note that shares an entity with it picks up a fresh
+    ``entity`` link pointing to the newcomer (and vice versa). Older
+    notes effectively "learn" the new context without re-running the
+    O(n) full recompute.
+
+    Returns the number of neighbor pairs touched.
+    """
+    shared = db.conn.execute(
+        """SELECT b.engram_id, COUNT(*) as shared_count
+           FROM entity_mentions a
+           JOIN entity_mentions b ON a.entity_id = b.entity_id
+           WHERE a.engram_id = ? AND b.engram_id != ?
+           GROUP BY b.engram_id
+           HAVING shared_count >= 1""",
+        (engram_id, engram_id),
+    ).fetchall()
+
+    touched = 0
+    for row in shared:
+        neighbor_id, count = row[0], row[1]
+        # Same formula as _compute_entity_links so incremental vs full
+        # rebuild produce identical similarity values.
+        similarity = min(1.0, 0.5 + count * 0.1)
+        # OR IGNORE so we don't clobber an existing semantic/manual link
+        # between the same pair — the engram_links PK is (from, to) with
+        # no link_type in the key, so REPLACE would silently rewrite a
+        # stronger relationship into a weaker "entity" one.
+        db.conn.execute(
+            """INSERT OR IGNORE INTO engram_links (from_engram, to_engram, similarity, link_type)
+               VALUES (?, ?, ?, 'entity')""",
+            (engram_id, neighbor_id, similarity),
+        )
+        db.conn.execute(
+            """INSERT OR IGNORE INTO engram_links (from_engram, to_engram, similarity, link_type)
+               VALUES (?, ?, ?, 'entity')""",
+            (neighbor_id, engram_id, similarity),
+        )
+        touched += 1
+
+    if touched:
+        db.conn.commit()
+        logger.debug("Retroactive entity links: {} neighbors touched for {}", touched, engram_id[:8])
+    return touched
 
 
 def _compute_entity_links(db: Database) -> None:
