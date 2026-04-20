@@ -103,6 +103,30 @@ def test_retroactive_applies_to_many_older_engrams(tmp_db: Database):
         assert len(links) == 2  # bidirectional
 
 
+def test_skips_dormant_neighbors(tmp_db: Database):
+    """Regression: _update_entity_links used to crash with FOREIGN KEY
+    constraint failed when a shared entity pointed at a soft-deleted
+    engram. The FK on engram_links.from/to references engrams(id), so
+    inserting a link to a missing row tripped the constraint. The fix
+    filters shared neighbors by state != 'dormant'."""
+    alive = _new_engram(tmp_db, "alive_older")
+    dormant = _new_engram(tmp_db, "soft_deleted_older")
+    newer = _new_engram(tmp_db, "newer")
+
+    for eid in (alive, dormant, newer):
+        store_entities(tmp_db, eid, [{"name": "Shared", "kind": "CONCEPT", "salience": 0.8}])
+
+    # Soft-delete the second one the way the production code does.
+    tmp_db.conn.execute("UPDATE engrams SET state = 'dormant' WHERE id = ?", (dormant,))
+    tmp_db.conn.commit()
+
+    # Should not raise — and should still link to the live neighbor.
+    touched = _update_entity_links(tmp_db, newer)
+    assert touched == 1
+    assert len(_links_between(tmp_db, alive, newer)) == 2
+    assert _links_between(tmp_db, dormant, newer) == []
+
+
 def test_second_call_is_idempotent(tmp_db: Database):
     older = _new_engram(tmp_db, "older")
     store_entities(tmp_db, older, [{"name": "X", "kind": "CONCEPT", "salience": 0.8}])

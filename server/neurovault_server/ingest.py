@@ -527,11 +527,19 @@ def _update_entity_links(db: Database, engram_id: str) -> int:
 
     Returns the number of neighbor pairs touched.
     """
+    # Inner-join engrams so we only surface neighbors that still exist
+    # and aren't dormant. entity_mentions rows can outlive the engram
+    # they point to (e.g. soft-delete leaves the mention row intact),
+    # and inserting an engram_link to a missing/dormant engram_id
+    # trips the FOREIGN KEY constraint on engram_links.from/to_engram.
     shared = db.conn.execute(
         """SELECT b.engram_id, COUNT(*) as shared_count
            FROM entity_mentions a
            JOIN entity_mentions b ON a.entity_id = b.entity_id
-           WHERE a.engram_id = ? AND b.engram_id != ?
+           JOIN engrams e        ON e.id = b.engram_id
+           WHERE a.engram_id = ?
+             AND b.engram_id != ?
+             AND e.state != 'dormant'
            GROUP BY b.engram_id
            HAVING shared_count >= 1""",
         (engram_id, engram_id),

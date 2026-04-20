@@ -161,24 +161,44 @@ def _active_brain_id() -> str:
 
 
 def _create_and_activate_bench_brain() -> str:
-    """Create the isolated bench brain, activate it, and return its id.
+    """Create the isolated bench brain fresh, activate it, and return its id.
 
-    If a brain with the bench name already exists (from a previous
-    crashed run), reuse it — better than minting a new one each time
-    and leaving stale brains on disk.
+    If a previous crashed run left a stale ``BrainBench`` behind, delete
+    it first so we always start on a clean slate — stale semantic links
+    and retroactive entity enrichment carried over from an earlier run
+    would distort the hit@k metrics.
     """
     brains = _get("/api/brains")
-    existing = next((b for b in brains if b.get("name") == BENCH_BRAIN_NAME), None)  # type: ignore[union-attr]
-    if existing:
-        brain_id = existing["brain_id"]
-    else:
-        created = _post("/api/brains", {
-            "name": BENCH_BRAIN_NAME,
-            "description": "Ephemeral brain for bench_longmemory.py — deleted at end of run.",
-        })
-        if "error" in created:
-            raise RuntimeError(f"failed to create bench brain: {created['error']}")
-        brain_id = created["brain_id"]
+    existing = [b for b in brains if b.get("name") == BENCH_BRAIN_NAME]  # type: ignore[union-attr]
+    for b in existing:
+        stale_id = b.get("id") or b.get("brain_id")
+        if not stale_id:
+            continue
+        # Can't delete the active brain — switch to any other first.
+        other = next(
+            (x for x in brains if (x.get("id") or x.get("brain_id")) != stale_id),
+            None,
+        )
+        if other:
+            _post(f"/api/brains/{other.get('id') or other.get('brain_id')}/activate", {})
+            time.sleep(0.5)
+        try:
+            _delete(f"/api/brains/{stale_id}")
+            print(f"  cleaned up stale bench brain {stale_id}")
+        except Exception as e:
+            print(f"  WARN: couldn't delete stale bench brain {stale_id}: {e}")
+
+    # create_brain is synchronous and runs a full vault ingest + BM25
+    # + _recompute_all_semantic_links — easily 60-100s on a warm server
+    # with background observation traffic. 240s is generous enough that
+    # a legitimately busy server still lands in time.
+    created = _post("/api/brains", {
+        "name": BENCH_BRAIN_NAME,
+        "description": "Ephemeral brain for bench_longmemory.py — deleted at end of run.",
+    }, timeout=240.0)
+    if "error" in created:
+        raise RuntimeError(f"failed to create bench brain: {created['error']}")
+    brain_id = created["brain_id"]
 
     _post(f"/api/brains/{brain_id}/activate", {})
     # Give the brain a moment to become the active context on the server.
@@ -250,6 +270,7 @@ def run_probes(engram_ids: list[str], topk: int = 5) -> dict:
         items = result if isinstance(result, list) else result.get("results", [])
         tokens_total += sum(len((r.get("preview") or "").split()) for r in items)
         ids = [r.get("engram_id") or r.get("id") for r in items]
+        titles = [r.get("title") or "" for r in items]
 
         rank = next((i + 1 for i, rid in enumerate(ids) if rid == correct_id), 0)
         if rank == 1:
@@ -263,6 +284,8 @@ def run_probes(engram_ids: list[str], topk: int = 5) -> dict:
             "question": probe.question,
             "rank": rank or "miss",
             "returned_ids": ids[:3],
+            "top_titles": titles[:3],
+            "correct_session_title": f"{SESSION_PREFIX}-session-{probe.session_idx:02d}",
         })
 
     n = len(CORPUS)
@@ -296,9 +319,12 @@ def main():
         print(f"  MRR                 : {report['mrr']:.3f}")
         print(f"  avg tokens returned : {report['avg_tokens_returned']:.0f}")
         print()
-        print("Per-probe detail:")
+        print("Per-probe detail (rank → top-3 titles beating or including the correct engram):")
         for row in report["detail"]:
             print(f"  session {row['session']:>2}  rank={row['rank']!s:>4}  q={row['question']}")
+            print(f"             want: {row['correct_session_title']}")
+            for t in row["top_titles"]:
+                print(f"             got : {t}")
 
         print()
         print(json.dumps({k: v for k, v in report.items() if k != "detail"}, indent=2))
