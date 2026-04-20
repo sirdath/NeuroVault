@@ -14,45 +14,51 @@ from rich.console import Console
 from rich.text import Text
 
 
+NEURO = [
+    " ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮ ",
+    " │ █   █ │  │ █████ │  │ █   █ │  │ ████  │  │ █████ │ ",
+    " │ ██  █ │  │ █ ╰───╯  │ █   █ │  │ █   █ │  │ █   █ │ ",
+    " │ █ █ █ │  │ ████  │  │ █   █ │  │ ████  │  │ █   █ │ ",
+    " │ █  ██ │  │ █ ╭───╮  │ █   █ │  │ █  █  │  │ █   █ │ ",
+    " │ █   █ │  │ █████ │  │ █████ │  │ █   █ │  │ █████ │ ",
+    " ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯ ",
+]
+
+VAULT = [
+    " ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮ ",
+    " │ █   █ │  │  ███  │  │ █   █ │  │ █     │  │ █████ │ ",
+    " │ █   █ │  │ █   █ │  │ █   █ │  │ █     │  ╰─╮ █ ╭─╯ ",
+    " │ █   █ │  │ █████ │  │ █   █ │  │ █     │    │ █ │   ",
+    " │  █ █  │  │ █   █ │  │ █   █ │  │ █ ╭───╮    │ █ │   ",
+    " │   █   │  │ █   █ │  │ █████ │  │ █████ │    │ █ │   ",
+    " ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯    ╰───╯   ",
+]
+
+GAP = "    "
+
+# Gradient approximating the SVG (peachy-orange shading left-to-right)
+GRADIENT = ["#E39173", "#DE8767", "#D97B59", "#D0714F", "#C46A45"]
+
+
+def _render(line: str) -> Text:
+    """Render one character-row with a left-to-right peachy gradient."""
+    text = Text()
+    if not line:
+        return text
+    bins = len(GRADIENT)
+    stride = max(1, len(line) // bins)
+    for i, ch in enumerate(line):
+        color = GRADIENT[min(i // stride, bins - 1)]
+        text.append(ch, style=color)
+    return text
+
+
 def print_neurovault_logo() -> None:
     console = Console()
-
-    # Signature Claude Code peachy-orange
-    color = "#D97B59"
-
-    # Row 1: NEURO
-    row1 = [
-        " ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮ ",
-        " │ █   █ │  │ █████ │  │ █   █ │  │ ████  │  │ █████ │ ",
-        " │ ██  █ │  │ █ ╰───╯  │ █   █ │  │ █   █ │  │ █   █ │ ",
-        " │ █ █ █ │  │ ████  │  │ █   █ │  │ ████  │  │ █   █ │ ",
-        " │ █  ██ │  │ █ ╭───╮  │ █   █ │  │ █  █  │  │ █   █ │ ",
-        " │ █   █ │  │ █████ │  │ █████ │  │ █   █ │  │ █████ │ ",
-        " ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯ ",
-    ]
-
-    # Row 2: VAULT
-    row2 = [
-        " ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮  ╭───────╮ ",
-        " │ █   █ │  │  ███  │  │ █   █ │  │ █     │  │ █████ │ ",
-        " │ █   █ │  │ █   █ │  │ █   █ │  │ █     │  ╰─╮ █ ╭─╯ ",
-        " │ █   █ │  │ █████ │  │ █   █ │  │ █     │    │ █ │   ",
-        " │  █ █  │  │ █   █ │  │ █   █ │  │ █ ╭───╮    │ █ │   ",
-        " │   █   │  │ █   █ │  │ █████ │  │ █████ │    │ █ │   ",
-        " ╰───────╯  ╰───────╯  ╰───────╯  ╰───────╯    ╰───╯   ",
-    ]
-
-    console.print("\n")
-
-    for line in row1:
-        console.print(Text(line, style=color))
-
     console.print()
-
-    for line in row2:
-        console.print(Text(line, style=color))
-
-    console.print("\n")
+    for n_row, v_row in zip(NEURO, VAULT):
+        console.print(_render(n_row + GAP + v_row))
+    console.print()
 
 
 if __name__ == "__main__":
