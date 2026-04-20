@@ -486,6 +486,8 @@ export default function App() {
               onClick={() => setSettingsOpen(false)}
               className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-lg z-10 text-lg"
               style={{ color: theme.textMuted }}
+              aria-label="Close settings"
+              title="Close (Esc)"
             >
               ×
             </button>

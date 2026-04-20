@@ -97,6 +97,8 @@ export function ActivityPanel({ open, onClose }: ActivityPanelProps) {
             onClick={onClose}
             className="w-7 h-7 flex items-center justify-center rounded-md text-lg transition-all"
             style={{ color: "var(--nv-text-muted)" }}
+            aria-label="Close activity panel"
+            title="Close (Esc)"
           >
             ×
           </button>

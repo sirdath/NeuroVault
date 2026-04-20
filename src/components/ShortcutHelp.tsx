@@ -82,6 +82,8 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
                 style={{ color: "var(--nv-text-dim)" }}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "var(--nv-text)")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "var(--nv-text-dim)")}
+                aria-label="Close shortcuts help"
+                title="Close (Esc)"
               >
                 ×
               </button>
