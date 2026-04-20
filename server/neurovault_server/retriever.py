@@ -265,6 +265,7 @@ def hybrid_retrieve(
     use_reranker: bool = False,
     as_of: str | None = None,
     exclude_kinds: list[str] | None = None,
+    spread_hops: int = 0,
 ) -> list[dict]:
     """Hybrid retrieval with adaptive weighting and query expansion.
 
@@ -504,6 +505,24 @@ def hybrid_retrieve(
     if not candidates:
         return []
 
+    # --- Spreading activation (read-path) ---
+    # Optionally expand the candidate pool with 1-hop neighbors of the
+    # top seeds so a linked-but-not-directly-matching engram can still
+    # surface. Default off to preserve the current behavior; callers
+    # opt in with spread_hops=1. The dampening (0.4) + link-similarity
+    # gating ensures spread neighbors can't outrank direct matches
+    # unless the direct matches were already weak.
+    if spread_hops >= 1:
+        _spread_neighbors(
+            db, candidates,
+            seed_count=3,
+            link_threshold=0.55,
+            dampening=0.4,
+            max_new=10,
+            as_of=as_of,
+            exclude_set=exclude_set,
+        )
+
     # --- Temporal & decision-aware adjustments ---
     # Newer memories beat older ones on contested topics; explicitly-superseded
     # facts get a hard penalty; titles flagged as decisions/updates get a small
@@ -696,6 +715,102 @@ def hybrid_retrieve(
         "on" if reranker_used else ("requested-but-unavailable" if use_reranker else "off"),
     )
     return results
+
+
+def _spread_neighbors(
+    db: Database,
+    candidates: list[dict],
+    seed_count: int = 3,
+    link_threshold: float = 0.55,
+    dampening: float = 0.4,
+    max_new: int = 10,
+    as_of: str | None = None,
+    exclude_set: set[str] | None = None,
+) -> None:
+    """Read-path spreading activation: expand the candidate pool with
+    1-hop neighbors of the top `seed_count` candidates. Mutates
+    `candidates` in place by appending up to `max_new` new rows.
+
+    Rationale: if the query matches "database decisions" strongly but
+    the actual answer is on a linked "Postgres switchover" page that
+    didn't match the query directly, pure vector/BM25 retrieval misses
+    it. Pulling 1-hop neighbors of strong seeds surfaces the bridge.
+
+    Scoring: neighbors enter with rrf_score = seed_rrf × link_similarity
+    × dampening — a strong edge from a top seed beats a weak edge from
+    a mediocre one, and a spread neighbor can't outrank a direct match
+    unless the direct match was already weak. Marked `via_spread=True`
+    so downstream consumers can tell and callers can debug.
+
+    This is DIFFERENT from `consolidation.spread_activation()` which is
+    a write-path reinforcement (bumps neighbor strength for FUTURE
+    queries). Both work together: consolidation strengthens links over
+    time; this function surfaces them at query time.
+    """
+    if not candidates or seed_count <= 0:
+        return
+    exclude_set = exclude_set or set()
+
+    # Rank seeds by current rrf_score; only the top-N get to radiate.
+    seeds = sorted(candidates, key=lambda c: c.get("rrf_score", 0), reverse=True)[:seed_count]
+    if not seeds:
+        return
+    already = {c["engram_id"] for c in candidates}
+
+    # Pull directed 1-hop neighbors from engram_links. Join engrams so we
+    # skip dormant / after-as_of / excluded-kind hits in one SQL round.
+    seed_ids = [s["engram_id"] for s in seeds]
+    placeholders = ",".join("?" * len(seed_ids))
+    rows = db.conn.execute(
+        f"""SELECT l.from_engram, l.to_engram, l.similarity, l.link_type,
+                   e.id, e.title, e.content, e.strength, e.state,
+                   e.updated_at, e.created_at, e.kind
+            FROM engram_links l
+            JOIN engrams e ON e.id = l.to_engram
+            WHERE l.from_engram IN ({placeholders})
+              AND l.similarity >= ?
+              AND e.state != 'dormant'
+            ORDER BY l.similarity DESC""",
+        (*seed_ids, link_threshold),
+    ).fetchall()
+
+    seed_rrf = {s["engram_id"]: s.get("rrf_score", 0) for s in seeds}
+    added = 0
+    for row in rows:
+        if added >= max_new:
+            break
+        from_id, to_id, sim, _link_type = row[0], row[1], float(row[2]), row[3]
+        if to_id in already:
+            continue
+        if exclude_set and (row[11] or "note") in exclude_set:
+            continue
+        if as_of:
+            created = row[10] or ""
+            if created and created > as_of:
+                continue
+        rrf = seed_rrf.get(from_id, 0) * sim * dampening
+        candidates.append({
+            "engram_id": to_id,
+            "title": row[5],
+            "content": (row[6] or "")[:1000],
+            "strength": row[7],
+            "state": row[8],
+            "updated_at": row[9] or "",
+            "created_at": row[10] or "",
+            "kind": row[11] or "note",
+            "rrf_score": rrf,
+            "via_spread": True,
+            "spread_from": from_id,
+            "spread_similarity": sim,
+        })
+        already.add(to_id)
+        added += 1
+
+    if added:
+        logger.debug(
+            "Spreading activation added {} neighbors via {} seeds (thr={}, damp={})",
+            added, len(seeds), link_threshold, dampening,
+        )
 
 
 def chunk_retrieve(

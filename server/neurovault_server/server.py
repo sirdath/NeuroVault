@@ -294,6 +294,7 @@ def recall(
     brain: str | None = None,
     include_meta: bool = False,
     rerank: bool = False,
+    spread_hops: int = 0,
 ) -> list[dict]:
     """Hybrid search across memory (semantic + BM25 + knowledge graph). Call
     BEFORE answering anything the user might have told you before.
@@ -309,6 +310,10 @@ def recall(
     include_observations=True only for session-replay questions.
     rerank=True runs a cross-encoder second pass on the top 20 candidates
       (~50ms extra; silently skipped in installs without sentence-transformers).
+    spread_hops=1 expands the candidate pool with 1-hop neighbors of the top
+      seeds via engram_links — useful for multi-hop queries where the answer
+      is linked to, but doesn't directly match, what you asked. Dampened by
+      0.4 × link_similarity so a spread hit can't outrank a direct match.
     Prefer `recall_and_read(query)` if you want the top result's full body.
     """
     ctx = _ctx(brain)
@@ -317,6 +322,7 @@ def recall(
         query, ctx.db, manager.embedder, ctx.bm25,
         top_k=limit * 2 if agent_id else limit,  # over-fetch when filtering
         as_of=as_of, exclude_kinds=exclude_kinds, use_reranker=rerank,
+        spread_hops=spread_hops,
     )
 
     # Filter by agent_id if specified

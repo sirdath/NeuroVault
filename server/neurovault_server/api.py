@@ -1581,15 +1581,19 @@ def create_api(manager) -> FastAPI:
         mode: str = "preview",
         as_of: str | None = None,
         rerank: bool = False,
+        spread_hops: int = 0,
     ):
         """Hybrid retrieval over the active brain. Pass as_of (ISO) for time
         travel; rerank=true runs a cross-encoder second pass (silently
-        skipped if sentence-transformers isn't installed)."""
+        skipped if sentence-transformers isn't installed).
+        spread_hops=1 expands the candidate pool with 1-hop neighbors of
+        the top seeds via engram_links — useful for multi-hop queries."""
         from neurovault_server.retriever import hybrid_retrieve
         ctx = _ctx()
         results = hybrid_retrieve(
             q, ctx.db, manager.embedder, ctx.bm25,
             top_k=limit, as_of=as_of, use_reranker=rerank,
+            spread_hops=spread_hops,
         )
         if mode == "titles":
             # Enrich with filename so the frontend sidebar can map recall
