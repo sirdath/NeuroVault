@@ -69,8 +69,11 @@ def create_api(manager) -> FastAPI:
     # after the response so it doesn't slow the actual request path. Covers
     # both MCP-proxied and HTTP-direct endpoints uniformly.
     from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request
     from starlette.responses import Response
+    # NOTE: don't re-import Request here. A local ``from ... import Request``
+    # would shadow the module-level import and make Python treat Request as
+    # a local in create_api's scope — the exception-handler decorator above
+    # would then trip on "cannot access local variable 'Request'".
 
     class _AuditMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
