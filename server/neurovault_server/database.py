@@ -169,6 +169,20 @@ CREATE TABLE IF NOT EXISTS working_memory (
     pin_type   TEXT DEFAULT 'recent'  -- recent|manual|active
 );
 
+-- Core memory blocks (Letta/MemGPT pattern): short, agent-editable
+-- chunks the agent maintains as structured "working identity" — the
+-- persona it's operating as, the active project, known user prefs.
+-- Always loaded by session_start(); the agent updates them via
+-- core_memory_append/replace/set. char_limit bounds each block so the
+-- context stays predictable no matter how much the agent writes.
+CREATE TABLE IF NOT EXISTS core_memory_blocks (
+    label       TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    char_limit  INTEGER NOT NULL DEFAULT 2000,
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
+
 -- Episodic memory: events with timestamps (separate from semantic facts)
 -- "On April 5th, Sarah told me X" vs "I prefer Tauri" (semantic, no time)
 CREATE TABLE IF NOT EXISTS episodic_facts (

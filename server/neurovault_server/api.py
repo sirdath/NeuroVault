@@ -1036,6 +1036,67 @@ def create_api(manager) -> FastAPI:
         timeout_ms = int(body.get("timeout_ms") or 15000)
         return _ej(code=code, timeout_ms=timeout_ms)
 
+    # --- Core memory blocks (agent-editable) ---
+    @app.get("/api/core_memory")
+    def core_memory_list_endpoint():
+        """Return all agent-editable core memory blocks for the active brain."""
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        _cm.ensure_defaults(ctx.db)
+        return _cm.list_blocks(ctx.db)
+
+    @app.get("/api/core_memory/{label}")
+    def core_memory_read_endpoint(label: str):
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        _cm.ensure_defaults(ctx.db)
+        block = _cm.read_block(ctx.db, label)
+        if not block:
+            return {"error": "not_found", "label": label}
+        return block
+
+    @app.put("/api/core_memory/{label}")
+    def core_memory_set_endpoint(label: str, body: dict):
+        """Body: {value: str}. Overwrites the block's value."""
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        value = body.get("value", "")
+        if not isinstance(value, str):
+            return {"error": "value must be a string"}
+        return _cm.set_block(ctx.db, label, value)
+
+    @app.post("/api/core_memory/{label}/append")
+    def core_memory_append_endpoint(label: str, body: dict):
+        """Body: {text: str, separator?: str}. Appends to the block."""
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        text = body.get("text", "")
+        sep = body.get("separator") or "\n"
+        if not isinstance(text, str) or not text:
+            return {"error": "text is required"}
+        return _cm.append_block(ctx.db, label, text, separator=sep)
+
+    @app.post("/api/core_memory/{label}/replace")
+    def core_memory_replace_endpoint(label: str, body: dict):
+        """Body: {old: str, new: str}. Find-and-replace."""
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        old = body.get("old", "")
+        new = body.get("new", "")
+        if not old:
+            return {"error": "old is required"}
+        result = _cm.replace_block(ctx.db, label, old, new)
+        if result is None:
+            return {"error": "not_found_or_no_match", "label": label}
+        return result
+
+    @app.delete("/api/core_memory/{label}")
+    def core_memory_delete_endpoint(label: str):
+        from neurovault_server import core_memory as _cm
+        ctx = _ctx()
+        ok = _cm.delete_block(ctx.db, label)
+        return {"status": "cleared_or_deleted" if ok else "not_found", "label": label}
+
     @app.post("/api/check_duplicate")
     def check_duplicate_endpoint(body: dict):
         """Read-only dedup check. Body: {content, threshold?, limit?}.

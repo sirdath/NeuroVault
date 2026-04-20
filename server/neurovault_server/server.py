@@ -855,7 +855,22 @@ def session_start(
         "top_memories": top_memories,
         "open_todos": open_todos,
         "changes": changes,
+        "core_memory": _load_core_memory(ctx),
     }
+
+
+def _load_core_memory(ctx) -> list[dict]:
+    """Pull the agent-editable core memory blocks for session_start.
+    Seeds defaults on first call so the agent sees the schema even on
+    a brand-new brain. Best-effort: any failure returns an empty list
+    so the wake-up never breaks on core-memory issues."""
+    try:
+        from neurovault_server import core_memory as _cm
+        _cm.ensure_defaults(ctx.db)
+        return _cm.list_blocks(ctx.db)
+    except Exception as e:
+        logger.debug("session_start: core_memory load skipped: {}", e)
+        return []
 
 
 @tiered("core")
@@ -950,6 +965,64 @@ def execute_js(code: str, timeout_ms: int = 15000) -> dict:
             __import__("os").unlink(script_path)
         except OSError:
             pass
+
+
+# --- Agent-editable core memory blocks (Letta/MemGPT pattern) ---
+
+@tiered("core")
+def core_memory_read(label: str | None = None, brain: str | None = None) -> dict | list[dict]:
+    """Read the agent's core memory blocks — short, always-loaded chunks
+    the agent curates as its working identity (persona, active project,
+    known user preferences). Pass `label` to read one block; omit for
+    all. These blocks are included in `session_start()` by default.
+    """
+    from neurovault_server import core_memory as _cm
+    ctx = _ctx(brain)
+    _cm.ensure_defaults(ctx.db)
+    if label:
+        block = _cm.read_block(ctx.db, label)
+        return block or {"error": f"no block named '{label}'"}
+    return _cm.list_blocks(ctx.db)
+
+
+@tiered("core")
+def core_memory_append(label: str, text: str, brain: str | None = None) -> dict:
+    """Append text to a core memory block (newline-separated). Block is
+    created if it doesn't exist. When the combined value exceeds the
+    block's char_limit, the oldest leading line is dropped until it
+    fits — newest content always wins. Use this when adding a
+    fact/update incrementally; prefer `core_memory_set` when you want
+    to rewrite the whole block.
+    """
+    from neurovault_server import core_memory as _cm
+    ctx = _ctx(brain)
+    return _cm.append_block(ctx.db, label, text)
+
+
+@tiered("core")
+def core_memory_replace(label: str, old: str, new: str, brain: str | None = None) -> dict:
+    """Find-and-replace inside a block. Returns the updated block, or
+    `{"error": "not_found"}` if `old` isn't present. Use for small edits
+    (fixing a stale fact, renaming a project) — fall back to `_set`
+    when you want to start fresh.
+    """
+    from neurovault_server import core_memory as _cm
+    ctx = _ctx(brain)
+    updated = _cm.replace_block(ctx.db, label, old, new)
+    if updated is None:
+        return {"error": "not_found", "label": label}
+    return updated
+
+
+@tiered("core")
+def core_memory_set(label: str, value: str, brain: str | None = None) -> dict:
+    """Overwrite a core memory block's value entirely. Exceeding the
+    char_limit triggers a word-boundary truncation. Creates the block
+    with default char_limit=2000 if it doesn't exist.
+    """
+    from neurovault_server import core_memory as _cm
+    ctx = _ctx(brain)
+    return _cm.set_block(ctx.db, label, value)
 
 
 @tiered("core")
