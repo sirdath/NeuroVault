@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
+import { activityApi, type AuditEntry } from "../lib/api";
 
 const FONT_SIZES = [
   { label: "Small", value: "small" as const },
@@ -244,6 +245,77 @@ export function SettingsView() {
 }
 
 /**
+ * Live indicator of whether an MCP client (Claude Desktop, Cursor, …)
+ * is actually talking to the server right now. Reads the audit log —
+ * any entry whose tool does not start with "http:" is an MCP call,
+ * because HTTP routes are prefixed by the audit middleware and MCP
+ * tool calls land bare ("remember", "recall", etc).
+ *
+ * Three visual states tell a clear story in a demo:
+ *   • green pulse + "Connected · last call Ns ago"   (<= 60s)
+ *   • amber dot   + "Idle · last call Nm ago"        (between 60s and 30min)
+ *   • gray dot    + "Not connected yet"              (no MCP call ever seen)
+ */
+function McpConnectionBadge() {
+  const [lastMcp, setLastMcp] = useState<AuditEntry | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const entries = await activityApi.recent(50);
+        const mcp = entries.find((e) => !e.tool.startsWith("http:"));
+        if (!cancelled) setLastMcp(mcp ?? null);
+      } catch { /* server down — handled by the parent banner */ }
+    };
+    load();
+    const poll = setInterval(load, 3000);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { cancelled = true; clearInterval(poll); clearInterval(tick); };
+  }, []);
+
+  const ageMs = lastMcp ? now - Date.parse(lastMcp.ts) : Number.POSITIVE_INFINITY;
+  const state: "live" | "idle" | "never" = !lastMcp
+    ? "never"
+    : ageMs <= 60_000 ? "live" : "idle";
+
+  const color = state === "live"
+    ? "var(--nv-positive)"
+    : state === "idle" ? "var(--nv-accent)" : "var(--nv-text-dim)";
+  const pulse = state === "live";
+
+  let label: string;
+  if (state === "never") {
+    label = "Not connected yet — finish the setup below and restart Claude Desktop";
+  } else if (state === "live") {
+    const s = Math.max(0, Math.round(ageMs / 1000));
+    label = `Connected · last call ${s}s ago (${lastMcp!.tool})`;
+  } else {
+    const m = Math.round(ageMs / 60_000);
+    label = `Idle · last call ${m} min ago (${lastMcp!.tool})`;
+  }
+
+  return (
+    <div
+      className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
+      style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+    >
+      <span
+        className={`w-2 h-2 rounded-full ${pulse ? "animate-pulse" : ""}`}
+        style={{
+          backgroundColor: color,
+          boxShadow: pulse ? `0 0 6px ${color}` : undefined,
+        }}
+      />
+      <span className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/**
  * MCP setup card — shows the user how to wire NeuroVault into Claude
  * Desktop / Cursor as an MCP server. Auto-detects the sidecar path and
  * the OS-specific Claude config location. The JSON block is kept
@@ -301,6 +373,7 @@ function McpSection() {
 
   return (
     <Section title="Connect Claude Desktop (MCP)">
+      <McpConnectionBadge />
       {!sidecarPath ? (
         <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
           Sidecar binary not found next to the app. Rebuild and reinstall NeuroVault, then reopen this dialog.
