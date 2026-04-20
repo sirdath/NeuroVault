@@ -9,7 +9,7 @@ Windows/macOS/Linux executable and bundled into the Tauri installer as a
 
 The sidecar binary is **not checked into git** — it's ~275 MB on Windows
 because of torch + sentence-transformers. See
-[`server/engram_server.spec`](../server/engram_server.spec) for the
+[`server/neurovault_server.spec`](../server/neurovault_server.spec) for the
 PyInstaller build config.
 
 ## Build locally (Windows)
@@ -17,7 +17,7 @@ PyInstaller build config.
 ```powershell
 cd server
 uv sync --extra dev          # installs PyInstaller into .venv
-.venv\Scripts\python.exe -m PyInstaller engram_server.spec --clean --noconfirm
+.venv\Scripts\python.exe -m PyInstaller neurovault_server.spec --clean --noconfirm
 ```
 
 The resulting single-file exe lands at `server/dist/neurovault-server.exe`.
