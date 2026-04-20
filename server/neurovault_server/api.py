@@ -6,11 +6,25 @@ Exposes vault data, brain management, indexing status, and graph data.
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 from loguru import logger
+
+
+def api_error(status_code: int, message: str, **extra) -> HTTPException:
+    """Helper for endpoints that want a proper HTTP status + the
+    historical ``{"error": "..."}`` body shape the Tauri frontend reads.
+
+    ``raise api_error(404, "brain not found")`` → HTTP 404 with body
+    ``{"error": "brain not found"}``. Extra kwargs flow into the body
+    alongside the error field (e.g. ``filename="foo.md"`` for compat
+    with earlier soft-error endpoints).
+    """
+    detail = {"error": message, **extra} if extra else {"error": message}
+    return HTTPException(status_code=status_code, detail=detail)
 
 from neurovault_server.config import SERVER_PORT
 
@@ -34,6 +48,21 @@ def create_api(manager) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(HTTPException)
+    async def _reshape_http_exception(request: Request, exc: HTTPException):
+        """Preserve the historical ``{"error": "..."}`` body shape the
+        Tauri frontend already parses, while returning the correct HTTP
+        status code. When ``detail`` is a plain string (FastAPI default)
+        we wrap it; when it's a dict from ``api_error(...)`` we pass it
+        through verbatim.
+        """
+        detail = exc.detail
+        if isinstance(detail, dict):
+            body = detail
+        else:
+            body = {"error": str(detail)}
+        return JSONResponse(status_code=exc.status_code, content=body)
 
     # --- Query audit middleware ------------------------------------------------
     # Logs every API request to the brain's audit.jsonl. Lightweight — fires
@@ -114,7 +143,7 @@ def create_api(manager) -> FastAPI:
         try:
             ctx = manager.create_brain(body.name, body.description, body.vault_path)
         except ValueError as e:
-            return {"error": str(e)}
+            raise api_error(400, str(e))
         return {
             "brain_id": ctx.brain_id,
             "name": ctx.name,
@@ -139,10 +168,10 @@ def create_api(manager) -> FastAPI:
         name = b.get("name")
         desc = b.get("description")
         if name is None and desc is None:
-            return {"error": "nothing to update"}
+            raise api_error(400, "nothing to update")
         ok = manager.update_brain(brain_id, name=name, description=desc)
         if not ok:
-            return {"error": "brain not found"}
+            raise api_error(404, "brain not found")
         return {"status": "updated", "brain_id": brain_id}
 
     @app.delete("/api/brains/{brain_id}")
@@ -150,7 +179,9 @@ def create_api(manager) -> FastAPI:
         success = manager.delete_brain(brain_id)
         if success:
             return {"status": "deleted"}
-        return {"status": "error", "message": "Cannot delete active brain"}
+        # delete_brain returns False for the single case: trying to
+        # remove the active brain. 409 (conflict) is the right code.
+        raise api_error(409, "Cannot delete active brain")
 
     @app.get("/api/brains/{brain_id}/ingest_status")
     def ingest_status(brain_id: str):
@@ -183,7 +214,7 @@ def create_api(manager) -> FastAPI:
         from neurovault_server.config import BRAINS_DIR
         brain_info = next((b for b in manager.list_brains() if b["id"] == brain_id), None)
         if brain_info is None:
-            return {"error": "brain not found"}
+            raise api_error(404, "brain not found")
 
         brain_root = BRAINS_DIR / brain_id
         vault_path_str = brain_info.get("vault_path")
@@ -293,7 +324,7 @@ def create_api(manager) -> FastAPI:
             first = first.lstrip("#").strip()
             title = first[:60] if first else "Untitled"
         if not content.strip():
-            return {"error": "content is required"}
+            raise api_error(400, "content is required")
 
         ctx = _ctx()
 
@@ -349,7 +380,7 @@ def create_api(manager) -> FastAPI:
             )
         except Exception as e:
             logger.warning("POST /api/notes ingest failed: {}", e)
-            return {"error": f"ingest failed: {e}", "filename": filename}
+            raise api_error(500, f"ingest failed: {e}", filename=filename)
 
         # ingest_file returns None when the file is unchanged — resolve
         # the real engram_id by filename in that case.
@@ -405,7 +436,7 @@ def create_api(manager) -> FastAPI:
             "SELECT id, filename, title FROM engrams WHERE id = ?", (engram_id,),
         ).fetchone()
         if not row:
-            return {"error": "not found"}
+            raise api_error(404, "not found")
         old_filename = row["filename"] if hasattr(row, "keys") else row[1]
         old_title = row["title"] if hasattr(row, "keys") else row[2]
 
@@ -417,7 +448,7 @@ def create_api(manager) -> FastAPI:
             # Normalize to posix, strip leading slashes, reject traversal.
             candidate = new_filename_raw.replace("\\", "/").lstrip("/")
             if ".." in candidate.split("/"):
-                return {"error": "'..' not allowed in filename"}
+                raise api_error(400, "'..' not allowed in filename")
             if not candidate.endswith(".md"):
                 candidate = candidate + ".md"
             new_filename = candidate
@@ -428,9 +459,9 @@ def create_api(manager) -> FastAPI:
             src = ctx.vault_dir / old_filename
             dst = ctx.vault_dir / new_filename
             if not src.exists():
-                return {"error": f"source file missing: {old_filename}"}
+                raise api_error(404, f"source file missing: {old_filename}")
             if dst.exists():
-                return {"error": f"destination exists: {new_filename}"}
+                raise api_error(409, f"destination exists: {new_filename}")
             dst.parent.mkdir(parents=True, exist_ok=True)
             src.rename(dst)
 
@@ -480,7 +511,7 @@ def create_api(manager) -> FastAPI:
         db = _db()
         engram = db.get_engram(engram_id)
         if not engram:
-            return {"error": "not found"}
+            raise api_error(404, "not found")
 
         links = db.conn.execute(
             """SELECT e.id, e.title, l.similarity, l.link_type
@@ -885,17 +916,18 @@ def create_api(manager) -> FastAPI:
         from neurovault_server.compiler import compile_topic
         topic = (body or {}).get("topic", "").strip()
         if not topic:
-            return {"error": "missing 'topic' in body"}
+            raise api_error(400, "missing 'topic' in body")
         model = (body or {}).get("model")
         dry_run = bool((body or {}).get("dry_run", False))
         try:
             result = compile_topic(_ctx(), topic, model=model, dry_run=dry_run)
         except ValueError as e:
-            # no sources / topic not found — soft error, 200 with error body
-            return {"error": str(e), "topic": topic}
+            # no sources / topic not found — 404 with the same shape
+            # the frontend was already parsing
+            raise api_error(404, str(e), topic=topic)
         except RuntimeError as e:
-            # LLM config problem or unparseable response — loud error
-            return {"error": str(e), "topic": topic, "fatal": True}
+            # LLM config problem or unparseable response — 500
+            raise api_error(500, str(e), topic=topic, fatal=True)
 
         payload: dict = {
             "id": result.id,
@@ -932,11 +964,11 @@ def create_api(manager) -> FastAPI:
         )
         topic = (body or {}).get("topic", "").strip()
         if not topic:
-            return {"error": "missing 'topic' in body"}
+            raise api_error(400, "missing 'topic' in body")
         ctx = _ctx()
         sources = _gather_sources(ctx.db, topic)
         if not sources:
-            return {"error": f"no raw sources found for topic {topic!r}", "topic": topic}
+            raise api_error(404, f"no raw sources found for topic {topic!r}", topic=topic)
         existing = _fetch_existing_wiki(ctx.db, topic)
         contradictions = _fetch_contradictions_for_sources(ctx.db, [s["id"] for s in sources])
         schema_text = ""
@@ -980,7 +1012,7 @@ def create_api(manager) -> FastAPI:
         topic = (b.get("topic") or "").strip()
         wiki_markdown = (b.get("wiki_markdown") or "").strip()
         if not topic or not wiki_markdown:
-            return {"error": "topic and wiki_markdown are required"}
+            raise api_error(400, "topic and wiki_markdown are required")
         changelog = b.get("changelog") or []
 
         ctx = _ctx()
@@ -1032,7 +1064,7 @@ def create_api(manager) -> FastAPI:
         from neurovault_server.server import execute_js as _ej
         code = (body.get("code") or "").strip()
         if not code:
-            return {"error": "code is required"}
+            raise api_error(400, "code is required")
         timeout_ms = int(body.get("timeout_ms") or 15000)
         return _ej(code=code, timeout_ms=timeout_ms)
 
@@ -1052,7 +1084,7 @@ def create_api(manager) -> FastAPI:
         _cm.ensure_defaults(ctx.db)
         block = _cm.read_block(ctx.db, label)
         if not block:
-            return {"error": "not_found", "label": label}
+            raise api_error(404, "not_found", label=label)
         return block
 
     @app.put("/api/core_memory/{label}")
@@ -1062,7 +1094,7 @@ def create_api(manager) -> FastAPI:
         ctx = _ctx()
         value = body.get("value", "")
         if not isinstance(value, str):
-            return {"error": "value must be a string"}
+            raise api_error(400, "value must be a string")
         return _cm.set_block(ctx.db, label, value)
 
     @app.post("/api/core_memory/{label}/append")
@@ -1073,7 +1105,7 @@ def create_api(manager) -> FastAPI:
         text = body.get("text", "")
         sep = body.get("separator") or "\n"
         if not isinstance(text, str) or not text:
-            return {"error": "text is required"}
+            raise api_error(400, "text is required")
         return _cm.append_block(ctx.db, label, text, separator=sep)
 
     @app.post("/api/core_memory/{label}/replace")
@@ -1084,10 +1116,10 @@ def create_api(manager) -> FastAPI:
         old = body.get("old", "")
         new = body.get("new", "")
         if not old:
-            return {"error": "old is required"}
+            raise api_error(400, "old is required")
         result = _cm.replace_block(ctx.db, label, old, new)
         if result is None:
-            return {"error": "not_found_or_no_match", "label": label}
+            raise api_error(404, "not_found_or_no_match", label=label)
         return result
 
     @app.delete("/api/core_memory/{label}")
@@ -1105,7 +1137,7 @@ def create_api(manager) -> FastAPI:
         from neurovault_server.server import check_duplicate as _cd
         content = (body.get("content") or "").strip()
         if not content:
-            return {"error": "content is required"}
+            raise api_error(400, "content is required")
         threshold = float(body.get("threshold") or 0.85)
         limit = int(body.get("limit") or 5)
         return _cd(content=content, threshold=threshold, limit=limit)
@@ -1149,7 +1181,7 @@ def create_api(manager) -> FastAPI:
         brain_dir = ctx.vault_dir.parent
         task = (body.get("task") or "").strip()
         if not task:
-            return {"error": "task is required"}
+            raise api_error(400, "task is required")
         return _todos.add_todo(
             brain_dir, task,
             context=(body.get("context") or ""),
@@ -1168,7 +1200,7 @@ def create_api(manager) -> FastAPI:
         brain_dir = ctx.vault_dir.parent
         agent_id = (body.get("agent_id") or "").strip()
         if not agent_id:
-            return {"error": "agent_id is required"}
+            raise api_error(400, "agent_id is required")
         _ = todo_id  # claim is FIFO by agent match; explicit id-claim would need a new helper
         result = _todos.claim_todo(brain_dir, agent_id)
         if result is None:
@@ -1203,7 +1235,7 @@ def create_api(manager) -> FastAPI:
                 (since, max(1, min(limit, 500))),
             ).fetchall()
         except Exception as e:
-            return {"error": f"query failed: {e}"}
+            raise api_error(500, f"query failed: {e}")
         return {
             "since": since,
             "count": len(rows),
@@ -1365,7 +1397,7 @@ def create_api(manager) -> FastAPI:
         ctx = _ctx()
         path = Path(body["path"]).expanduser().resolve()
         if not path.exists():
-            return {"error": f"File not found: {path}"}
+            raise api_error(404, f"File not found: {path}")
         result = ingest_code_file(path, ctx.vault_dir, ctx.db, manager.embedder, ctx.bm25)
         return result or {"error": "Could not ingest"}
 
@@ -1477,7 +1509,7 @@ def create_api(manager) -> FastAPI:
         )
         text = (body.get("text") or "").strip()
         if not text:
-            return {"error": "text is required"}
+            raise api_error(400, "text is required")
         ctx = _ctx()
         if body.get("save"):
             created = promote_insights_from_text(ctx, text)
@@ -1507,7 +1539,7 @@ def create_api(manager) -> FastAPI:
         ctx = _ctx()
         session = (body.get("session_id") or "").strip()
         if not session:
-            return {"error": "session_id is required"}
+            raise api_error(400, "session_id is required")
         short = session[:8] if len(session) > 8 else session
         return rollup_session(ctx, short)
 
