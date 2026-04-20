@@ -25,7 +25,8 @@ const IS_TAURI =
   typeof window !== "undefined" &&
   (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
 
-const HTTP_BASE = "http://127.0.0.1:8765";
+import { API_HOST } from "./config";
+const HTTP_BASE = API_HOST;
 
 // --- HTTP fallback helpers (browser-only) --------------------------------
 

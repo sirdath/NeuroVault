@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { activityApi, type AuditEntry } from "../lib/api";
+import { API_HOST, API_DISPLAY } from "../lib/config";
 
 const FONT_SIZES = [
   { label: "Small", value: "small" as const },
@@ -8,7 +9,7 @@ const FONT_SIZES = [
   { label: "Large", value: "large" as const },
 ];
 
-const SERVER_URL = "http://127.0.0.1:8765";
+const SERVER_URL = API_HOST;
 
 function useServerStatus() {
   const [online, setOnline] = useState(false);
@@ -209,7 +210,7 @@ export function SettingsView() {
           )}
 
           <SettingRow label="Address" description="Python backend address">
-            <span className="text-[13px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>127.0.0.1:8765</span>
+            <span className="text-[13px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>{API_DISPLAY}</span>
           </SettingRow>
           <SettingRow label="Data" description="Notes and database location">
             <span className="text-[12px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>~/.neurovault/</span>

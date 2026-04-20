@@ -17,7 +17,8 @@ export interface IngestProgress {
   current_file: string;
 }
 
-const API = "http://127.0.0.1:8765";
+import { API_HOST } from "../lib/config";
+const API = API_HOST;
 
 interface BrainStore {
   brains: BrainInfo[];

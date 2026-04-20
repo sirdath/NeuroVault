@@ -3,6 +3,7 @@ import { useCompilationStore } from "../stores/compilationStore";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { toast } from "../stores/toastStore";
 import type { CompilationChangelogEntry } from "../lib/api";
+import { API_HOST, API_DISPLAY } from "../lib/config";
 
 // Theme-aware Tailwind fragments. Uses arbitrary-property syntax so
 // switching the active theme (Midnight / Claude / Rosé Pine / …) flows
@@ -261,7 +262,7 @@ export function CompilationReview() {
                 Can't reach the server
               </div>
               <div className={`text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif] mb-3 leading-relaxed`}>
-                The Python backend on <span className="font-mono">127.0.0.1:8765</span> isn't
+                The Python backend on <span className="font-mono">{API_DISPLAY}</span> isn't
                 answering. Compilations are stored in the brain DB so this view
                 needs it running.
               </div>
@@ -510,7 +511,7 @@ export function CompilationReview() {
 
 // --- Agent-driven compile panel ------------------------------------------
 
-const API = "http://127.0.0.1:8765";
+const API = API_HOST;
 
 interface PreparedPack {
   topic: string;

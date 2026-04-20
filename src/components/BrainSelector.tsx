@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useBrainStore } from "../stores/brainStore";
+import { API_HOST } from "../lib/config";
 
-const API = "http://127.0.0.1:8765";
+const API = API_HOST;
 
 interface BrainStats { note_count: number; total_bytes: number }
 

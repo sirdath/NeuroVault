@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import * as tauri from "../lib/tauri";
 import type { NoteMeta } from "../lib/tauri";
+import { API_HOST } from "../lib/config";
 import { toast } from "./toastStore";
 
 interface NoteStore {
@@ -118,7 +119,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
     // We need the engram_id. Ask the server (the notes array only has
     // filename/title/modified/size from Rust; id lives in the DB).
     try {
-      const listRes = await fetch(`http://127.0.0.1:8765/api/notes`);
+      const listRes = await fetch(`${API_HOST}/api/notes`);
       if (!listRes.ok) throw new Error(`list failed: ${listRes.status}`);
       const all = (await listRes.json()) as Array<{ id: string; filename: string }>;
       const hit = all.find((n) => n.filename === filename);
@@ -128,7 +129,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       }
       const patch: Record<string, string> = { filename: newFilename };
       if (newTitle) patch.title = newTitle;
-      const r = await fetch(`http://127.0.0.1:8765/api/notes/${hit.id}`, {
+      const r = await fetch(`${API_HOST}/api/notes/${hit.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -168,7 +169,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
     (async () => {
       try {
         const r = await fetch(
-          `http://127.0.0.1:8765/api/recall?q=${encodeURIComponent(q)}&mode=titles&limit=50`,
+          `${API_HOST}/api/recall?q=${encodeURIComponent(q)}&mode=titles&limit=50`,
         );
         if (!r.ok) return;
         const hits = (await r.json()) as Array<{ engram_id: string; filename: string }>;

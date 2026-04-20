@@ -1,6 +1,8 @@
-/** HTTP client for the Python MCP server (localhost:8765) */
+/** HTTP client for the Python MCP server. Base URL comes from lib/config. */
 
-const BASE = "http://127.0.0.1:8765";
+import { API_HOST } from "./config";
+
+const BASE = API_HOST;
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
