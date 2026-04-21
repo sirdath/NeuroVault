@@ -88,6 +88,39 @@
     reveals.forEach((el) => el.classList.add("is-in"));
   }
 
+  // ----- Theme toggle ------------------------------------------------------
+  // Two themes: "peach" (default, Claude brand) and "blue" (app-icon palette).
+  // Persisted to localStorage so the choice survives reloads.
+  const THEME_KEY = "nv.theme";
+  const root = document.documentElement;
+
+  function applyTheme(theme) {
+    if (theme === "blue") {
+      root.setAttribute("data-theme", "blue");
+    } else {
+      root.removeAttribute("data-theme");
+    }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "blue" ? "#0a1628" : "#0b0b12");
+  }
+
+  // Apply stored preference ASAP (before paint) via the early block at the
+  // top of index.html; this runs once more to sync any UI state.
+  const stored = (() => {
+    try { return localStorage.getItem(THEME_KEY); } catch { return null; }
+  })();
+  applyTheme(stored === "blue" ? "blue" : "peach");
+
+  const toggle = document.getElementById("theme-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      const current = root.getAttribute("data-theme") === "blue" ? "blue" : "peach";
+      const next = current === "blue" ? "peach" : "blue";
+      applyTheme(next);
+      try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore quota */ }
+    });
+  }
+
   // ----- Scroll progress bar ----------------------------------------------
   const bar = document.querySelector(".scroll-progress");
   if (bar) {

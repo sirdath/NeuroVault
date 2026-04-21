@@ -33,6 +33,28 @@
   --sans: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
 }
 
+/* ============================================================
+   Blue theme — matches the app icon (navy bg + cyan accents)
+   Toggle via [data-theme="blue"] on <html>. Keeps the existing
+   --peach variable names so no component CSS has to change;
+   only the color values swap under the hood.
+   ============================================================ */
+[data-theme="blue"] {
+  --bg:           #0a1628;
+  --bg-deep:      #060e1b;
+  --surface:      #0f1d35;
+  --surface-2:    #132544;
+  --border:       rgba(168, 229, 240, 0.12);
+  --border-hot:   rgba(77, 212, 232, 0.45);
+  --text:         #f0f7fa;
+  --text-muted:   #a2b5c8;
+  --text-dim:     #5d7490;
+
+  --peach:        #4dd4e8;   /* bright cyan, matches neural-network nodes */
+  --peach-soft:   #a8e5f0;   /* pale cyan for highlights */
+  --peach-glow:   rgba(77, 212, 232, 0.38);
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 html { scroll-behavior: smooth; }
@@ -87,23 +109,76 @@ code { font-family: var(--mono); font-size: 0.9em;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 14px clamp(16px, 3vw, 40px);
   backdrop-filter: blur(12px) saturate(160%);
   -webkit-backdrop-filter: blur(12px) saturate(160%);
   background: rgba(11, 11, 18, 0.55);
   border-bottom: 1px solid var(--border);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+[data-theme="blue"] .nav {
+  background: rgba(10, 22, 40, 0.62);
 }
 .nav-logo {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-family: var(--mono);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+.nav-logo-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  box-shadow: 0 4px 14px -4px var(--peach-glow);
+  display: block;
+  flex-shrink: 0;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.nav-logo:hover .nav-logo-icon {
+  transform: scale(1.05);
+  box-shadow: 0 6px 18px -4px var(--peach-glow);
+}
 .nav-logo-mark {
   color: var(--peach);
   font-size: 1.2em;
+}
+
+/* ───── Theme toggle ───── */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.theme-toggle:hover {
+  border-color: var(--border-hot);
+  color: var(--peach);
+  background: rgba(255, 255, 255, 0.02);
+}
+.theme-icon {
+  width: 18px;
+  height: 18px;
+}
+/* Show sun in blue mode (click → switch to peach), moon in peach mode */
+.theme-icon-sun { display: none; }
+.theme-icon-moon { display: block; }
+[data-theme="blue"] .theme-icon-sun { display: block; }
+[data-theme="blue"] .theme-icon-moon { display: none; }
+@media (max-width: 720px) {
+  .theme-toggle { width: 32px; height: 32px; }
+  .theme-icon { width: 16px; height: 16px; }
 }
 .nav-links {
   display: flex;

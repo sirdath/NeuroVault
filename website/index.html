@@ -19,6 +19,17 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./styles.css" />
+
+<!-- Apply stored theme before paint (prevents peach → blue flash on reload) -->
+<script>
+  try {
+    if (localStorage.getItem("nv.theme") === "blue") {
+      document.documentElement.setAttribute("data-theme", "blue");
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute("content", "#0a1628");
+    }
+  } catch (e) {}
+</script>
 </head>
 
 <body>
@@ -37,7 +48,7 @@
 <!-- Nav -->
 <header class="nav">
   <a href="#top" class="nav-logo" aria-label="NeuroVault home">
-    <span class="nav-logo-mark">▮</span>
+    <img src="./assets/app-icon.png" srcset="./assets/app-icon.png 1x, ./assets/app-icon@2x.png 2x" alt="" class="nav-logo-icon" width="32" height="32" />
     <span class="nav-logo-text">NeuroVault</span>
   </a>
   <nav class="nav-links">
@@ -46,6 +57,16 @@
     <a href="#privacy">Privacy</a>
     <a href="https://github.com/daththeanalyst/NeuroVault" target="_blank" rel="noopener">GitHub ↗</a>
   </nav>
+  <button
+    id="theme-toggle"
+    class="theme-toggle"
+    type="button"
+    aria-label="Switch color theme"
+    title="Switch color theme"
+  >
+    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
   <a href="#download" class="nav-cta">Download</a>
 </header>
 
@@ -64,7 +85,20 @@
       <span>v0.1.0 · Windows build live · macOS soon</span>
     </div>
 
-    <img src="./assets/logo.svg" alt="NeuroVault" class="hero-logo" />
+    <svg class="hero-logo" viewBox="0 0 1020 190" role="img" aria-label="NeuroVault">
+      <style>
+        .hero-logo .t   { font-family: "JetBrains Mono","Fira Code","SF Mono","Menlo","Consolas",ui-monospace,monospace; font-size: 20px; font-weight: 700; fill: var(--peach); white-space: pre; }
+        .hero-logo .tag { font-family: "JetBrains Mono","Fira Code","SF Mono","Menlo","Consolas",ui-monospace,monospace; font-size: 14px; fill: var(--peach-soft); letter-spacing: 0.08em; }
+      </style>
+      <g transform="translate(24, 32)">
+        <text class="t" x="0" y="0"   xml:space="preserve">███    ██ ███████ ██    ██ ██████   ██████  ██    ██  █████  ██    ██ ██    ████████</text>
+        <text class="t" x="0" y="26"  xml:space="preserve">████   ██ ██      ██    ██ ██   ██ ██    ██ ██    ██ ██   ██ ██    ██ ██       ██</text>
+        <text class="t" x="0" y="52"  xml:space="preserve">██ ██  ██ █████   ██    ██ ██████  ██    ██ ██    ██ ███████ ██    ██ ██       ██</text>
+        <text class="t" x="0" y="78"  xml:space="preserve">██  ██ ██ ██      ██    ██ ██   ██ ██    ██  ██  ██  ██   ██ ██    ██ ██       ██</text>
+        <text class="t" x="0" y="104" xml:space="preserve">██   ████ ███████  ██████  ██   ██  ██████    ████   ██   ██  ██████  ███████  ██</text>
+      </g>
+      <text class="tag" x="510" y="165" text-anchor="middle">local-first AI memory  ✻</text>
+    </svg>
 
     <p class="hero-tagline">
       Claude forgets you after every conversation.
