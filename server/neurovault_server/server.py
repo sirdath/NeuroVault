@@ -2830,12 +2830,31 @@ def main() -> None:
         # server as an MCP subprocess. Skipping start_api_server avoids
         # an EADDRINUSE clash with the Tauri app's own sidecar on 8765
         # and keeps boot clean for the stdio JSON-RPC handshake.
-        # (Note: _warm_embedder ran above takes 2-3s but the first
-        #  tool call would trigger Embedder.get() lazily anyway; the
-        #  warmup just shifts cost to startup. Claude Code's health
-        #  check times out if we stall here, so in MCP-only mode the
-        #  embedder is lazy-initialised on first recall.)
         logger.info("Running in MCP-only mode (stdio, no HTTP)")
+
+        # Background warmup: the first tool call would otherwise pay
+        # for BrainManager materialisation (sqlite-vec load + vault
+        # fingerprint + possible reingest, 5-10s) and embedder load
+        # (~2-3s). Kicking this off before mcp.run blocks means the
+        # warmup runs while the user is reading the session welcome
+        # message; by the time they fire a recall, the stack is warm.
+        # If they call recall before warmup finishes, it just waits on
+        # the same singletons — no correctness issue.
+        import threading as _thr
+        def _warmup():
+            try:
+                logger.info("MCP warmup: materialising BrainManager")
+                active = manager.get_active()
+                logger.info("MCP warmup: brain active = {}", active.brain_id)
+                from neurovault_server.audit import init_audit_log
+                init_audit_log(active.vault_dir.parent)
+                logger.info("MCP warmup: loading embedder")
+                _warm_embedder()
+                logger.info("MCP warmup complete — first tool call will be fast")
+            except Exception as e:
+                logger.warning("MCP warmup failed (tools still work, just cold): {}", e)
+        _thr.Thread(target=_warmup, daemon=True, name="nv-mcp-warmup").start()
+
         mcp.run(transport="stdio")
     else:
         start_api_server(manager)
