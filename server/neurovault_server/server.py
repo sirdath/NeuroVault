@@ -2754,7 +2754,12 @@ def main() -> None:
     from neurovault_server.audit import init_audit_log
     init_audit_log(active.vault_dir.parent)
 
-    _warm_embedder()
+    # Skip embedder warmup in MCP-only mode — Claude Code's health
+    # check has a short window and waiting for fastembed to load
+    # 384-dim BGE ONNX weights makes the handshake time out. The
+    # Embedder singleton loads lazily on first recall anyway.
+    if "--mcp-only" not in sys.argv:
+        _warm_embedder()
 
     # Emit the JS SDK so execute_js() has something to import. Idempotent —
     # safe to run every boot; the file is overwritten with the current
@@ -2775,6 +2780,18 @@ def main() -> None:
         logger.info("Running in HTTP-only mode on port {}", SERVER_PORT)
         app = create_api(manager)
         uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT, log_level="info")
+    elif "--mcp-only" in sys.argv:
+        # Pure MCP stdio — used when Claude Code / Cursor spawns the
+        # server as an MCP subprocess. Skipping start_api_server avoids
+        # an EADDRINUSE clash with the Tauri app's own sidecar on 8765
+        # and keeps boot clean for the stdio JSON-RPC handshake.
+        # (Note: _warm_embedder ran above takes 2-3s but the first
+        #  tool call would trigger Embedder.get() lazily anyway; the
+        #  warmup just shifts cost to startup. Claude Code's health
+        #  check times out if we stall here, so in MCP-only mode the
+        #  embedder is lazy-initialised on first recall.)
+        logger.info("Running in MCP-only mode (stdio, no HTTP)")
+        mcp.run(transport="stdio")
     else:
         start_api_server(manager)
         mcp.run(transport="stdio")

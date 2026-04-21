@@ -218,6 +218,7 @@ export function SettingsView() {
         </Section>
 
         <McpSection />
+        <ClaudeCodeMcpSection />
 
         {/* Shortcuts */}
         <Section title="Keyboard Shortcuts">
@@ -439,6 +440,129 @@ function McpSection() {
     </Section>
   );
 }
+
+/**
+ * MCP setup for Claude Code — the terminal CLI, not Claude Desktop.
+ * Claude Code stores user-scope MCP servers in ~/.claude.json (not
+ * ~/.claude/settings.json) and the canonical registration path is
+ * ``claude mcp add --scope user <name> <cmd> -- <args...>``. The UI
+ * shows both the one-line CLI command (to copy into a terminal) and
+ * the raw JSON snippet (for users who prefer to edit the file).
+ *
+ * The server is invoked in --mcp-only mode (no HTTP) so it doesn't
+ * race the Tauri sidecar for port 8765 and so the stdio handshake
+ * lands fast without waiting for embedder warmup.
+ */
+function ClaudeCodeMcpSection() {
+  const [sidecarPath, setSidecarPath] = useState<string>("");
+  const [copiedCli, setCopiedCli] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const s = await invoke<string>("mcp_sidecar_path");
+        setSidecarPath(s || "");
+      } catch {
+        /* web fallback */
+      }
+    })();
+  }, []);
+
+  const cliCommand = sidecarPath
+    ? `claude mcp add --scope user neurovault "${sidecarPath}" -- --mcp-only`
+    : "";
+
+  const jsonSnippet = sidecarPath
+    ? JSON.stringify(
+        {
+          mcpServers: {
+            neurovault: {
+              type: "stdio",
+              command: sidecarPath,
+              args: ["--mcp-only"],
+            },
+          },
+        },
+        null,
+        2,
+      )
+    : "";
+
+  const copy = async (text: string, setFlag: (v: boolean) => void) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setFlag(true);
+      setTimeout(() => setFlag(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <Section title="Connect Claude Code (MCP)">
+      {!sidecarPath ? (
+        <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+          Sidecar binary not found next to the app. Rebuild and reinstall NeuroVault.
+        </p>
+      ) : (
+        <>
+          <div>
+            <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
+              Run the one-line command below so Claude Code (the terminal CLI) can call <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault in every project you open.
+            </p>
+            <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+              Requires the <span className="font-mono">claude</span> CLI on your <span className="font-mono">PATH</span>. The registration lives in <span className="font-mono">~/.claude.json</span>. Restart your Claude Code session after registering.
+            </p>
+          </div>
+
+          <div className="relative">
+            <pre
+              className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
+              style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+            >{cliCommand}</pre>
+            <button
+              onClick={() => copy(cliCommand, setCopiedCli)}
+              className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
+              style={{
+                background: copiedCli ? "var(--nv-positive)" : "var(--nv-surface)",
+                color: copiedCli ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                border: "1px solid var(--nv-border)",
+              }}
+            >
+              {copiedCli ? "Copied" : "Copy command"}
+            </button>
+          </div>
+
+          <details className="group">
+            <summary className="text-[11px] font-[Geist,sans-serif] cursor-pointer select-none" style={{ color: "var(--nv-text-dim)" }}>
+              Prefer to edit <span className="font-mono">~/.claude.json</span> by hand? Show the raw JSON snippet →
+            </summary>
+            <div className="relative mt-2">
+              <pre
+                className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
+                style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+              >{jsonSnippet}</pre>
+              <button
+                onClick={() => copy(jsonSnippet, setCopiedJson)}
+                className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
+                style={{
+                  background: copiedJson ? "var(--nv-positive)" : "var(--nv-surface)",
+                  color: copiedJson ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                  border: "1px solid var(--nv-border)",
+                }}
+              >
+                {copiedJson ? "Copied" : "Copy JSON"}
+              </button>
+            </div>
+          </details>
+        </>
+      )}
+    </Section>
+  );
+}
+
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
