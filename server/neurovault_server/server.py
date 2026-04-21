@@ -40,7 +40,43 @@ mcp = FastMCP(
     ),
 )
 
-manager = BrainManager()
+class _LazyBrainManager:
+    """Transparent lazy proxy around BrainManager.
+
+    Why this exists: BrainManager() triggers sqlite-vec load + migration
+    + vault fingerprint scan + (if fingerprint changed) full reingest +
+    decay/consolidation schedulers + file watcher — easily 5-10s on a
+    warm brain, 20s+ on a cold one. When Claude Code spawns us as an
+    MCP subprocess, its stdio handshake has a hard timeout well below
+    that, so the tool server appears ``Failed to connect`` even though
+    everything works.
+
+    In ``--mcp-only`` mode we swap BrainManager for this proxy and
+    defer the real init until the first attribute access — which
+    only happens inside an actual tool handler, long after the MCP
+    handshake has completed. Every other caller sees the same object
+    shape via __getattr__.
+    """
+    def __init__(self) -> None:
+        self._real: BrainManager | None = None
+
+    def _materialize(self) -> BrainManager:
+        if self._real is None:
+            logger.info("BrainManager: lazy-initialising on first use")
+            self._real = BrainManager()
+        return self._real
+
+    def __getattr__(self, name: str):
+        # Python only calls __getattr__ when normal lookup fails, so
+        # _real / _materialize stay local and don't recurse.
+        return getattr(self._materialize(), name)
+
+
+import sys as _sys
+if "--mcp-only" in _sys.argv:
+    manager = _LazyBrainManager()  # type: ignore[assignment]
+else:
+    manager = BrainManager()
 
 
 # --- Tiered tool registration ----------------------------------------------
@@ -2745,31 +2781,40 @@ def _warm_embedder() -> None:
 def main() -> None:
     import sys
 
-    active = manager.get_active()
-    logger.info("Starting NeuroVault MCP server")
-    logger.info("Active brain: {} ({})", active.name, active.brain_id)
-    logger.info("Vault: {}", active.vault_dir)
+    mcp_only = "--mcp-only" in sys.argv
 
-    # Init query audit log for the active brain
-    from neurovault_server.audit import init_audit_log
-    init_audit_log(active.vault_dir.parent)
+    if not mcp_only:
+        # Eager boot — safe because HTTP-mode and Claude Desktop use a
+        # long-lived session and don't impose a hard handshake deadline.
+        active = manager.get_active()
+        logger.info("Starting NeuroVault MCP server")
+        logger.info("Active brain: {} ({})", active.name, active.brain_id)
+        logger.info("Vault: {}", active.vault_dir)
 
-    # Skip embedder warmup in MCP-only mode — Claude Code's health
-    # check has a short window and waiting for fastembed to load
-    # 384-dim BGE ONNX weights makes the handshake time out. The
-    # Embedder singleton loads lazily on first recall anyway.
-    if "--mcp-only" not in sys.argv:
+        from neurovault_server.audit import init_audit_log
+        init_audit_log(active.vault_dir.parent)
+
         _warm_embedder()
+    else:
+        # MCP-only mode: let mcp.run() come up immediately so Claude
+        # Code's stdio handshake lands. BrainManager stays unmaterialised
+        # until the first tool invocation via _LazyBrainManager. Audit
+        # log init happens there too (ctx.vault_dir is only known after
+        # the brain loads).
+        logger.info("Starting NeuroVault MCP server (lazy init — --mcp-only)")
 
-    # Emit the JS SDK so execute_js() has something to import. Idempotent —
-    # safe to run every boot; the file is overwritten with the current
-    # canonical shape.
-    try:
+    # Emit the JS SDK so execute_js() has something to import. Skipped
+    # in --mcp-only because it's only used by the execute_js tool, and
+    # we can write it lazily on first use. The file I/O itself is fast
+    # but the import cost of js_sdk pulls in more machinery than we
+    # want during the MCP handshake window.
+    if not mcp_only:
+      try:
         from neurovault_server.js_sdk import write_sdk
         from neurovault_server.config import NEUROVAULT_HOME
         sdk = write_sdk(NEUROVAULT_HOME)
         logger.info("JS SDK emitted at {}", sdk)
-    except Exception as e:
+      except Exception as e:
         logger.debug("JS SDK emission skipped: {}", e)
 
     if "--http-only" in sys.argv:

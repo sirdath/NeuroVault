@@ -349,10 +349,12 @@ def promote_insights_from_text(
             continue
 
         try:
-            # Async for the same reason capture_observation uses it —
-            # a burst of extracted insights shouldn't pin the CPU
-            # rebuilding BM25 once per insight.
-            engram_id = ingest_file(filepath, ctx.db, Embedder.get(), ctx.bm25, async_slow_phase=True)
+            # Keep this synchronous. The write-amp storm we're protecting
+            # against comes from observation hooks (10+/min during Claude
+            # Code sessions); insights promote at most a handful per
+            # prompt and tests depend on synchronous completion for the
+            # immediate-recall-after-upsert path.
+            engram_id = ingest_file(filepath, ctx.db, Embedder.get(), ctx.bm25)
         except Exception as e:
             logger.debug("insight ingest failed: {}", e)
             continue
