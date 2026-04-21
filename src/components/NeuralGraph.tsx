@@ -7,6 +7,12 @@ import { useBrainStore } from "../stores/brainStore";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
+// Minimal shape of the ForceGraph3D ref handle we actually touch. The real
+// type (ForceGraphMethods) exposes 20+ methods; we only need the composer
+// accessor, so we cast through a narrow slice to keep bloom wiring readable.
+type Composer = { addPass: (pass: unknown) => void; passes: unknown[] };
+type ForceGraph3DComposerAccess = { postProcessingComposer(): Composer };
+
 // react-force-graph ships heavy ThreeJS deps in its 3D variant. Lazy-load so
 // the 2D mode (which is the default) doesn't pull in the whole 3D bundle until
 // the user actually toggles into 3D view. Cuts initial bundle size ~600 KB.
@@ -83,6 +89,57 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       return v === "3d" ? "3d" : "2d";
     } catch { return "2d"; }
   });
+  // Ref to the 3D force-graph instance so we can attach an UnrealBloomPass
+  // once the Three.js renderer/composer is available. The ref is passed
+  // to ForceGraph3D as-is; we narrow at the use site.
+  const fg3dRef = useRef<unknown>(undefined);
+  const bloomAttachedRef = useRef(false);
+
+  // On toggle into 3D, lazy-import UnrealBloomPass and inject it into the
+  // composer. Kept separate from the 2D path so the bloom module (and its
+  // Three.js addons) only ship in the already-lazy 3D chunk.
+  useEffect(() => {
+    if (mode !== "3d") return;
+    let cancelled = false;
+    const tryAttach = async () => {
+      const fg = fg3dRef.current as ForceGraph3DComposerAccess | undefined;
+      if (!fg || bloomAttachedRef.current) return;
+      const composer = fg.postProcessingComposer?.();
+      if (!composer) return;
+      const [{ UnrealBloomPass }, { Vector2 }] = await Promise.all([
+        import("three/examples/jsm/postprocessing/UnrealBloomPass.js"),
+        import("three"),
+      ]);
+      if (cancelled) return;
+      // Tuned so "fresh" (amber) and "connected" (teal) nodes bleed light
+      // without drowning the rest of the scene. resolution scales with
+      // the container; strength/radius/threshold are the classic UE4
+      // bloom knobs (threshold 0.85 ≈ only bright colors bloom).
+      const pass = new UnrealBloomPass(
+        new Vector2(size.w, size.h),
+        0.9, // strength
+        0.6, // radius
+        0.1, // threshold (low so most bright colors contribute)
+      );
+      composer.addPass(pass);
+      bloomAttachedRef.current = true;
+    };
+    // The ref isn't populated synchronously when Suspense resolves, so
+    // retry a couple of times over the next few frames.
+    const id = window.setInterval(tryAttach, 200);
+    // Also try immediately in case it's ready already.
+    tryAttach();
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [mode, size.w, size.h]);
+
+  // Clearing the flag on mode-switch so bloom re-attaches if the user
+  // toggles 3D → 2D → 3D (the composer is a fresh instance each time).
+  useEffect(() => {
+    if (mode === "2d") bloomAttachedRef.current = false;
+  }, [mode]);
 
   const { nodes, edges, loadGraph, setSelected } = useGraphStore();
   const selectNote = useNoteStore((s) => s.selectNote);
@@ -348,6 +405,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           />
         ) : (
           <ForceGraph3D
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ref={fg3dRef as any}
             graphData={graphData}
             width={size.w}
             height={size.h}
