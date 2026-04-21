@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from "react";
 import { useGraphStore } from "../stores/graphStore";
 import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
@@ -7,14 +7,15 @@ import { useBrainStore } from "../stores/brainStore";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
-const REPULSION = 0.0004;
-const SPRING = 0.004;
-const TARGET_DIST = 0.15;
-const DAMPING = 0.85;
-const CENTER_GRAVITY = 0.005;
-const MIN_NODE_RADIUS = 6;
-const MAX_NODE_RADIUS = 20;
-const SIMULATION_ITERATIONS = 300; // pre-simulate this many ticks then freeze
+// react-force-graph ships heavy ThreeJS deps in its 3D variant. Lazy-load so
+// the 2D mode (which is the default) doesn't pull in the whole 3D bundle until
+// the user actually toggles into 3D view. Cuts initial bundle size ~600 KB.
+const ForceGraph2D = lazy(() =>
+  import("react-force-graph-2d").then((m) => ({ default: m.default }))
+);
+const ForceGraph3D = lazy(() =>
+  import("react-force-graph-3d").then((m) => ({ default: m.default }))
+);
 
 const STATE_COLORS: Record<string, string> = {
   fresh: "#f0a500",
@@ -24,228 +25,119 @@ const STATE_COLORS: Record<string, string> = {
   consolidated: "#1f1f2e",
 };
 
-/** Edge color by link_type. The typed-wikilink vocabulary gets distinct
- *  colors so the graph instantly communicates relationship semantics.
+const STATE_GLOW: Record<string, string> = {
+  fresh: "rgba(240, 165, 0, 0.22)",
+  active: "rgba(240, 165, 0, 0.22)",
+  connected: "rgba(0, 201, 177, 0.14)",
+};
+
+/** Edge color by link_type — typed-wikilink vocabulary mapped to a palette
+ *  so the graph communicates relationship semantics at a glance.
  *  Grouped by intent: structural (blue/purple), dependency (green/teal),
- *  conflict (red/orange), and the default semantic/manual fallbacks. */
+ *  conflict (red/orange), neutral fallback. */
 function edgeColor(linkType: string, alpha: number): string {
   switch (linkType) {
-    // Existing types
-    case "manual":      return `rgba(139, 124, 248, ${alpha})`;  // violet
-    case "entity":      return `rgba(0, 201, 177, ${alpha})`;    // teal
-    // Structural relationships
-    case "defines":     return `rgba(139, 124, 248, ${alpha})`;  // violet (same as manual)
-    case "part_of":     return `rgba(100, 140, 240, ${alpha})`;  // blue
-    case "extends":     return `rgba(120, 160, 255, ${alpha})`;  // light blue
-    // Dependencies + causal
-    case "depends_on":  return `rgba(0, 201, 177, ${alpha})`;    // teal
-    case "uses":        return `rgba(80, 220, 160, ${alpha})`;   // green
-    case "caused_by":   return `rgba(60, 200, 140, ${alpha})`;   // emerald
-    case "works_at":    return `rgba(40, 190, 180, ${alpha})`;   // cyan
-    // Conflict / supersession
-    case "contradicts": return `rgba(255, 100, 100, ${alpha})`;  // red
-    case "supersedes":  return `rgba(255, 165, 80, ${alpha})`;   // orange
-    // Neutral
-    case "mentions":    return `rgba(150, 150, 170, ${alpha})`;  // grey
-    // Fallback (semantic, unknown)
-    default:            return `rgba(122, 119, 154, ${alpha})`;  // muted purple
+    case "manual":      return `rgba(139, 124, 248, ${alpha})`;
+    case "entity":      return `rgba(0, 201, 177, ${alpha})`;
+    case "defines":     return `rgba(139, 124, 248, ${alpha})`;
+    case "part_of":     return `rgba(100, 140, 240, ${alpha})`;
+    case "extends":     return `rgba(120, 160, 255, ${alpha})`;
+    case "depends_on":  return `rgba(0, 201, 177, ${alpha})`;
+    case "uses":        return `rgba(80, 220, 160, ${alpha})`;
+    case "caused_by":   return `rgba(60, 200, 140, ${alpha})`;
+    case "works_at":    return `rgba(40, 190, 180, ${alpha})`;
+    case "contradicts": return `rgba(255, 100, 100, ${alpha})`;
+    case "supersedes":  return `rgba(255, 165, 80, ${alpha})`;
+    case "mentions":    return `rgba(150, 150, 170, ${alpha})`;
+    default:            return `rgba(122, 119, 154, ${alpha})`;
   }
 }
 
 function nodeRadius(accessCount: number): number {
-  return Math.min(MAX_NODE_RADIUS, MIN_NODE_RADIUS + Math.sqrt(accessCount) * 2);
+  // Same curve as the old hand-rolled sim so the perceived "size" stays
+  // consistent for existing users.
+  return Math.min(20, 6 + Math.sqrt(accessCount) * 2);
 }
 
-function tick(nodes: SimNode[], edges: GraphEdge[], nodeMap: Map<string, number>): void {
-  if (nodes.length === 0) return;
-
-  // Spatial grid for repulsion
-  const CELL = 0.12;
-  const grid = new Map<string, number[]>();
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i]!;
-    const key = `${Math.floor(n.x / CELL)},${Math.floor(n.y / CELL)}`;
-    if (!grid.has(key)) grid.set(key, []);
-    grid.get(key)!.push(i);
-  }
-
-  for (let i = 0; i < nodes.length; i++) {
-    const a = nodes[i]!;
-    const cx = Math.floor(a.x / CELL);
-    const cy = Math.floor(a.y / CELL);
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const neighbors = grid.get(`${cx + dx},${cy + dy}`);
-        if (!neighbors) continue;
-        for (const j of neighbors) {
-          if (j <= i) continue;
-          const b = nodes[j]!;
-          const ddx = a.x - b.x;
-          const ddy = a.y - b.y;
-          const dist = Math.sqrt(ddx * ddx + ddy * ddy) || 0.001;
-          const force = REPULSION / (dist * dist);
-          if (!a.pinned) { a.vx += ddx * force; a.vy += ddy * force; }
-          if (!b.pinned) { b.vx -= ddx * force; b.vy -= ddy * force; }
-        }
-      }
-    }
-  }
-
-  for (const edge of edges) {
-    const ai = nodeMap.get(edge.from);
-    const bi = nodeMap.get(edge.to);
-    if (ai === undefined || bi === undefined) continue;
-    const a = nodes[ai]!;
-    const b = nodes[bi]!;
-    const ddx = b.x - a.x;
-    const ddy = b.y - a.y;
-    const dist = Math.sqrt(ddx * ddx + ddy * ddy) || 0.001;
-    const force = (dist - edge.similarity * TARGET_DIST) * SPRING;
-    if (!a.pinned) { a.vx += ddx * force; a.vy += ddy * force; }
-    if (!b.pinned) { b.vx -= ddx * force; b.vy -= ddy * force; }
-  }
-
-  for (const n of nodes) {
-    if (n.pinned) continue;
-    n.x += n.vx;
-    n.y += n.vy;
-    n.vx *= DAMPING;
-    n.vy *= DAMPING;
-    n.x += (0.5 - n.x) * CENTER_GRAVITY;
-    n.y += (0.5 - n.y) * CENTER_GRAVITY;
-    n.x = Math.max(0.05, Math.min(0.95, n.x));
-    n.y = Math.max(0.05, Math.min(0.95, n.y));
-  }
-}
+type Mode = "2d" | "3d";
 
 interface HoverCard {
   node: SimNode;
-  x: number;
-  y: number;
+  screenX: number;
+  screenY: number;
   preview: string;
 }
 
 interface NeuralGraphProps {
-  /** Called when the user clicks "View note" on a hover card. Lets the
-   * parent switch back to the Editor view so the selected note becomes
-   * visible (the graph view has no editor of its own). */
+  /** Called after the user clicks "View note" so the parent can switch
+   * back to the Editor view. */
   onOpenNote?: () => void;
 }
 
 export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const nodesRef = useRef<SimNode[]>([]);
-  const edgesRef = useRef<GraphEdge[]>([]);
-  const nodeMapRef = useRef<Map<string, number>>(new Map());
-  const dragRef = useRef<{ id: string } | null>(null);
-  const sizeRef = useRef({ w: 800, h: 600 });
-  const settledRef = useRef(false);
-  const animRef = useRef<number>(0);
+  const [size, setSize] = useState({ w: 800, h: 600 });
+  const [mode, setMode] = useState<Mode>(() => {
+    try {
+      const v = localStorage.getItem("nv.graph.mode");
+      return v === "3d" ? "3d" : "2d";
+    } catch { return "2d"; }
+  });
 
+  const { nodes, edges, loadGraph, setSelected } = useGraphStore();
+  const selectNote = useNoteStore((s) => s.selectNote);
+  const allNotes = useNoteStore((s) => s.notes);
+
+  const activeBrainId = useBrainStore((s) => s.activeBrainId);
+  const notesList = useNoteStore((s) => s.notes);
+  useEffect(() => { loadGraph(); }, [loadGraph, activeBrainId, notesList]);
+
+  // Container resize → re-measure so ForceGraph fills the pane.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize({ w: Math.max(100, r.width), h: Math.max(100, r.height) });
+    };
+    measure();
+    const obs = new ResizeObserver(measure);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  // react-force-graph wants {nodes, links} with source/target keys. Our
+  // store uses edges with from/to. Remap once per change.
+  const graphData = useMemo(() => ({
+    nodes: nodes.map((n) => ({ ...n })),  // shallow clone so the sim can stamp x/y without polluting the store
+    links: edges.map((e: GraphEdge) => ({
+      source: e.from,
+      target: e.to,
+      similarity: e.similarity,
+      link_type: e.link_type,
+    })),
+  }), [nodes, edges]);
+
+  // Track hover node and its screen position (set from onNodeHover).
   const [hoverCard, setHoverCard] = useState<HoverCard | null>(null);
   const previewCacheRef = useRef<Record<string, string>>({});
-  // Grace-period timer for closing the hover card. Without this, moving the
-  // cursor from the node toward the card (through the 30px gap) fires
-  // onMouseMove-with-no-node and closes the card before the user can click
-  // "View note". The timer is cancelled when the cursor enters the card.
   const closeTimerRef = useRef<number | null>(null);
-
   const cancelClose = useCallback(() => {
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
   }, []);
-
-  const scheduleClose = useCallback((delayMs: number = 250) => {
-    if (closeTimerRef.current !== null) return;  // already scheduled
+  const scheduleClose = useCallback((delayMs: number = 220) => {
+    if (closeTimerRef.current !== null) return;
     closeTimerRef.current = window.setTimeout(() => {
       setHoverCard(null);
       closeTimerRef.current = null;
     }, delayMs);
   }, []);
-
-  // Clean up any pending timer on unmount
   useEffect(() => () => cancelClose(), [cancelClose]);
 
-  const { nodes, edges, loadGraph, setSelected } = useGraphStore();
-  const selectNote = useNoteStore((s) => s.selectNote);
-  const allNotes = useNoteStore((s) => s.notes);
-  const activeFilename = useNoteStore((s) => s.activeFilename);
-
-  // Sync store into refs and pre-simulate to settle
-  useEffect(() => {
-    if (nodes.length === 0) return;
-    nodesRef.current = nodes.map((n) => ({ ...n }));
-    edgesRef.current = edges;
-    const map = new Map<string, number>();
-    nodes.forEach((n, i) => map.set(n.id, i));
-    nodeMapRef.current = map;
-
-    // Pre-simulate the layout to a stable state
-    settledRef.current = false;
-    for (let i = 0; i < SIMULATION_ITERATIONS; i++) {
-      tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
-    }
-    // Freeze: zero out all velocities
-    for (const n of nodesRef.current) {
-      n.vx = 0;
-      n.vy = 0;
-    }
-    settledRef.current = true;
-  }, [nodes, edges]);
-
-  // Load graph on mount, and re-load when the active brain changes or when
-  // any write path refreshes the notes list (create / save / delete all
-  // call loadNotes which replaces the array reference). Without this the
-  // graph showed stale nodes/edges until the user toggled tabs.
-  const activeBrainId = useBrainStore((s) => s.activeBrainId);
-  const notes = useNoteStore((s) => s.notes);
-  useEffect(() => {
-    loadGraph();
-  }, [loadGraph, activeBrainId, notes]);
-
-  // Resize canvas
-  useEffect(() => {
-    const container = containerRef.current;
-    const canvas = canvasRef.current;
-    if (!container || !canvas) return;
-
-    const resize = () => {
-      const rect = container.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-      sizeRef.current = { w: rect.width, h: rect.height };
-    };
-
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
-
-  const findNodeAt = useCallback((cx: number, cy: number): SimNode | null => {
-    const { w, h } = sizeRef.current;
-    for (let i = nodesRef.current.length - 1; i >= 0; i--) {
-      const n = nodesRef.current[i]!;
-      const nx = n.x * w;
-      const ny = n.y * h;
-      const r = nodeRadius(n.access_count) + 4;
-      if ((cx - nx) ** 2 + (cy - ny) ** 2 < r ** 2) return n;
-    }
-    return null;
-  }, []);
-
-  const getCanvasPos = useCallback((e: React.MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { cx: 0, cy: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return { cx: e.clientX - rect.left, cy: e.clientY - rect.top };
-  }, []);
-
-  // Load preview content for hover
-  const loadPreviewForNode = useCallback(async (node: SimNode): Promise<string> => {
+  const loadPreview = useCallback(async (node: SimNode): Promise<string> => {
     if (previewCacheRef.current[node.id]) return previewCacheRef.current[node.id]!;
     const match = allNotes.find((n) => n.title === node.title);
     if (!match) return "";
@@ -254,225 +146,248 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const preview = extractPreview(content);
       previewCacheRef.current[node.id] = preview;
       return preview;
-    } catch {
-      return "";
-    }
+    } catch { return ""; }
   }, [allNotes]);
 
-  // When the user clicks a sidebar note while the graph is visible, open
-  // the hover card over the matching node instead of silently switching
-  // the active note in the background. NeuralGraph only exists while the
-  // user is on the graph view, so this effect won't fire during editor
-  // navigation.
-  useEffect(() => {
-    if (!activeFilename) return;
-    const matchingNote = allNotes.find((n) => n.filename === activeFilename);
-    if (!matchingNote) return;
-    const title = matchingNote.title;
-    // Find the node in the current sim. Use the live ref so we get the
-    // post-settle coordinates even if React's state hasn't flushed yet.
-    const node = nodesRef.current.find((n) => n.title === title);
-    if (!node) return;
-
-    const { w, h } = sizeRef.current;
-    if (w === 0 || h === 0) return;
-    const nx = node.x * w;
-    const ny = node.y * h;
-    const cardX = nx + 30 > w - 280 ? nx - 290 : nx + 30;
-    const cardY = Math.max(10, Math.min(h - 200, ny - 50));
-
+  const handleNodeHover = useCallback((node: unknown) => {
+    if (!node) {
+      scheduleClose();
+      return;
+    }
     cancelClose();
-    loadPreviewForNode(node).then((preview) => {
-      setHoverCard({ node, x: cardX, y: cardY, preview });
-      setSelected(node.id);
+    const n = node as SimNode & { x?: number; y?: number };
+    // For 2D mode, x/y are in graph space; the ForceGraph2D ref would be
+    // needed to project to screen coords. Simpler: we anchor the hover
+    // card near the cursor via a mousemove handler on the container.
+    // But for 3D mode, the projection isn't straightforward. So we just
+    // center the card horizontally in the container for 3D, and use the
+    // last-known mouse position for 2D.
+    loadPreview(n).then((preview) => {
+      setHoverCard((prev) => ({
+        node: n,
+        screenX: prev?.screenX ?? size.w / 2 - 130,
+        screenY: prev?.screenY ?? 60,
+        preview,
+      }));
     });
-  }, [activeFilename, allNotes, loadPreviewForNode, cancelClose, setSelected]);
+  }, [cancelClose, scheduleClose, loadPreview, size.w]);
 
-  const onMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const { cx, cy } = getCanvasPos(e);
-      const canvas = canvasRef.current;
-
-      if (dragRef.current) {
-        const { w, h } = sizeRef.current;
-        const idx = nodeMapRef.current.get(dragRef.current.id);
-        if (idx !== undefined && nodesRef.current[idx]) {
-          nodesRef.current[idx]!.x = cx / w;
-          nodesRef.current[idx]!.y = cy / h;
-          nodesRef.current[idx]!.pinned = true;
-        }
-        return;
-      }
-
-      const node = findNodeAt(cx, cy);
-      if (canvas) canvas.style.cursor = node ? "pointer" : "default";
-
-      if (node) {
-        // Cursor is on a node — cancel any pending close and (re)position the card.
-        cancelClose();
-        const { w, h } = sizeRef.current;
-        const nx = node.x * w;
-        const ny = node.y * h;
-        // Show card to the right unless near right edge
-        const cardX = nx + 30 > w - 280 ? nx - 290 : nx + 30;
-        const cardY = Math.max(10, Math.min(h - 200, ny - 50));
-
-        if (!hoverCard || hoverCard.node.id !== node.id) {
-          loadPreviewForNode(node).then((preview) => {
-            setHoverCard({ node, x: cardX, y: cardY, preview });
-          });
-        }
-      } else if (hoverCard) {
-        // Cursor moved off a node. Don't close the card immediately — the
-        // user may be transiting through empty canvas toward the "View note"
-        // button. Schedule a close; the card's onMouseEnter will cancel it.
-        scheduleClose();
-      }
-    },
-    [findNodeAt, getCanvasPos, hoverCard, loadPreviewForNode, cancelClose, scheduleClose]
-  );
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const { cx, cy } = getCanvasPos(e);
-      const node = findNodeAt(cx, cy);
-      if (node) dragRef.current = { id: node.id };
-    },
-    [findNodeAt, getCanvasPos]
-  );
-
-  const onMouseUp = useCallback(() => {
-    dragRef.current = null;
+  const lastMouseRef = useRef({ x: 0, y: 0 });
+  const handleContainerMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const r = containerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    lastMouseRef.current = { x: e.clientX - r.left, y: e.clientY - r.top };
   }, []);
+
+  // Reposition hover card to track the last mouse position.
+  useEffect(() => {
+    if (!hoverCard) return;
+    const { x, y } = lastMouseRef.current;
+    const cardW = 260, cardH = 180;
+    const sx = x + 20 + cardW > size.w ? Math.max(10, x - cardW - 20) : x + 20;
+    const sy = Math.max(10, Math.min(size.h - cardH - 10, y - 40));
+    if (sx !== hoverCard.screenX || sy !== hoverCard.screenY) {
+      setHoverCard((p) => p ? { ...p, screenX: sx, screenY: sy } : p);
+    }
+  }, [hoverCard, size.w, size.h]);
+
+  const handleNodeClick = useCallback((node: unknown) => {
+    const n = node as SimNode;
+    cancelClose();
+    setSelected(n.id);
+    const match = allNotes.find((m) => m.title === n.title);
+    if (match) {
+      selectNote(match.filename);
+      setHoverCard(null);
+      onOpenNote?.();
+    }
+  }, [cancelClose, setSelected, allNotes, selectNote, onOpenNote]);
 
   const handleViewNote = useCallback((node: SimNode) => {
     cancelClose();
     setSelected(node.id);
-    const match = allNotes.find((n) => n.title === node.title);
+    const match = allNotes.find((m) => m.title === node.title);
     if (match) {
       selectNote(match.filename);
       setHoverCard(null);
-      // Switch back to the editor so the selected note is visible — the
-      // graph view has no editor of its own.
       onOpenNote?.();
     }
-  }, [setSelected, selectNote, allNotes, cancelClose, onOpenNote]);
+  }, [cancelClose, setSelected, allNotes, selectNote, onOpenNote]);
 
-  // Render loop — only redraws on change/hover, not constantly
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+  const toggleMode = useCallback(() => {
+    setMode((m) => {
+      const next = m === "2d" ? "3d" : "2d";
+      try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
-    const render = () => {
-      const { w, h } = sizeRef.current;
-      if (w === 0 || h === 0) {
-        animRef.current = requestAnimationFrame(render);
-        return;
-      }
+  // Custom 2D node renderer: preserves the glow-ring for active/fresh/connected
+  // nodes and draws the title label under each node (matching the old feel).
+  const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const node = rawNode as SimNode & { x?: number; y?: number };
+    if (node.x == null || node.y == null) return;
+    const r = nodeRadius(node.access_count);
+    const color = STATE_COLORS[node.state] ?? "#35335a";
+    const glow = STATE_GLOW[node.state];
 
-      // Only run physics if not yet settled OR if user is dragging
-      if (!settledRef.current || dragRef.current) {
-        tick(nodesRef.current, edgesRef.current, nodeMapRef.current);
-      }
+    if (glow) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
+      ctx.fillStyle = glow;
+      ctx.fill();
+    }
 
-      ctx.fillStyle = "#0b0b12";
-      ctx.fillRect(0, 0, w, h);
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
 
-      // Edges
-      for (const edge of edgesRef.current) {
-        const ai = nodeMapRef.current.get(edge.from);
-        const bi = nodeMapRef.current.get(edge.to);
-        if (ai === undefined || bi === undefined) continue;
-        const a = nodesRef.current[ai]!;
-        const b = nodesRef.current[bi]!;
+    // Labels become readable past a zoom threshold — saves clutter at far zoom
+    // and matches Obsidian's default behaviour.
+    if (globalScale >= 0.6) {
+      const fontSize = 12 / globalScale;
+      ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
+      ctx.fillStyle = "#8a88a0";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const truncated = node.title.length > 24 ? node.title.slice(0, 22) + "…" : node.title;
+      ctx.fillText(truncated, node.x, node.y + r + 2);
+    }
+  }, []);
 
-        const alpha = Math.max(0.1, edge.similarity * 0.5);
-        const isHov = hoverCard && (hoverCard.node.id === a.id || hoverCard.node.id === b.id);
+  // Pointer hit area for custom-drawn nodes — drawn in the same shape so
+  // hover/click respond where the node visually is.
+  const paintPointerArea2D = useCallback((rawNode: unknown, color: string, ctx: CanvasRenderingContext2D) => {
+    const node = rawNode as SimNode & { x?: number; y?: number };
+    if (node.x == null || node.y == null) return;
+    const r = nodeRadius(node.access_count) + 2;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }, []);
 
-        ctx.beginPath();
-        ctx.moveTo(a.x * w, a.y * h);
-        ctx.lineTo(b.x * w, b.y * h);
-        ctx.strokeStyle = isHov
-          ? `rgba(240, 165, 0, ${alpha + 0.3})`
-          : edgeColor(edge.link_type, alpha);
-        ctx.lineWidth = isHov ? 2 : 0.7;
-        ctx.stroke();
-      }
-
-      // Nodes
-      for (const n of nodesRef.current) {
-        const nx = n.x * w;
-        const ny = n.y * h;
-        const r = nodeRadius(n.access_count);
-        const color = STATE_COLORS[n.state] ?? "#35335a";
-        const isHov = hoverCard?.node.id === n.id;
-
-        // Glow for active/connected nodes
-        if (n.state === "active" || n.state === "fresh" || n.state === "connected") {
-          ctx.beginPath();
-          ctx.arc(nx, ny, r + (isHov ? 10 : 5), 0, Math.PI * 2);
-          ctx.fillStyle =
-            n.state === "active" || n.state === "fresh"
-              ? "rgba(240, 165, 0, 0.2)"
-              : "rgba(0, 201, 177, 0.12)";
-          ctx.fill();
-        }
-
-        // Circle
-        ctx.beginPath();
-        ctx.arc(nx, ny, isHov ? r + 2 : r, 0, Math.PI * 2);
-        ctx.fillStyle = isHov ? "#ffffff" : color;
-        ctx.fill();
-
-        // Always show node title (so users can read them at a glance)
-        ctx.font = '11px "Geist", system-ui, sans-serif';
-        ctx.fillStyle = isHov ? "#e8e6f0" : "#8a88a0";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        const truncated = n.title.length > 20 ? n.title.slice(0, 18) + "…" : n.title;
-        ctx.fillText(truncated, nx, ny + r + 4);
-      }
-
-      animRef.current = requestAnimationFrame(render);
-    };
-
-    animRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [hoverCard]);
+  // Color accessors shared by 2D + 3D. 3D gets native sphere rendering.
+  const nodeColor = useCallback((rawNode: unknown) => {
+    const n = rawNode as SimNode;
+    return STATE_COLORS[n.state] ?? "#35335a";
+  }, []);
+  const nodeVal = useCallback((rawNode: unknown) => {
+    const n = rawNode as SimNode;
+    // nodeVal is an area (2D) / volume (3D) multiplier — map our 6-20px
+    // radius curve onto a 1-10 range.
+    return 1 + Math.min(9, n.access_count * 0.6);
+  }, []);
+  const linkColor = useCallback((rawLink: unknown) => {
+    const l = rawLink as { similarity: number; link_type: string };
+    const alpha = Math.max(0.15, Math.min(0.6, l.similarity * 0.5));
+    return edgeColor(l.link_type, alpha);
+  }, []);
+  const linkWidth = useCallback((rawLink: unknown) => {
+    const l = rawLink as { similarity: number };
+    return 0.5 + l.similarity * 0.8;
+  }, []);
 
   return (
-    <div ref={containerRef} className="flex-1 relative overflow-hidden" style={{ background: "var(--nv-bg)" }}>
-      <canvas
-        ref={canvasRef}
-        onMouseMove={onMouseMove}
-        onMouseDown={onMouseDown}
-        onMouseUp={onMouseUp}
-        onMouseLeave={() => {
-          dragRef.current = null;
-          // Grace period — the user may be moving toward the hover card,
-          // which sits inside this same container div.
-          scheduleClose();
-        }}
-        className="absolute inset-0 w-full h-full"
-      />
+    <div
+      ref={containerRef}
+      className="flex-1 relative overflow-hidden"
+      style={{ background: "var(--nv-bg)" }}
+      onMouseMove={handleContainerMouseMove}
+      onMouseLeave={() => scheduleClose()}
+    >
+      {/* Mode toggle */}
+      <div className="absolute top-4 right-4 z-20 flex gap-1 rounded-lg p-0.5"
+        style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+      >
+        {(["2d", "3d"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => { if (mode !== m) toggleMode(); }}
+            className="px-3 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors"
+            style={{
+              background: mode === m ? "var(--nv-accent)" : "transparent",
+              color: mode === m ? "var(--nv-bg)" : "var(--nv-text-muted)",
+            }}
+            aria-pressed={mode === m}
+            aria-label={`Switch to ${m.toUpperCase()} graph view`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
 
-      {/* Hover preview card */}
+      <Suspense fallback={
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="text-sm font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+            Loading graph engine…
+          </p>
+        </div>
+      }>
+        {mode === "2d" ? (
+          <ForceGraph2D
+            graphData={graphData}
+            width={size.w}
+            height={size.h}
+            backgroundColor="rgba(0,0,0,0)"
+            nodeLabel=""
+            nodeRelSize={5}
+            nodeVal={nodeVal}
+            nodeColor={nodeColor}
+            nodeCanvasObject={paintNode2D}
+            nodeCanvasObjectMode={() => "replace"}
+            nodePointerAreaPaint={paintPointerArea2D}
+            linkColor={linkColor}
+            linkWidth={linkWidth}
+            linkDirectionalParticles={0}
+            cooldownTicks={100}
+            onNodeHover={handleNodeHover}
+            onNodeClick={handleNodeClick}
+            enableNodeDrag={true}
+          />
+        ) : (
+          <ForceGraph3D
+            graphData={graphData}
+            width={size.w}
+            height={size.h}
+            backgroundColor="#0b0b12"
+            nodeLabel={(n: unknown) => (n as SimNode).title}
+            nodeRelSize={5}
+            nodeVal={nodeVal}
+            nodeColor={nodeColor}
+            nodeOpacity={0.9}
+            linkColor={linkColor}
+            linkWidth={linkWidth}
+            linkOpacity={0.55}
+            linkDirectionalParticles={1}
+            linkDirectionalParticleSpeed={0.006}
+            linkDirectionalParticleWidth={1.6}
+            onNodeHover={handleNodeHover}
+            onNodeClick={handleNodeClick}
+            enableNodeDrag={true}
+            showNavInfo={false}
+          />
+        )}
+      </Suspense>
+
+      {/* Hover preview card — positioned near the cursor */}
       {hoverCard && (
         <div
-          className="absolute [background-color:var(--nv-bg)] border [border-color:var(--nv-border)] rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
-          style={{ left: hoverCard.x, top: hoverCard.y }}
+          className="absolute rounded-lg shadow-2xl p-4 w-[260px] pointer-events-auto z-10"
+          style={{
+            left: hoverCard.screenX,
+            top: hoverCard.screenY,
+            background: "var(--nv-bg)",
+            border: "1px solid var(--nv-border)",
+          }}
           onMouseEnter={cancelClose}
           onMouseLeave={() => scheduleClose()}
         >
           <div className="flex items-start justify-between gap-2 mb-2">
-            <h3 className="text-sm font-semibold [color:var(--nv-text)] font-[Geist,sans-serif] leading-tight">
+            <h3 className="text-sm font-semibold font-[Geist,sans-serif] leading-tight" style={{ color: "var(--nv-text)" }}>
               {hoverCard.node.title}
             </h3>
-            {/* Strength badge keeps its semantic color (gold = strong,
-                teal = linked, grey = fading) — those map to memory state,
-                not theme chrome. */}
             <span
               className={`text-[9px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded flex-shrink-0 ${
                 hoverCard.node.state === "active" || hoverCard.node.state === "fresh"
@@ -487,28 +402,29 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           </div>
 
           {hoverCard.preview && (
-            <p className="text-xs [color:var(--nv-text-muted)] line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed">
+            <p className="text-xs line-clamp-4 mb-3 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
               {hoverCard.preview}
             </p>
           )}
 
-          <div className="flex items-center justify-between text-[10px] [color:var(--nv-text-dim)] font-[Geist,sans-serif] mb-3">
+          <div className="flex items-center justify-between text-[10px] font-[Geist,sans-serif] mb-3" style={{ color: "var(--nv-text-dim)" }}>
             <span>{hoverCard.node.access_count} accesses</span>
             <span className="capitalize">{hoverCard.node.state}</span>
           </div>
 
           <button
             onClick={() => handleViewNote(hoverCard.node)}
-            className="w-full text-xs font-medium font-[Geist,sans-serif] [background-color:var(--nv-accent)] [color:var(--nv-bg)] py-1.5 rounded hover:brightness-110 transition-all"
+            className="w-full text-xs font-medium font-[Geist,sans-serif] py-1.5 rounded hover:brightness-110 transition-all"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
           >
             View note
           </button>
         </div>
       )}
 
-      {/* Legend — color swatches match the canvas node colors (semantic,
+      {/* Legend — color swatches match node state colors (semantic,
           not theme chrome) so stay as fixed hex values. */}
-      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] [color:var(--nv-text-muted)] pointer-events-none">
+      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] pointer-events-none" style={{ color: "var(--nv-text-muted)" }}>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> strong
         </span>
@@ -518,14 +434,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: "var(--nv-text-dim)" }} /> fading
         </span>
-        <span className="flex items-center gap-1 ml-2 [color:var(--nv-text-dim)]">
-          click a node to open
+        <span className="flex items-center gap-1 ml-2" style={{ color: "var(--nv-text-dim)" }}>
+          {mode === "3d" ? "drag to rotate · scroll to zoom · click a node to open" : "click a node to open"}
         </span>
       </div>
 
       {nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="[color:var(--nv-text-muted)] text-sm font-[Geist,sans-serif]">
+          <p className="text-sm font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
             Create a few notes to see your knowledge graph
           </p>
         </div>
