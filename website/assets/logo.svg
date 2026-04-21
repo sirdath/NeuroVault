@@ -1,27 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 200" width="1080" height="200" preserveAspectRatio="xMidYMid meet">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 220" width="1080" height="220" preserveAspectRatio="xMidYMid meet">
   <defs>
+    <linearGradient id="nv-brand-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFAF87"/>
+      <stop offset="100%" stop-color="#DE7356"/>
+    </linearGradient>
     <style>
       .t {
         font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", "Cascadia Code", "DejaVu Sans Mono", ui-monospace, monospace;
         font-size: 20px;
         font-weight: 700;
-        fill: #DE7356;
+        fill: url(#nv-brand-grad);
         white-space: pre;
       }
       .tag {
-        font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", "Cascadia Code", ui-monospace, monospace;
+        font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", ui-monospace, monospace;
         font-size: 14px;
         fill: #FFAF87;
         letter-spacing: 0.08em;
       }
     </style>
   </defs>
-  <g transform="translate(24, 32)">
-    <text class="t" x="0" y="0"   xml:space="preserve">███    ██ ███████ ██    ██ ██████   ██████  ██    ██  █████  ██    ██ ██      ████████</text>
-    <text class="t" x="0" y="26"  xml:space="preserve">████   ██ ██      ██    ██ ██   ██ ██    ██ ██    ██ ██   ██ ██    ██ ██         ██   </text>
-    <text class="t" x="0" y="52"  xml:space="preserve">██ ██  ██ █████   ██    ██ ██████  ██    ██ ██    ██ ███████ ██    ██ ██         ██   </text>
-    <text class="t" x="0" y="78"  xml:space="preserve">██  ██ ██ ██      ██    ██ ██   ██ ██    ██  ██  ██  ██   ██ ██    ██ ██         ██   </text>
-    <text class="t" x="0" y="104" xml:space="preserve">██   ████ ███████  ██████  ██   ██  ██████    ████   ██   ██  ██████  ███████    ██   </text>
+  <g transform="translate(24, 34)">
+    <text class="t" x="0" y="0"   xml:space="preserve">███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗ ██╗   ██╗ █████╗ ██╗   ██╗██╗  ████████╗</text>
+    <text class="t" x="0" y="24"  xml:space="preserve">████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗██║   ██║██╔══██╗██║   ██║██║  ╚══██╔══╝</text>
+    <text class="t" x="0" y="48"  xml:space="preserve">██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║██║   ██║███████║██║   ██║██║     ██║</text>
+    <text class="t" x="0" y="72"  xml:space="preserve">██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║╚██╗ ██╔╝██╔══██║██║   ██║██║     ██║</text>
+    <text class="t" x="0" y="96"  xml:space="preserve">██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝ ╚████╔╝ ██║  ██║╚██████╔╝███████╗██║</text>
+    <text class="t" x="0" y="120" xml:space="preserve">╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝   ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝</text>
   </g>
-  <text class="tag" x="540" y="172" text-anchor="middle">local-first AI memory  ✻</text>
+  <text class="tag" x="540" y="192" text-anchor="middle">local-first AI memory  ✻</text>
 </svg>
