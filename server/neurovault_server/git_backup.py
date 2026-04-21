@@ -10,6 +10,7 @@ errors so missing git doesn't block anything.
 
 import shutil
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +62,85 @@ def init_backup_repo(vault_dir: Path) -> bool:
 
     logger.info("Initialized git backup in {}", vault_dir)
     return True
+
+
+# --- Debounced commit ------------------------------------------------------
+# Every ingest used to spawn 3 subprocesses (git add -A + git status +
+# git commit). Under Claude-Code observation storms (10-15 writes/min)
+# that's 30-45 subprocess spawns per minute on top of the slow-phase
+# work — enough sustained CPU to heat-kick unstable iGPU drivers into
+# TDR on some Windows machines. Debouncing coalesces the burst into one
+# commit per quiet window while keeping the "auto-backup on every
+# meaningful write" guarantee.
+
+_COMMIT_DEBOUNCE_SECONDS = 30.0
+_commit_timers: dict[str, threading.Timer] = {}
+_commit_messages: dict[str, list[str]] = {}
+_commit_lock = threading.Lock()
+
+
+def schedule_auto_commit(vault_dir: Path, message: str = "", delay: float | None = None) -> None:
+    """Debounced wrapper around ``auto_commit``. Call from hot write paths
+    (slow_phase). Multiple calls inside the window merge into a single
+    commit whose message is a summary of the batch.
+    """
+    wait = delay if delay is not None else _COMMIT_DEBOUNCE_SECONDS
+    key = str(vault_dir)
+
+    def _fire():
+        with _commit_lock:
+            msgs = _commit_messages.pop(key, [])
+            _commit_timers.pop(key, None)
+        # Summarise up to 5 of the batched messages for the commit body.
+        if not msgs:
+            summary = ""
+        elif len(msgs) == 1:
+            summary = msgs[0]
+        else:
+            head = "; ".join(msgs[:5])
+            extra = f" (+{len(msgs) - 5} more)" if len(msgs) > 5 else ""
+            summary = f"batch: {len(msgs)} changes — {head}{extra}"
+        try:
+            auto_commit(vault_dir, summary)
+        except Exception as e:
+            logger.debug("Debounced auto_commit failed: {}", e)
+
+    with _commit_lock:
+        _commit_messages.setdefault(key, []).append(message or "update")
+        existing = _commit_timers.get(key)
+        if existing is not None:
+            existing.cancel()
+        t = threading.Timer(wait, _fire)
+        t.daemon = True
+        _commit_timers[key] = t
+        t.start()
+
+
+def flush_auto_commit(vault_dir: Path) -> None:
+    """Cancel any pending debounced commit for this vault and run it now.
+    Useful for graceful shutdown so pending writes aren't lost. Matches
+    the flush/cancel pattern on BM25 + Karpathy rebuilds."""
+    key = str(vault_dir)
+    with _commit_lock:
+        pending = _commit_timers.pop(key, None)
+        msgs = _commit_messages.pop(key, [])
+    if pending is not None:
+        pending.cancel()
+    if msgs:
+        summary = f"flush: {len(msgs)} changes" if len(msgs) > 1 else msgs[0]
+        try:
+            auto_commit(vault_dir, summary)
+        except Exception as e:
+            logger.debug("flush_auto_commit failed: {}", e)
+
+
+def _cancel_pending_commits() -> None:
+    """Test/shutdown helper — cancel all scheduled commits without firing."""
+    with _commit_lock:
+        for t in _commit_timers.values():
+            t.cancel()
+        _commit_timers.clear()
+        _commit_messages.clear()
 
 
 def auto_commit(vault_dir: Path, message: str = "") -> bool:

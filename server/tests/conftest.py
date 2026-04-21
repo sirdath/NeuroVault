@@ -32,6 +32,11 @@ def tmp_db(tmp_path):
     except Exception:
         pass
     try:
+        from neurovault_server.git_backup import _cancel_pending_commits
+        _cancel_pending_commits()
+    except Exception:
+        pass
+    try:
         from neurovault_server.ingest import wait_for_slow_phase_drain
         wait_for_slow_phase_drain(timeout=15.0)
     except Exception:

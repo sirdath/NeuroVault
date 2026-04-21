@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { fetchGraph } from "../lib/api";
+import { buildGraphFromDisk, folderOf } from "../lib/graphFromDisk";
 import type { GraphNode, GraphEdge } from "../lib/api";
 
 /** Simulation node — extends GraphNode with position/velocity */
@@ -34,19 +35,38 @@ export const useGraphStore = create<GraphStore>((set) => ({
 
   loadGraph: async () => {
     set({ loading: true });
-    try {
-      const data = await fetchGraph();
-      // Initialize positions randomly in 0..1 space
-      const simNodes: SimNode[] = data.nodes.map((n) => ({
+
+    // Normalise a GraphData-like payload into sim nodes, backfilling the
+    // ``folder`` attribute if the server didn't send one (older server
+    // builds return the field only on the disk-fallback path).
+    const toSimNodes = (nodes: GraphNode[], filenameById?: Map<string, string>): SimNode[] =>
+      nodes.map((n) => ({
         ...n,
+        folder: n.folder ?? (filenameById ? folderOf(filenameById.get(n.id) ?? "") : ""),
         x: 0.1 + Math.random() * 0.8,
         y: 0.1 + Math.random() * 0.8,
         vx: 0,
         vy: 0,
         pinned: false,
       }));
-      set({ nodes: simNodes, edges: data.edges, loading: false });
+
+    try {
+      const data = await fetchGraph();
+      if (data.nodes.length > 0) {
+        set({ nodes: toSimNodes(data.nodes), edges: data.edges, loading: false });
+        return;
+      }
+      // Server up but empty index (cold start, reingest in flight). Fall
+      // through to the disk builder so the graph view isn't blank.
     } catch {
+      // Server unreachable — fall through to disk.
+    }
+
+    try {
+      const disk = await buildGraphFromDisk();
+      set({ nodes: toSimNodes(disk.nodes), edges: disk.edges, loading: false });
+    } catch {
+      // Disk read also failed (running in browser without Tauri, perhaps).
       set({ loading: false });
     }
   },

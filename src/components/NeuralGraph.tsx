@@ -65,6 +65,80 @@ function nodeRadius(accessCount: number): number {
   return Math.min(20, 6 + Math.sqrt(accessCount) * 2);
 }
 
+/** Deterministic palette — a folder always maps to the same color across
+ *  reloads and machines. Hand-picked against the app's dark navy bg so
+ *  even small nodes pop without being garish. Peach leads the list so a
+ *  vault with only root-level notes (empty folder string) still feels
+ *  like it belongs to the NeuroVault brand. */
+const FOLDER_PALETTE = [
+  "#DE7356",  // peach (brand)
+  "#00c9b1",  // teal
+  "#8b7cf8",  // purple
+  "#60a5fa",  // blue
+  "#f0a500",  // amber
+  "#f472b6",  // pink
+  "#34d399",  // green
+  "#38bdf8",  // sky
+  "#a78bfa",  // violet
+  "#fb7185",  // rose
+  "#facc15",  // yellow
+  "#FFAF87",  // peach-soft
+];
+
+function folderColor(folder: string): string {
+  if (!folder) return "#6e6d8f"; // root-level notes — neutral slate
+  // Simple FNV-ish hash so the mapping is stable across sessions without
+  // pulling in a real hashing lib.
+  let h = 2166136261;
+  for (let i = 0; i < folder.length; i++) {
+    h ^= folder.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  return FOLDER_PALETTE[h % FOLDER_PALETTE.length]!;
+}
+
+/** Custom d3-force that pulls each node toward its folder's centroid.
+ *  Makes folders visibly cluster on the graph without destroying the
+ *  natural link-based layout — the link + charge forces still run, this
+ *  is just an extra nudge. Strength is gentle (0.08) so tightly-linked
+ *  cross-folder notes still pull together when the edges are strong.
+ *
+ *  Runs per simulation tick; centroids are recomputed every call so
+ *  dragging one cluster away moves the pull point with it.
+ */
+function createClusterForce(strength: number = 0.08) {
+  type F = {
+    (alpha: number): void;
+    initialize?: (nodes: unknown[]) => void;
+  };
+  let nodes: Array<{ folder?: string; x?: number; y?: number; vx?: number; vy?: number }> = [];
+  const force: F = (alpha: number) => {
+    if (!nodes.length) return;
+    // Accumulate centroids by folder in one pass.
+    const sums = new Map<string, { x: number; y: number; n: number }>();
+    for (const n of nodes) {
+      if (n.x == null || n.y == null) continue;
+      const key = n.folder ?? "";
+      const s = sums.get(key);
+      if (s) { s.x += n.x; s.y += n.y; s.n += 1; }
+      else sums.set(key, { x: n.x, y: n.y, n: 1 });
+    }
+    const centroids = new Map<string, { x: number; y: number }>();
+    for (const [k, s] of sums) centroids.set(k, { x: s.x / s.n, y: s.y / s.n });
+
+    const k = strength * alpha;
+    for (const n of nodes) {
+      if (n.x == null || n.y == null) continue;
+      const c = centroids.get(n.folder ?? "");
+      if (!c) continue;
+      n.vx = (n.vx ?? 0) + (c.x - n.x) * k;
+      n.vy = (n.vy ?? 0) + (c.y - n.y) * k;
+    }
+  };
+  force.initialize = (ns: unknown[]) => { nodes = ns as typeof nodes; };
+  return force;
+}
+
 type Mode = "2d" | "3d";
 
 interface HoverCard {
@@ -93,7 +167,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // once the Three.js renderer/composer is available. The ref is passed
   // to ForceGraph3D as-is; we narrow at the use site.
   const fg3dRef = useRef<unknown>(undefined);
+  const fg2dRef = useRef<unknown>(undefined);
   const bloomAttachedRef = useRef(false);
+  const clusterAttachedRef = useRef(false);
 
   // On toggle into 3D, lazy-import UnrealBloomPass and inject it into the
   // composer. Kept separate from the 2D path so the bloom module (and its
@@ -139,6 +215,43 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // toggles 3D → 2D → 3D (the composer is a fresh instance each time).
   useEffect(() => {
     if (mode === "2d") bloomAttachedRef.current = false;
+    // Same story for the cluster force — re-mounted ForceGraph instance
+    // means a fresh d3-force graph with no custom forces attached.
+    clusterAttachedRef.current = false;
+  }, [mode]);
+
+  // Install the folder-cluster force on the 2D graph's d3-force sim.
+  // Uses an interval to poll because the ref isn't set until after
+  // Suspense resolves the lazy import + the library mounts internally.
+  useEffect(() => {
+    if (mode !== "2d") return;
+    if (clusterAttachedRef.current) return;
+    let cancelled = false;
+
+    type D3ForceAPI = {
+      d3Force: (name: string, force?: unknown) => D3ForceAPI;
+      d3ReheatSimulation?: () => void;
+    };
+
+    const tryAttach = () => {
+      if (cancelled || clusterAttachedRef.current) return;
+      const fg = fg2dRef.current as D3ForceAPI | undefined;
+      if (!fg || typeof fg.d3Force !== "function") return;
+      try {
+        fg.d3Force("cluster", createClusterForce(0.08));
+        fg.d3ReheatSimulation?.();
+        clusterAttachedRef.current = true;
+      } catch {
+        /* ref not ready yet — retry on next interval tick */
+      }
+    };
+
+    const id = window.setInterval(tryAttach, 200);
+    tryAttach();
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [mode]);
 
   const { nodes, edges, loadGraph, setSelected } = useGraphStore();
@@ -279,15 +392,18 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     });
   }, []);
 
-  // Custom 2D node renderer: preserves the glow-ring for active/fresh/connected
-  // nodes and draws the title label under each node (matching the old feel).
+  // Custom 2D node renderer: folder drives the primary fill color so
+  // clusters pop visually; the state color (amber/teal/gray) becomes a
+  // thin outer ring so "heat" and "grouping" are both legible at once.
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const node = rawNode as SimNode & { x?: number; y?: number };
     if (node.x == null || node.y == null) return;
     const r = nodeRadius(node.access_count);
-    const color = STATE_COLORS[node.state] ?? "#35335a";
+    const fill = folderColor(node.folder ?? "");
+    const stateRing = STATE_COLORS[node.state] ?? "#35335a";
     const glow = STATE_GLOW[node.state];
 
+    // Soft outer glow for hot / freshly-touched notes.
     if (glow) {
       ctx.beginPath();
       ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
@@ -295,10 +411,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fill();
     }
 
+    // Folder-colored body.
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = fill;
     ctx.fill();
+
+    // 1.5px state ring on top — communicates "strong / connected /
+    // dormant" without stealing the folder signal.
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = stateRing;
+    ctx.stroke();
 
     // Labels become readable past a zoom threshold — saves clutter at far zoom
     // and matches Obsidian's default behaviour.
@@ -325,10 +450,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     ctx.fill();
   }, []);
 
-  // Color accessors shared by 2D + 3D. 3D gets native sphere rendering.
+  // Color accessors shared by 2D + 3D. 3D uses folder color too — so
+  // orbiting the scene, you see folders as clearly-colored clouds of
+  // nodes rather than a monochromatic swarm.
   const nodeColor = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
-    return STATE_COLORS[n.state] ?? "#35335a";
+    return folderColor(n.folder ?? "");
   }, []);
   const nodeVal = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
@@ -384,6 +511,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       }>
         {mode === "2d" ? (
           <ForceGraph2D
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ref={fg2dRef as any}
             graphData={graphData}
             width={size.w}
             height={size.h}

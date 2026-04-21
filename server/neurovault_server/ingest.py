@@ -292,10 +292,13 @@ def _run_slow_phase(
         except Exception as e:
             logger.debug("Karpathy wiki update skipped: {}", e)
 
-        # 11. Git auto-backup
+        # 11. Git auto-backup — debounced. Under observation-hook storms
+        # we used to spawn 3 subprocesses per write (add + status +
+        # commit). Coalescing into one commit per quiet window cuts
+        # Windows process-spawn overhead by 10-30×.
         try:
-            from neurovault_server.git_backup import auto_commit
-            auto_commit(filepath.parent, f"{status}: {title[:60]}")
+            from neurovault_server.git_backup import schedule_auto_commit
+            schedule_auto_commit(filepath.parent, f"{status}: {title[:60]}")
         except Exception as e:
             logger.debug("Git auto-commit skipped: {}", e)
 

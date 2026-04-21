@@ -18,6 +18,11 @@ export interface GraphNode {
   state: string;
   strength: number;
   access_count: number;
+  /** Top-level folder the note sits in (e.g. "projects", "agent", "").
+   *  Populated by the server when /api/graph is used, or by the
+   *  disk-fallback builder. Used client-side for cluster-by-folder
+   *  layout and coloring in the graph view. */
+  folder?: string;
 }
 
 export interface GraphEdge {
