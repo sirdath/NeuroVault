@@ -88,6 +88,17 @@
     reveals.forEach((el) => el.classList.add("is-in"));
   }
 
+  // ----- Spotlight mouse-follow on the hero feature card ------------------
+  // Sets --mx/--my CSS vars on the card so the radial gradient (.feature-hero::after)
+  // tracks the cursor. Pattern borrowed from ../frontendmaxxing/effects/spotlight-reveal.
+  document.querySelectorAll(".feature-hero").forEach((card) => {
+    card.addEventListener("mousemove", (e) => {
+      const r = card.getBoundingClientRect();
+      card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+      card.style.setProperty("--my", `${e.clientY - r.top}px`);
+    });
+  });
+
   // ----- Theme toggle ------------------------------------------------------
   // Two themes: "peach" (default, Claude brand) and "blue" (app-icon palette).
   // Persisted to localStorage so the choice survives reloads.

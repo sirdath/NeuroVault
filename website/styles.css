@@ -531,10 +531,17 @@ code { font-family: var(--mono); font-size: 0.9em;
 }
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: minmax(160px, auto);
   gap: 18px;
   max-width: var(--maxw);
   margin: 0 auto;
+}
+@media (max-width: 900px) {
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 520px) {
+  .feature-grid { grid-template-columns: 1fr; }
 }
 .feature {
   position: relative;
@@ -549,7 +556,62 @@ code { font-family: var(--mono); font-size: 0.9em;
   backdrop-filter: blur(12px);
   overflow: hidden;
   transition: border-color .25s ease, transform .25s ease;
+  grid-column: span 2; /* default: 2 of 4 columns, so 2 per row */
 }
+@media (max-width: 900px) {
+  .feature { grid-column: span 1; }
+}
+@media (max-width: 520px) {
+  .feature { grid-column: span 1; }
+}
+
+/* Bento hero: promote the #1 differentiator to 2x width on desktop.
+   Still 1 cell on mobile via the breakpoints above. */
+.feature-hero {
+  grid-column: span 4;
+  padding: 36px 32px;
+  background: linear-gradient(
+    135deg,
+    rgba(222, 115, 86, 0.08) 0%,
+    rgba(255, 175, 135, 0.03) 100%
+  );
+  border-color: var(--border-hot);
+}
+@media (max-width: 900px) {
+  .feature-hero { grid-column: span 2; }
+}
+@media (max-width: 520px) {
+  .feature-hero { grid-column: span 1; padding: 28px 24px; }
+}
+
+/* Mouse-follow spotlight on the hero card (borrowed from frontendmaxxing
+   spotlight-reveal pattern). Peach glow that tracks the cursor. */
+.feature-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    400px circle at var(--mx, 50%) var(--my, 50%),
+    var(--peach-glow),
+    transparent 40%
+  );
+  opacity: 0;
+  transition: opacity .3s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+.feature-hero:hover::after { opacity: 1; }
+.feature-hero > * { position: relative; z-index: 1; }
+.feature-hero h3 { font-size: 22px; }
+.feature-hero p { font-size: 15.5px; max-width: 68ch; }
+.feature-hero .feature-icon {
+  width: 52px; height: 52px;
+}
+.feature-hero .feature-icon svg {
+  width: 26px; height: 26px;
+}
+
 .feature::before {
   content: "";
   position: absolute;
@@ -573,6 +635,19 @@ code { font-family: var(--mono); font-size: 0.9em;
 }
 .feature:hover { transform: translateY(-3px); }
 .feature:hover::before { opacity: 1; }
+
+/* Staggered reveal — each card delays in by its nth-child index when
+   the section enters the viewport. Existing .reveal → .is-in flow
+   keeps firing; we just augment the timing per-card. */
+.feature.reveal { transition-duration: 0.7s; }
+.feature.reveal:nth-child(1) { transition-delay: 0s; }
+.feature.reveal:nth-child(2) { transition-delay: 0.08s; }
+.feature.reveal:nth-child(3) { transition-delay: 0.16s; }
+.feature.reveal:nth-child(4) { transition-delay: 0.24s; }
+.feature.reveal:nth-child(5) { transition-delay: 0.32s; }
+.feature.reveal:nth-child(6) { transition-delay: 0.4s; }
+.feature.reveal:nth-child(7) { transition-delay: 0.48s; }
+.feature.reveal:nth-child(8) { transition-delay: 0.56s; }
 
 .feature-icon {
   display: inline-flex;
