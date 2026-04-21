@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>NeuroVault Logo Editor</title>
+<style>
+  :root {
+    --bg: #0b0b12;
+    --surface: #12121c;
+    --elev: #1a1a28;
+    --border: #2a2a40;
+    --text: #e8e6f0;
+    --sub: #a8a6c0;
+    --peach: #DE7356;
+    --peach-bright: #FFAF87;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    margin: 0 0 4px;
+    color: var(--peach);
+    font-size: 22px;
+    letter-spacing: 0.02em;
+  }
+  .sub { color: var(--sub); font-size: 13px; margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  label {
+    display: block;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--sub);
+  }
+  label:first-child { margin-top: 0; }
+  input[type="text"], input[type="number"], select, textarea {
+    width: 100%;
+    background: var(--elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 14px;
+  }
+  input[type="color"] {
+    width: 100%;
+    height: 36px;
+    background: var(--elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--peach);
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #preview-wrap {
+    border-radius: 10px;
+    overflow: auto;
+    min-height: 380px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+  }
+  #preview {
+    white-space: pre;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", ui-monospace, monospace;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.1;
+    margin: 0;
+    outline: none;
+    tab-size: 2;
+  }
+  #tag-preview {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    margin-top: 14px;
+    opacity: 0.85;
+  }
+  .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  button {
+    background: var(--peach);
+    color: var(--bg);
+    border: 0;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { background: var(--peach-bright); }
+  button.ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.ghost:hover { border-color: var(--peach); color: var(--peach); }
+  .hint { color: var(--sub); font-size: 12px; margin-top: 10px; line-height: 1.4; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--elev);
+    color: var(--sub);
+    font-size: 11px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+  #status { font-size: 12px; color: var(--sub); margin-top: 8px; min-height: 16px; }
+</style>
+</head>
+<body>
+
+<h1>NeuroVault logo editor</h1>
+<p class="sub">Pick a figlet font, tweak colors, edit the art by hand if you want, export as SVG.</p>
+
+<div class="grid">
+  <div class="panel">
+    <label for="text">Text</label>
+    <input type="text" id="text" value="NEUROVAULT" spellcheck="false"/>
+
+    <label for="font">Font</label>
+    <select id="font">
+      <option value="ANSI Regular" selected>ANSI Regular — clean, Claude-like</option>
+      <option value="ANSI Shadow">ANSI Shadow — 3D drop shadow, Gemini-like</option>
+      <option value="Big">Big — balanced</option>
+      <option value="Standard">Standard — 80s classic</option>
+      <option value="Small">Small — compact 4 rows</option>
+      <option value="Slant">Slant — italic</option>
+      <option value="3-D">3-D — isometric tower</option>
+      <option value="Alpha">Alpha — huge, bold</option>
+      <option value="Doh">Doh — thick</option>
+      <option value="Ghost">Ghost — outline only</option>
+      <option value="Calvin S">Calvin S — single-line cute</option>
+      <option value="Delta Corps Priest 1">Delta Corps Priest 1 — gothic</option>
+      <option value="Larry 3D">Larry 3D — 3D wireframe</option>
+      <option value="Cyberlarge">Cyberlarge — thin stroke</option>
+      <option value="Elite">Elite — blocky</option>
+      <option value="Bloody">Bloody — horror</option>
+      <option value="Isometric1">Isometric1 — cube tower</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label for="fg">Foreground</label>
+        <input type="color" id="fg" value="#DE7356"/>
+      </div>
+      <div>
+        <label for="bg">Background</label>
+        <input type="color" id="bg" value="#0b0b12"/>
+      </div>
+    </div>
+
+    <label for="tagline">Tagline (optional)</label>
+    <input type="text" id="tagline" value="local-first AI memory  ✻"/>
+
+    <div class="row">
+      <div>
+        <label for="font-size">Font size (SVG)</label>
+        <input type="number" id="font-size" value="20" min="8" max="48"/>
+      </div>
+      <div>
+        <label for="padding">Padding (px)</label>
+        <input type="number" id="padding" value="36" min="0" max="200"/>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="regen">Regenerate</button>
+      <button class="ghost" id="copy">Copy ASCII</button>
+      <button class="ghost" id="download">Download SVG</button>
+    </div>
+
+    <div id="status"></div>
+
+    <p class="hint">
+      Click in the preview to edit characters by hand (great for fixing a
+      single mis-aligned corner). Hit <span class="pill">Regenerate</span>
+      to restart from the font.
+    </p>
+  </div>
+
+  <div id="preview-wrap" class="panel">
+    <pre id="preview" contenteditable="true" spellcheck="false">Loading font…</pre>
+    <div id="tag-preview"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/figlet@1.8.0/lib/figlet.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const status = msg => { $("status").textContent = msg || ""; };
+
+  figlet.defaults({ fontPath: "https://cdn.jsdelivr.net/npm/figlet@1.8.0/fonts" });
+
+  function applyStyles() {
+    const fg = $("fg").value;
+    const bg = $("bg").value;
+    $("preview").style.color = fg;
+    $("tag-preview").style.color = fg;
+    $("preview-wrap").style.background = bg;
+  }
+
+  function regenerate() {
+    const text = $("text").value || "NEUROVAULT";
+    const font = $("font").value;
+    status(`Rendering ${font}…`);
+    figlet.text(text, { font }, (err, rendered) => {
+      if (err) {
+        $("preview").textContent = `Error loading font "${font}": ${err.message || err}`;
+        status("Font failed to load.");
+        return;
+      }
+      const lines = rendered.split("\n").map(l => l.replace(/\s+$/, ""));
+      while (lines.length && !lines[0].trim()) lines.shift();
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      $("preview").textContent = lines.join("\n");
+      $("tag-preview").textContent = $("tagline").value;
+      applyStyles();
+      status(`Font: ${font}  ·  ${lines.length} rows × ${Math.max(...lines.map(l => l.length))} cols`);
+    });
+  }
+
+  function buildSvg() {
+    const ascii = $("preview").textContent.replace(/\s+$/, "");
+    const lines = ascii.split("\n");
+    const cols = Math.max(...lines.map(l => l.length));
+    const rows = lines.length;
+    const fg = $("fg").value;
+    const bg = $("bg").value;
+    const tagline = $("tagline").value;
+    const fontSize = parseInt($("font-size").value, 10) || 20;
+    const padding = parseInt($("padding").value, 10) || 36;
+
+    const charW = fontSize * 0.6;
+    const lineH = fontSize * 1.1;
+    const tagH = tagline ? 36 : 0;
+    const width = Math.ceil(cols * charW + padding * 2);
+    const height = Math.ceil(rows * lineH + padding * 2 + tagH);
+
+    const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const texts = lines.map((l, i) =>
+      `    <text class="t" x="0" y="${i * lineH}" xml:space="preserve">${esc(l)}</text>`
+    ).join("\n");
+
+    const tagSvg = tagline
+      ? `  <text class="tag" x="${width / 2}" y="${height - padding / 2}" text-anchor="middle">${esc(tagline)}</text>\n`
+      : "";
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+  <defs>
+    <style>
+      .t {
+        font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", "Cascadia Code", ui-monospace, monospace;
+        font-size: ${fontSize}px;
+        font-weight: 700;
+        fill: ${fg};
+        white-space: pre;
+      }
+      .tag {
+        font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+        font-size: 14px;
+        fill: ${fg};
+        letter-spacing: 0.08em;
+      }
+    </style>
+  </defs>
+  <rect width="100%" height="100%" fill="${bg}" rx="14"/>
+  <g transform="translate(${padding}, ${padding + fontSize})">
+${texts}
+  </g>
+${tagSvg}</svg>
+`;
+  }
+
+  function downloadSvg() {
+    const svg = buildSvg();
+    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const name = ($("text").value || "logo").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "logo";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}-logo.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+    status(`Saved ${name}-logo.svg`);
+  }
+
+  async function copyAscii() {
+    try {
+      await navigator.clipboard.writeText($("preview").textContent);
+      status("ASCII copied to clipboard.");
+    } catch (e) {
+      status("Copy failed — select + Ctrl+C manually.");
+    }
+  }
+
+  // Wiring
+  ["text", "font"].forEach(id => $(id).addEventListener("change", regenerate));
+  $("text").addEventListener("input", () => {
+    clearTimeout(window._regen);
+    window._regen = setTimeout(regenerate, 300);
+  });
+  ["fg", "bg"].forEach(id => $(id).addEventListener("input", applyStyles));
+  $("tagline").addEventListener("input", () => { $("tag-preview").textContent = $("tagline").value; });
+  $("regen").addEventListener("click", regenerate);
+  $("copy").addEventListener("click", copyAscii);
+  $("download").addEventListener("click", downloadSvg);
+
+  regenerate();
+</script>
+</body>
+</html>
