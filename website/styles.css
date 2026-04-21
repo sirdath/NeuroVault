@@ -306,7 +306,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   max-width: 100%;
   margin: 28px auto 20px;
   display: block;
-  filter: drop-shadow(0 20px 60px rgba(222, 115, 86, 0.25));
+  filter: drop-shadow(0 20px 60px var(--peach-glow));
 }
 
 .hero-tagline {
