@@ -553,10 +553,10 @@ code { font-family: var(--mono); font-size: 0.9em;
   gap: 14px;
 }
 .features-brain {
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 4;      /* portrait — natural side-cropping of landscape GIF */
   border-radius: var(--radius);
   background:
-    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.18), transparent 72%),
+    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.22), transparent 72%),
     linear-gradient(150deg, rgba(255, 175, 135, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
   border: 1px solid var(--border);
   backdrop-filter: blur(12px);
@@ -570,18 +570,20 @@ code { font-family: var(--mono); font-size: 0.9em;
   height: 100%;
   object-fit: cover;
   object-position: center center;
-  /* Scale up so only the middle (the densest brain region) is visible.
-     2.2x on the GIF zooms past the sparse outer edges right to the core. */
-  transform: scale(2.2);
+  /* Heavy zoom: object-fit:cover with a portrait container already crops
+     the GIF's left/right (landscape 16:9 → 3:4 portrait container).
+     transform: scale(3.6) then zooms the cropped strip into the core. */
+  transform: scale(3.6);
   transform-origin: center center;
-  filter: saturate(1.2) brightness(1.1);
-  /* Soft vignette so the crop doesn't hit hard edges */
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 72%, transparent 100%);
-          mask-image: radial-gradient(ellipse at center, #000 72%, transparent 100%);
+  filter: saturate(1.25) brightness(1.15);
 }
 @media (max-width: 900px) {
+  .features-brain { aspect-ratio: 4 / 5; }
+  .features-brain img { transform: scale(2.6); }
+}
+@media (max-width: 520px) {
   .features-brain { aspect-ratio: 3 / 2; }
-  .features-brain img { transform: scale(1.8); }
+  .features-brain img { transform: scale(2.0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .features-brain img { /* browsers freeze GIF animation — nothing to disable in CSS, but keep the rule explicit */ }
