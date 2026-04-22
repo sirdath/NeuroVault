@@ -544,13 +544,13 @@ code { font-family: var(--mono); font-size: 0.9em;
   content: "";
   position: absolute;
   inset: 0;
-  background: url("assets/ascii-brain.gif") center center / auto 90% no-repeat;
-  opacity: 0.22;
+  background: url("assets/ascii-brain.gif") center center / auto 110% no-repeat;
+  opacity: 0.65;
   z-index: -1;
   pointer-events: none;
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
-          mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
-  filter: saturate(1.1);
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 55%, transparent 92%);
+          mask-image: radial-gradient(ellipse at center, #000 55%, transparent 92%);
+  filter: saturate(1.25) brightness(1.1);
 }
 /* Under the blue theme the peach GIF still shows peach — that's OK;
    the blue cards sit on top. If it feels off we can render a cyan variant. */
