@@ -532,40 +532,62 @@ code { font-family: var(--mono); font-size: 0.9em;
    Features
    ============================================================ */
 .features {
-  position: relative;
-  overflow: hidden;
   padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
-  isolation: isolate; /* create stacking context so ::before sits below children only */
 }
-/* Animated ASCII-brain background — soft-masked so it fades at edges
-   and doesn't fight the card readability. Cards already have
-   backdrop-filter: blur(12px) so they sit as glass above this layer. */
-.features::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: url("assets/ascii-brain.gif") center center / auto 110% no-repeat;
-  opacity: 0.65;
-  z-index: -1;
-  pointer-events: none;
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 55%, transparent 92%);
-          mask-image: radial-gradient(ellipse at center, #000 55%, transparent 92%);
-  filter: saturate(1.25) brightness(1.1);
-}
-/* Under the blue theme the peach GIF still shows peach — that's OK;
-   the blue cards sit on top. If it feels off we can render a cyan variant. */
-@media (prefers-reduced-motion: reduce) {
-  .features::before { display: none; }
-}
-.feature-grid {
+
+/* Split layout: left column is the animated brain panel,
+   right column is the feature-card grid. Stacks on mobile. */
+.features-split {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(280px, 0.85fr) 1.3fr;
+  gap: clamp(20px, 3vw, 40px);
+  align-items: stretch;
   max-width: var(--maxw);
   margin: 0 auto;
 }
 @media (max-width: 900px) {
-  .feature-grid { grid-template-columns: repeat(2, 1fr); }
+  .features-split { grid-template-columns: 1fr; gap: 20px; }
+}
+.features-brain {
+  position: sticky;
+  top: 80px;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 380px;
+  padding: 20px;
+  border-radius: var(--radius);
+  background:
+    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.12), transparent 70%),
+    linear-gradient(150deg, rgba(255, 175, 135, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.features-brain img {
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: contain;
+  filter: saturate(1.15) brightness(1.05);
+  /* Soft edge fade so the GIF doesn't hard-crop against the panel border */
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 62%, transparent 98%);
+          mask-image: radial-gradient(ellipse at center, #000 62%, transparent 98%);
+}
+@media (max-width: 900px) {
+  .features-brain { position: static; min-height: 260px; }
+  .features-brain img { max-height: 320px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .features-brain img { /* show as still — browsers freeze the GIF with this */
+    animation: none;
+  }
+}
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
 }
 @media (max-width: 520px) {
   .feature-grid { grid-template-columns: 1fr; }
