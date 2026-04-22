@@ -532,7 +532,30 @@ code { font-family: var(--mono); font-size: 0.9em;
    Features
    ============================================================ */
 .features {
+  position: relative;
+  overflow: hidden;
   padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
+  isolation: isolate; /* create stacking context so ::before sits below children only */
+}
+/* Animated ASCII-brain background — soft-masked so it fades at edges
+   and doesn't fight the card readability. Cards already have
+   backdrop-filter: blur(12px) so they sit as glass above this layer. */
+.features::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("assets/ascii-brain.gif") center center / auto 90% no-repeat;
+  opacity: 0.22;
+  z-index: -1;
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
+          mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
+  filter: saturate(1.1);
+}
+/* Under the blue theme the peach GIF still shows peach — that's OK;
+   the blue cards sit on top. If it feels off we can render a cyan variant. */
+@media (prefers-reduced-motion: reduce) {
+  .features::before { display: none; }
 }
 .feature-grid {
   display: grid;
