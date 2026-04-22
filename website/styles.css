@@ -553,10 +553,10 @@ code { font-family: var(--mono); font-size: 0.9em;
   gap: 14px;
 }
 .features-brain {
-  aspect-ratio: 3 / 4;      /* portrait — natural side-cropping of landscape GIF */
+  aspect-ratio: 4 / 5;      /* tall-ish so left/right auto-crop via object-fit:cover */
   border-radius: var(--radius);
   background:
-    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.22), transparent 72%),
+    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.18), transparent 72%),
     linear-gradient(150deg, rgba(255, 175, 135, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
   border: 1px solid var(--border);
   backdrop-filter: blur(12px);
@@ -570,20 +570,17 @@ code { font-family: var(--mono); font-size: 0.9em;
   height: 100%;
   object-fit: cover;
   object-position: center center;
-  /* Heavy zoom: object-fit:cover with a portrait container already crops
-     the GIF's left/right (landscape 16:9 → 3:4 portrait container).
-     transform: scale(3.6) then zooms the cropped strip into the core. */
-  transform: scale(3.6);
+  /* Gentle zoom that keeps ASCII detail intact. The portrait-ish
+     aspect above already does the heavy side-crop via object-fit:cover;
+     the transform below just nudges in on the center without
+     blowing up the individual ASCII characters to pixelated mush. */
+  transform: scale(1.7);
   transform-origin: center center;
-  filter: saturate(1.25) brightness(1.15);
+  filter: saturate(1.2) brightness(1.1);
 }
 @media (max-width: 900px) {
-  .features-brain { aspect-ratio: 4 / 5; }
-  .features-brain img { transform: scale(2.6); }
-}
-@media (max-width: 520px) {
   .features-brain { aspect-ratio: 3 / 2; }
-  .features-brain img { transform: scale(2.0); }
+  .features-brain img { transform: scale(1.4); }
 }
 @media (prefers-reduced-motion: reduce) {
   .features-brain img { /* browsers freeze GIF animation — nothing to disable in CSS, but keep the rule explicit */ }
