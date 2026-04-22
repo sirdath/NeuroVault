@@ -97,6 +97,11 @@ code { font-family: var(--mono); font-size: 0.9em;
   background: linear-gradient(to right, var(--peach), var(--peach-soft));
   z-index: 1000;
   transition: width 60ms linear;
+  display: none; /* hidden by default (desktop) */
+}
+/* Show the scroll progress bar only on mobile */
+@media (max-width: 720px) {
+  .scroll-progress { display: block; }
 }
 
 /* ============================================================
