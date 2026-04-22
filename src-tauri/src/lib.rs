@@ -186,6 +186,104 @@ fn get_vault_path() -> String {
     vault_dir().to_string_lossy().to_string()
 }
 
+/// Brain summary for the offline-fallback path. Fields mirror the server's
+/// ``/api/brains`` response shape so the frontend can treat them identically.
+#[derive(serde::Serialize)]
+struct BrainInfoOffline {
+    id: String,
+    name: String,
+    description: Option<String>,
+    vault_path: Option<String>,
+    is_active: bool,
+}
+
+/// List every brain from ``brains.json`` on disk, no HTTP server needed.
+///
+/// This is the fallback the Tauri frontend uses when the Python sidecar
+/// is off. Without it, the BrainSelector dropdown shows an empty list and
+/// the user can only create a new vault — they can't switch to an
+/// existing one. Returns an empty vec when the registry is missing (fresh
+/// install) so the frontend doesn't need to special-case that.
+#[tauri::command]
+fn list_brains_offline() -> Vec<BrainInfoOffline> {
+    let registry_path = nv_home().join("brains.json");
+    let Ok(data) = fs::read_to_string(&registry_path) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return Vec::new();
+    };
+    let active_id = parsed
+        .get("active")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let Some(brains) = parsed.get("brains").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    brains
+        .iter()
+        .filter_map(|b| {
+            let id = b.get("id").and_then(|v| v.as_str())?.to_string();
+            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
+            let description = b
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let vault_path = b
+                .get("vault_path")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let is_active = id == active_id;
+            Some(BrainInfoOffline {
+                id,
+                name,
+                description,
+                vault_path,
+                is_active,
+            })
+        })
+        .collect()
+}
+
+/// Switch the active brain by rewriting ``brains.json`` directly. Used
+/// by the frontend when the server is off — ``vault_dir()`` re-reads
+/// the registry on every filesystem call, so subsequent ``list_notes``
+/// etc. will pick up the new active brain's vault without a restart.
+///
+/// Returns the new active brain's vault path so the frontend can
+/// immediately fetch the note list for the switched-to vault.
+#[tauri::command]
+fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
+    let registry_path = nv_home().join("brains.json");
+    let data = fs::read_to_string(&registry_path)
+        .map_err(|e| format!("brains.json not readable: {e}"))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&data).map_err(|e| format!("brains.json malformed: {e}"))?;
+
+    // Validate the target id exists before switching — silently activating
+    // a non-existent brain would leave the user stuck with no vault.
+    let exists = parsed
+        .get("brains")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&brain_id))
+        })
+        .unwrap_or(false);
+    if !exists {
+        return Err(format!("brain '{brain_id}' not found in registry"));
+    }
+
+    parsed["active"] = serde_json::Value::String(brain_id);
+    let serialised = serde_json::to_string_pretty(&parsed)
+        .map_err(|e| format!("failed to serialise registry: {e}"))?;
+    fs::write(&registry_path, serialised)
+        .map_err(|e| format!("could not write brains.json: {e}"))?;
+
+    Ok(vault_dir().to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn list_notes() -> Result<Vec<NoteMeta>, String> {
     let vault = vault_dir();
@@ -725,6 +823,7 @@ pub fn run() {
             hide_to_background, brain_storage_stats,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
             export_brain_as_zip,
+            list_brains_offline, set_active_brain_offline,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

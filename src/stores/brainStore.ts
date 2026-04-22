@@ -46,10 +46,43 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   ingest: null,
 
   loadBrains: async () => {
+    // Try the HTTP server first — richer payload (created_at, is_external).
+    // Fall back to the Tauri filesystem command when the sidecar is off so
+    // the BrainSelector dropdown still lists every vault the user has.
     try {
       const res = await fetch(`${API}/api/brains`);
-      if (!res.ok) return;
-      const brains: BrainInfo[] = await res.json();
+      if (res.ok) {
+        const brains: BrainInfo[] = await res.json();
+        const active = brains.find((b) => b.is_active);
+        set({
+          brains,
+          activeBrainId: active?.id ?? null,
+          activeBrainName: active?.name ?? "Default",
+        });
+        return;
+      }
+    } catch {
+      // Server unreachable — fall through to disk.
+    }
+
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      type DiskBrain = {
+        id: string;
+        name: string;
+        description: string | null;
+        vault_path: string | null;
+        is_active: boolean;
+      };
+      const rows = await invoke<DiskBrain[]>("list_brains_offline");
+      const brains: BrainInfo[] = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description ?? "",
+        created_at: "", // disk fallback doesn't surface created_at
+        is_active: r.is_active,
+        vault_path: r.vault_path ?? undefined,
+      }));
       const active = brains.find((b) => b.is_active);
       set({
         brains,
@@ -57,7 +90,8 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
         activeBrainName: active?.name ?? "Default",
       });
     } catch {
-      // Server not running — use defaults
+      // Neither server nor Tauri fs worked — probably running in a browser
+      // build. Leave the list empty rather than throwing.
     }
   },
 
@@ -80,12 +114,35 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
     }, 500);
 
     try {
-      const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
-        method: "POST",
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      set({ activeBrainId: data.brain_id, activeBrainName: data.name });
+      // Try the server's activate endpoint first — gives us live progress
+      // and triggers reingest. If the sidecar is off, fall back to a pure
+      // filesystem switch (rewrite brains.json) so brain switching still
+      // works offline for read / edit flows.
+      let usedServer = false;
+      try {
+        const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          const data = await res.json();
+          set({ activeBrainId: data.brain_id, activeBrainName: data.name });
+          usedServer = true;
+        }
+      } catch {
+        /* fall through to offline path */
+      }
+
+      if (!usedServer) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke<string>("set_active_brain_offline", { brainId });
+        const target = get().brains.find((b) => b.id === brainId);
+        set({
+          activeBrainId: brainId,
+          activeBrainName: target?.name ?? brainId,
+          // No live ingest in offline mode — graph fallback handles it
+          ingest: { phase: "ready", files_done: 0, files_total: 0, current_file: "" },
+        });
+      }
 
       // Clear state from the previous brain before loading the new one —
       // the previously-open note, search, and dirty buffer all belong to
