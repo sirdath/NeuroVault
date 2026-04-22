@@ -72,11 +72,12 @@ class _LazyBrainManager:
         return getattr(self._materialize(), name)
 
 
-import sys as _sys
-if "--mcp-only" in _sys.argv:
-    manager = _LazyBrainManager()  # type: ignore[assignment]
-else:
-    manager = BrainManager()
+# Always lazy. BrainManager() runs sqlite-vec load + vault fingerprint
+# + possible reingest + scheduler threads — easily 5-10s warm, 20s+ cold.
+# Keeping the module-level binding as a transparent proxy means the
+# server boots in milliseconds; the real work happens on the first
+# attribute access (which the background warmup below triggers).
+manager = _LazyBrainManager()  # type: ignore[assignment]
 
 
 # --- Tiered tool registration ----------------------------------------------
@@ -2780,34 +2781,47 @@ def _warm_embedder() -> None:
 
 def main() -> None:
     import sys
+    import threading
 
     mcp_only = "--mcp-only" in sys.argv
+    http_only = "--http-only" in sys.argv
 
-    if not mcp_only:
-        # Eager boot — safe because HTTP-mode and Claude Desktop use a
-        # long-lived session and don't impose a hard handshake deadline.
-        active = manager.get_active()
-        logger.info("Starting NeuroVault MCP server")
-        logger.info("Active brain: {} ({})", active.name, active.brain_id)
-        logger.info("Vault: {}", active.vault_dir)
+    logger.info(
+        "Starting NeuroVault server (mode={})",
+        "mcp-only" if mcp_only else "http-only" if http_only else "dual",
+    )
 
-        from neurovault_server.audit import init_audit_log
-        init_audit_log(active.vault_dir.parent)
+    # Universal background warmup. Fires on a daemon thread so the transport
+    # (stdio for MCP, uvicorn for HTTP) can start accepting connections in
+    # milliseconds. Any request that arrives mid-warmup serialises on the
+    # singleton — correctness is preserved, latency just blocks on the first
+    # slow call instead of every caller paying at startup. Three things get
+    # pre-loaded here:
+    #   1) BrainManager()  — sqlite-vec load + vault fingerprint check +
+    #      possible reingest. Biggest cost, 5-10s warm, 20s+ cold.
+    #   2) audit log       — needs active brain's dir, cheap once step 1 done.
+    #   3) embedder        — fastembed ONNX BGE model, ~300 MB, 2-3s.
+    def _warmup():
+        try:
+            logger.info("warmup: materialising BrainManager")
+            active = manager.get_active()
+            logger.info("warmup: brain active = {} ({})", active.name, active.brain_id)
+            try:
+                from neurovault_server.audit import init_audit_log
+                init_audit_log(active.vault_dir.parent)
+            except Exception as e:
+                logger.debug("warmup: audit-log init skipped: {}", e)
+            logger.info("warmup: loading embedder")
+            _warm_embedder()
+            logger.info("warmup: complete — first call will be fast")
+        except Exception as e:
+            logger.warning("warmup failed (tools still work, just cold): {}", e)
 
-        _warm_embedder()
-    else:
-        # MCP-only mode: let mcp.run() come up immediately so Claude
-        # Code's stdio handshake lands. BrainManager stays unmaterialised
-        # until the first tool invocation via _LazyBrainManager. Audit
-        # log init happens there too (ctx.vault_dir is only known after
-        # the brain loads).
-        logger.info("Starting NeuroVault MCP server (lazy init — --mcp-only)")
+    threading.Thread(target=_warmup, daemon=True, name="nv-warmup").start()
 
-    # Emit the JS SDK so execute_js() has something to import. Skipped
-    # in --mcp-only because it's only used by the execute_js tool, and
-    # we can write it lazily on first use. The file I/O itself is fast
-    # but the import cost of js_sdk pulls in more machinery than we
-    # want during the MCP handshake window.
+    # JS SDK emission — only needed by the execute_js tool, and only in
+    # modes that expose it. Skipped in mcp-only because mcp_proxy.py
+    # doesn't proxy execute_js and the bundled sidecar is HTTP-mode anyway.
     if not mcp_only:
       try:
         from neurovault_server.js_sdk import write_sdk
@@ -2829,32 +2843,9 @@ def main() -> None:
         # Pure MCP stdio — used when Claude Code / Cursor spawns the
         # server as an MCP subprocess. Skipping start_api_server avoids
         # an EADDRINUSE clash with the Tauri app's own sidecar on 8765
-        # and keeps boot clean for the stdio JSON-RPC handshake.
-        logger.info("Running in MCP-only mode (stdio, no HTTP)")
-
-        # Background warmup: the first tool call would otherwise pay
-        # for BrainManager materialisation (sqlite-vec load + vault
-        # fingerprint + possible reingest, 5-10s) and embedder load
-        # (~2-3s). Kicking this off before mcp.run blocks means the
-        # warmup runs while the user is reading the session welcome
-        # message; by the time they fire a recall, the stack is warm.
-        # If they call recall before warmup finishes, it just waits on
-        # the same singletons — no correctness issue.
-        import threading as _thr
-        def _warmup():
-            try:
-                logger.info("MCP warmup: materialising BrainManager")
-                active = manager.get_active()
-                logger.info("MCP warmup: brain active = {}", active.brain_id)
-                from neurovault_server.audit import init_audit_log
-                init_audit_log(active.vault_dir.parent)
-                logger.info("MCP warmup: loading embedder")
-                _warm_embedder()
-                logger.info("MCP warmup complete — first tool call will be fast")
-            except Exception as e:
-                logger.warning("MCP warmup failed (tools still work, just cold): {}", e)
-        _thr.Thread(target=_warmup, daemon=True, name="nv-mcp-warmup").start()
-
+        # and keeps boot clean for the stdio JSON-RPC handshake. The
+        # universal warmup kicked off above already handles cold-start
+        # latency for this path.
         mcp.run(transport="stdio")
     else:
         start_api_server(manager)
