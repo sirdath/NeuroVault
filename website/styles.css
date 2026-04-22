@@ -627,19 +627,35 @@ code { font-family: var(--mono); font-size: 0.9em;
 .feature.reveal:nth-child(7) { transition-delay: 0.48s; }
 .feature.reveal:nth-child(8) { transition-delay: 0.56s; }
 
-.feature-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px; height: 34px;
-  border-radius: 8px;
-  background: rgba(222, 115, 86, 0.12);
-  border: 1px solid var(--border-hot);
-  color: var(--peach-soft);
-  margin-bottom: 10px;
+/* ASCII icons — replace the old SVG .feature-icon boxes.
+   Each icon is rendered in a <pre> tag, monospace, peach-colored.
+   Text-shadow gives a subtle glow that matches the Vault Noir vibe. */
+.feature-ascii {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.05;
+  color: var(--peach);
+  margin: 0 0 12px;
+  white-space: pre;
+  letter-spacing: 0;
+  text-shadow: 0 0 10px rgba(222, 115, 86, 0.35);
+  transition: transform .25s ease, text-shadow .25s ease, color .25s ease;
+  user-select: none;
+  min-height: 60px;
 }
-.feature-icon svg {
-  width: 17px; height: 17px;
+.feature:hover .feature-ascii {
+  transform: translateY(-1px) scale(1.04);
+  color: var(--peach-soft);
+  text-shadow: 0 0 18px rgba(255, 175, 135, 0.55);
+}
+[data-theme="blue"] .feature-ascii {
+  text-shadow: 0 0 10px rgba(77, 212, 232, 0.35);
+}
+[data-theme="blue"] .feature:hover .feature-ascii {
+  text-shadow: 0 0 18px rgba(168, 229, 240, 0.55);
+}
+@media (max-width: 520px) {
+  .feature-ascii { font-size: 10px; }
 }
 
 .feature h3 {
