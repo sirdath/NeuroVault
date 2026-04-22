@@ -425,9 +425,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     ctx.strokeStyle = stateRing;
     ctx.stroke();
 
-    // Labels become readable past a zoom threshold — saves clutter at far zoom
-    // and matches Obsidian's default behaviour.
-    if (globalScale >= 0.6) {
+    // Labels only appear once the user zooms in past ~1.4× default. At the
+    // overview zoom, node colour + folder clusters carry the story and
+    // labels would just turn the graph into wall-of-text. The hover card
+    // already shows the title, so readers never lose identity.
+    if (globalScale >= 1.4) {
       const fontSize = 12 / globalScale;
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
       ctx.fillStyle = "#8a88a0";
