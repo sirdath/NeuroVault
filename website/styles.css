@@ -535,59 +535,64 @@ code { font-family: var(--mono); font-size: 0.9em;
   padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
 }
 
-/* Split layout: left column is the animated brain panel,
-   right column is the feature-card grid. Stacks on mobile. */
+/* Split layout: left column = big brain + 2 cards, right column = 6 cards. */
 .features-split {
   display: grid;
-  grid-template-columns: minmax(280px, 0.85fr) 1.3fr;
-  gap: clamp(20px, 3vw, 40px);
-  align-items: stretch;
+  grid-template-columns: minmax(300px, 1fr) 1.4fr;
+  gap: clamp(20px, 3vw, 36px);
+  align-items: start;
   max-width: var(--maxw);
   margin: 0 auto;
 }
 @media (max-width: 900px) {
   .features-split { grid-template-columns: 1fr; gap: 20px; }
 }
-.features-brain {
-  position: sticky;
-  top: 80px;
-  align-self: start;
+.features-left {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 380px;
-  padding: 20px;
+  flex-direction: column;
+  gap: 14px;
+}
+.features-brain {
+  aspect-ratio: 4 / 3;
   border-radius: var(--radius);
   background:
-    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.12), transparent 70%),
-    linear-gradient(150deg, rgba(255, 175, 135, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%);
+    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.18), transparent 72%),
+    linear-gradient(150deg, rgba(255, 175, 135, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
   border: 1px solid var(--border);
   backdrop-filter: blur(12px);
   overflow: hidden;
+  position: relative;
 }
 .features-brain img {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
-  max-height: 520px;
-  object-fit: contain;
-  filter: saturate(1.15) brightness(1.05);
-  /* Soft edge fade so the GIF doesn't hard-crop against the panel border */
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 62%, transparent 98%);
-          mask-image: radial-gradient(ellipse at center, #000 62%, transparent 98%);
+  height: 100%;
+  object-fit: cover;
+  object-position: center center;
+  /* Scale up so only the middle (the densest brain region) is visible.
+     2.2x on the GIF zooms past the sparse outer edges right to the core. */
+  transform: scale(2.2);
+  transform-origin: center center;
+  filter: saturate(1.2) brightness(1.1);
+  /* Soft vignette so the crop doesn't hit hard edges */
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 72%, transparent 100%);
+          mask-image: radial-gradient(ellipse at center, #000 72%, transparent 100%);
 }
 @media (max-width: 900px) {
-  .features-brain { position: static; min-height: 260px; }
-  .features-brain img { max-height: 320px; }
+  .features-brain { aspect-ratio: 3 / 2; }
+  .features-brain img { transform: scale(1.8); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .features-brain img { /* show as still — browsers freeze the GIF with this */
-    animation: none;
-  }
+  .features-brain img { /* browsers freeze GIF animation — nothing to disable in CSS, but keep the rule explicit */ }
 }
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
+}
+@media (max-width: 1100px) {
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 520px) {
   .feature-grid { grid-template-columns: 1fr; }
