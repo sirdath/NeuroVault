@@ -535,65 +535,21 @@ code { font-family: var(--mono); font-size: 0.9em;
   padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
 }
 
-/* Split layout: left column = big brain + 2 cards, right column = 6 cards. */
-.features-split {
-  display: grid;
-  grid-template-columns: minmax(300px, 1fr) 1.4fr;
-  gap: clamp(20px, 3vw, 36px);
-  align-items: start;
-  max-width: var(--maxw);
-  margin: 0 auto;
-}
-@media (max-width: 900px) {
-  .features-split { grid-template-columns: 1fr; gap: 20px; }
-}
-.features-left {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.features-brain {
-  aspect-ratio: 4 / 5;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-  overflow: hidden;
-  position: relative;
-  /* Background = peach GIF + peach glow + subtle card gradient, layered.
-     The GIF is zoomed via background-size: 240% so the heavy center-crop
-     shows only the densest brain region. Now that the source is rendered
-     at width=240 chars, this zoom level stays crisp without pixelation. */
-  background-image:
-    radial-gradient(ellipse at center, rgba(222, 115, 86, 0.20), transparent 72%),
-    url("assets/ascii-brain.gif"),
-    linear-gradient(150deg, rgba(255, 175, 135, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
-  background-size: auto, 240%, auto;
-  background-position: center, center, center;
-  background-repeat: no-repeat, no-repeat, no-repeat;
-  filter: saturate(1.15) brightness(1.08);
-}
-/* Blue theme swaps in the cyan variant of the brain + a cyan glow */
-[data-theme="blue"] .features-brain {
-  background-image:
-    radial-gradient(ellipse at center, rgba(77, 212, 232, 0.22), transparent 72%),
-    url("assets/ascii-brain-blue.gif"),
-    linear-gradient(150deg, rgba(168, 229, 240, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
-}
-@media (max-width: 900px) {
-  .features-brain {
-    aspect-ratio: 3 / 2;
-    background-size: auto, 170%, auto;
-  }
-}
+/* ASCII brain animation disabled — assets still in website/assets/ and
+   the Remotion source + asciify.py pipeline in demo-video/ if we want
+   to bring it back later. See commit df0800a for the split-layout
+   variant. */
 @media (prefers-reduced-motion: reduce) {
   .features-brain img { /* browsers freeze GIF animation — nothing to disable in CSS, but keep the rule explicit */ }
 }
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
+  max-width: var(--maxw);
+  margin: 0 auto;
 }
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 520px) {
