@@ -532,13 +532,12 @@ code { font-family: var(--mono); font-size: 0.9em;
    Features
    ============================================================ */
 .features {
-  padding: clamp(70px, 11vh, 120px) clamp(16px, 4vw, 40px);
+  padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
 }
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  grid-auto-rows: minmax(160px, auto);
-  gap: 18px;
+  gap: 14px;
   max-width: var(--maxw);
   margin: 0 auto;
 }
@@ -550,7 +549,7 @@ code { font-family: var(--mono); font-size: 0.9em;
 }
 .feature {
   position: relative;
-  padding: 28px 24px;
+  padding: 20px 20px;
   background: linear-gradient(
     150deg,
     rgba(255, 175, 135, 0.04) 0%,
@@ -561,43 +560,17 @@ code { font-family: var(--mono); font-size: 0.9em;
   backdrop-filter: blur(12px);
   overflow: hidden;
   transition: border-color .25s ease, transform .25s ease;
-  grid-column: span 2; /* default: 2 of 4 columns, so 2 per row */
-}
-@media (max-width: 900px) {
-  .feature { grid-column: span 1; }
-}
-@media (max-width: 520px) {
-  .feature { grid-column: span 1; }
 }
 
-/* Bento hero: promote the #1 differentiator to 2x width on desktop.
-   Still 1 cell on mobile via the breakpoints above. */
-.feature-hero {
-  grid-column: span 4;
-  padding: 36px 32px;
-  background: linear-gradient(
-    135deg,
-    rgba(222, 115, 86, 0.08) 0%,
-    rgba(255, 175, 135, 0.03) 100%
-  );
-  border-color: var(--border-hot);
-}
-@media (max-width: 900px) {
-  .feature-hero { grid-column: span 2; }
-}
-@media (max-width: 520px) {
-  .feature-hero { grid-column: span 1; padding: 28px 24px; }
-}
-
-/* Mouse-follow spotlight on the hero card (borrowed from frontendmaxxing
+/* Mouse-follow spotlight on every card (borrowed from frontendmaxxing
    spotlight-reveal pattern). Peach glow that tracks the cursor. */
-.feature-hero::after {
+.feature::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
   background: radial-gradient(
-    400px circle at var(--mx, 50%) var(--my, 50%),
+    260px circle at var(--mx, 50%) var(--my, 50%),
     var(--peach-glow),
     transparent 40%
   );
@@ -606,16 +579,8 @@ code { font-family: var(--mono); font-size: 0.9em;
   pointer-events: none;
   z-index: 0;
 }
-.feature-hero:hover::after { opacity: 1; }
-.feature-hero > * { position: relative; z-index: 1; }
-.feature-hero h3 { font-size: 22px; }
-.feature-hero p { font-size: 15.5px; max-width: 68ch; }
-.feature-hero .feature-icon {
-  width: 52px; height: 52px;
-}
-.feature-hero .feature-icon svg {
-  width: 26px; height: 26px;
-}
+.feature:hover::after { opacity: 0.6; }
+.feature > * { position: relative; z-index: 1; }
 
 .feature::before {
   content: "";
@@ -658,28 +623,28 @@ code { font-family: var(--mono); font-size: 0.9em;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px; height: 42px;
-  border-radius: 10px;
+  width: 34px; height: 34px;
+  border-radius: 8px;
   background: rgba(222, 115, 86, 0.12);
   border: 1px solid var(--border-hot);
   color: var(--peach-soft);
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 .feature-icon svg {
-  width: 20px; height: 20px;
+  width: 17px; height: 17px;
 }
 
 .feature h3 {
-  margin: 0 0 8px;
-  font-size: 17px;
+  margin: 0 0 4px;
+  font-size: 15.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 .feature p {
   margin: 0;
-  font-size: 14.5px;
+  font-size: 13.5px;
   color: var(--text-muted);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 /* ============================================================

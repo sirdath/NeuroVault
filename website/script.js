@@ -88,10 +88,10 @@
     reveals.forEach((el) => el.classList.add("is-in"));
   }
 
-  // ----- Spotlight mouse-follow on the hero feature card ------------------
-  // Sets --mx/--my CSS vars on the card so the radial gradient (.feature-hero::after)
-  // tracks the cursor. Pattern borrowed from ../frontendmaxxing/effects/spotlight-reveal.
-  document.querySelectorAll(".feature-hero").forEach((card) => {
+  // ----- Spotlight mouse-follow on every feature card ---------------------
+  // Sets --mx/--my CSS vars on the hovered card so the radial gradient
+  // (.feature::after) tracks the cursor. Pattern from frontendmaxxing/effects.
+  document.querySelectorAll(".feature").forEach((card) => {
     card.addEventListener("mousemove", (e) => {
       const r = card.getBoundingClientRect();
       card.style.setProperty("--mx", `${e.clientX - r.left}px`);
