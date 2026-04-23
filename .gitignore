@@ -29,3 +29,18 @@ server/*.egg-info/
 server/dist/
 server/build/
 *.pyc
+
+# Tauri release bundles (installers are built locally and uploaded to GH releases)
+src-tauri/target/
+src-tauri/WixTools/
+
+# Demo-video build artifacts (Remotion renders, hundreds of MB)
+demo-video/out/
+demo-video/.remotion/
+
+# Eval run logs (keep baselines under eval/baselines/, ignore ad-hoc run logs)
+eval/*.log
+
+# Python caches that slip in under subdirs
+**/__pycache__/
+**/*.pyc
