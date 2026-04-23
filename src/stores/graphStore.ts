@@ -12,18 +12,34 @@ export interface SimNode extends GraphNode {
   pinned: boolean;
 }
 
+/** One-shot "please tween to this node" request. The NeuralGraph
+ *  component subscribes; when it sees a new `at` timestamp it animates
+ *  the camera + draws a fading pulse ring for ~1.5s. `at` is the
+ *  trigger timestamp — consumers re-read it to detect new requests
+ *  even for repeat selections of the same node. */
+export interface FocusRequest {
+  nodeId: string;
+  at: number;
+}
+
 interface GraphStore {
   nodes: SimNode[];
   edges: GraphEdge[];
   hoveredNode: string | null;
   selectedNode: string | null;
   loading: boolean;
+  focusRequest: FocusRequest | null;
 
   loadGraph: () => Promise<void>;
   setHovered: (id: string | null) => void;
   setSelected: (id: string | null) => void;
   pinNode: (id: string, x: number, y: number) => void;
   unpinNode: (id: string) => void;
+  /** Fire a new focus-tween request. Callers are the Cmd+K palette
+   *  (find-a-node-from-search) and anything else that wants to jump
+   *  the camera to a specific node. NeuralGraph handles the actual
+   *  animation; this just hands off the node id + timestamp. */
+  requestFocus: (nodeId: string) => void;
 }
 
 export const useGraphStore = create<GraphStore>((set) => ({
@@ -32,6 +48,7 @@ export const useGraphStore = create<GraphStore>((set) => ({
   hoveredNode: null,
   selectedNode: null,
   loading: false,
+  focusRequest: null,
 
   loadGraph: async () => {
     set({ loading: true });
@@ -87,4 +104,7 @@ export const useGraphStore = create<GraphStore>((set) => ({
         n.id === id ? { ...n, pinned: false } : n
       ),
     })),
+
+  requestFocus: (nodeId) =>
+    set({ focusRequest: { nodeId, at: Date.now() } }),
 }));

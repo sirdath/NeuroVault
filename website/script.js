@@ -24,9 +24,13 @@
     os = "android";
   }
 
+  // Fallback: the releases page (always works). The GitHub API lookup below
+  // upgrades this to a direct `.exe` URL so clicks trigger a download instead
+  // of opening a page where the user has to hunt for the asset.
   const WINDOWS_LATEST = "https://github.com/daththeanalyst/NeuroVault/releases/latest";
   const RELEASES_PAGE  = "https://github.com/daththeanalyst/NeuroVault/releases";
   const REPO_SOURCE    = "https://github.com/daththeanalyst/NeuroVault#for-developers";
+  const GH_API_LATEST  = "https://api.github.com/repos/daththeanalyst/NeuroVault/releases/latest";
 
   // Present the most relevant download copy for the visitor. Windows is the
   // only platform with a published binary right now, so non-Windows visitors
@@ -52,6 +56,48 @@
     }
   }
 
+  // Ask the GitHub API for the latest release, pick the Windows setup asset,
+  // and rewrite the Windows download buttons to point directly at the .exe.
+  // On failure (rate-limit, offline, API outage) we keep the releases-page
+  // fallback already set by relabelButton().
+  async function resolveDirectWindowsInstaller() {
+    try {
+      const res = await fetch(GH_API_LATEST, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const assets = Array.isArray(data.assets) ? data.assets : [];
+      // Tauri NSIS output: NeuroVault_<version>_x64-setup.exe
+      const asset = assets.find(
+        (a) => typeof a.name === "string" && /_x64-setup\.exe$/i.test(a.name)
+      );
+      if (!asset || !asset.browser_download_url) return null;
+      const mb = asset.size ? (asset.size / (1024 * 1024)).toFixed(1) : null;
+      return {
+        url: asset.browser_download_url,
+        sizeLabel: mb ? `${mb} MB · x64 installer` : "x64 installer",
+        version: data.tag_name || "",
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function applyDirectInstaller(direct) {
+    if (!direct || os !== "windows") return;
+    const primaryAnchor = document.getElementById("primary-download");
+    const primarySub    = document.getElementById("primary-sub");
+    if (primaryAnchor) primaryAnchor.href = direct.url;
+    if (primarySub) primarySub.textContent = direct.sizeLabel;
+
+    const ctaLabel = document.getElementById("cta-label");
+    if (ctaLabel) {
+      const ctaAnchor = ctaLabel.closest("a");
+      if (ctaAnchor) ctaAnchor.href = direct.url;
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     relabelButton(
       document.getElementById("primary-label"),
@@ -65,6 +111,12 @@
     if (ctaLabel) {
       const ctaAnchor = ctaLabel.closest("a");
       relabelButton(ctaLabel, ctaSub, ctaAnchor);
+    }
+
+    // Fire-and-forget: upgrade Windows buttons to direct .exe URLs. Fires
+    // after the initial label set so users never see a broken state.
+    if (os === "windows") {
+      resolveDirectWindowsInstaller().then(applyDirectInstaller);
     }
   });
 

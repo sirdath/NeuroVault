@@ -16,6 +16,8 @@ import { ActivityBar } from "./components/ActivityBar";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
+import { useGraphStore } from "./stores/graphStore";
+import { toast } from "./stores/toastStore";
 import { fetchStatus } from "./lib/api";
 
 type View = "editor" | "graph" | "compile";
@@ -57,6 +59,69 @@ export default function App() {
   useEffect(() => {
     initVault();
   }, [initVault]);
+
+  // --- Deep-link handler ----------------------------------------------
+  //
+  // Subscribes to `neurovault-deep-link` events emitted by the Rust
+  // side when a `neurovault://…` URL is opened (cold-start or forwarded
+  // from single-instance). Supported shapes:
+  //
+  //   neurovault://engram/<id>             → open in editor
+  //   neurovault://engram/<id>?view=graph  → switch to graph + focus
+  //
+  // `<id>` is the engram UUID that MCP recall results carry. We resolve
+  // id → title via graphStore.nodes (stable across reloads), then
+  // title → filename via noteStore.notes. If the graph isn't loaded
+  // yet (first boot, cold cache) we emit a toast and bail — user can
+  // retry after the graph populates.
+  useEffect(() => {
+    const un = listen<string[]>("neurovault-deep-link", (event) => {
+      const urls = event.payload ?? [];
+      for (const raw of urls) {
+        try {
+          const url = new URL(raw);
+          if (url.protocol !== "neurovault:") continue;
+          // `URL` on Windows parses `neurovault://engram/<id>` with
+          // host=engram and pathname=/<id>. We accept both so the
+          // format is forgiving.
+          const kind = url.host || url.pathname.split("/").filter(Boolean)[0] || "";
+          const id = url.host ? url.pathname.replace(/^\/+/, "") : url.pathname.split("/").filter(Boolean)[1] ?? "";
+          const preferredView = url.searchParams.get("view");
+
+          if (kind !== "engram" || !id) {
+            toast.warning(`unrecognised deep link: ${raw}`);
+            continue;
+          }
+
+          const graphNodes = useGraphStore.getState().nodes;
+          const noteList = useNoteStore.getState().notes;
+          const match = graphNodes.find((g) => g.id === id);
+          if (!match) {
+            toast.warning(`deep link: engram ${id.slice(0, 8)}… not found (graph may still be loading)`);
+            continue;
+          }
+          const note = noteList.find((n) => n.title === match.title);
+
+          if (preferredView === "graph") {
+            setView("graph");
+            // requestFocus after view switch so the tween lands on
+            // the graph view, not a hidden canvas. A 50ms tick is
+            // enough for the view state to propagate.
+            window.setTimeout(() => {
+              useGraphStore.getState().requestFocus(id);
+            }, 50);
+          } else {
+            setView("editor");
+            if (note) useNoteStore.getState().selectNote(note.filename);
+          }
+          toast.info(`opened: ${match.title}`);
+        } catch (e) {
+          toast.error(`bad deep link: ${(e as Error).message}`);
+        }
+      }
+    });
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, [setView]);
 
   // Server health monitor — polls faster while booting for snappy feedback
   useEffect(() => {
@@ -501,6 +566,7 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         commands={commands}
+        currentView={view}
       />
       <QuickCapture
         open={quickCaptureOpen}

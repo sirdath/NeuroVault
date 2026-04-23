@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from "react";
+import type { SimulationNodeDatum } from "d3-force";
 import { useGraphStore } from "../stores/graphStore";
 import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
@@ -23,19 +24,12 @@ const ForceGraph3D = lazy(() =>
   import("react-force-graph-3d").then((m) => ({ default: m.default }))
 );
 
-const STATE_COLORS: Record<string, string> = {
-  fresh: "#f0a500",
-  active: "#f0a500",
-  connected: "#00c9b1",
-  dormant: "#35335a",
-  consolidated: "#1f1f2e",
-};
-
-const STATE_GLOW: Record<string, string> = {
-  fresh: "rgba(240, 165, 0, 0.22)",
-  active: "rgba(240, 165, 0, 0.22)",
-  connected: "rgba(0, 201, 177, 0.14)",
-};
+// STATE_COLORS + STATE_GLOW were removed in the graph-aesthetic
+// redesign (2026-04-23). Node state (fresh/active/dormant) is now
+// encoded as a single alpha channel on the fill, not a separate
+// ring + halo — the previous layered look was too busy on the
+// small node sizes and competed with folder color as the primary
+// identity signal.
 
 /** Edge color by link_type — typed-wikilink vocabulary mapped to a palette
  *  so the graph communicates relationship semantics at a glance.
@@ -59,30 +53,33 @@ function edgeColor(linkType: string, alpha: number): string {
   }
 }
 
+/** Node radius curve — tasteful, not domineering. Hand-tuned against
+ *  Obsidian + Cosmograph references: at median access_count (~5) a
+ *  node draws at ~4 px, capped at 7 px for the hottest 1-accessed-a-
+ *  day heroes. Previous curve (6-20 px) produced a hairball of big
+ *  discs that left no room for the edges to breathe. */
 function nodeRadius(accessCount: number): number {
-  // Same curve as the old hand-rolled sim so the perceived "size" stays
-  // consistent for existing users.
-  return Math.min(20, 6 + Math.sqrt(accessCount) * 2);
+  return Math.min(7, 2.5 + Math.sqrt(Math.max(0, accessCount)) * 0.6);
 }
 
-/** Deterministic palette — a folder always maps to the same color across
- *  reloads and machines. Hand-picked against the app's dark navy bg so
- *  even small nodes pop without being garish. Peach leads the list so a
- *  vault with only root-level notes (empty folder string) still feels
- *  like it belongs to the NeuroVault brand. */
+/** Deterministic palette — a folder always maps to the same color
+ *  across reloads. Redesigned as a cohesive cool-tone set with ONE
+ *  warm brand accent (peach), replacing the prior rainbow (12 hues
+ *  that collectively looked chaotic against the dark-navy canvas).
+ *
+ *  Philosophy: when the graph is "the hero view people screenshot
+ *  to show off their brain", colour harmony matters more than
+ *  colour variety. Eight cohesive tones group folders without
+ *  making the canvas feel like a toy chest. */
 const FOLDER_PALETTE = [
-  "#DE7356",  // peach (brand)
-  "#00c9b1",  // teal
-  "#8b7cf8",  // purple
-  "#60a5fa",  // blue
-  "#f0a500",  // amber
-  "#f472b6",  // pink
-  "#34d399",  // green
-  "#38bdf8",  // sky
-  "#a78bfa",  // violet
-  "#fb7185",  // rose
-  "#facc15",  // yellow
-  "#FFAF87",  // peach-soft
+  "#DE7356",  // peach (brand accent — the one warm)
+  "#5CC8A8",  // soft teal
+  "#6C9FD8",  // sky blue
+  "#A78BFA",  // violet
+  "#87A396",  // sage
+  "#C9A3C8",  // dusty rose
+  "#7891B0",  // slate blue
+  "#C9A673",  // warm sand
 ];
 
 function folderColor(folder: string): string {
@@ -95,6 +92,24 @@ function folderColor(folder: string): string {
     h = (h * 16777619) >>> 0;
   }
   return FOLDER_PALETTE[h % FOLDER_PALETTE.length]!;
+}
+
+/** Turn a CSS/hex color into an rgba() with the given alpha. Handles
+ *  both `#rrggbb` + `rgba(...)` input shapes — folder colors are hex,
+ *  node glow colors are rgba already. Pure function; hoisted outside
+ *  the component so useCallback deps don't churn every render. */
+function withAlpha(c: string, alpha: number): string {
+  if (c.startsWith("#") && c.length === 7) {
+    const r = parseInt(c.slice(1, 3), 16);
+    const g = parseInt(c.slice(3, 5), 16);
+    const b = parseInt(c.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (c.startsWith("rgba(")) {
+    // Replace the last comma-separated value (alpha).
+    return c.replace(/,\s*[\d.]+\)$/, `, ${alpha})`);
+  }
+  return c;
 }
 
 /** Custom d3-force that pulls each node toward its folder's centroid.
@@ -220,9 +235,23 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     clusterAttachedRef.current = false;
   }, [mode]);
 
-  // Install the folder-cluster force on the 2D graph's d3-force sim.
-  // Uses an interval to poll because the ref isn't set until after
-  // Suspense resolves the lazy import + the library mounts internally.
+  // Install the folder-cluster force + tighter charge/collide tuning
+  // on the 2D graph's d3-force sim. Default force-graph parameters
+  // are tuned for ~100 nodes; at 250+ nodes with 30k+ edges the
+  // default charge (-30) and no-collide behaviour produce a hairball.
+  //
+  // Cluster strength 0.03 (was 0.08): gentler pull so folders are
+  // still visible as regions but don't clump into tight balls that
+  // hide intra-folder structure.
+  //
+  // Charge -120: ~4× default repulsion; spreads the graph into a
+  // more readable layout at our scale.
+  //
+  // Collide radius: matches the drawn `nodeRadius` + a 4-px buffer
+  // so nodes never overlap visually. `replace` rendering mode made
+  // the library's internal collision calc use `nodeVal` (which maps
+  // to a smaller radius than we actually draw) — this fixes the
+  // "nodes intertwine" symptom.
   useEffect(() => {
     if (mode !== "2d") return;
     if (clusterAttachedRef.current) return;
@@ -233,12 +262,51 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       d3ReheatSimulation?: () => void;
     };
 
-    const tryAttach = () => {
+    const tryAttach = async () => {
       if (cancelled || clusterAttachedRef.current) return;
       const fg = fg2dRef.current as D3ForceAPI | undefined;
       if (!fg || typeof fg.d3Force !== "function") return;
       try {
-        fg.d3Force("cluster", createClusterForce(0.08));
+        // Lazy-load d3-force. ~30 KB gzipped, already a transitive
+        // dep of react-force-graph-2d — no bundle cost.
+        const d3 = await import("d3-force");
+
+        // Force tuning — rebalanced for the smaller 2.5-7 px node
+        // size. Default force-graph is tuned for bigger nodes at
+        // ~100 count; our 250+ nodes at smaller draw size need
+        // less aggressive repulsion + tighter links to look tidy.
+        //
+        //   charge -90, distanceMax 280  → enough to separate
+        //     clusters without flinging outliers to the edge of
+        //     the canvas.
+        //   collide r + 1 px  → matched to the (smaller) drawn
+        //     radius; tight enough that the graph packs densely
+        //     but no overlap.
+        //   cluster 0.025 → folder pull is a visual hint, not a
+        //     vacuum.
+        //   link distance 26 → nodes connected by a strong edge
+        //     sit close, forming a readable "group". Was 50,
+        //     felt sparse against the smaller nodes.
+        fg.d3Force(
+          "charge",
+          d3.forceManyBody().strength(-90).distanceMax(280),
+        );
+        const collide = d3
+          .forceCollide<SimulationNodeDatum>()
+          .radius((node) => {
+            const n = node as SimulationNodeDatum & { access_count?: number };
+            return nodeRadius(n.access_count ?? 0) + 1;
+          })
+          .strength(0.95)
+          .iterations(2);
+        fg.d3Force("collide", collide);
+        fg.d3Force("cluster", createClusterForce(0.025));
+        const linkForce = (fg as unknown as {
+          d3Force: (n: string) => { distance?: (d: number) => unknown } | undefined;
+        }).d3Force("link");
+        if (linkForce && typeof linkForce.distance === "function") {
+          linkForce.distance(26);
+        }
         fg.d3ReheatSimulation?.();
         clusterAttachedRef.current = true;
       } catch {
@@ -255,12 +323,64 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [mode]);
 
   const { nodes, edges, loadGraph, setSelected } = useGraphStore();
+  const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
 
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const notesList = useNoteStore((s) => s.notes);
   useEffect(() => { loadGraph(); }, [loadGraph, activeBrainId, notesList]);
+
+  // Pulse-ring state. `focusPulse` carries the node id + start time
+  // of the most recent focus request. The per-frame renderer reads
+  // elapsed time and draws a fading ring around the node; cleared
+  // ~1.5s after the request. Separate from `focusedNodeId` (which is
+  // the hover-dim state) because the two are independent signals.
+  const [focusPulse, setFocusPulse] = useState<{ nodeId: string; start: number } | null>(null);
+
+  // Wake the 2D graph's camera to the focused node + kick off the
+  // pulse ring whenever the store fires a new `requestFocus`. Runs
+  // only when the request timestamp changes; repeated focus requests
+  // for the same node still re-tween because `at` bumps each call.
+  useEffect(() => {
+    if (!focusRequest) return;
+    if (mode !== "2d") return; // 3D camera tween would need a different API
+    const target = (nodes as Array<SimNode & { x?: number; y?: number }>)
+      .find((n) => n.id === focusRequest.nodeId);
+    if (!target || target.x == null || target.y == null) return;
+
+    type CamApi = {
+      centerAt?: (x: number, y: number, ms?: number) => void;
+      zoom?: (scale: number, ms?: number) => void;
+    };
+    const fg = fg2dRef.current as CamApi | undefined;
+    // centerAt tweens the camera over `ms`; zoom slides the zoom
+    // factor over the same duration so both land together.
+    fg?.centerAt?.(target.x, target.y, 450);
+    fg?.zoom?.(2.2, 450);
+
+    setFocusPulse({ nodeId: focusRequest.nodeId, start: Date.now() });
+    // Clear the pulse after its animation window. Using a timeout
+    // instead of a prop-driven render loop keeps idle frames at zero.
+    const id = window.setTimeout(() => setFocusPulse(null), 1500);
+    return () => window.clearTimeout(id);
+  }, [focusRequest, mode, nodes]);
+
+  // During the pulse window, kick a per-frame repaint so the ring
+  // actually animates. force-graph's internal render loop goes idle
+  // after cooldown; `tickFrame()` on the ref forces a single paint.
+  // Only runs while a pulse is active; idle frames stay free.
+  useEffect(() => {
+    if (!focusPulse) return;
+    let raf = 0;
+    const tick = () => {
+      const fg = fg2dRef.current as { tickFrame?: () => void } | undefined;
+      fg?.tickFrame?.();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [focusPulse]);
 
   // Container resize → re-measure so ForceGraph fills the pane.
   useEffect(() => {
@@ -278,15 +398,49 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
 
   // react-force-graph wants {nodes, links} with source/target keys. Our
   // store uses edges with from/to. Remap once per change.
-  const graphData = useMemo(() => ({
-    nodes: nodes.map((n) => ({ ...n })),  // shallow clone so the sim can stamp x/y without polluting the store
-    links: edges.map((e: GraphEdge) => ({
-      source: e.from,
-      target: e.to,
-      similarity: e.similarity,
-      link_type: e.link_type,
-    })),
-  }), [nodes, edges]);
+  //
+  // Also precompute two side-indexes the render path needs:
+  //   - `bidiEdges`: set of "a|b" (sorted) pairs where BOTH directions
+  //     exist. We curve these apart visually so A→B and B→A don't
+  //     stack on top of each other. Half the edges in a semantic brain
+  //     are bidirectional so this matters a lot.
+  //   - `adjacency`: node_id → set of neighbour ids. Used by the
+  //     hover-focus mode to dim everything outside the 1-hop
+  //     neighbourhood of the hovered node.
+  const graphData = useMemo(() => {
+    const directedSeen = new Set<string>();
+    const bidi = new Set<string>();
+    for (const e of edges) {
+      const key = `${e.from}|${e.to}`;
+      const rev = `${e.to}|${e.from}`;
+      if (directedSeen.has(rev)) {
+        // Canonicalise on sorted pair so both edges get the same lookup key.
+        const [a, b] = e.from < e.to ? [e.from, e.to] : [e.to, e.from];
+        bidi.add(`${a}|${b}`);
+      }
+      directedSeen.add(key);
+    }
+
+    const adjacency = new Map<string, Set<string>>();
+    const addEdge = (from: string, to: string) => {
+      let s = adjacency.get(from);
+      if (!s) { s = new Set(); adjacency.set(from, s); }
+      s.add(to);
+    };
+    for (const e of edges) { addEdge(e.from, e.to); addEdge(e.to, e.from); }
+
+    return {
+      nodes: nodes.map((n) => ({ ...n })),
+      links: edges.map((e: GraphEdge) => ({
+        source: e.from,
+        target: e.to,
+        similarity: e.similarity,
+        link_type: e.link_type,
+      })),
+      bidi,
+      adjacency,
+    };
+  }, [nodes, edges]);
 
   // Track hover node and its screen position (set from onNodeHover).
   const [hoverCard, setHoverCard] = useState<HoverCard | null>(null);
@@ -322,10 +476,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const handleNodeHover = useCallback((node: unknown) => {
     if (!node) {
       scheduleClose();
+      setFocusedNodeId(null);
       return;
     }
     cancelClose();
     const n = node as SimNode & { x?: number; y?: number };
+    // Turn on focus dim so the 1-hop neighbourhood pops while everything
+    // else fades. Cleared in the `!node` branch above when the cursor
+    // leaves the node area.
+    setFocusedNodeId(n.id);
     // For 2D mode, x/y are in graph space; the ForceGraph2D ref would be
     // needed to project to screen coords. Simpler: we anchor the hover
     // card near the cursor via a mousemove handler on the container.
@@ -392,53 +551,99 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     });
   }, []);
 
-  // Custom 2D node renderer: folder drives the primary fill color so
-  // clusters pop visually; the state color (amber/teal/gray) becomes a
-  // thin outer ring so "heat" and "grouping" are both legible at once.
+  // Hover-focus state. When set, `paintNode2D` dims every node that
+  // isn't the hovered node or one of its 1-hop neighbours. Same story
+  // for `linkColor`. This turns a hairball of 30k edges into a
+  // reading-friendly subgraph on the fly.
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+
+  // Clear stale focus when the graph reloads (brain switch, ingest).
+  // Otherwise a previously-hovered node id can outlive its node and
+  // silently dim the whole new graph because the adjacency lookup
+  // returns nothing.
+  useEffect(() => {
+    if (!focusedNodeId) return;
+    if (!nodes.some((n) => n.id === focusedNodeId)) {
+      setFocusedNodeId(null);
+    }
+  }, [nodes, focusedNodeId]);
+
+  // Custom 2D node renderer. Redesigned for a cleaner, more
+  // screenshot-worthy aesthetic:
+  //   - Small discs (2.5-7 px radius) — the graph reads as a
+  //     *network*, not a pile of disks.
+  //   - Folder colour is the ONLY visual channel for identity;
+  //     state encoded via alpha (fresh=1.0, dormant=0.45) instead
+  //     of a competing ring colour. Removes the "dartboard" look
+  //     that the prior 1.5 px state-ring produced on small nodes.
+  //   - No glow halo per-node. Soft inner shadow (single 2 px
+  //     blur) gives depth without noise. Hover-focus takes the
+  //     place of always-on highlights.
+  //   - Thin 0.5 px bg-coloured rim so a light-coloured node on
+  //     a lighter edge still separates visually.
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const node = rawNode as SimNode & { x?: number; y?: number };
     if (node.x == null || node.y == null) return;
     const r = nodeRadius(node.access_count);
-    const fill = folderColor(node.folder ?? "");
-    const stateRing = STATE_COLORS[node.state] ?? "#35335a";
-    const glow = STATE_GLOW[node.state];
+    const fillBase = folderColor(node.folder ?? "");
 
-    // Soft outer glow for hot / freshly-touched notes.
-    if (glow) {
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
-      ctx.fillStyle = glow;
-      ctx.fill();
+    // Strength + state together in one alpha channel. Prior
+    // design overloaded both into a ring *and* a glow; this is
+    // cleaner. Dormant = 0.45 floor (visible but clearly faded),
+    // fresh/active = full.
+    const stateScale = node.state === "dormant" ? 0.5 : 1.0;
+    const strengthAlpha = (0.45 + 0.55 * Math.min(1, Math.max(0, node.strength))) * stateScale;
+
+    // Hover-focus dimming unchanged — still the right UX.
+    let focusAlpha = 1;
+    if (focusedNodeId) {
+      const neighbours = graphData.adjacency.get(focusedNodeId);
+      const isSelf = node.id === focusedNodeId;
+      const isNeighbour = neighbours?.has(node.id) ?? false;
+      focusAlpha = (isSelf || isNeighbour) ? 1 : 0.08;
     }
 
-    // Folder-colored body.
+    const alpha = strengthAlpha * focusAlpha;
+
+    // Subtle drop shadow for depth — makes the graph look like
+    // it has atmosphere instead of flat 2D pancake. Only drawn
+    // once per node, cheap.
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetY = 0.5;
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = fill;
+    ctx.fillStyle = withAlpha(fillBase, alpha);
     ctx.fill();
+    ctx.restore();
 
-    // 1.5px state ring on top — communicates "strong / connected /
-    // dormant" without stealing the folder signal.
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = stateRing;
-    ctx.stroke();
+    // Thin BG-coloured rim so any pair of near-colour nodes still
+    // separates visually. 0.5 px divided by zoom so it stays
+    // consistently thin regardless of how close the user is.
+    if (focusAlpha > 0.2) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      ctx.lineWidth = 0.5 / globalScale;
+      ctx.strokeStyle = withAlpha("#0b0b12", 0.75 * focusAlpha);
+      ctx.stroke();
+    }
 
-    // Labels only appear once the user zooms in past ~1.4× default. At the
-    // overview zoom, node colour + folder clusters carry the story and
-    // labels would just turn the graph into wall-of-text. The hover card
-    // already shows the title, so readers never lose identity.
-    if (globalScale >= 1.4) {
-      const fontSize = 12 / globalScale;
+    // Labels only on zoom-in (>1.4×) OR for neighbours during
+    // hover-focus — the overview zoom should read as a shape, not
+    // a wall of text. Smaller font than before (was 12 px) to
+    // match the smaller nodes.
+    const focusLabelBoost = focusAlpha === 1 && focusedNodeId != null;
+    if (globalScale >= 1.4 || focusLabelBoost) {
+      const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
-      ctx.fillStyle = "#8a88a0";
+      ctx.fillStyle = withAlpha("#a8a6c0", Math.max(0.35, focusAlpha));
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      const truncated = node.title.length > 24 ? node.title.slice(0, 22) + "…" : node.title;
+      const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
       ctx.fillText(truncated, node.x, node.y + r + 2);
     }
-  }, []);
+  }, [focusedNodeId, graphData.adjacency]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -451,6 +656,116 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
     ctx.fill();
   }, []);
+
+  /** Native hover tooltip for edges. react-force-graph-2d reads this
+   *  and renders a lightweight DOM tooltip on mouseover — no extra
+   *  state plumbing on our end. Format: "uses · 0.87" so the reader
+   *  sees both the relationship type AND how strong it is. */
+  const linkLabel = useCallback((rawLink: unknown) => {
+    const l = rawLink as { similarity: number; link_type: string };
+    const sim = l.similarity.toFixed(2);
+    return `${l.link_type} · ${sim}`;
+  }, []);
+
+  /** Cluster-label renderer — draws the folder name at each cluster's
+   *  centroid on top of the force graph. Runs once per frame via
+   *  `onRenderFramePost`, after all nodes + links have painted.
+   *
+   *  Why on the canvas vs HTML overlay: we get the correct zoom
+   *  transform + DPR handling for free, and the labels follow the
+   *  sim without any projection math on our end. `globalScale` is the
+   *  zoom factor so we shrink the font as the user zooms out (keeps
+   *  labels legible without dominating the view).
+   *
+   *  Uses folder color at low opacity so labels feel "of" the cluster
+   *  rather than pasted on top. Root-level notes (folder === "") are
+   *  labelled "Root" only when they're a meaningful group (>2 nodes).
+   */
+  const paintClusterLabels = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
+    if (!nodes.length) return;
+    // Bail if hover-focus is on — cluster labels compete with the
+    // focused subgraph and add visual noise when the user is reading
+    // one neighbourhood.
+    if (focusedNodeId) return;
+
+    const sums = new Map<string, { x: number; y: number; n: number }>();
+    for (const n of nodes as Array<SimNode & { x?: number; y?: number }>) {
+      if (n.x == null || n.y == null) continue;
+      const key = n.folder ?? "";
+      const s = sums.get(key);
+      if (s) { s.x += n.x; s.y += n.y; s.n += 1; }
+      else sums.set(key, { x: n.x, y: n.y, n: 1 });
+    }
+
+    // Hide labels when we zoom in past 1.8× — at that point the user
+    // is reading individual node titles, not cluster structure.
+    if (globalScale > 1.8) return;
+
+    // Font size scales with zoom + cluster size. Bigger clusters get
+    // bigger labels so the eye lands on them first.
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (const [folder, s] of sums) {
+      // Raise the threshold: 5+ notes = real region; smaller = noise.
+      if (s.n < 5) continue;
+      const cx = s.x / s.n;
+      const cy = s.y / s.n;
+      const color = folder === "" ? "#9a97b4" : folderColor(folder);
+      const label = folder === "" ? "root" : folder;
+      // Size: 11-15 px (was 18-28). Huge labels at overview zoom
+      // were dominating the canvas and making the graph feel
+      // cluttered. Shrink + soften so they read as orientation
+      // aids, not hero content.
+      const weight = Math.min(1, s.n / 15);
+      const size = (11 + weight * 4) / globalScale;
+      ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
+
+      // Tighter shadow + lower alpha — labels feel "of" the cluster
+      // rather than pasted on top.
+      ctx.save();
+      ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+      ctx.shadowBlur = 5 / globalScale;
+      ctx.fillStyle = withAlpha(color, 0.72);
+      ctx.fillText(label, cx, cy);
+      ctx.restore();
+    }
+
+    // --- Focus pulse ring. Drawn in the same post-frame pass so it
+    // sits on top of nodes + links. Two concentric expanding rings
+    // offset in phase for a sonar-ping feel.
+    if (focusPulse) {
+      const target = (nodes as Array<SimNode & { x?: number; y?: number }>)
+        .find((n) => n.id === focusPulse.nodeId);
+      if (target && target.x != null && target.y != null) {
+        const elapsed = (Date.now() - focusPulse.start) / 1500;
+        if (elapsed >= 0 && elapsed <= 1) {
+          const baseR = nodeRadius(target.access_count);
+          // Ring 1: expands fast, fades out.
+          const r1 = baseR + 4 + elapsed * 60;
+          const a1 = Math.max(0, 0.8 * (1 - elapsed));
+          ctx.save();
+          ctx.strokeStyle = withAlpha("#00c9b1", a1);
+          ctx.lineWidth = 2 / globalScale;
+          ctx.beginPath();
+          ctx.arc(target.x, target.y, r1 / globalScale + baseR, 0, Math.PI * 2);
+          ctx.stroke();
+          // Ring 2: offset by 0.3 phase, slower expand.
+          const p2 = Math.max(0, elapsed - 0.3);
+          if (p2 > 0) {
+            const r2 = baseR + 4 + p2 * 50;
+            const a2 = Math.max(0, 0.6 * (1 - p2 / 0.7));
+            ctx.strokeStyle = withAlpha("#f0a500", a2);
+            ctx.lineWidth = 1.5 / globalScale;
+            ctx.beginPath();
+            ctx.arc(target.x, target.y, r2 / globalScale + baseR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+    }
+  }, [nodes, focusedNodeId, focusPulse]);
 
   // Color accessors shared by 2D + 3D. 3D uses folder color too — so
   // orbiting the scene, you see folders as clearly-colored clouds of
@@ -466,14 +781,67 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     return 1 + Math.min(9, n.access_count * 0.6);
   }, []);
   const linkColor = useCallback((rawLink: unknown) => {
-    const l = rawLink as { similarity: number; link_type: string };
-    const alpha = Math.max(0.15, Math.min(0.6, l.similarity * 0.5));
-    return edgeColor(l.link_type, alpha);
-  }, []);
+    const l = rawLink as {
+      similarity: number;
+      link_type: string;
+      source: string | { id: string };
+      target: string | { id: string };
+    };
+    // Lower base alpha — edges should read as connective tissue,
+    // not dominant content. Hover-focus brightens the neighbourhood.
+    const baseAlpha = Math.max(0.08, Math.min(0.4, l.similarity * 0.35));
+    // Dim non-neighbourhood edges to ~5% alpha when hover-focus is on.
+    // Identifying the "neighbourhood" edges: either endpoint is the
+    // focused node. (react-force-graph mutates source/target into
+    // node objects once the simulation starts, hence the union type.)
+    if (focusedNodeId) {
+      const from = typeof l.source === "string" ? l.source : l.source.id;
+      const to = typeof l.target === "string" ? l.target : l.target.id;
+      const touchesFocus = from === focusedNodeId || to === focusedNodeId;
+      const a = touchesFocus ? Math.min(0.9, baseAlpha * 2.2) : 0.04;
+      return edgeColor(l.link_type, a);
+    }
+    return edgeColor(l.link_type, baseAlpha);
+  }, [focusedNodeId]);
   const linkWidth = useCallback((rawLink: unknown) => {
-    const l = rawLink as { similarity: number };
-    return 0.5 + l.similarity * 0.8;
-  }, []);
+    const l = rawLink as {
+      similarity: number;
+      source: string | { id: string };
+      target: string | { id: string };
+    };
+    // Thinner edges for a cleaner aesthetic. 0.25-0.65 px at
+    // rest; neighbourhood edges thicken 2.4× during hover-focus
+    // so the active subgraph pops.
+    const base = 0.25 + l.similarity * 0.4;
+    if (focusedNodeId) {
+      const from = typeof l.source === "string" ? l.source : l.source.id;
+      const to = typeof l.target === "string" ? l.target : l.target.id;
+      if (from === focusedNodeId || to === focusedNodeId) return base * 2.4;
+    }
+    return base;
+  }, [focusedNodeId]);
+  // Bidirectional edge curvature: when both A→B and B→A exist, curve
+  // them in opposite directions so they no longer draw on top of each
+  // other. Each direction gets ±0.15 curvature — subtle enough not
+  // to distort layout but enough to visually separate the pair.
+  const linkCurvature = useCallback((rawLink: unknown) => {
+    const l = rawLink as {
+      source: string | { id: string };
+      target: string | { id: string };
+    };
+    const from = typeof l.source === "string" ? l.source : l.source.id;
+    const to = typeof l.target === "string" ? l.target : l.target.id;
+    const [a, b] = from < to ? [from, to] : [to, from];
+    if (!graphData.bidi.has(`${a}|${b}`)) return 0;
+    // A→B curves +0.15, B→A curves -0.15. Use the canonical order.
+    return from === a ? 0.15 : -0.15;
+  }, [graphData.bidi]);
+
+  // Edge-type labels (the "manual" / "semantic" / "uses" / etc.
+  // pills) were REMOVED in the aesthetic pass. Even at zoom ≥1.6×
+  // they produced wall-of-text — a 200-edge subgraph means 200
+  // pills. The hover tooltip (`linkLabel`) surfaces the same info
+  // on demand without polluting the static canvas.
 
   return (
     <div
@@ -526,9 +894,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             nodeCanvasObject={paintNode2D}
             nodeCanvasObjectMode={() => "replace"}
             nodePointerAreaPaint={paintPointerArea2D}
+            linkLabel={linkLabel}
             linkColor={linkColor}
             linkWidth={linkWidth}
+            linkCurvature={linkCurvature}
             linkDirectionalParticles={0}
+            onRenderFramePost={paintClusterLabels}
             cooldownTicks={100}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
@@ -547,8 +918,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             nodeVal={nodeVal}
             nodeColor={nodeColor}
             nodeOpacity={0.9}
+            linkLabel={linkLabel}
             linkColor={linkColor}
             linkWidth={linkWidth}
+            linkCurvature={linkCurvature}
             linkOpacity={0.55}
             linkDirectionalParticles={1}
             linkDirectionalParticleSpeed={0.006}

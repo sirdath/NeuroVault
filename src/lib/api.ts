@@ -1,6 +1,22 @@
-/** HTTP client for the Python MCP server. Base URL comes from lib/config. */
+/** HTTP client for the Python MCP server. Base URL comes from lib/config.
+ *
+ *  Phase-4 note: a handful of read-path calls (`fetchGraph`, `fetchNote`,
+ *  `fetchNotesList`) now try the in-process Rust `nv_*` Tauri commands
+ *  first and fall back to HTTP when those commands aren't registered —
+ *  either because we're in plain-browser mode or because the installed
+ *  Tauri build predates Phase 4. Callers of `fetchGraph` etc. don't see
+ *  which path served the request. */
 
 import { API_HOST } from "./config";
+import {
+  nvGetGraph,
+  nvGetNote,
+  nvListNotes,
+  nvRecall,
+  type NvFullNote,
+  type NvGraphData,
+  type NvNoteListRow,
+} from "./tauri";
 
 const BASE = API_HOST;
 
@@ -90,12 +106,60 @@ export interface RecallResult {
 // --- API calls ---
 
 export const recall = (query: string, limit = 8) =>
-  get<RecallResult[]>(`/api/recall?q=${encodeURIComponent(query)}&limit=${limit}`);
+  preferNv<RecallResult[]>(
+    async () => {
+      const hits = await nvRecall(query, { limit });
+      // NvRecallHit → RecallResult has the same keys (engram_id, title,
+      // content, score, strength, state) so the cast is safe — the
+      // optional fields (preview, kind, filename) simply stay undefined
+      // when the Rust path served the request.
+      return hits as unknown as RecallResult[];
+    },
+    () => get<RecallResult[]>(`/api/recall?q=${encodeURIComponent(query)}&limit=${limit}`)
+  );
 
-export const fetchGraph = () => get<GraphData>("/api/graph");
+/** Rust nv_* commands aren't registered on older Tauri builds and
+ *  aren't available in plain-browser mode. Any error from the invoke
+ *  call (missing command, sidecar-only features, serialisation
+ *  mismatch) pushes us to the HTTP fallback so callers never see a
+ *  broken read path. We don't log — the HTTP call that follows either
+ *  succeeds and users see their data, or fails and its own error
+ *  message is surfaced by the caller. */
+async function preferNv<T>(nv: () => Promise<T>, http: () => Promise<T>): Promise<T> {
+  try {
+    return await nv();
+  } catch {
+    return http();
+  }
+}
+
+export const fetchGraph = () =>
+  preferNv<GraphData>(
+    async () => {
+      const g = (await nvGetGraph()) as NvGraphData;
+      // Rust serializes absent `folder` as JSON `null`; GraphData wants
+      // `string | undefined`. One-shot normalise so downstream callers
+      // can treat the two transports identically.
+      return {
+        nodes: g.nodes.map((n) => ({
+          ...n,
+          folder: n.folder ?? undefined,
+        })),
+        edges: g.edges,
+      };
+    },
+    () => get<GraphData>("/api/graph")
+  );
 export const fetchStatus = () => get<ServerStatus>("/api/status");
 export const fetchSessionContext = () => get<SessionContext>("/api/session-context");
-export const fetchNote = (id: string) => get<NoteDetail>(`/api/notes/${id}`);
+export const fetchNote = (id: string) =>
+  preferNv<NoteDetail>(
+    async () => {
+      const full = (await nvGetNote(id)) as NvFullNote;
+      return full as unknown as NoteDetail;
+    },
+    () => get<NoteDetail>(`/api/notes/${id}`)
+  );
 export const fetchStrength = () => get<StrengthStats>("/api/strength");
 export const fetchBacklinks = (id: string) => get<Backlink[]>(`/api/backlinks/${id}`);
 
@@ -152,12 +216,20 @@ export async function fetchContradictions(): Promise<Contradiction[]> {
 }
 
 export async function fetchNotesList(): Promise<NoteSummary[]> {
+  // Rust `nv_list_notes` first — if it throws (command not registered
+  // or browser mode) fall through to the HTTP path. Empty-on-error
+  // behaviour stays the same so the sidebar never crashes.
   try {
-    const res = await fetch(`${BASE}/api/notes`);
-    if (!res.ok) return [];
-    return res.json();
+    const rows = (await nvListNotes()) as NvNoteListRow[];
+    return rows;
   } catch {
-    return [];
+    try {
+      const res = await fetch(`${BASE}/api/notes`);
+      if (!res.ok) return [];
+      return res.json();
+    } catch {
+      return [];
+    }
   }
 }
 

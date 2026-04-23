@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
+import { useDensityStore, type Density } from "../stores/densityStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 
@@ -7,6 +8,16 @@ const FONT_SIZES = [
   { label: "Small", value: "small" as const },
   { label: "Medium", value: "medium" as const },
   { label: "Large", value: "large" as const },
+];
+
+// Sidebar + command-palette row density. Drives `html[data-density]`
+// which the CSS uses to pick `--row-h`, `--gap`, `--pad-x`, `--pad-y`.
+// Compact fits ~30% more notes in the sidebar at the cost of breathing
+// room; comfortable is the default we recommend for daily use.
+const DENSITIES: { label: string; value: Density; hint: string }[] = [
+  { label: "Comfortable", value: "comfortable", hint: "Default — roomy" },
+  { label: "Cozy",        value: "cozy",        hint: "A bit tighter" },
+  { label: "Compact",     value: "compact",     hint: "Max rows" },
 ];
 
 const SERVER_URL = API_HOST;
@@ -28,6 +39,8 @@ function useServerStatus() {
 
 export function SettingsView() {
   const { themeId, fontSize, update } = useSettingsStore();
+  const density = useDensityStore((s) => s.density);
+  const setDensity = useDensityStore((s) => s.setDensity);
   const { online, checking, check: recheckServer } = useServerStatus();
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -162,6 +175,27 @@ export function SettingsView() {
                   } : { color: "var(--nv-text-dim)" }}
                 >
                   {f.label}
+                </button>
+              ))}
+            </div>
+          </SettingRow>
+
+          <SettingRow label="Interface density" description="Row height + padding for the sidebar and command palette">
+            <div className="flex gap-1 rounded-xl p-1" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+              {DENSITIES.map((d) => (
+                <button
+                  key={d.value}
+                  onClick={() => setDensity(d.value)}
+                  title={d.hint}
+                  className="px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all"
+                  style={density === d.value ? {
+                    background: "var(--nv-surface)",
+                    color: "var(--nv-text)",
+                    border: "1px solid var(--nv-border)",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+                  } : { color: "var(--nv-text-dim)" }}
+                >
+                  {d.label}
                 </button>
               ))}
             </div>
