@@ -531,6 +531,74 @@ code { font-family: var(--mono); font-size: 0.9em;
 /* ============================================================
    Features
    ============================================================ */
+/* ============================================================
+   ASCII marquee — news-ticker strip
+   Thin horizontal band that scrolls continuously. Sits between hero
+   and features to give the page a "living" pulse.
+   ============================================================ */
+.marquee {
+  overflow: hidden;
+  width: 100%;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(90deg,
+      var(--bg) 0%,
+      rgba(222, 115, 86, 0.04) 50%,
+      var(--bg) 100%);
+  position: relative;
+  mask-image: linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%);
+}
+.marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: marquee-scroll 55s linear infinite;
+  will-change: transform;
+}
+.marquee-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+  padding-right: 18px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--peach);
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 8px rgba(222, 115, 86, 0.25);
+}
+.marquee-group > span {
+  flex-shrink: 0;
+}
+.marquee-group .sep {
+  color: var(--peach-soft);
+  opacity: 0.55;
+  font-size: 12px;
+}
+/* Pause on hover so users can read items */
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+/* Respect reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track { animation: none; }
+}
+[data-theme="blue"] .marquee-group {
+  text-shadow: 0 0 8px rgba(77, 212, 232, 0.25);
+}
+[data-theme="blue"] .marquee {
+  background:
+    linear-gradient(90deg,
+      var(--bg) 0%,
+      rgba(77, 212, 232, 0.04) 50%,
+      var(--bg) 100%);
+}
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
 .features {
   padding: clamp(48px, 7vh, 80px) clamp(16px, 4vw, 40px);
 }
