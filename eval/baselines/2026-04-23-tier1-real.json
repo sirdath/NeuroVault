@@ -1,0 +1,432 @@
+{
+  "saved_at": "2026-04-23T07:11:58Z",
+  "metrics": {
+    "n": 30,
+    "hit@1": 0.8333333333333334,
+    "hit@3": 0.9,
+    "hit@5": 0.9,
+    "hit@10": 0.9,
+    "mrr": 0.861111111111111,
+    "median_ms": 22.007300009136088,
+    "p95_ms": 32.06383999277023
+  },
+  "results": [
+    {
+      "id": "backend-strength",
+      "query": "how does strength decay work",
+      "expected": [
+        "Backend: Strength & Decay"
+      ],
+      "got_titles": [
+        "Backend: Strength & Decay",
+        "Octogent coordination pattern",
+        "How NeuroVault Works",
+        "Competitor research — agent memory frameworks (2026-04-21)",
+        "Semantic dedup: check_duplicate + remember() hint",
+        "Silent Fact Capture (Stage 5)",
+        "Reranker toggle on recall()",
+        "Chunk-level recall — passage retrieval",
+        "LLM-memory research references (2026)",
+        "Hybrid Retrieval"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 13.2
+    },
+    {
+      "id": "backend-retrieval",
+      "query": "hybrid retrieval pipeline design",
+      "expected": [
+        "Backend: Retrieval",
+        "Hybrid Retrieval",
+        "Hybrid Retrieval (Reciprocal Rank Fusion)"
+      ],
+      "got_titles": [
+        "Hybrid Retrieval",
+        "Hybrid Retrieval (Reciprocal Rank Fusion)",
+        "Backend: Retrieval",
+        "Design System",
+        "Chunk-level recall — passage retrieval",
+        "Backend: Ingest Pipeline",
+        "NeuroVault uses sqlite-vec for embedding storage and BM25 fo",
+        "Backend: Write-back & Insights",
+        "Folders as first-class storage",
+        "Semantic dedup: check_duplicate + remember() hint"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 29.1
+    },
+    {
+      "id": "backend-core",
+      "query": "python server core architecture",
+      "expected": [
+        "Backend Core (`server/engram_server/`)"
+      ],
+      "got_titles": [
+        "Backend Core (`server/engram_server/`)",
+        "Registering NeuroVault as an MCP Server",
+        "Backend: Strength & Decay",
+        "Async write benchmark",
+        "Core MCP tool surface v2 (2026-04-18)",
+        "T0 complete 2026-04-19: rebuilt the PyInstaller sidecar so t",
+        "Backend: Code Intelligence (Stage 5)",
+        "HTTP API (`api.py`, port 8765)",
+        "Frontend Overview",
+        "Folders as first-class storage"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 28.9
+    },
+    {
+      "id": "backend-ingest",
+      "query": "how does ingestion work chunking embedding",
+      "expected": [
+        "Backend: Ingest Pipeline"
+      ],
+      "got_titles": [
+        "Hybrid Retrieval",
+        "Backend: Ingest Pipeline",
+        "Backend: Strength & Decay",
+        "Chunk-level recall — passage retrieval",
+        "NeuroVault uses sqlite-vec for embedding storage and BM25 fo"
+      ],
+      "first_hit_rank": 2,
+      "latency_ms": 31.8
+    },
+    {
+      "id": "frontend-stores",
+      "query": "zustand state management frontend",
+      "expected": [
+        "Frontend Stores"
+      ],
+      "got_titles": [
+        "Frontend Overview",
+        "Frontend Components",
+        "Frontend Stores",
+        "Tier 2 UI Features — Shipped (2026-04-15)",
+        "Backend: Strength & Decay"
+      ],
+      "first_hit_rank": 3,
+      "latency_ms": 37.5
+    },
+    {
+      "id": "frontend-graph",
+      "query": "neural graph view editor frontend",
+      "expected": [
+        "Frontend: Editor & Neural Graph",
+        "Neural Graph View"
+      ],
+      "got_titles": [
+        "Frontend: Editor & Neural Graph",
+        "Neural Graph View",
+        "Frontend Components",
+        "Frontend Overview",
+        "Frontend Stores"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 16.4
+    },
+    {
+      "id": "mcp-tools",
+      "query": "mcp tool tiers core recall remember",
+      "expected": [
+        "MCP Tools & Tiers",
+        "Core MCP tool surface v2 (2026-04-18)"
+      ],
+      "got_titles": [
+        "Core MCP tool surface v2 (2026-04-18)",
+        "MCP Tools & Tiers",
+        "Backend: Write-back & Insights",
+        "Reranker toggle on recall()",
+        "Chunk-level recall — passage retrieval"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 23.9
+    },
+    {
+      "id": "mcp-registration",
+      "query": "how to register with claude desktop mcp",
+      "expected": [
+        "Registering NeuroVault as an MCP Server"
+      ],
+      "got_titles": [
+        "Registering NeuroVault as an MCP Server",
+        "Tauri UI state after this session",
+        "dedupe-fix-verify",
+        "Core MCP tool surface v2 (2026-04-18)",
+        "Session start · a15675cb"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 28.6
+    },
+    {
+      "id": "async-write",
+      "query": "async write path 107ms remember latency",
+      "expected": [
+        "Async write path — 107ms remember() latency",
+        "Async write benchmark"
+      ],
+      "got_titles": [
+        "Async write path — 107ms remember() latency"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 32.3
+    },
+    {
+      "id": "architecture",
+      "query": "three processes tauri python claude",
+      "expected": [
+        "Architecture: Three Processes"
+      ],
+      "got_titles": [
+        "Architecture: Three Processes"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 29.1
+    },
+    {
+      "id": "multi-brain",
+      "query": "multi brain system vault isolation",
+      "expected": [
+        "Multi-Brain System"
+      ],
+      "got_titles": [
+        "Multi-Brain System"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 24.5
+    },
+    {
+      "id": "data-storage",
+      "query": "data storage layout on disk neurovault directory",
+      "expected": [
+        "Data Storage Layout"
+      ],
+      "got_titles": [
+        "Data Storage Layout"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 22.8
+    },
+    {
+      "id": "http-api",
+      "query": "http api endpoints recall graph notes",
+      "expected": [
+        "HTTP API (`api.py`, port 8765)",
+        "HTTP API additions 2026-04-18"
+      ],
+      "got_titles": [
+        "HTTP API (`api.py`, port 8765)"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 21.1
+    },
+    {
+      "id": "neural-graph",
+      "query": "force directed knowledge graph visualization",
+      "expected": [
+        "Neural Graph View",
+        "Frontend: Editor & Neural Graph"
+      ],
+      "got_titles": [
+        "Competitor research — agent memory frameworks (2026-04-21)"
+      ],
+      "first_hit_rank": null,
+      "latency_ms": 21.3
+    },
+    {
+      "id": "note-interconnection",
+      "query": "how notes connect semantic entity wikilink",
+      "expected": [
+        "Note Interconnection — 3 link types"
+      ],
+      "got_titles": [
+        "Backend: Write-back & Insights"
+      ],
+      "first_hit_rank": null,
+      "latency_ms": 23.8
+    },
+    {
+      "id": "design-system",
+      "query": "design tokens css themes colors",
+      "expected": [
+        "Design System"
+      ],
+      "got_titles": [
+        "Design System"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 10.1
+    },
+    {
+      "id": "competitor-research",
+      "query": "competitor research agent memory systems 2026",
+      "expected": [
+        "Competitor research — agent memory frameworks (2026-04-21)",
+        "Competitor research — round 2 (2026-04-21 evening)"
+      ],
+      "got_titles": [
+        "Competitor research — agent memory frameworks (2026-04-21)"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 21.1
+    },
+    {
+      "id": "code-intelligence",
+      "query": "variable tracker function calls code graph",
+      "expected": [
+        "Backend: Code Intelligence (Stage 5)"
+      ],
+      "got_titles": [
+        "Backend: Code Intelligence (Stage 5)"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 20.2
+    },
+    {
+      "id": "write-back",
+      "query": "insight extraction from conversations write back",
+      "expected": [
+        "Backend: Write-back & Insights"
+      ],
+      "got_titles": [
+        "Backend: Write-back & Insights"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 9.8
+    },
+    {
+      "id": "neurovault-overview",
+      "query": "what is neurovault tldr overview",
+      "expected": [
+        "NeuroVault",
+        "How NeuroVault Works"
+      ],
+      "got_titles": [
+        "NeuroVault"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 25.1
+    },
+    {
+      "id": "how-it-works",
+      "query": "how does neurovault work end to end",
+      "expected": [
+        "How NeuroVault Works"
+      ],
+      "got_titles": [
+        "How NeuroVault Works"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 23.2
+    },
+    {
+      "id": "tech-stack",
+      "query": "what tech stack does neurovault use",
+      "expected": [
+        "Tech Stack"
+      ],
+      "got_titles": [
+        "Tech Stack"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 19.5
+    },
+    {
+      "id": "quick-start",
+      "query": "quick start getting started guide",
+      "expected": [
+        "Quick Start"
+      ],
+      "got_titles": [
+        "Quick Start"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 24.1
+    },
+    {
+      "id": "dedup-design",
+      "query": "semantic dedup check duplicate remember hint",
+      "expected": [
+        "Semantic dedup: check_duplicate + remember() hint"
+      ],
+      "got_titles": [
+        "Semantic dedup: check_duplicate + remember() hint"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 15.7
+    },
+    {
+      "id": "reranker",
+      "query": "reranker toggle on recall cross encoder",
+      "expected": [
+        "Reranker toggle on recall()"
+      ],
+      "got_titles": [
+        "Reranker toggle on recall()"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 18.0
+    },
+    {
+      "id": "session-start",
+      "query": "session start wake up call once",
+      "expected": [
+        "session_start() — one-call session wake-up",
+        "Session Wake-Up: L0 / L1 / L2"
+      ],
+      "got_titles": [
+        "session_start() — one-call session wake-up"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 18.3
+    },
+    {
+      "id": "folders-storage",
+      "query": "folders first class storage structure",
+      "expected": [
+        "Folders as first-class storage"
+      ],
+      "got_titles": [
+        "Folders as first-class storage"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 22.7
+    },
+    {
+      "id": "external-vault",
+      "query": "external folder vault obsidian style",
+      "expected": [
+        "External-folder vaults (Obsidian-style, delete preserves folder)"
+      ],
+      "got_titles": [
+        "External-folder vaults (Obsidian-style, delete preserves folder)"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 15.7
+    },
+    {
+      "id": "frontend-overview",
+      "query": "frontend overview architecture components",
+      "expected": [
+        "Frontend Overview"
+      ],
+      "got_titles": [
+        "Frontend Components"
+      ],
+      "first_hit_rank": null,
+      "latency_ms": 15.7
+    },
+    {
+      "id": "wiki-index",
+      "query": "auto maintained catalog wiki index notes",
+      "expected": [
+        "Wiki Index"
+      ],
+      "got_titles": [
+        "Wiki Index"
+      ],
+      "first_hit_rank": 1,
+      "latency_ms": 17.5
+    }
+  ]
+}

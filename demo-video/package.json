@@ -1,0 +1,26 @@
+{
+  "name": "riskterrain-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion render src/index.ts RiskTerrainDemo out/demo.mp4",
+    "render:s01": "remotion render src/index.ts S01 out/s01.mp4",
+    "render:s03": "remotion render src/index.ts S03 out/s03.mp4"
+  },
+  "dependencies": {
+    "remotion": "^4.0.0",
+    "@remotion/cli": "^4.0.0",
+    "@remotion/three": "^4.0.0",
+    "@remotion/google-fonts": "^4.0.0",
+    "@react-three/fiber": "^8.0.0",
+    "three": "^0.170.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/react": "^18.3.0",
+    "@types/three": "^0.170.0"
+  }
+}

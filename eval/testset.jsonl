@@ -1,0 +1,30 @@
+{"id": "backend-strength", "query": "how does strength decay work", "expect": ["Backend: Strength & Decay"], "notes": "Ebbinghaus/strength model question"}
+{"id": "backend-retrieval", "query": "hybrid retrieval pipeline design", "expect": ["Backend: Retrieval", "Hybrid Retrieval", "Hybrid Retrieval (Reciprocal Rank Fusion)"], "notes": "core retrieval doc"}
+{"id": "backend-core", "query": "python server core architecture", "expect": ["Backend Core (`server/engram_server/`)"], "notes": "Python backend doc — real title includes path suffix"}
+{"id": "backend-ingest", "query": "how does ingestion work chunking embedding", "expect": ["Backend: Ingest Pipeline"], "notes": "ingest pipeline doc"}
+{"id": "frontend-stores", "query": "zustand state management frontend", "expect": ["Frontend Stores"], "notes": "frontend state doc"}
+{"id": "frontend-graph", "query": "neural graph view editor frontend", "expect": ["Frontend: Editor & Neural Graph", "Neural Graph View"], "notes": "UI frontend"}
+{"id": "mcp-tools", "query": "mcp tool tiers core recall remember", "expect": ["MCP Tools & Tiers", "Core MCP tool surface v2 (2026-04-18)"], "notes": "MCP API design"}
+{"id": "mcp-registration", "query": "how to register with claude desktop mcp", "expect": ["Registering NeuroVault as an MCP Server"], "notes": "setup instructions"}
+{"id": "async-write", "query": "async write path 107ms remember latency", "expect": ["Async write path — 107ms remember() latency", "Async write benchmark"], "notes": "perf detail"}
+{"id": "architecture", "query": "three processes tauri python claude", "expect": ["Architecture: Three Processes"], "notes": "high-level arch"}
+{"id": "multi-brain", "query": "multi brain system vault isolation", "expect": ["Multi-Brain System"], "notes": "brains concept"}
+{"id": "data-storage", "query": "data storage layout on disk neurovault directory", "expect": ["Data Storage Layout"], "notes": "on-disk schema"}
+{"id": "http-api", "query": "http api endpoints recall graph notes", "expect": ["HTTP API (`api.py`, port 8765)", "HTTP API additions 2026-04-18"], "notes": "REST surface"}
+{"id": "neural-graph", "query": "force directed knowledge graph visualization", "expect": ["Neural Graph View", "Frontend: Editor & Neural Graph"], "notes": "graph UI"}
+{"id": "note-interconnection", "query": "how notes connect semantic entity wikilink", "expect": ["Note Interconnection — 3 link types"], "notes": "edge types doc"}
+{"id": "design-system", "query": "design tokens css themes colors", "expect": ["Design System"], "notes": "theming"}
+{"id": "competitor-research", "query": "competitor research agent memory systems 2026", "expect": ["Competitor research — agent memory frameworks (2026-04-21)", "Competitor research — round 2 (2026-04-21 evening)"], "notes": "research notes"}
+{"id": "code-intelligence", "query": "variable tracker function calls code graph", "expect": ["Backend: Code Intelligence (Stage 5)"], "notes": "code ingest feature"}
+{"id": "write-back", "query": "insight extraction from conversations write back", "expect": ["Backend: Write-back & Insights"], "notes": "conversation-to-memory"}
+{"id": "neurovault-overview", "query": "what is neurovault tldr overview", "expect": ["NeuroVault", "How NeuroVault Works"], "notes": "elevator pitch"}
+{"id": "how-it-works", "query": "how does neurovault work end to end", "expect": ["How NeuroVault Works"], "notes": "end-to-end doc"}
+{"id": "tech-stack", "query": "what tech stack does neurovault use", "expect": ["Tech Stack"], "notes": "stack doc"}
+{"id": "quick-start", "query": "quick start getting started guide", "expect": ["Quick Start"], "notes": "onboarding"}
+{"id": "dedup-design", "query": "semantic dedup check duplicate remember hint", "expect": ["Semantic dedup: check_duplicate + remember() hint"], "notes": "dedupe feature doc"}
+{"id": "reranker", "query": "reranker toggle on recall cross encoder", "expect": ["Reranker toggle on recall()"], "notes": "reranker feature"}
+{"id": "session-start", "query": "session start wake up call once", "expect": ["session_start() — one-call session wake-up", "Session Wake-Up: L0 / L1 / L2"], "notes": "session bootstrap tool"}
+{"id": "folders-storage", "query": "folders first class storage structure", "expect": ["Folders as first-class storage"], "notes": "folder architecture"}
+{"id": "external-vault", "query": "external folder vault obsidian style", "expect": ["External-folder vaults (Obsidian-style, delete preserves folder)"], "notes": "obsidian interop"}
+{"id": "frontend-overview", "query": "frontend overview architecture components", "expect": ["Frontend Overview"], "notes": "high-level frontend"}
+{"id": "wiki-index", "query": "auto maintained catalog wiki index notes", "expect": ["Wiki Index"], "notes": "the auto-generated index"}
