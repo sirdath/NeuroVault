@@ -7,6 +7,12 @@ use std::time::SystemTime;
 use tauri_plugin_shell::process::CommandChild;
 use uuid::Uuid;
 
+// Rust memory layer — the in-process replacement for the Python
+// neurovault_server package. Exposes the in-process Tauri commands
+// (nv_list_notes, nv_get_graph, nv_recall, ...) that the frontend
+// now prefers over the legacy HTTP sidecar.
+pub mod memory;
+
 /// Shared state holding the Python sidecar child process (if running).
 struct ServerState(Mutex<Option<CommandChild>>);
 
@@ -275,11 +281,25 @@ fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
         return Err(format!("brain '{brain_id}' not found in registry"));
     }
 
-    parsed["active"] = serde_json::Value::String(brain_id);
+    parsed["active"] = serde_json::Value::String(brain_id.clone());
     let serialised = serde_json::to_string_pretty(&parsed)
         .map_err(|e| format!("failed to serialise registry: {e}"))?;
     fs::write(&registry_path, serialised)
         .map_err(|e| format!("could not write brains.json: {e}"))?;
+
+    // Rotate the vault watcher to the newly-active brain. "Single
+    // vault at a time" invariant keeps the ingest pipeline from
+    // racing two brains' writes against the same BM25 index.
+    // Watcher failures are non-fatal: a brain with a missing vault
+    // should still switch (user may have just rebooted with an
+    // external drive unmounted). We log and continue.
+    memory::watcher::stop_all();
+    if let Err(e) = memory::watcher::start_for_brain(&brain_id, vault_dir()) {
+        eprintln!(
+            "[neurovault] watcher start failed for {}: {}",
+            brain_id, e
+        );
+    }
 
     Ok(vault_dir().to_string_lossy().to_string())
 }
@@ -753,6 +773,435 @@ fn brain_storage_stats() -> Result<BrainStorageStats, String> {
     })
 }
 
+// --- Rust memory layer: Phase-4 read-path commands ----------------------
+//
+// These Tauri commands expose `memory::read_ops` to the frontend. They're
+// the first user-visible piece of the Python→Rust migration — each one
+// replaces an HTTP endpoint (`GET /api/notes`, `/api/graph`, etc.) with
+// an in-process call that doesn't require the Python sidecar to be
+// running. The frontend uses feature detection: if the Tauri command
+// is available it calls here, otherwise it falls back to the HTTP
+// path. That keeps behaviour stable throughout the migration.
+//
+// Error handling: `memory::MemoryError` is mapped to `String` at the
+// Tauri boundary so it serialises cleanly through IPC. The matching
+// HTTP layer already returns strings, so the frontend handles both
+// error shapes identically.
+
+/// List every non-dormant engram in the given (or active) brain.
+/// Replaces `GET /api/notes`. `brain_id` = null → active brain from
+/// `brains.json`.
+#[tauri::command]
+fn nv_list_notes(
+    brain_id: Option<String>,
+) -> std::result::Result<Vec<memory::NoteListRow>, String> {
+    let (_id, db) =
+        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::list_notes(&db).map_err(|e| e.to_string())
+}
+
+/// Fetch one engram by id, including outbound connections + entities.
+/// Replaces `GET /api/notes/{engram_id}`. 404 from Python becomes a
+/// `MemoryError::EngramNotFound` string here.
+#[tauri::command]
+fn nv_get_note(
+    engram_id: String,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::FullNote, String> {
+    let (_id, db) =
+        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::get_note(&db, &engram_id).map_err(|e| e.to_string())
+}
+
+/// List every brain in the registry enriched with disk footprint.
+/// Replaces `GET /api/brains`. Broken brains (unreadable vault,
+/// missing DB) are returned with zeroed stats so the BrainSelector
+/// stays populated even when one brain is in a bad state.
+#[tauri::command]
+fn nv_list_brains() -> std::result::Result<Vec<memory::BrainSummary>, String> {
+    memory::list_brains_with_stats().map_err(|e| e.to_string())
+}
+
+/// Disk + note-count footprint for one brain. Replaces
+/// `GET /api/brains/{brain_id}/stats`.
+#[tauri::command]
+fn nv_brain_stats(brain_id: String) -> std::result::Result<memory::BrainStats, String> {
+    memory::brain_stats(&brain_id).map_err(|e| e.to_string())
+}
+
+/// Knowledge graph payload for the given (or active) brain. Replaces
+/// `GET /api/graph`. Defaults match Python: observations excluded,
+/// `min_similarity = 0.75`. The frontend's `graphFromDisk.ts` already
+/// consumes this exact shape.
+#[tauri::command]
+fn nv_get_graph(
+    brain_id: Option<String>,
+    include_observations: Option<bool>,
+    min_similarity: Option<f64>,
+) -> std::result::Result<memory::types::GraphData, String> {
+    let (_id, db) =
+        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::get_graph(
+        &db,
+        include_observations.unwrap_or(false),
+        min_similarity.unwrap_or(0.75),
+    )
+    .map_err(|e| e.to_string())
+}
+
+// --- Phase-5 write-path commands ---------------------------------------
+//
+// These replace `save_note` / `create_note` / `delete_note` for callers
+// that want the full ingest pipeline to run (chunk, embed, entities,
+// links, BM25 rebuild). The legacy file-only commands stay around for
+// back-compat — frontend code that already uses them keeps working
+// and the ingest can be run asynchronously (via file watcher) if
+// needed. The Phase-5 variants are the path the frontend migrates to.
+//
+// Brain resolution: always the active brain (from brains.json). The
+// `brain_id` parameter is accepted for forwards-compat but the vault
+// path resolution still reads from `vault_dir()` which tracks the
+// active brain. Writing to a non-active brain needs a brain switch
+// first — same contract the Python API had.
+
+/// Write `content` to `filename` under the active brain's vault and
+/// run the ingest pipeline. Returns the engram id + status.
+#[tauri::command]
+fn nv_save_note(
+    filename: String,
+    content: String,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::WriteResult, String> {
+    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
+        .map_err(|e| e.to_string())?;
+    memory::save_note(&ctx, &filename, &content).map_err(|e| e.to_string())
+}
+
+/// Create a new note from `title`. Generates a slug-based filename
+/// and seeds the file with a `# title` heading before ingest. Returns
+/// the generated filename so the frontend can navigate to it.
+#[tauri::command]
+fn nv_create_note(
+    title: String,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::WriteResult, String> {
+    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
+        .map_err(|e| e.to_string())?;
+    memory::create_note(&ctx, &title).map_err(|e| e.to_string())
+}
+
+/// Soft-delete the engram backing `filename` and move the file to the
+/// per-brain trash. Returns the engram id so the frontend can
+/// optimistically drop it from the sidebar store.
+#[tauri::command]
+fn nv_delete_note(
+    filename: String,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::WriteResult, String> {
+    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
+        .map_err(|e| e.to_string())?;
+    memory::delete_note(&ctx, &filename).map_err(|e| e.to_string())
+}
+
+// --- Phase-6 recall + HTTP server -------------------------------------
+
+/// Hybrid recall — the main retrieval entry point. Replaces
+/// `GET /api/recall`. Args mirror Python's `hybrid_retrieve` with
+/// a few sensible defaults when the caller passes null:
+///   - `limit` → 10
+///   - `spread_hops` → 0 (no graph expand)
+///   - `include_observations` → false (exclude observation kind)
+#[tauri::command]
+fn nv_recall(
+    query: String,
+    brain_id: Option<String>,
+    limit: Option<usize>,
+    spread_hops: Option<u8>,
+    include_observations: Option<bool>,
+    as_of: Option<String>,
+) -> std::result::Result<Vec<memory::RecallHit>, String> {
+    let (_, db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let opts = memory::RecallOpts {
+        top_k: limit.unwrap_or(10),
+        spread_hops: spread_hops.unwrap_or(0),
+        exclude_kinds: if include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+        as_of,
+        use_reranker: false, // Tauri UI stays fast by default; HTTP/MCP opts in
+        ablate: Vec::new(),  // Tauri command always uses full pipeline
+    };
+    memory::hybrid_retrieve_throttled(&db, &query, &opts).map_err(|e| e.to_string())
+}
+
+/// Shared state holding the Rust HTTP server handle (if running).
+/// Separate from `ServerState` (which tracks the legacy Python
+/// sidecar) so both can coexist during the migration window — the
+/// user can run one, the other, or (briefly, for debugging) neither.
+struct RustServerState(tokio::sync::Mutex<Option<memory::http_server::ServerHandle>>);
+
+/// Start the in-process Rust HTTP server on 127.0.0.1:8765. Takes
+/// over the port the Python sidecar used to own, so `mcp_proxy.py`
+/// routes to the Rust backend transparently. Does not spawn Python.
+#[tauri::command]
+async fn nv_start_rust_server(
+    state: tauri::State<'_, RustServerState>,
+    port: Option<u16>,
+) -> std::result::Result<String, String> {
+    let mut guard = state.0.lock().await;
+    if guard.is_some() {
+        return Err("Rust HTTP server is already running".to_string());
+    }
+    let handle = memory::http_server::start_server(port).await?;
+    let port = handle.port;
+    *guard = Some(handle);
+    Ok(format!("Rust HTTP server listening on 127.0.0.1:{}", port))
+}
+
+/// Stop the Rust HTTP server. Idempotent — no error if not running.
+#[tauri::command]
+async fn nv_stop_rust_server(
+    state: tauri::State<'_, RustServerState>,
+) -> std::result::Result<(), String> {
+    let mut guard = state.0.lock().await;
+    if let Some(mut handle) = guard.take() {
+        handle.stop().await;
+    }
+    Ok(())
+}
+
+/// Tier-A agent-efficiency: fetch direct + 2-hop neighbours of an
+/// engram. Much cheaper than a recall (single SQL query against
+/// `engram_links`). Replaces the common "recall → pick hit →
+/// follow-up recall on that hit's topic" two-call pattern.
+#[tauri::command]
+fn nv_get_related(
+    engram_id: String,
+    brain_id: Option<String>,
+    hops: Option<u8>,
+    limit: Option<usize>,
+    min_similarity: Option<f64>,
+    link_types: Option<Vec<String>>,
+    include_observations: Option<bool>,
+) -> std::result::Result<Vec<memory::RelatedHit>, String> {
+    let (_, db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let opts = memory::RelatedOpts {
+        hops: hops.unwrap_or(1),
+        limit: limit.unwrap_or(20),
+        min_similarity: min_similarity.unwrap_or(0.55),
+        link_types,
+        exclude_kinds: if include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+    };
+    memory::get_related_checked(&db, &engram_id, &opts).map_err(|e| e.to_string())
+}
+
+// --- Phase-7 vault file watcher ---------------------------------------
+//
+// Replaces Python's `watchdog`-based watcher. Uses the `notify`
+// crate with a 500ms per-file debounce so editor save bursts
+// (VSCode atomic-rename, Obsidian's fsync dance) collapse into one
+// ingest call per save. One watcher per brain; activating a brain
+// starts its watcher, switching brains rotates.
+
+/// Start watching the active brain's vault for .md file changes.
+/// Each change triggers the ingest pipeline (chunk → embed →
+/// entities → links → BM25). No-op if a watcher for this brain is
+/// already running.
+#[tauri::command]
+fn nv_start_vault_watcher(brain_id: Option<String>) -> std::result::Result<String, String> {
+    let id = brain_id.unwrap_or_else(|| {
+        memory::read_ops::resolve_brain_id(None).unwrap_or_default()
+    });
+    if id.is_empty() {
+        return Err("no active brain to watch".to_string());
+    }
+    memory::watcher::start_for_brain(&id, vault_dir())
+        .map(|_| format!("watching brain {}", id))
+        .map_err(|e| e.to_string())
+}
+
+/// Stop the per-brain vault watcher. Idempotent.
+#[tauri::command]
+fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), String> {
+    let id = brain_id.unwrap_or_else(|| {
+        memory::read_ops::resolve_brain_id(None).unwrap_or_default()
+    });
+    if id.is_empty() {
+        return Ok(());
+    }
+    memory::watcher::stop_for_brain(&id);
+    Ok(())
+}
+
+// --- Phase-8 Python-as-subprocess glue --------------------------------
+//
+// The hot path lives in Rust (Phases 2-7). Advanced features that
+// stay in Python — compilation, PDF ingest, Zotero sync, code graph,
+// drafts export — run here, on demand, as short-lived subprocesses
+// that finish their job and exit. No more persistent Python daemon.
+//
+// Contract between Rust + Python:
+//   * We spawn `python -m neurovault_server <job_name>`.
+//   * We pipe `args_json` into its stdin as a single JSON blob.
+//   * Python prints the result as one JSON blob to stdout and exits
+//     with code 0. Any non-zero exit is surfaced to the caller with
+//     stderr attached so the user sees the real error, not a generic
+//     "python failed".
+//
+// Python path resolution (in order):
+//   1. `NEUROVAULT_PYTHON` env var — explicit override for dev.
+//   2. `python` on PATH — typical user install.
+// That's it — we don't bundle a Python anymore (Phase 9). If neither
+// is present the user gets a clean error message prompting them to
+// install Python + run `uv sync`.
+
+/// Result of a one-shot Python job invocation. `stdout` holds the
+/// JSON payload the CLI module printed; `stderr` is captured so the
+/// frontend can surface loguru warnings to the user. Shape is stable
+/// — frontend components rely on the `ok` + `data` fields.
+#[derive(serde::Serialize)]
+struct PythonJobResult {
+    ok: bool,
+    exit_code: i32,
+    data: Option<serde_json::Value>,
+    stderr: String,
+}
+
+/// Resolve the python executable. Env override wins, otherwise we
+/// assume `python` is on PATH.
+fn python_executable() -> String {
+    if let Ok(v) = std::env::var("NEUROVAULT_PYTHON") {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    "python".to_string()
+}
+
+/// Spawn a one-shot Python job and return its parsed JSON result.
+/// See module doc for the protocol. Blocking — runs in
+/// `tauri::async_runtime::spawn_blocking` so it doesn't tie up the
+/// Tauri IPC thread.
+#[tauri::command]
+async fn run_python_job(
+    job_name: String,
+    args_json: Option<serde_json::Value>,
+    timeout_secs: Option<u64>,
+) -> std::result::Result<PythonJobResult, String> {
+    // Reject characters that could smuggle an extra shell argument
+    // or let an attacker target a different module. The dispatcher
+    // is argv-based (not shell-parsed) so quoting is already safe,
+    // but defence-in-depth: jobs are internal names, not user input.
+    if !job_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!("invalid job name: {}", job_name));
+    }
+
+    let payload = serde_json::to_string(&args_json.unwrap_or(serde_json::json!({})))
+        .map_err(|e| format!("could not serialise args_json: {e}"))?;
+    let python = python_executable();
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<(i32, String, String)> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new(&python)
+            .args(["-m", "neurovault_server", &job_name])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        // Write args to stdin + close it so the child's read terminates.
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(payload.as_bytes())?;
+        }
+
+        // Naive timeout: a long-running compile shouldn't run forever.
+        // We wait up to `timeout_secs` then kill. Rust's std Child has
+        // no native timeout wait; poll with a short sleep loop.
+        let deadline = timeout_secs.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+        loop {
+            match child.try_wait()? {
+                Some(status) => {
+                    let exit = status.code().unwrap_or(-1);
+                    let stdout = child
+                        .stdout
+                        .take()
+                        .map(|mut s| {
+                            use std::io::Read;
+                            let mut buf = String::new();
+                            let _ = s.read_to_string(&mut buf);
+                            buf
+                        })
+                        .unwrap_or_default();
+                    let stderr = child
+                        .stderr
+                        .take()
+                        .map(|mut s| {
+                            use std::io::Read;
+                            let mut buf = String::new();
+                            let _ = s.read_to_string(&mut buf);
+                            buf
+                        })
+                        .unwrap_or_default();
+                    return Ok((exit, stdout, stderr));
+                }
+                None => {
+                    if let Some(d) = deadline {
+                        if std::time::Instant::now() >= d {
+                            let _ = child.kill();
+                            let stderr = child
+                                .stderr
+                                .take()
+                                .map(|mut s| {
+                                    use std::io::Read;
+                                    let mut buf = String::new();
+                                    let _ = s.read_to_string(&mut buf);
+                                    buf
+                                })
+                                .unwrap_or_default();
+                            return Ok((
+                                124,
+                                String::new(),
+                                format!("{stderr}\n[run_python_job] job timed out after {}s", timeout_secs.unwrap_or(0)),
+                            ));
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join failed: {e}"))?
+    .map_err(|e| format!("python spawn failed: {e}. Is python on PATH? (override with NEUROVAULT_PYTHON env var)"))?;
+
+    let (exit, stdout, stderr) = result;
+    let ok = exit == 0;
+    let data = if stdout.trim().is_empty() {
+        None
+    } else {
+        serde_json::from_str::<serde_json::Value>(stdout.trim())
+            .ok()
+            .or(Some(serde_json::Value::String(stdout)))
+    };
+    Ok(PythonJobResult {
+        ok,
+        exit_code: exit,
+        data,
+        stderr,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::Emitter;
@@ -767,6 +1216,31 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        // Single-instance guard with deep-link forwarding: when a
+        // `neurovault://engram/<id>` URL is opened while the app is
+        // already running, Windows would normally spawn a second
+        // neurovault.exe. This plugin detects that, forwards the
+        // argv (including the URL) to the running instance, and
+        // exits the new one. The deep-link plugin below then picks
+        // up the forwarded URL and emits it to the frontend.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Bring the existing window to the front so the user
+            // doesn't stare at nothing after clicking a URL. The
+            // actual URL handling is done by the deep-link plugin's
+            // `on_open_url` callback, which single-instance triggers
+            // when it sees a URL arg in argv.
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            // Log once so a user staring at stderr knows the URL
+            // round-tripped; the frontend will emit a second log
+            // when it acts on it.
+            eprintln!("[neurovault] deep link forwarded to running instance: {:?}", argv);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -802,21 +1276,96 @@ pub fn run() {
                 ),
             }
 
-            // The Python MCP server is NOT auto-started. The user controls
-            // it via Settings → Server → Start/Stop. The frontend shows a
-            // "server offline" banner when 8765 isn't responding, with
-            // instructions on how to start it.
+            // Register the `neurovault://` URL scheme with the OS. In
+            // production this is a no-op because the installer already
+            // wrote the registry entry; in dev mode it lets you click
+            // a deep link and have it route back to the running
+            // `tauri dev` instance. Failure here is non-fatal.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("[neurovault] deep-link register_all failed: {}", e);
+                }
+                // Emit every incoming URL to the frontend so React can
+                // parse `neurovault://engram/<id>` and focus the note.
+                // Fires for both cold-start URLs (app opened by click)
+                // and hot URLs (clicked while app already running,
+                // forwarded via single-instance).
+                let app_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    let urls: Vec<String> = event
+                        .urls()
+                        .iter()
+                        .map(|u| u.to_string())
+                        .collect();
+                    eprintln!("[neurovault] deep link open: {:?}", urls);
+                    let _ = app_handle.emit("neurovault-deep-link", urls);
+                });
+            }
+
+            // Python MCP sidecar is NOT auto-started (sidecar binary
+            // was retired in the Rust migration). Instead we auto-
+            // start the in-process Rust HTTP server on 8765 so the
+            // MCP proxy has something to talk to from first boot, and
+            // start the vault watcher for the currently-active brain
+            // so external-editor saves (Obsidian, VSCode) get picked
+            // up immediately.
             //
-            // For packaged builds with a sidecar binary, a future "Start
-            // Server" button in Settings can call shell().sidecar() on demand.
+            // Both are spawned on `tauri::async_runtime` — failure is
+            // non-fatal (port already taken, vault missing, etc.) so
+            // the app still opens even if one of them can't bind.
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // 1) HTTP server on 127.0.0.1:8765. If the user has an
+                // older Python sidecar still running on the port, our
+                // bind fails and we just log; the user can stop the
+                // sidecar via Settings and restart the app.
+                let rust_state = app_handle.state::<RustServerState>();
+                let mut guard = rust_state.0.lock().await;
+                match memory::http_server::start_server(None).await {
+                    Ok(handle) => {
+                        let p = handle.port;
+                        *guard = Some(handle);
+                        eprintln!(
+                            "[neurovault] Rust HTTP server auto-started on 127.0.0.1:{}",
+                            p
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[neurovault] Rust HTTP server did NOT start (port may be busy): {}",
+                            e
+                        );
+                    }
+                }
+                drop(guard);
+
+                // 2) Vault watcher for the active brain. A missing
+                // active brain (fresh install) is expected — skip
+                // quietly.
+                if let Ok(active) = memory::read_ops::resolve_brain_id(None) {
+                    if !active.is_empty() {
+                        if let Err(e) = memory::watcher::start_for_brain(&active, vault_dir()) {
+                            eprintln!(
+                                "[neurovault] vault watcher did NOT start for brain {}: {}",
+                                active, e
+                            );
+                        } else {
+                            eprintln!("[neurovault] vault watcher started for brain {}", active);
+                        }
+                    }
+                }
+            });
+
             eprintln!(
-                "[neurovault] desktop app ready. Start the server via Settings or: \
-                 cd server && uv run python -m neurovault_server --http-only"
+                "[neurovault] desktop app ready. Rust backend in-process; Python sidecar retired. \
+                 Advanced features spawn on demand via run_python_job."
             );
 
             Ok(())
         })
         .manage(ServerState(Mutex::new(None)))
+        .manage(RustServerState(tokio::sync::Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
@@ -824,6 +1373,27 @@ pub fn run() {
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
             export_brain_as_zip,
             list_brains_offline, set_active_brain_offline,
+            // Phase-4 Rust memory commands. Each one replaces an HTTP
+            // endpoint — frontend feature-detects and prefers these.
+            nv_list_notes, nv_get_note, nv_list_brains, nv_brain_stats, nv_get_graph,
+            // Phase-5 write-path commands. Run the full ingest pipeline
+            // (chunk → embed → entities → links → BM25) in-process.
+            nv_save_note, nv_create_note, nv_delete_note,
+            // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
+            // is the in-process Tauri path; the HTTP server serves
+            // MCP proxy + external HTTP clients.
+            nv_recall, nv_start_rust_server, nv_stop_rust_server,
+            // Tier-A agent-efficiency: cheap 1-2 hop neighbour lookup.
+            nv_get_related,
+            // Phase-7 vault file watcher. Started automatically on
+            // brain activation; the Tauri commands are here for
+            // debug/manual control from Settings.
+            nv_start_vault_watcher, nv_stop_vault_watcher,
+            // Phase-8 Python-as-subprocess glue. One command spawns
+            // `python -m neurovault_server <job>` for advanced
+            // features (compile, pdf ingest, zotero) that stay in
+            // Python. Replaces the persistent sidecar model.
+            run_python_job,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -840,6 +1410,12 @@ pub fn run() {
                         }
                     }
                 }
+                // Stop every per-brain vault watcher so worker
+                // threads + OS-level watches exit cleanly. Without
+                // this, notify's background listener on Windows can
+                // keep the process alive for a few seconds after
+                // the main window closes.
+                memory::watcher::stop_all();
             }
         });
 }

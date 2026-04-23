@@ -12,15 +12,110 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# Release-build tuning. Cargo's default release profile is already
+# `opt-level = 3` (Tauri does NOT override this), so the wins here
+# come from cross-crate optimisation + dead-code elimination:
+#
+#   lto = "fat"          — link-time optimisation across every crate;
+#                          ~5-15% speedup on fastembed/ONNX hot paths
+#                          where the compiler can inline tensor ops
+#                          across crate boundaries. Link time goes
+#                          from ~60s → ~3-4min, but that's only the
+#                          release build, not dev.
+#   codegen-units = 1    — one compilation unit = better optimisation
+#                          than the default 16 parallel units. ~3-10%
+#                          extra speedup in tight inner loops.
+#   strip = "symbols"    — removes debug symbols; ~25% smaller exe.
+#                          Release binaries don't need them; users
+#                          can't read them anyway.
+#   panic = "abort"      — no unwinding machinery; smaller binary +
+#                          slightly faster code. We never catch
+#                          panics anyway (Tauri's event loop converts
+#                          them to process exits).
+#
+# Dev profile intentionally NOT touched — we don't want 4-minute
+# incremental rebuilds during iteration.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
+# Phase 7b: `neurovault://engram/<id>` URL scheme. Claude Code can
+# emit clickable links in chat that jump the user straight to an
+# engram. The `single-instance` plugin (with the `deep-link` feature)
+# makes sure clicking a link while the app is already open forwards
+# the URL to the running instance instead of spawning a duplicate.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 slug = "0.1"
 dirs = "6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# --- Rust memory-layer dependencies -----------------------------------
+# These power the in-process backend that replaced the Python HTTP
+# sidecar: SQLite + sqlite-vec, ONNX embeddings, axum, tokio, notify.
+# Kept minimal on purpose — anything a single memory:: module needs
+# is declared here; heavy optional features stay opt-in.
+
+# SQLite driver for the brain.db read/write path (Phase 2).
+# `bundled` vendors SQLite so we don't link against a system libsqlite
+# that may lack load_extension. `buildtime_bindgen` lets us expose the
+# load_extension C entry that sqlite-vec needs at runtime.
+rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
+
+# ONNX Runtime inference + text embedding (Phase 3). fastembed-rs
+# downloads the exact same BGE-small-en-v1.5 model the Python side
+# uses, into the same ~/.cache/fastembed/ directory — zero re-download
+# on first Rust invocation for existing users.
+fastembed = "4"
+
+# Synchronisation primitives the ported modules will use:
+# once_cell     — lazy singletons (embedder, BM25, config)
+# parking_lot   — faster Mutex/RwLock than std's, matches Python LRU
+#                 behaviour where readers don't block each other
+# thiserror     — clean error types at the memory:: boundary so
+#                 Tauri command results round-trip cleanly
+once_cell = "1"
+parking_lot = "0.12"
+thiserror = "1"
+
+# Pure-Rust regex engine used by the chunker, summaries, entities
+# port. Matches Python `re` module semantics closely enough that the
+# cross-language output tests Phase 3 requires pass without adjustment.
+regex = "1"
+
+# SHA-256 for the `content_hash` column used by ingest's "skip if
+# unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
+# — we match so a row written by either runtime is seen as unchanged
+# by the other and doesn't trigger an unnecessary re-embed.
+sha2 = "0.10"
+
+# Phase 6: async runtime + HTTP server. `tokio` powers axum's event
+# loop. `axum` gives us the same `/api/*` surface the Python FastAPI
+# server exposed — same URLs, same JSON shapes — so `mcp_proxy.py`
+# keeps working unchanged while Python is retired.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+axum = "0.7"
+
+# Timestamp parsing for the retriever's recency-decay prior. SQLite
+# writes ISO-8601-ish strings via `strftime`; we parse them into
+# `OffsetDateTime` to compute age_days. `formatting` + `parsing` +
+# `macros` cover compile-time format descriptions.
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+
+# Phase 7: cross-platform filesystem watcher. Replaces Python's
+# `watchdog`-based vault watcher. `notify` fires on create/modify/
+# remove; we layer a 500ms per-file debounce on top so an editor
+# save burst (atomic rename + multiple fsyncs) collapses into one
+# ingest call per write.
+notify = "6"

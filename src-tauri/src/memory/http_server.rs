@@ -1,0 +1,552 @@
+//! Axum HTTP server on 127.0.0.1:8765 — same port the Python
+//! FastAPI sidecar used. Path + response shapes match what
+//! `mcp_proxy.py` already sends. That's the contract: the MCP
+//! proxy is the external-facing piece and doesn't need to know
+//! which runtime answers.
+//!
+//! Endpoints implemented in Phase 6:
+//!   GET  /api/health                — liveness probe
+//!   GET  /api/status                — brain stats summary
+//!   GET  /api/brains                — list brains + active marker
+//!   GET  /api/brains/active         — just the active id + name
+//!   POST /api/brains/{id}/activate  — switch active brain
+//!   GET  /api/brains/{id}/stats     — disk/note counts
+//!   GET  /api/notes                 — sidebar list
+//!   GET  /api/notes/{engram_id}     — single note + connections
+//!   GET  /api/graph                 — knowledge graph payload
+//!   GET  /api/recall                — hybrid retrieval
+//!
+//! The server binds to 127.0.0.1 only — never exposes outside the
+//! loopback. Same invariant the Python server held; the MCP proxy
+//! connects to loopback so this keeps working without config
+//! changes.
+
+use std::net::SocketAddr;
+
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json};
+use axum::routing::{get, post};
+use axum::Router;
+use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+
+use super::db::open_brain;
+use super::ingest;
+use super::read_ops::{
+    brain_stats, get_graph, get_note, list_brains_with_stats, list_notes, resolve_brain_id,
+    BrainStats, BrainSummary, FullNote, NoteListRow,
+};
+use super::related::{get_related_checked, RelatedHit, RelatedOpts};
+use super::retriever::{hybrid_retrieve_throttled, RecallHit, RecallOpts};
+use super::types::{GraphData, MemoryError};
+
+/// Default bind port. Matches Python's `SERVER_PORT` default. Kept as
+/// a const rather than reading the env at bind time so stopping +
+/// restarting doesn't accidentally hop ports.
+pub const DEFAULT_PORT: u16 = 8765;
+
+/// Handle returned by `start_server` — holds the shutdown trigger +
+/// the join handle for the tokio task. `stop()` sends the shutdown
+/// signal, awaits the task, and frees the port.
+pub struct ServerHandle {
+    pub port: u16,
+    shutdown: Option<oneshot::Sender<()>>,
+    join: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ServerHandle {
+    /// Gracefully stop the server. Idempotent — second call is a no-op.
+    pub async fn stop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.await;
+        }
+    }
+}
+
+/// Spin up the server on `port` (or `DEFAULT_PORT` when `None`).
+/// Must be called from inside a tokio runtime. Returns once the
+/// listener is bound; the accept loop runs as a background task.
+pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
+    let port = port.unwrap_or(DEFAULT_PORT);
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+
+    let app = router();
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| format!("could not bind {}: {}", addr, e))?;
+
+    let (tx, rx) = oneshot::channel::<()>();
+    let join = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = rx.await;
+            })
+            .await;
+    });
+
+    Ok(ServerHandle {
+        port,
+        shutdown: Some(tx),
+        join: Some(join),
+    })
+}
+
+/// Router factory — separated from `start_server` so tests can hit
+/// it in-process without binding to a real port.
+fn router() -> Router {
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/status", get(status))
+        .route("/api/brains", get(brains_list))
+        .route("/api/brains/active", get(brains_active))
+        .route("/api/brains/:brain_id/activate", post(brains_activate))
+        .route("/api/brains/:brain_id/stats", get(brains_stats))
+        .route("/api/notes", get(notes_list))
+        .route("/api/notes/:engram_id", get(notes_detail))
+        .route("/api/graph", get(graph))
+        .route("/api/recall", get(recall))
+        .route("/api/related/:engram_id", get(related))
+        .route("/api/notes", post(remember))
+        .with_state(ServerState {})
+}
+
+#[derive(Clone)]
+struct ServerState {}
+
+// ---- Error handling ------------------------------------------------------
+
+/// Wrap `MemoryError` so axum can render it as JSON with a status
+/// code the frontend + MCP proxy already understand (404 for
+/// not-found, 500 for everything else).
+struct ApiError(StatusCode, String);
+
+impl From<MemoryError> for ApiError {
+    fn from(e: MemoryError) -> Self {
+        match e {
+            MemoryError::BrainNotFound(id) => {
+                ApiError(StatusCode::NOT_FOUND, format!("brain not found: {}", id))
+            }
+            MemoryError::EngramNotFound(id) => ApiError(
+                StatusCode::NOT_FOUND,
+                format!("engram not found: {}", id),
+            ),
+            other => ApiError(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        #[derive(Serialize)]
+        struct ErrorBody {
+            error: String,
+        }
+        (self.0, Json(ErrorBody { error: self.1 })).into_response()
+    }
+}
+
+// ---- Handlers -----------------------------------------------------------
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok", "service": "neurovault-rust"}))
+}
+
+#[derive(Serialize)]
+struct StatusBody {
+    brain: String,
+    memories: i64,
+    chunks: i64,
+    entities: i64,
+    connections: i64,
+}
+
+async fn status(_s: State<ServerState>) -> Result<Json<StatusBody>, ApiError> {
+    // Simple SELECT COUNT queries against the active brain. Matches
+    // what Python's `/api/status` returns minus `indexing` (which
+    // was always an empty list in the Rust stub anyway).
+    let id = resolve_brain_id(None)?;
+    let db = open_brain(&id)?;
+    let conn = db.lock();
+    let memories: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM engrams WHERE state != 'dormant'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let chunks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+        .unwrap_or(0);
+    let entities: i64 = conn
+        .query_row("SELECT COUNT(*) FROM entities", [], |r| r.get(0))
+        .unwrap_or(0);
+    let connections: i64 = conn
+        .query_row("SELECT COUNT(*) FROM engram_links", [], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(Json(StatusBody {
+        brain: id,
+        memories,
+        chunks,
+        entities,
+        connections,
+    }))
+}
+
+async fn brains_list(_s: State<ServerState>) -> Result<Json<Vec<BrainSummary>>, ApiError> {
+    Ok(Json(list_brains_with_stats()?))
+}
+
+#[derive(Serialize)]
+struct ActiveBrainBody {
+    id: String,
+}
+
+async fn brains_active(_s: State<ServerState>) -> Result<Json<ActiveBrainBody>, ApiError> {
+    Ok(Json(ActiveBrainBody {
+        id: resolve_brain_id(None)?,
+    }))
+}
+
+async fn brains_activate(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Rewrite brains.json → active=brain_id. Same operation the
+    // existing Tauri command `set_active_brain_offline` does.
+    use std::fs;
+
+    use super::paths::registry_path;
+    let data = fs::read_to_string(registry_path())
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut parsed: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let exists = parsed
+        .get("brains")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&brain_id))
+        })
+        .unwrap_or(false);
+    if !exists {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("brain not found: {}", brain_id),
+        ));
+    }
+    parsed["active"] = serde_json::Value::String(brain_id.clone());
+    let serialised = serde_json::to_string_pretty(&parsed)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    fs::write(registry_path(), serialised)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"status": "ok", "active": brain_id}),
+    ))
+}
+
+async fn brains_stats(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<BrainStats>, ApiError> {
+    Ok(Json(brain_stats(&brain_id)?))
+}
+
+async fn notes_list(_s: State<ServerState>) -> Result<Json<Vec<NoteListRow>>, ApiError> {
+    let id = resolve_brain_id(None)?;
+    let db = open_brain(&id)?;
+    Ok(Json(list_notes(&db)?))
+}
+
+async fn notes_detail(
+    Path(engram_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<FullNote>, ApiError> {
+    let id = resolve_brain_id(None)?;
+    let db = open_brain(&id)?;
+    Ok(Json(get_note(&db, &engram_id)?))
+}
+
+#[derive(Deserialize)]
+struct GraphQuery {
+    #[serde(default)]
+    include_observations: Option<bool>,
+    #[serde(default)]
+    min_similarity: Option<f64>,
+}
+
+async fn graph(
+    Query(q): Query<GraphQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<GraphData>, ApiError> {
+    let id = resolve_brain_id(None)?;
+    let db = open_brain(&id)?;
+    Ok(Json(get_graph(
+        &db,
+        q.include_observations.unwrap_or(false),
+        q.min_similarity.unwrap_or(0.75),
+    )?))
+}
+
+#[derive(Deserialize)]
+struct RecallQuery {
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    mode: Option<String>,
+    #[serde(default)]
+    spread_hops: Option<u8>,
+    #[serde(default)]
+    as_of: Option<String>,
+    #[serde(default)]
+    include_observations: Option<bool>,
+    #[serde(default)]
+    brain_id: Option<String>,
+    /// Comma-separated list of scoring features to disable. Used by
+    /// the eval harness to A/B-test which signals earn their weight.
+    /// Production callers never set this; the retriever defaults to
+    /// the full pipeline.
+    #[serde(default)]
+    ablate: Option<String>,
+    /// Enable cross-encoder reranker on top-20. Adds ~50-100 ms
+    /// per call; improves top-1 precision. Off by default.
+    #[serde(default)]
+    rerank: Option<bool>,
+}
+
+async fn recall(
+    Query(q): Query<RecallQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<RecallHit>>, ApiError> {
+    // tokio::task::spawn_blocking because the retriever is sync and
+    // holds SQLite locks — keeping it off the async executor means
+    // a long retrieval doesn't stall the HTTP server for other
+    // inflight requests.
+    let brain_id = q.brain_id.clone();
+    let ablate_list: Vec<String> = q
+        .ablate
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let opts = RecallOpts {
+        top_k: q.limit.unwrap_or(10),
+        spread_hops: q.spread_hops.unwrap_or(0),
+        exclude_kinds: if q.include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+        as_of: q.as_of.clone(),
+        use_reranker: q.rerank.unwrap_or(false),
+        ablate: ablate_list,
+    };
+    let query_str = q.q.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<RecallHit>, MemoryError> {
+        let id = resolve_brain_id(brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        hybrid_retrieve_throttled(&db, &query_str, &opts)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(result))
+}
+
+// Allow unused — the `mode` field exists for Python-compat; we don't
+// act on it yet. (The Python server accepts it; dropping it would
+// break clients that set it.)
+#[allow(dead_code)]
+fn _consume_mode(_: &str) {}
+
+// --- Tier-A agent-efficiency endpoints --------------------------------
+//
+// 1) GET  /api/related/:engram_id       — cheap neighbour lookup,
+//    replaces follow-up recall calls.
+// 2) POST /api/notes                    — remember, with optional
+//    `deduplicate` threshold that short-circuits near-duplicate
+//    writes + returns the matched engram id instead.
+
+#[derive(Deserialize)]
+struct RelatedQuery {
+    #[serde(default)]
+    hops: Option<u8>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    min_similarity: Option<f64>,
+    #[serde(default)]
+    link_types: Option<String>, // comma-separated
+    #[serde(default)]
+    include_observations: Option<bool>,
+    #[serde(default)]
+    brain_id: Option<String>,
+}
+
+async fn related(
+    axum::extract::Path(engram_id): axum::extract::Path<String>,
+    Query(q): Query<RelatedQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<RelatedHit>>, ApiError> {
+    let brain_id = q.brain_id.clone();
+    let opts = RelatedOpts {
+        hops: q.hops.unwrap_or(1),
+        limit: q.limit.unwrap_or(20),
+        min_similarity: q.min_similarity.unwrap_or(0.55),
+        link_types: q.link_types.as_ref().map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        }),
+        exclude_kinds: if q.include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+    };
+    let eid = engram_id.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<RelatedHit>, MemoryError> {
+        let id = resolve_brain_id(brain_id.as_deref())?;
+        let db = super::db::open_brain(&id)?;
+        get_related_checked(&db, &eid, &opts)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct RememberBody {
+    title: Option<String>,
+    content: String,
+    #[serde(default)]
+    brain: Option<String>,
+    /// Cosine-similarity threshold (0..=1). When present and a
+    /// non-dormant engram matches above the threshold, skip the
+    /// ingest and return the matched engram id with status="merged".
+    /// Agents pass ~0.92 to merge only near-identical content; the
+    /// default keeps the legacy behaviour (no dedupe) for clients
+    /// that don't know about the parameter.
+    #[serde(default)]
+    deduplicate: Option<f64>,
+    /// Optional folder under the vault. `projects/` places the new
+    /// note under that subdirectory. Defaults to the vault root.
+    #[serde(default)]
+    folder: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RememberResult {
+    status: String, // "created" | "updated" | "unchanged" | "merged"
+    engram_id: String,
+    /// Only populated on `status == "merged"` — the cosine similarity
+    /// that triggered the merge. Lets agents decide whether to retry
+    /// with a higher threshold if they wanted the note created anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    similarity: Option<f64>,
+}
+
+/// Hard ceiling on `remember` content size. Agents occasionally send
+/// an entire wiki page or multi-KB transcript; running the full
+/// chunk+embed+link pipeline on content that large compounds badly
+/// with the vault watcher's re-ingest (which also fires on the
+/// newly-written file). We reject anything larger with a clear
+/// error telling the caller to chunk their content upstream. 32 KB
+/// comfortably covers multi-paragraph insights; anything beyond is
+/// almost always "I should have written multiple notes."
+const REMEMBER_MAX_BYTES: usize = 32 * 1024;
+
+async fn remember(
+    _s: State<ServerState>,
+    Json(body): Json<RememberBody>,
+) -> Result<Json<RememberResult>, ApiError> {
+    if body.content.len() > REMEMBER_MAX_BYTES {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "content is {} bytes; remember() accepts up to {} bytes. \
+                 Split into multiple engrams or use file-level ingest instead.",
+                body.content.len(),
+                REMEMBER_MAX_BYTES
+            ),
+        ));
+    }
+    let brain_id = body.brain.clone();
+    let title_hint = body.title.clone();
+    let content = body.content.clone();
+    let dedupe = body.deduplicate;
+    let folder = body.folder.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<RememberResult, MemoryError> {
+        let id = resolve_brain_id(brain_id.as_deref())?;
+        let db = super::db::open_brain(&id)?;
+
+        // Derive title FIRST so dedupe can compare apples-to-apples
+        // against what's stored. The stored embedding is built from
+        // the full markdown (`# {title}\n\n{content}`) with a
+        // chunker title-prefix on top, so dedupe has to see the
+        // same shape.
+        let title = title_hint
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| {
+                let first = content.lines().next().unwrap_or("").trim();
+                let stripped = first.trim_start_matches('#').trim();
+                let truncated: String = stripped.chars().take(60).collect();
+                if truncated.is_empty() { "Untitled".to_string() } else { truncated }
+            });
+        let seed = format!("# {}\n\n{}", title, content);
+
+        // Dedupe short-circuit: compare the fully-formed note (what
+        // would be written) against existing engrams. If a close
+        // match exists, skip the write and return the match.
+        if let Some(threshold) = dedupe {
+            if let Some((matched_id, sim)) = ingest::dedupe_check(&db, &seed, threshold, None)? {
+                return Ok(RememberResult {
+                    status: "merged".to_string(),
+                    engram_id: matched_id,
+                    similarity: Some(sim),
+                });
+            }
+        }
+
+        // Slug + filename — same pattern write_ops::create_note uses.
+        let slug = slug::slugify(&title);
+        let short = &uuid::Uuid::new_v4().to_string()[..8];
+        let base = format!("{}-{}.md", slug, short);
+        let filename = match folder.as_ref() {
+            Some(f) if !f.is_empty() => format!("{}/{}", f.trim_end_matches('/'), base),
+            _ => base,
+        };
+
+        // Write the markdown file into the active vault so the
+        // watcher + ingest pipeline see it. We round-trip through
+        // the filesystem to keep MCP writes symmetric with Tauri UI
+        // writes + preserve the markdown-as-source-of-truth invariant.
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+        let write = super::write_ops::save_note(&ctx, &filename, &seed)?;
+        Ok(RememberResult {
+            status: write.status,
+            engram_id: write.engram_id,
+            similarity: None,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(result))
+}
