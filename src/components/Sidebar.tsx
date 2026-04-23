@@ -4,6 +4,7 @@ import { useNoteStore } from "../stores/noteStore";
 import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
 import { BrainSelector } from "./BrainSelector";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { NoteMeta } from "../lib/tauri";
 
 
@@ -140,14 +141,28 @@ export function Sidebar({
     setIsCreating(false);
   }, [newTitle, createNote]);
 
+  // Two-step delete with an in-app confirm dialog. The previous
+  // `window.confirm()` was too easy to dismiss by accident — a single
+  // Enter press through a native prompt, done. Now:
+  //   1. User clicks the delete icon on a row.
+  //   2. Styled modal opens, Cancel focused by default, destructive
+  //      action rendered in red on the right.
+  //   3. User has to explicitly click Delete (Esc / backdrop / Cancel
+  //      all dismiss safely).
+  const [pendingDelete, setPendingDelete] = useState<{ filename: string; title: string } | null>(null);
   const handleDelete = useCallback(
     (filename: string, title: string) => {
-      if (window.confirm(`Move "${title}" to trash?`)) {
-        deleteNoteAction(filename);
-      }
+      setPendingDelete({ filename, title });
     },
-    [deleteNoteAction]
+    []
   );
+  const confirmDelete = useCallback(() => {
+    if (pendingDelete) {
+      deleteNoteAction(pendingDelete.filename);
+      setPendingDelete(null);
+    }
+  }, [pendingDelete, deleteNoteAction]);
+  const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
   // Resizable sidebar width
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -175,11 +190,37 @@ export function Sidebar({
         borderRight: "1px solid var(--nv-border)",
       }}
     >
-      {/* Resize handle */}
+      {/* Resize handle — 6px wide hit area with a persistent 2-dot drag
+           glyph so users can discover that the sidebar is resizable.
+           Dots sit at 35% opacity normally, fade up on hover; the strip
+           background tints into accent-glow on active drag. */}
       <div
-        className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 hover:[background-color:var(--nv-border)] active:[background-color:var(--nv-accent-glow)] transition-colors"
+        className="group absolute top-0 -right-[2px] w-[6px] h-full cursor-col-resize z-10 flex items-center justify-center"
         onMouseDown={() => { resizing.current = true; document.body.style.cursor = "col-resize"; }}
-      />
+        title="Drag to resize sidebar"
+        aria-label="Resize sidebar"
+        role="separator"
+      >
+        {/* Strip tint: subtle on hover, stronger on active drag. Uses a
+            child div instead of styling the parent so the 6px hit area
+            doesn't visibly widen on hover (which would feel glitchy). */}
+        <div
+          className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px transition-all group-hover:w-[3px] group-active:w-[3px]"
+          style={{ background: "var(--nv-border)" }}
+        />
+        {/* Two-dot grip centered vertically. Stays visible at all zoom
+            levels so discoverability doesn't depend on hover. */}
+        <div className="relative flex flex-col gap-1 opacity-35 group-hover:opacity-80 group-active:opacity-100 transition-opacity">
+          <span
+            className="w-[3px] h-[3px] rounded-full"
+            style={{ background: "var(--nv-text-muted)" }}
+          />
+          <span
+            className="w-[3px] h-[3px] rounded-full"
+            style={{ background: "var(--nv-text-muted)" }}
+          />
+        </div>
+      </div>
       {/* Header — search + new note on same line */}
       <div className="px-3 pt-3 pb-2 flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -336,6 +377,24 @@ export function Sidebar({
           </svg>
         </button>
       </div>
+      {/* Two-step delete safety gate — replaces the old
+          `window.confirm()`. Opened by clicking a row's delete icon;
+          closes on Esc / backdrop / Cancel. Only proceeds on explicit
+          click of the destructive-red button. */}
+      <ConfirmDialog
+        open={pendingDelete != null}
+        title="Delete this note?"
+        message={
+          pendingDelete
+            ? `"${pendingDelete.title}" will be moved to the brain's trash folder. The markdown file itself stays recoverable there, but the engram row (connections, entities, strength, access history) is removed from the graph and won't appear in recall results.`
+            : ""
+        }
+        confirmLabel="Delete note"
+        cancelLabel="Keep it"
+        destructive={true}
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 }
@@ -604,7 +663,14 @@ function NoteList({
               className="py-0.5"
             >
               <div
-                className="group relative cursor-pointer rounded-lg px-3.5 py-3 transition-all duration-200"
+                className={`group relative cursor-pointer rounded-lg px-3.5 py-3 transition-all duration-200 nv-spotlight${isActive ? " nv-spotlight-active" : ""}`}
+                onMouseMove={(e) => {
+                  // Track mouse position for the spotlight radial glow
+                  const el = e.currentTarget;
+                  const r = el.getBoundingClientRect();
+                  el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+                  el.style.setProperty("--my", `${e.clientY - r.top}px`);
+                }}
                 style={{
                   marginLeft: 12 + row.indent * 16,
                   marginRight: 12,
@@ -673,6 +739,7 @@ function NoteList({
           );
         })}
       </div>
+
     </div>
   );
 }

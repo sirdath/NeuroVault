@@ -192,3 +192,111 @@ html[data-density="compact"] {
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Polish utilities — "Luminous Vault Noir"
+   A small kit of classes that elevate chrome without touching tokens.
+   Usage: add `nv-spotlight` to any interactive row, `nv-glow` to any
+   accent element, etc.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Spotlight hover — mouse-tracked radial warmth.
+   Requires parent to set --mx / --my via onMouseMove (see Sidebar).
+   The radial follows the cursor for a "lit from within" feel. */
+.nv-spotlight {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.nv-spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  background: radial-gradient(
+    160px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(240, 165, 0, 0.10),
+    transparent 55%
+  );
+  z-index: 0;
+}
+.nv-spotlight:hover::before { opacity: 1; }
+.nv-spotlight > * { position: relative; z-index: 1; }
+
+/* Active / selected variant — always-on spotlight for the current row */
+.nv-spotlight-active::before {
+  opacity: 1;
+  background: radial-gradient(
+    200px circle at 30% 50%,
+    rgba(240, 165, 0, 0.14),
+    transparent 60%
+  );
+}
+
+/* Soft peach glow — for focus rings, pulsing indicators, accent badges.
+   Use with `box-shadow: var(--nv-glow-peach)` or as a class. */
+:root {
+  --nv-glow-amber: 0 0 0 1px rgba(240, 165, 0, 0.35),
+                   0 0 18px -2px rgba(240, 165, 0, 0.35);
+  --nv-glow-teal:  0 0 0 1px rgba(0, 201, 177, 0.35),
+                   0 0 18px -2px rgba(0, 201, 177, 0.35);
+  --nv-glow-purple: 0 0 0 1px rgba(139, 124, 248, 0.35),
+                    0 0 18px -2px rgba(139, 124, 248, 0.35);
+  --nv-ring-amber: 0 0 0 2px rgba(240, 165, 0, 0.18);
+}
+.nv-glow-amber { box-shadow: var(--nv-glow-amber); }
+.nv-glow-teal  { box-shadow: var(--nv-glow-teal); }
+.nv-glow-purple { box-shadow: var(--nv-glow-purple); }
+
+/* Subtle noise texture overlay — prevents banding on large dark surfaces,
+   adds organic texture. Apply via `.nv-noise-bg` on any element; uses an
+   SVG data-URI so it works offline (Tauri). Opacity kept very low to
+   avoid visible grain — just enough to defeat 8-bit quantization. */
+.nv-noise-bg {
+  position: relative;
+}
+.nv-noise-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 160px 160px;
+}
+
+/* Keyboard shortcut badge — for command palette rows + tooltips.
+   Tiny monospace pill that shows hotkeys inline. */
+.nv-kbd {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--color-tertiary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border);
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+}
+.nv-kbd-active {
+  color: var(--color-amber);
+  border-color: rgba(240, 165, 0, 0.35);
+  background: rgba(240, 165, 0, 0.08);
+}
+
+/* Fuzzy-match highlight — wrap matching chars in <mark class="nv-hl">. */
+.nv-hl {
+  color: var(--color-amber);
+  background: transparent;
+  font-weight: 600;
+}
+
+/* Tabular numbers for counts / timestamps / token displays */
+.nv-tabular { font-variant-numeric: tabular-nums; }

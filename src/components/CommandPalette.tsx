@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useNoteStore } from "../stores/noteStore";
+import { useGraphStore } from "../stores/graphStore";
 import { recall as apiRecall, type RecallResult } from "../lib/api";
 
 export interface Command {
@@ -15,6 +16,11 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   commands: Command[];
+  /** What the parent view is showing right now. Affects how Note
+   *  and Memory picks behave: on the Graph view, picking a note
+   *  tweens the camera + pulses the node instead of opening the
+   *  editor. On every other view, the default selectNote happens. */
+  currentView?: "editor" | "graph" | "compile";
 }
 
 // Per-section caps. The whole point of the rebuild is that you can scan the
@@ -65,7 +71,7 @@ function fuzzyScore(query: string, text: string): number {
   return score + maxConsecutive * 20;
 }
 
-export function CommandPalette({ open, onClose, commands }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, commands, currentView }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [memoryHits, setMemoryHits] = useState<RecallResult[]>([]);
@@ -76,6 +82,41 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
 
   const notes = useNoteStore((s) => s.notes);
   const selectNote = useNoteStore((s) => s.selectNote);
+  const graphNodes = useGraphStore((s) => s.nodes);
+  const requestGraphFocus = useGraphStore((s) => s.requestFocus);
+
+  /** Pick the right action when the user selects a note or memory hit:
+   *  if we're on the Graph view, find the matching graph node by
+   *  title + fire a focus-tween request (camera slides + node pulses);
+   *  otherwise open the note in the editor as before. Falls back to
+   *  selectNote if we can't resolve a graph node id — the user still
+   *  gets *something* useful when the graph's empty or still loading. */
+  const pickNoteByFilename = useCallback(
+    (filename: string, titleHint?: string) => {
+      if (currentView === "graph") {
+        const title = titleHint ?? notes.find((n) => n.filename === filename)?.title;
+        const match = graphNodes.find((g) => g.title === title);
+        if (match) {
+          requestGraphFocus(match.id);
+          return;
+        }
+      }
+      selectNote(filename);
+    },
+    [currentView, notes, graphNodes, requestGraphFocus, selectNote],
+  );
+  /** Same resolver but for memory hits that already carry an engram id
+   *  directly — skip the title lookup when we have the id on hand. */
+  const pickEngramById = useCallback(
+    (engramId: string, filename?: string) => {
+      if (currentView === "graph") {
+        requestGraphFocus(engramId);
+        return;
+      }
+      if (filename) selectNote(filename);
+    },
+    [currentView, requestGraphFocus, selectNote],
+  );
 
   // --- Local-only sections (commands + notes) -----------------------------
 
@@ -118,9 +159,9 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
       title: n.title,
       subtitle: n.filename,
       score,
-      action: () => selectNote(n.filename),
+      action: () => pickNoteByFilename(n.filename, n.title),
     }));
-  }, [notes, query, selectNote]);
+  }, [notes, query, pickNoteByFilename]);
 
   // --- Memory section: debounced /api/recall ------------------------------
   // Local fuzzy match catches what's in your sidebar. Memory recall catches
@@ -155,16 +196,29 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
 
   const memoryItems: PaletteItem[] = useMemo(() => {
     return memoryHits.map((hit) => {
-      // Try to resolve the hit to a vault note we can open directly. Falls
-      // back to opening by filename if the recall result includes one, or
-      // a no-op if neither is available.
+      // Phase-6 throttle-hint sentinel — the Rust retriever prepends
+      // this synthetic result when agents spam recall. Render it
+      // distinctly (no action, no score subtitle) so humans see the
+      // "slow down" signal that Claude Code sees.
+      if (hit.engram_id === "__throttle_hint__") {
+        return {
+          kind: "memory" as SectionKind,
+          id: "mem-throttle-hint",
+          title: hit.title,          // starts with ⚠️
+          subtitle: hit.content,      // the hint text
+          score: 0,
+          action: () => {},           // not pickable
+        };
+      }
+      // Normal hit: on the graph view, tween the camera to the engram;
+      // everywhere else, open the note in the editor.
       const matchedNote =
         hit.filename && notes.find((n) => n.filename === hit.filename);
       const action = matchedNote
-        ? () => selectNote(matchedNote.filename)
+        ? () => pickEngramById(hit.engram_id, matchedNote.filename)
         : hit.filename
-          ? () => selectNote(hit.filename!)
-          : () => {};
+          ? () => pickEngramById(hit.engram_id, hit.filename!)
+          : () => pickEngramById(hit.engram_id);
       return {
         kind: "memory" as SectionKind,
         id: `mem-${hit.engram_id}`,
@@ -174,7 +228,7 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
         action,
       };
     });
-  }, [memoryHits, notes, selectNote]);
+  }, [memoryHits, notes, pickEngramById]);
 
   // --- Combined flat list for keyboard navigation -------------------------
 
@@ -317,10 +371,17 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
                       onClose();
                     }}
                     onMouseEnter={() => setSelectedIndex(myIndex)}
-                    className="px-4 py-2 cursor-pointer flex items-center gap-3 transition-colors"
+                    className={`px-4 py-2 cursor-pointer flex items-center gap-3 transition-colors nv-spotlight${selected ? " nv-spotlight-active" : ""}`}
+                    onMouseMove={(e) => {
+                      const el = e.currentTarget;
+                      const r = el.getBoundingClientRect();
+                      el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+                      el.style.setProperty("--my", `${e.clientY - r.top}px`);
+                    }}
                     style={{
                       backgroundColor: selected ? "var(--color-surface-elevated)" : "transparent",
                       borderLeft: selected ? "2px solid var(--color-amber)" : "2px solid transparent",
+                      boxShadow: selected ? "inset 0 0 24px -8px rgba(240, 165, 0, 0.18)" : "none",
                     }}
                   >
                     <SectionIcon kind={item.kind} />
@@ -352,10 +413,7 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
                       </span>
                     )}
                     {item.shortcut && (
-                      <span
-                        className="text-[10px] font-[Geist,sans-serif] flex-shrink-0"
-                        style={{ color: "var(--color-tertiary)" }}
-                      >
+                      <span className={`nv-kbd flex-shrink-0${selected ? " nv-kbd-active" : ""}`}>
                         {item.shortcut}
                       </span>
                     )}
@@ -374,12 +432,12 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
             color: "var(--color-tertiary)",
           }}
         >
-          <div className="flex gap-3">
-            <span><kbd>↑↓</kbd> navigate</span>
-            <span><kbd>↵</kbd> select</span>
-            <span><kbd>esc</kbd> close</span>
+          <div className="flex gap-3 items-center">
+            <span className="inline-flex items-center gap-1"><span className="nv-kbd">↑↓</span> navigate</span>
+            <span className="inline-flex items-center gap-1"><span className="nv-kbd">↵</span> select</span>
+            <span className="inline-flex items-center gap-1"><span className="nv-kbd">esc</span> close</span>
           </div>
-          <span>{flatItems.length} results</span>
+          <span className="nv-tabular">{flatItems.length} results</span>
         </div>
       </div>
     </>
