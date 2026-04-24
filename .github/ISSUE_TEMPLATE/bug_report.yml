@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in NeuroVault doesn't work as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what actually happened?
+      placeholder: |
+        1. I opened NeuroVault
+        2. I tried to ...
+        3. Instead of X, Y happened
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: NeuroVault version
+      description: Help → About, or the installer filename (e.g. NeuroVault_0.1.0_x64-setup.exe)
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (build from source)
+        - Linux (build from source)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output (optional)
+      description: |
+        Anything from the console, browser devtools, or the MCP server logs
+        if you know how to find them. Skip this field if you don't.
+      render: shell
