@@ -693,8 +693,8 @@ function NoteList({
                   <>
                     <div className="flex items-start justify-between gap-2">
                       <h3
-                        className="text-[13px] font-medium truncate font-[Geist,sans-serif] leading-snug"
-                        style={{ color: isActive ? "var(--nv-text)" : "var(--nv-text-muted)" }}
+                        className="text-[13.5px] font-semibold truncate font-[Geist,sans-serif] leading-snug tracking-[-0.005em]"
+                        style={{ color: "var(--nv-text)" }}
                       >
                         {note.title}
                       </h3>
