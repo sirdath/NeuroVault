@@ -130,6 +130,43 @@ class BrainContext:
         for subdir in ("pdfs", "conversations", "clips", "pastes", "imports"):
             (self.raw_dir / subdir).mkdir(parents=True, exist_ok=True)
 
+        # --- New-layout subfolders (idempotent, safe on existing brains) ---
+        # Matches scripts/migrate_layout.py so fresh installs land in the
+        # research-validated shape without the user running the migrator.
+
+        # cache/ — our rebuildable derivatives. SQLite's WAL/SHM stay
+        # next to brain.db; this is for bm25/embeddings/rerank scratch.
+        cache_dir = brain_dir / "cache"
+        for sub in ("embeddings", "bm25", "rerank", "temp"):
+            (cache_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        # assets/ — media that notes reference (distinct from raw/pdfs/
+        # which is for PDFs the brain ingests as source documents).
+        assets_dir = brain_dir / "assets"
+        for sub in ("images", "audio", "data"):
+            (assets_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        # Vault typed subfolders as default homes. Frontmatter type: is
+        # authoritative; folders just give new notes somewhere to land.
+        # External vaults skip this — it's the user's tree.
+        if self.external_vault_path is None:
+            for sub in ("concepts", "entities", "decisions", "summaries", "inbox"):
+                (self.vault_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        # raw/conversations/ split: existing raw/conversations/ parent
+        # stays and may hold pre-split imports; new imported/ and
+        # sessions/ subdirs differentiate future inputs.
+        (self.raw_dir / "conversations" / "imported").mkdir(parents=True, exist_ok=True)
+        (self.raw_dir / "conversations" / "sessions" / "_rollups").mkdir(
+            parents=True, exist_ok=True
+        )
+
+        # Per-brain config.json — created empty if missing; the app reads
+        # {} as "defaults". Never clobber an existing file.
+        cfg_path = brain_dir / "config.json"
+        if not cfg_path.exists():
+            cfg_path.write_text("{}\n", encoding="utf-8")
+
         self.db = Database(self.db_path)
         self.bm25 = BM25Index()
 
