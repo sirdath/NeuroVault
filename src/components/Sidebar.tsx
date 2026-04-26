@@ -5,6 +5,7 @@ import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
 import { BrainSelector } from "./BrainSelector";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import type { NoteMeta } from "../lib/tauri";
 
 
@@ -164,6 +165,62 @@ export function Sidebar({
   }, [pendingDelete, deleteNoteAction]);
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
+  // Right-click → floating context menu. State holds where on screen the
+  // menu should appear and which note triggered it. The menu component
+  // handles its own outside-click / Esc / scroll dismissal.
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    note: NoteMeta;
+  } | null>(null);
+  const openContextMenu = useCallback((note: NoteMeta, x: number, y: number) => {
+    setCtxMenu({ x, y, note });
+  }, []);
+  const closeContextMenu = useCallback(() => setCtxMenu(null), []);
+
+  // Build menu items lazily so the closures capture the active note.
+  const ctxMenuItems: ContextMenuEntry[] = ctxMenu
+    ? [
+        {
+          label: "Open",
+          onSelect: () => selectNote(ctxMenu.note.filename),
+        },
+        {
+          label: "Rename…",
+          hint: "F2",
+          onSelect: () => setRenamingFilename(ctxMenu.note.filename),
+        },
+        {
+          label: "Reveal in vault",
+          onSelect: async () => {
+            try {
+              const { invoke } = await import("@tauri-apps/api/core");
+              const vaultPath = await invoke<string>("get_vault_path");
+              const sep = vaultPath.includes("\\") ? "\\" : "/";
+              const full = `${vaultPath.replace(/[\\/]+$/, "")}${sep}${ctxMenu.note.filename}`;
+              await invoke("reveal_in_file_manager", { path: full });
+            } catch {
+              /* feature not available — silently no-op (web build, etc.) */
+            }
+          },
+        },
+        {
+          label: "Copy filename",
+          onSelect: async () => {
+            try {
+              await navigator.clipboard.writeText(ctxMenu.note.filename);
+            } catch { /* clipboard blocked */ }
+          },
+        },
+        { divider: true },
+        {
+          label: "Delete…",
+          destructive: true,
+          onSelect: () => handleDelete(ctxMenu.note.filename, ctxMenu.note.title),
+        },
+      ]
+    : [];
+
   // Resizable sidebar width
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const resizing = useRef(false);
@@ -294,6 +351,7 @@ export function Sidebar({
         activeFilename={activeFilename}
         onSelect={(fn) => selectNote(fn)}
         onDelete={handleDelete}
+        onOpenContextMenu={openContextMenu}
         onToggleFolder={toggleFolder}
         renamingFilename={renamingFilename}
         onStartRename={setRenamingFilename}
@@ -395,6 +453,14 @@ export function Sidebar({
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
       />
+
+      <ContextMenu
+        open={ctxMenu != null}
+        x={ctxMenu?.x ?? 0}
+        y={ctxMenu?.y ?? 0}
+        items={ctxMenuItems}
+        onClose={closeContextMenu}
+      />
     </div>
   );
 }
@@ -431,26 +497,70 @@ function RenameInput({
     try { ref.current?.setSelectionRange(from, to); } catch { /* ignore */ }
   }, [initial]);
 
+  // Why no onBlur commit:
+  //   The previous implementation committed on blur. That meant
+  //   clicking anywhere outside the input (including by accident)
+  //   silently saved a half-typed filename. Now blur is a no-op;
+  //   the user has to deliberately click ✓ or hit Enter to commit,
+  //   or click ✕ / press Escape to cancel.
+  const dirty = value.trim().length > 0 && value !== initial;
+
   return (
-    <input
-      ref={ref}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
+    <div
+      className="flex items-center gap-1 w-full"
       onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") onCommit(value);
-        else if (e.key === "Escape") onCancel();
-      }}
-      onBlur={() => onCommit(value)}
-      className="w-full text-[13px] px-2 py-1 rounded-md focus:outline-none font-mono"
-      style={{
-        background: "var(--nv-bg)",
-        color: "var(--nv-text)",
-        border: "1px solid var(--nv-accent)",
-      }}
-      placeholder="folder/name.md"
-    />
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && dirty) onCommit(value);
+          else if (e.key === "Escape") onCancel();
+        }}
+        className="flex-1 min-w-0 text-[13px] px-2 py-1 rounded-md focus:outline-none font-mono"
+        style={{
+          background: "var(--nv-bg)",
+          color: "var(--nv-text)",
+          border: "1px solid var(--nv-accent)",
+        }}
+        placeholder="folder/name.md"
+      />
+      <button
+        onClick={() => dirty && onCommit(value)}
+        disabled={!dirty}
+        title="Confirm rename (Enter)"
+        aria-label="Confirm rename"
+        className="w-6 h-6 flex items-center justify-center rounded-md transition-colors disabled:opacity-40"
+        style={{
+          background: dirty ? "var(--nv-accent)" : "var(--nv-surface)",
+          color: dirty ? "var(--nv-bg)" : "var(--nv-text-muted)",
+          border: "1px solid var(--nv-border)",
+        }}
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      </button>
+      <button
+        onClick={onCancel}
+        title="Cancel rename (Esc)"
+        aria-label="Cancel rename"
+        className="w-6 h-6 flex items-center justify-center rounded-md transition-colors hover:[background-color:var(--nv-surface-elevated,var(--nv-surface))]"
+        style={{
+          background: "var(--nv-surface)",
+          color: "var(--nv-text-muted)",
+          border: "1px solid var(--nv-border)",
+        }}
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
@@ -507,6 +617,7 @@ interface NoteListProps {
   onStartRename: (filename: string | null) => void;
   onCommitRename: (oldFilename: string, newFilename: string) => void;
   onDropToFolder: (fromFilename: string, folder: string) => void;
+  onOpenContextMenu: (note: NoteMeta, x: number, y: number) => void;
 }
 
 /**
@@ -530,6 +641,7 @@ function NoteList({
   onStartRename,
   onCommitRename,
   onDropToFolder,
+  onOpenContextMenu,
 }: NoteListProps) {
   // Track which folder is being dragged-over so we can highlight it.
   // `__root__` is the sentinel for the top-of-list root drop zone.
@@ -652,6 +764,11 @@ function NoteList({
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               onClick={() => !isRenaming && onSelect(note.filename)}
+              onContextMenu={(e) => {
+                if (isRenaming) return;
+                e.preventDefault();
+                onOpenContextMenu(note, e.clientX, e.clientY);
+              }}
               draggable={!isRenaming}
               onDragStart={(e) => {
                 // Custom MIME so only folder drop zones accept the drag —
