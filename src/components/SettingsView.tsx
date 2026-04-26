@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
+import {
+  useGraphSettingsStore,
+  PALETTES,
+  type GraphPalette,
+  type GraphNodeShape,
+} from "../stores/graphSettingsStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 
@@ -203,6 +209,8 @@ export function SettingsView() {
 
         </Section>
 
+        <GraphSection />
+
         {/* Server */}
         <Section title="Server">
           <div className="flex items-center justify-between mb-4">
@@ -277,6 +285,121 @@ export function SettingsView() {
         </Section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Settings section for the graph view's user-pickable visual options.
+ * Three controls: palette (4 presets), node shape (3 options), and
+ * "show all folder labels" toggle. All persist to localStorage via
+ * useGraphSettingsStore. Changes apply live — the graph rerenders as
+ * the user clicks because it subscribes to the same store.
+ */
+function GraphSection() {
+  const palette = useGraphSettingsStore((s) => s.palette);
+  const setPalette = useGraphSettingsStore((s) => s.setPalette);
+  const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
+  const setNodeShape = useGraphSettingsStore((s) => s.setNodeShape);
+  const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
+  const setShowClusterLabels = useGraphSettingsStore((s) => s.setShowClusterLabels);
+
+  const PALETTE_LABELS: { value: GraphPalette; label: string; hint: string }[] = [
+    { value: "warm",  label: "Warm",  hint: "Peach + cohesive cools (default)" },
+    { value: "cool",  label: "Cool",  hint: "Blues, teals, violets" },
+    { value: "mono",  label: "Mono",  hint: "Single hue gradient" },
+    { value: "vivid", label: "Vivid", hint: "High-saturation, demo-ready" },
+  ];
+
+  const SHAPE_LABELS: { value: GraphNodeShape; label: string }[] = [
+    { value: "circle", label: "Circle" },
+    { value: "square", label: "Square" },
+    { value: "hex",    label: "Hex" },
+  ];
+
+  return (
+    <Section title="Graph">
+      <SettingRow label="Palette" description="Folder colors in the graph view">
+        <div className="grid grid-cols-2 gap-2 w-full">
+          {PALETTE_LABELS.map((p) => {
+            const colors = PALETTES[p.value];
+            const selected = palette === p.value;
+            return (
+              <button
+                key={p.value}
+                onClick={() => setPalette(p.value)}
+                title={p.hint}
+                className="text-left rounded-lg p-2.5 transition-all border"
+                style={{
+                  background: "var(--nv-surface)",
+                  borderColor: selected ? "var(--nv-accent)" : "var(--nv-border)",
+                  boxShadow: selected ? "0 0 14px var(--nv-accent-glow)" : undefined,
+                }}
+              >
+                <div className="flex gap-1 mb-2">
+                  {colors.slice(0, 6).map((c, i) => (
+                    <span
+                      key={i}
+                      className="w-3.5 h-3.5 rounded-full"
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <p className="text-[12px] font-medium font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+                  {p.label}
+                </p>
+                <p className="text-[10px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-muted)" }}>
+                  {p.hint}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </SettingRow>
+
+      <SettingRow label="Node shape" description="Geometry of each node on the canvas">
+        <div className="flex gap-1 rounded-xl p-1" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          {SHAPE_LABELS.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => setNodeShape(s.value)}
+              className="px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all"
+              style={nodeShape === s.value ? {
+                background: "var(--nv-surface)",
+                color: "var(--nv-text)",
+                border: "1px solid var(--nv-border)",
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+              } : { color: "var(--nv-text-muted)" }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        label="Show all folder labels"
+        description="By default, only the cluster you hover gets labelled. Turn on to label every cluster permanently."
+      >
+        <button
+          onClick={() => setShowClusterLabels(!showClusterLabels)}
+          className="relative w-10 h-6 rounded-full transition-colors"
+          style={{
+            background: showClusterLabels ? "var(--nv-accent)" : "var(--nv-surface)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-label="Toggle folder labels"
+          aria-pressed={showClusterLabels}
+        >
+          <span
+            className="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full transition-transform"
+            style={{
+              background: showClusterLabels ? "var(--nv-bg)" : "var(--nv-text-muted)",
+              transform: showClusterLabels ? "translateX(16px)" : "translateX(0)",
+            }}
+          />
+        </button>
+      </SettingRow>
+    </Section>
   );
 }
 

@@ -5,6 +5,13 @@ import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
 import { useBrainStore } from "../stores/brainStore";
+import {
+  PALETTES,
+  PALETTE_NEUTRAL,
+  useGraphSettingsStore,
+  type GraphPalette,
+  type GraphNodeShape,
+} from "../stores/graphSettingsStore";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -80,27 +87,17 @@ function nodeRadius(node: { degree?: number; access_count?: number }): number {
 }
 
 /** Deterministic palette — a folder always maps to the same color
- *  across reloads. Redesigned as a cohesive cool-tone set with ONE
- *  warm brand accent (peach), replacing the prior rainbow (12 hues
- *  that collectively looked chaotic against the dark-navy canvas).
+ *  within a session and across reloads, regardless of which palette
+ *  the user picks. The hash → index step is stable; only the array
+ *  it indexes into changes when the user switches palettes (warm /
+ *  cool / mono / vivid via Settings).
  *
  *  Philosophy: when the graph is "the hero view people screenshot
  *  to show off their brain", colour harmony matters more than
- *  colour variety. Eight cohesive tones group folders without
- *  making the canvas feel like a toy chest. */
-const FOLDER_PALETTE = [
-  "#DE7356",  // peach (brand accent — the one warm)
-  "#5CC8A8",  // soft teal
-  "#6C9FD8",  // sky blue
-  "#A78BFA",  // violet
-  "#87A396",  // sage
-  "#C9A3C8",  // dusty rose
-  "#7891B0",  // slate blue
-  "#C9A673",  // warm sand
-];
-
-function folderColor(folder: string): string {
-  if (!folder) return "#6e6d8f"; // root-level notes — neutral slate
+ *  colour variety. Eight cohesive tones per palette group folders
+ *  without making the canvas feel like a toy chest. */
+function folderColor(folder: string, palette: GraphPalette): string {
+  if (!folder) return PALETTE_NEUTRAL[palette];
   // Simple FNV-ish hash so the mapping is stable across sessions without
   // pulling in a real hashing lib.
   let h = 2166136261;
@@ -108,7 +105,49 @@ function folderColor(folder: string): string {
     h ^= folder.charCodeAt(i);
     h = (h * 16777619) >>> 0;
   }
-  return FOLDER_PALETTE[h % FOLDER_PALETTE.length]!;
+  const colors = PALETTES[palette];
+  return colors[h % colors.length]!;
+}
+
+/** Trace a node-shape path on the given canvas context. Caller is
+ *  responsible for `fill()` / `stroke()` afterwards. The shape is one
+ *  of the user-pickable presets (circle / square / hex); circle is the
+ *  default. Square draws as a rounded rect inscribed in the same
+ *  bounding circle so visually-equivalent footprint is preserved.
+ *  Hex draws a flat-top regular hexagon with the same circumradius. */
+function drawNodeShape(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  shape: GraphNodeShape,
+): void {
+  ctx.beginPath();
+  if (shape === "square") {
+    // Rounded rect — corner radius proportional to the node so small
+    // nodes still read as squarish, large nodes feel softer.
+    const side = r * 1.7;
+    const half = side / 2;
+    const radius = Math.min(r * 0.25, half);
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(cx - half, cy - half, side, side, radius);
+    } else {
+      // Fallback for ancient browsers that miss roundRect.
+      ctx.rect(cx - half, cy - half, side, side);
+    }
+  } else if (shape === "hex") {
+    // Flat-top hexagon. 6 vertices at 0, 60, 120, ... degrees.
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i;
+      const x = cx + r * Math.cos(angle);
+      const y = cy + r * Math.sin(angle);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  } else {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  }
 }
 
 /** Turn a CSS/hex color into an rgba() with the given alpha. Handles
@@ -343,6 +382,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
+
+  // User-pickable graph appearance: palette, node shape, cluster-label
+  // toggle. Selecting individually so a change to one doesn't rerender
+  // consumers of the others (Zustand subscribes per-selector).
+  const palette = useGraphSettingsStore((s) => s.palette);
+  const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
+  const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
 
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const notesList = useNoteStore((s) => s.notes);
@@ -609,7 +655,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
     const r = nodeRadius(node);
-    const fillBase = folderColor(node.folder ?? "");
+    const fillBase = folderColor(node.folder ?? "", palette);
 
     // Strength + state together in one alpha channel. Prior
     // design overloaded both into a ring *and* a glow; this is
@@ -636,8 +682,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
     ctx.shadowBlur = 3;
     ctx.shadowOffsetY = 0.5;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    drawNodeShape(ctx, node.x, node.y, r, nodeShape);
     ctx.fillStyle = withAlpha(fillBase, alpha);
     ctx.fill();
     ctx.restore();
@@ -646,8 +691,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // separates visually. 0.5 px divided by zoom so it stays
     // consistently thin regardless of how close the user is.
     if (focusAlpha > 0.2) {
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
       ctx.lineWidth = 0.5 / globalScale;
       ctx.strokeStyle = withAlpha("#0b0b12", 0.75 * focusAlpha);
       ctx.stroke();
@@ -667,7 +711,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
       ctx.fillText(truncated, node.x, node.y + r + 2);
     }
-  }, [focusedNodeId, graphData.adjacency]);
+  }, [focusedNodeId, graphData.adjacency, palette, nodeShape]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -676,10 +720,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (node.x == null || node.y == null) return;
     const r = nodeRadius(node) + 2;
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    drawNodeShape(ctx, node.x, node.y, r, nodeShape);
     ctx.fill();
-  }, []);
+  }, [nodeShape]);
 
   /** Native hover tooltip for edges. react-force-graph-2d reads this
    *  and renders a lightweight DOM tooltip on mouseover — no extra
@@ -708,48 +751,80 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const paintClusterLabels = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
     if (!nodes.length) return;
 
-    // Default: render NO cluster labels. The user explicitly asked for
-    // a clean graph — folder labels at every centroid was visual noise.
-    // Only show the label of the cluster the user is currently focused
-    // on (hover/click), so labels surface contextually rather than
-    // permanently. Phase 5 adds a Settings toggle to bring all-on back.
-    if (!focusedNodeId) return;
-
-    // Find the focused node so we know which folder to label.
-    const focused = (nodes as Array<SimNode & { folder?: string; x?: number; y?: number }>)
-      .find((n) => n.id === focusedNodeId);
-    if (!focused) return;
-    const focusedFolder = focused.folder ?? "";
-
-    // Compute centroid + count for the focused folder only — cheap,
-    // O(N) once and only on hover.
-    let sx = 0, sy = 0, count = 0;
-    for (const n of nodes as Array<SimNode & { x?: number; y?: number; folder?: string }>) {
-      if (n.x == null || n.y == null) continue;
-      if ((n.folder ?? "") !== focusedFolder) continue;
-      sx += n.x; sy += n.y; count += 1;
-    }
-    if (count < 2) return;  // a folder of one isn't a cluster
-
-    // Hide at very high zoom — user is reading individual titles.
-    if (globalScale > 2.0) return;
-
-    const cx = sx / count;
-    const cy = sy / count;
-    const color = focusedFolder === "" ? "#9a97b4" : folderColor(focusedFolder);
-    const label = focusedFolder === "" ? "root" : focusedFolder;
-    const weight = Math.min(1, count / 15);
-    const size = (11 + weight * 4) / globalScale;
-
-    ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
-    ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
-    ctx.shadowBlur = 5 / globalScale;
-    ctx.fillStyle = withAlpha(color, 0.85);
-    ctx.fillText(label, cx, cy);
-    ctx.restore();
+
+    // Two render modes (controlled by the Settings → Graph toggle):
+    //
+    //   1. showClusterLabels = false  (default after Phase 4):
+    //        Render NO labels by default. When the user hovers a
+    //        node, label only that node's cluster. Keeps the canvas
+    //        clean for screenshots and reading.
+    //
+    //   2. showClusterLabels = true:
+    //        Render all clusters with ≥5 members at all zoom levels
+    //        below 2.0×. The original behaviour — for users who want
+    //        the orientation aid permanently visible.
+    if (showClusterLabels) {
+      if (globalScale > 2.0) {
+        // Skip — user is zoomed in reading titles directly.
+      } else {
+        const sums = new Map<string, { x: number; y: number; n: number }>();
+        for (const n of nodes as Array<SimNode & { x?: number; y?: number; folder?: string }>) {
+          if (n.x == null || n.y == null) continue;
+          const key = n.folder ?? "";
+          const s = sums.get(key);
+          if (s) { s.x += n.x; s.y += n.y; s.n += 1; }
+          else sums.set(key, { x: n.x, y: n.y, n: 1 });
+        }
+        for (const [folder, s] of sums) {
+          if (s.n < 5) continue;
+          const cx = s.x / s.n;
+          const cy = s.y / s.n;
+          const color = folder === "" ? PALETTE_NEUTRAL[palette] : folderColor(folder, palette);
+          const label = folder === "" ? "root" : folder;
+          const weight = Math.min(1, s.n / 15);
+          const size = (11 + weight * 4) / globalScale;
+          ctx.save();
+          ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
+          ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+          ctx.shadowBlur = 5 / globalScale;
+          ctx.fillStyle = withAlpha(color, 0.72);
+          ctx.fillText(label, cx, cy);
+          ctx.restore();
+        }
+      }
+    } else if (focusedNodeId) {
+      // Hover-only mode: label only the focused node's cluster.
+      const focused = (nodes as Array<SimNode & { folder?: string; x?: number; y?: number }>)
+        .find((n) => n.id === focusedNodeId);
+      if (focused && globalScale <= 2.0) {
+        const focusedFolder = focused.folder ?? "";
+        let sx = 0, sy = 0, count = 0;
+        for (const n of nodes as Array<SimNode & { x?: number; y?: number; folder?: string }>) {
+          if (n.x == null || n.y == null) continue;
+          if ((n.folder ?? "") !== focusedFolder) continue;
+          sx += n.x; sy += n.y; count += 1;
+        }
+        if (count >= 2) {
+          const cx = sx / count;
+          const cy = sy / count;
+          const color = focusedFolder === ""
+            ? PALETTE_NEUTRAL[palette]
+            : folderColor(focusedFolder, palette);
+          const label = focusedFolder === "" ? "root" : focusedFolder;
+          const weight = Math.min(1, count / 15);
+          const size = (11 + weight * 4) / globalScale;
+          ctx.save();
+          ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
+          ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+          ctx.shadowBlur = 5 / globalScale;
+          ctx.fillStyle = withAlpha(color, 0.85);
+          ctx.fillText(label, cx, cy);
+          ctx.restore();
+        }
+      }
+    }
 
     // --- Focus pulse ring. Drawn in the same post-frame pass so it
     // sits on top of nodes + links. Two concentric expanding rings
@@ -785,15 +860,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         }
       }
     }
-  }, [nodes, focusedNodeId, focusPulse]);
+  }, [nodes, focusedNodeId, focusPulse, palette, showClusterLabels]);
 
   // Color accessors shared by 2D + 3D. 3D uses folder color too — so
   // orbiting the scene, you see folders as clearly-colored clouds of
   // nodes rather than a monochromatic swarm.
   const nodeColor = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
-    return folderColor(n.folder ?? "");
-  }, []);
+    return folderColor(n.folder ?? "", palette);
+  }, [palette]);
   const nodeVal = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
     // nodeVal is an area (2D) / volume (3D) multiplier — map our 6-20px
