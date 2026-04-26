@@ -302,6 +302,12 @@ function GraphSection() {
   const setNodeShape = useGraphSettingsStore((s) => s.setNodeShape);
   const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
   const setShowClusterLabels = useGraphSettingsStore((s) => s.setShowClusterLabels);
+  // Per-layer Analytics defaults — control which overlays light up
+  // when the user flips the in-graph Analytics toggle.
+  const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
+  const setAnalyticsResizeByImportance = useGraphSettingsStore((s) => s.setAnalyticsResizeByImportance);
+  const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
+  const setAnalyticsGroupByCommunity = useGraphSettingsStore((s) => s.setAnalyticsGroupByCommunity);
 
   const PALETTE_LABELS: { value: GraphPalette; label: string; hint: string }[] = [
     { value: "warm",  label: "Warm",  hint: "Peach + cohesive cools (default)" },
@@ -380,26 +386,77 @@ function GraphSection() {
         label="Show all folder labels"
         description="By default, only the cluster you hover gets labelled. Turn on to label every cluster permanently."
       >
-        <button
-          onClick={() => setShowClusterLabels(!showClusterLabels)}
-          className="relative w-10 h-6 rounded-full transition-colors"
-          style={{
-            background: showClusterLabels ? "var(--nv-accent)" : "var(--nv-surface)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-label="Toggle folder labels"
-          aria-pressed={showClusterLabels}
-        >
-          <span
-            className="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full transition-transform"
-            style={{
-              background: showClusterLabels ? "var(--nv-bg)" : "var(--nv-text-muted)",
-              transform: showClusterLabels ? "translateX(16px)" : "translateX(0)",
-            }}
-          />
-        </button>
+        <ToggleSwitch
+          on={showClusterLabels}
+          onChange={() => setShowClusterLabels(!showClusterLabels)}
+          ariaLabel="Toggle folder labels"
+        />
+      </SettingRow>
+
+      {/* Analytics defaults — control which Analytics-mode overlays
+          light up when the user flips the in-graph Analytics pill.
+          Both default ON; users who only want one half (e.g. node
+          sizing without the tints) opt the other off here. */}
+      <div
+        className="text-[11px] uppercase tracking-wider mt-6 mb-2 font-[Geist,sans-serif]"
+        style={{ color: "var(--nv-text-muted)" }}
+      >
+        Analytics defaults
+      </div>
+      <SettingRow
+        label="Resize nodes by importance"
+        description="Bigger nodes for notes that other notes link to more often (PageRank). Only shows in Analytics mode."
+      >
+        <ToggleSwitch
+          on={analyticsResizeByImportance}
+          onChange={() => setAnalyticsResizeByImportance(!analyticsResizeByImportance)}
+          ariaLabel="Toggle node-size by importance"
+        />
+      </SettingRow>
+      <SettingRow
+        label="Group notes by community"
+        description="Soft background tints behind notes that link to each other a lot. Only shows in Analytics mode."
+      >
+        <ToggleSwitch
+          on={analyticsGroupByCommunity}
+          onChange={() => setAnalyticsGroupByCommunity(!analyticsGroupByCommunity)}
+          ariaLabel="Toggle community grouping"
+        />
       </SettingRow>
     </Section>
+  );
+}
+
+/** Small reusable iOS-style toggle. Extracted so the three toggles
+ *  in this section don't repeat their own DOM. */
+function ToggleSwitch({
+  on,
+  onChange,
+  ariaLabel,
+}: {
+  on: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      onClick={onChange}
+      className="relative w-10 h-6 rounded-full transition-colors"
+      style={{
+        background: on ? "var(--nv-accent)" : "var(--nv-surface)",
+        border: "1px solid var(--nv-border)",
+      }}
+      aria-label={ariaLabel}
+      aria-pressed={on}
+    >
+      <span
+        className="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full transition-transform"
+        style={{
+          background: on ? "var(--nv-bg)" : "var(--nv-text-muted)",
+          transform: on ? "translateX(16px)" : "translateX(0)",
+        }}
+      />
+    </button>
   );
 }
 
