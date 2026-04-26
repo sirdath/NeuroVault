@@ -13,6 +13,7 @@ import {
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
 import { edgeConfidence } from "../lib/graphMetrics";
+import { AnalyticsTipBar } from "./AnalyticsTipBar";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -1024,6 +1025,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           Analytics
         </button>
       </div>
+
+      {/* Analytics tip bar — appears below the toolbar when analytics
+          mode is on. Idle copy + per-hover swap + dismiss-for-session.
+          Hover-driven copy is plumbed in G5 once PageRank/community
+          data is available; for now it's idle copy only. */}
+      <AnalyticsTipBar visible={analyticsMode} />
 
       <Suspense fallback={
         <div className="absolute inset-0 flex items-center justify-center">
