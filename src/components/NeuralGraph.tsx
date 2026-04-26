@@ -12,7 +12,7 @@ import {
   type GraphPalette,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
-import { edgeConfidence } from "../lib/graphMetrics";
+import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
@@ -391,11 +391,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const palette = useGraphSettingsStore((s) => s.palette);
   const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
   const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
-  // Analytics-mode master toggle. When on, downstream phases will
-  // also factor in the per-layer toggles (analyticsResizeByImportance,
-  // analyticsGroupByCommunity) — this commit only wires the master.
+  // Analytics-mode master toggle + per-layer toggles. The master
+  // gates whether anything analytics-y renders at all; the per-layer
+  // booleans decide which specific overlays light up.
   const analyticsMode = useGraphSettingsStore((s) => s.analyticsMode);
   const toggleAnalyticsMode = useGraphSettingsStore((s) => s.toggleAnalyticsMode);
+  const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
+  const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
 
   // Cmd+Shift+A toggles analytics. Cmd+A is select-all in editor
   // contexts, hence the Shift disambiguator. Skipped if focus is in
@@ -537,6 +539,42 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
   }, [nodes, edges]);
 
+  // Cache key for analytics computations — same brain state = same key.
+  // Used by the analyticsData memo below so toggling analytics off and
+  // back on doesn't recompute when nothing has changed.
+  const analyticsKey = useMemo(
+    () => graphCacheKey(nodes, edges),
+    [nodes, edges]
+  );
+
+  // PageRank + Louvain are only computed when the user actually flips
+  // Analytics on. Off path = zero cost, identical render to v0.1.0.
+  // useMemo cache invalidates on cacheKey change, so adding/removing
+  // notes recomputes; toggling analytics on/off does not.
+  const analyticsData = useMemo<{
+    pr: Map<string, number>;
+    com: Map<string, number>;
+    communitySizes: Map<number, number>;
+  } | null>(() => {
+    if (!analyticsMode) return null;
+    if (nodes.length === 0) {
+      return { pr: new Map(), com: new Map(), communitySizes: new Map() };
+    }
+    const pr = pageRank(nodes, edges);
+    const com = louvain(nodes, edges);
+    const communitySizes = new Map<number, number>();
+    for (const c of com.values()) {
+      communitySizes.set(c, (communitySizes.get(c) ?? 0) + 1);
+    }
+    return { pr, com, communitySizes };
+    // analyticsKey is part of deps via the cache-key sentinel; including
+    // it explicitly is what makes the memo refresh on graph change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyticsMode, analyticsKey]);
+
+  // (Hover-driven tip bar copy lives further down, after focusedNodeId
+  //  is declared.)
+
   // Track hover node and its screen position (set from onNodeHover).
   const [hoverCard, setHoverCard] = useState<HoverCard | null>(null);
   const previewCacheRef = useRef<Record<string, string>>({});
@@ -663,6 +701,24 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [nodes, focusedNodeId]);
 
+  // Hover-driven tip bar copy. Active only in Analytics mode; falls
+  // through to the idle copy when nothing meaningful is hovered.
+  // PR mean is 1.0 by design — 2.0+ is a hub, 0.5- is peripheral.
+  const tipBarHoverText = useMemo<string | null>(() => {
+    if (!analyticsMode || !analyticsData || !focusedNodeId) return null;
+    const pr = analyticsData.pr.get(focusedNodeId) ?? 0;
+    const com = analyticsData.com.get(focusedNodeId);
+    const size = com != null ? analyticsData.communitySizes.get(com) ?? 0 : 0;
+    if (pr >= 2.0) {
+      return size > 1
+        ? `Core note · ${pr.toFixed(1)}× the average reference rate · in a cluster of ${size}`
+        : `Core note · ${pr.toFixed(1)}× the average reference rate`;
+    }
+    if (size >= 3) return `In a cluster of ${size} linked notes`;
+    if (pr <= 0.5) return `Peripheral note · few links to the rest of your brain`;
+    return null;
+  }, [analyticsMode, analyticsData, focusedNodeId]);
+
   // Custom 2D node renderer. Redesigned for a cleaner, more
   // screenshot-worthy aesthetic:
   //   - Small discs (2.5-7 px radius) — the graph reads as a
@@ -679,7 +735,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
-    const r = nodeRadius(node);
+    let r = nodeRadius(node);
+    // Analytics mode + "resize by importance" toggle blends PageRank
+    // into the radius. PR mean is 1.0; sqrt-scaled boost keeps the
+    // long tail compressed (a PR=10 hub stays ~9px, doesn't blow up).
+    if (analyticsMode && analyticsResizeByImportance && analyticsData) {
+      const pr = analyticsData.pr.get(node.id) ?? 1;
+      const prBoost = Math.min(2.5, Math.sqrt(Math.max(0, pr - 1)) * 1.4);
+      r = Math.min(11, r + prBoost);
+    }
     const fillBase = folderColor(node.folder ?? "", palette);
 
     // Strength + state together in one alpha channel. Prior
@@ -736,7 +800,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
       ctx.fillText(truncated, node.x, node.y + r + 2);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, nodeShape]);
+  }, [focusedNodeId, graphData.adjacency, palette, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -887,6 +951,72 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [nodes, focusedNodeId, focusPulse, palette, showClusterLabels]);
 
+  /** Community background tints — gated on Analytics mode + the
+   *  "group by community" toggle. Drawn in `onRenderFramePre` so
+   *  every other layer (links, nodes, labels) paints on top.
+   *
+   *  Algorithm (cheap on purpose):
+   *    For each community with ≥3 members, compute the centroid and
+   *    the max distance from centroid to any member. Fill a circle
+   *    of (max-distance + padding) radius at low opacity. Overlapping
+   *    blobs blend additively at low alpha — totally fine visually.
+   *
+   *  No convex hull, no Voronoi, no marching squares. The simpler
+   *  approach reads well at our scale and has zero per-frame
+   *  trigonometry overhead.
+   */
+  const paintBackgroundTints = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
+    if (!analyticsMode || !analyticsGroupByCommunity || !analyticsData) return;
+    if (globalScale > 1.6) return; // Hide once user is reading nodes.
+
+    // Bucket node positions by community.
+    const buckets = new Map<number, Array<{ x: number; y: number }>>();
+    for (const raw of nodes as Array<SimNode & { x?: number; y?: number }>) {
+      if (raw.x == null || raw.y == null) continue;
+      const c = analyticsData.com.get(raw.id);
+      if (c == null) continue;
+      let arr = buckets.get(c);
+      if (!arr) { arr = []; buckets.set(c, arr); }
+      arr.push({ x: raw.x, y: raw.y });
+    }
+
+    // For each community with ≥3 members: centroid + max radius blob.
+    for (const [comId, pts] of buckets) {
+      if (pts.length < 3) continue;
+      let sx = 0, sy = 0;
+      for (const p of pts) { sx += p.x; sy += p.y; }
+      const cx = sx / pts.length;
+      const cy = sy / pts.length;
+      let maxR = 0;
+      for (const p of pts) {
+        const d = Math.hypot(p.x - cx, p.y - cy);
+        if (d > maxR) maxR = d;
+      }
+      const padding = 14;
+      const blobR = maxR + padding;
+
+      // Tint hue: derive from the top-degree node in this community
+      // so it visually matches the dominant folder colour. Fallback
+      // to community-id-based hash so two communities of the same
+      // folder still get different tints.
+      let dominantFolder: string | undefined;
+      let bestDegree = -1;
+      for (const raw of nodes as Array<SimNode & { folder?: string; degree?: number }>) {
+        if (analyticsData.com.get(raw.id) !== comId) continue;
+        const d = raw.degree ?? 0;
+        if (d > bestDegree) { bestDegree = d; dominantFolder = raw.folder; }
+      }
+      const tint = folderColor(dominantFolder ?? `__comm_${comId}`, palette);
+
+      ctx.save();
+      ctx.fillStyle = withAlpha(tint, 0.10);
+      ctx.beginPath();
+      ctx.arc(cx, cy, blobR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }, [analyticsMode, analyticsGroupByCommunity, analyticsData, nodes, palette]);
+
   // Color accessors shared by 2D + 3D. 3D uses folder color too — so
   // orbiting the scene, you see folders as clearly-colored clouds of
   // nodes rather than a monochromatic swarm.
@@ -1027,10 +1157,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       </div>
 
       {/* Analytics tip bar — appears below the toolbar when analytics
-          mode is on. Idle copy + per-hover swap + dismiss-for-session.
-          Hover-driven copy is plumbed in G5 once PageRank/community
-          data is available; for now it's idle copy only. */}
-      <AnalyticsTipBar visible={analyticsMode} />
+          mode is on. Idle copy + per-hover swap + dismiss-for-session. */}
+      <AnalyticsTipBar visible={analyticsMode} hoverText={tipBarHoverText} />
 
       <Suspense fallback={
         <div className="absolute inset-0 flex items-center justify-center">
@@ -1059,6 +1187,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkWidth={linkWidth}
             linkCurvature={linkCurvature}
             linkDirectionalParticles={0}
+            onRenderFramePre={paintBackgroundTints}
             onRenderFramePost={paintClusterLabels}
             cooldownTicks={100}
             onNodeHover={handleNodeHover}
