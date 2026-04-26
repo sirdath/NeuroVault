@@ -390,6 +390,29 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const palette = useGraphSettingsStore((s) => s.palette);
   const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
   const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
+  // Analytics-mode master toggle. When on, downstream phases will
+  // also factor in the per-layer toggles (analyticsResizeByImportance,
+  // analyticsGroupByCommunity) — this commit only wires the master.
+  const analyticsMode = useGraphSettingsStore((s) => s.analyticsMode);
+  const toggleAnalyticsMode = useGraphSettingsStore((s) => s.toggleAnalyticsMode);
+
+  // Cmd+Shift+A toggles analytics. Cmd+A is select-all in editor
+  // contexts, hence the Shift disambiguator. Skipped if focus is in
+  // an input so the user can still type "A" inside the search box.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
+      if (e.key !== "A" && e.key !== "a") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      toggleAnalyticsMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleAnalyticsMode]);
 
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const notesList = useNoteStore((s) => s.notes);
@@ -961,25 +984,45 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       onMouseMove={handleContainerMouseMove}
       onMouseLeave={() => scheduleClose()}
     >
-      {/* Mode toggle */}
-      <div className="absolute top-4 right-4 z-20 flex gap-1 rounded-lg p-0.5"
-        style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
-      >
-        {(["2d", "3d"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => { if (mode !== m) toggleMode(); }}
-            className="px-3 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors"
-            style={{
-              background: mode === m ? "var(--nv-accent)" : "transparent",
-              color: mode === m ? "var(--nv-bg)" : "var(--nv-text-muted)",
-            }}
-            aria-pressed={mode === m}
-            aria-label={`Switch to ${m.toUpperCase()} graph view`}
-          >
-            {m}
-          </button>
-        ))}
+      {/* Toolbar: 2D/3D mode + Analytics pill */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        <div className="flex gap-1 rounded-lg p-0.5"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+        >
+          {(["2d", "3d"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => { if (mode !== m) toggleMode(); }}
+              className="px-3 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors"
+              style={{
+                background: mode === m ? "var(--nv-accent)" : "transparent",
+                color: mode === m ? "var(--nv-bg)" : "var(--nv-text-muted)",
+              }}
+              aria-pressed={mode === m}
+              aria-label={`Switch to ${m.toUpperCase()} graph view`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={toggleAnalyticsMode}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
+          style={{
+            background: analyticsMode ? "var(--nv-accent)" : "var(--nv-surface)",
+            color: analyticsMode ? "var(--nv-bg)" : "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-pressed={analyticsMode}
+          aria-label="Toggle analytics overlay"
+          title={analyticsMode ? "Analytics on (Cmd+Shift+A)" : "Show analytics (Cmd+Shift+A)"}
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: analyticsMode ? "var(--nv-bg)" : "var(--nv-text-dim)" }}
+          />
+          Analytics
+        </button>
       </div>
 
       <Suspense fallback={

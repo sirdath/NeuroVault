@@ -80,6 +80,17 @@ interface GraphSettings {
    *  times (the original behaviour). When false, only the cluster of
    *  the focused node is labelled (Phase 4 default). */
   showClusterLabels: boolean;
+  /** Master toggle for the Analytics layer (PageRank-driven node
+   *  sizing + community tints + tip bar). Default: off. Toggled via
+   *  the toolbar pill or Cmd+Shift+A. Persisted so the user's choice
+   *  survives reloads. */
+  analyticsMode: boolean;
+  /** When analyticsMode is on: also resize nodes by importance
+   *  (PageRank). User can opt out per-layer in Settings → Graph
+   *  without disabling analytics entirely. */
+  analyticsResizeByImportance: boolean;
+  /** When analyticsMode is on: also tint backgrounds by community. */
+  analyticsGroupByCommunity: boolean;
 }
 
 const STORAGE_KEY = "nv.graph.settings";
@@ -88,6 +99,9 @@ const DEFAULTS: GraphSettings = {
   palette: "warm",
   nodeShape: "circle",
   showClusterLabels: false,
+  analyticsMode: false,
+  analyticsResizeByImportance: true,
+  analyticsGroupByCommunity: true,
 };
 
 function load(): GraphSettings {
@@ -106,11 +120,16 @@ function load(): GraphSettings {
         parsed.nodeShape === "square" || parsed.nodeShape === "hex"
           ? parsed.nodeShape
           : "circle";
-      const showClusterLabels =
-        typeof parsed.showClusterLabels === "boolean"
-          ? parsed.showClusterLabels
-          : false;
-      return { palette, nodeShape, showClusterLabels };
+      const bool = (key: string, fallback: boolean): boolean =>
+        typeof parsed[key] === "boolean" ? parsed[key] : fallback;
+      return {
+        palette,
+        nodeShape,
+        showClusterLabels: bool("showClusterLabels", false),
+        analyticsMode: bool("analyticsMode", false),
+        analyticsResizeByImportance: bool("analyticsResizeByImportance", true),
+        analyticsGroupByCommunity: bool("analyticsGroupByCommunity", true),
+      };
     }
   } catch { /* corrupt / private mode */ }
   return DEFAULTS;
@@ -120,6 +139,10 @@ interface GraphSettingsStore extends GraphSettings {
   setPalette: (p: GraphPalette) => void;
   setNodeShape: (s: GraphNodeShape) => void;
   setShowClusterLabels: (v: boolean) => void;
+  setAnalyticsMode: (v: boolean) => void;
+  toggleAnalyticsMode: () => void;
+  setAnalyticsResizeByImportance: (v: boolean) => void;
+  setAnalyticsGroupByCommunity: (v: boolean) => void;
 }
 
 function persist(s: GraphSettings) {
@@ -141,5 +164,22 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setShowClusterLabels: (showClusterLabels) => {
     set({ showClusterLabels });
     persist({ ...get(), showClusterLabels });
+  },
+  setAnalyticsMode: (analyticsMode) => {
+    set({ analyticsMode });
+    persist({ ...get(), analyticsMode });
+  },
+  toggleAnalyticsMode: () => {
+    const next = !get().analyticsMode;
+    set({ analyticsMode: next });
+    persist({ ...get(), analyticsMode: next });
+  },
+  setAnalyticsResizeByImportance: (analyticsResizeByImportance) => {
+    set({ analyticsResizeByImportance });
+    persist({ ...get(), analyticsResizeByImportance });
+  },
+  setAnalyticsGroupByCommunity: (analyticsGroupByCommunity) => {
+    set({ analyticsGroupByCommunity });
+    persist({ ...get(), analyticsGroupByCommunity });
   },
 }));
