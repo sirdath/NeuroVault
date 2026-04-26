@@ -344,7 +344,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
           {sections.length === 0 && (
             <div
               className="text-center py-10 text-sm font-[Geist,sans-serif]"
-              style={{ color: "var(--color-muted)" }}
+              style={{ color: "var(--color-sub)" }}
             >
               {query.trim() ? "No matches" : "Start typing to search"}
             </div>
@@ -353,11 +353,11 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
           {sections.map((section) => (
             <div key={section.kind} className="py-1">
               <div
-                className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider font-medium font-[Geist,sans-serif]"
-                style={{ color: "var(--color-tertiary)" }}
+                className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider font-semibold font-[Geist,sans-serif]"
+                style={{ color: "var(--color-sub)" }}
               >
                 {section.label}
-                <span className="ml-2 opacity-60">{section.items.length}</span>
+                <span className="ml-2" style={{ color: "var(--color-tertiary)" }}>{section.items.length}</span>
               </div>
               {section.items.map((item) => {
                 const myIndex = runningIndex++;
@@ -395,7 +395,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
                       {item.subtitle && (
                         <div
                           className="text-[11px] font-[Geist,sans-serif] truncate"
-                          style={{ color: "var(--color-tertiary)" }}
+                          style={{ color: "var(--color-sub)" }}
                         >
                           {item.subtitle}
                         </div>
@@ -429,7 +429,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
           className="px-4 py-2 flex items-center justify-between text-[10px] font-[Geist,sans-serif]"
           style={{
             borderTop: "1px solid var(--color-border)",
-            color: "var(--color-tertiary)",
+            color: "var(--color-sub)",
           }}
         >
           <div className="flex gap-3 items-center">

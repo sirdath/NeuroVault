@@ -278,9 +278,9 @@ function EditorStats({ content }: { content: string }) {
       }}
     >
       <span>{stats.words.toLocaleString()} {stats.words === 1 ? "word" : "words"}</span>
-      <span style={{ color: "var(--nv-text-dim)", opacity: 0.5 }}>·</span>
+      <span style={{ color: "var(--nv-text-dim)" }}>·</span>
       <span>{stats.chars.toLocaleString()} chars</span>
-      <span style={{ color: "var(--nv-text-dim)", opacity: 0.5 }}>·</span>
+      <span style={{ color: "var(--nv-text-dim)" }}>·</span>
       <span>{stats.minutes} min read</span>
     </div>
   );

@@ -244,10 +244,10 @@ export function SettingsView() {
           )}
 
           <SettingRow label="Address" description="Python backend address">
-            <span className="text-[13px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>{API_DISPLAY}</span>
+            <span className="text-[13px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{API_DISPLAY}</span>
           </SettingRow>
           <SettingRow label="Data" description="Notes and database location">
-            <span className="text-[12px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>~/.neurovault/</span>
+            <span className="text-[12px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>~/.neurovault/</span>
           </SettingRow>
         </Section>
 

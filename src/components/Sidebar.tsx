@@ -210,7 +210,7 @@ export function Sidebar({
         />
         {/* Two-dot grip centered vertically. Stays visible at all zoom
             levels so discoverability doesn't depend on hover. */}
-        <div className="relative flex flex-col gap-1 opacity-35 group-hover:opacity-80 group-active:opacity-100 transition-opacity">
+        <div className="relative flex flex-col gap-1 opacity-70 group-hover:opacity-100 group-active:opacity-100 transition-opacity">
           <span
             className="w-[3px] h-[3px] rounded-full"
             style={{ background: "var(--nv-text-muted)" }}
@@ -349,7 +349,7 @@ export function Sidebar({
         <svg
           viewBox="0 0 24 24"
           className="w-4 h-4 flex-shrink-0"
-          style={{ color: "var(--nv-accent)", opacity: 0.6 }}
+          style={{ color: "var(--nv-accent)", opacity: 0.85 }}
           fill="none"
           stroke="currentColor"
           strokeWidth={1.4}
@@ -367,8 +367,8 @@ export function Sidebar({
         </svg>
         <button
           onClick={() => onSettingsOpen?.()}
-          className="w-7 h-7 flex items-center justify-center rounded-md transition-all"
-          style={{ color: "var(--nv-text-dim)" }}
+          className="w-7 h-7 flex items-center justify-center rounded-md transition-all hover:[color:var(--nv-text)]"
+          style={{ color: "var(--nv-text-muted)" }}
           title="Settings"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
