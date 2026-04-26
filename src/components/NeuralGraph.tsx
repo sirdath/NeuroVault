@@ -54,12 +54,29 @@ function edgeColor(linkType: string, alpha: number): string {
 }
 
 /** Node radius curve — tasteful, not domineering. Hand-tuned against
- *  Obsidian + Cosmograph references: at median access_count (~5) a
- *  node draws at ~4 px, capped at 7 px for the hottest 1-accessed-a-
- *  day heroes. Previous curve (6-20 px) produced a hairball of big
- *  discs that left no room for the edges to breathe. */
-function nodeRadius(accessCount: number): number {
-  return Math.min(7, 2.5 + Math.sqrt(Math.max(0, accessCount)) * 0.6);
+ *  Obsidian + Cosmograph references.
+ *
+ *  Sized by graph DEGREE (number of incident edges), with a small
+ *  access-count boost. Why degree first:
+ *    - "Importance" in a knowledge graph correlates with how often a
+ *      note is referenced, not how often the user clicked it. A hub
+ *      that everyone wikilinks to should look big even if the user
+ *      hasn't reread it lately.
+ *    - access_count alone produced ~3-4 outliers (the user's most-
+ *      opened recent note) ballooning while the actual graph hubs
+ *      stayed tiny — visually misleading.
+ *
+ *  Curve: 2.5 px floor (isolated nodes) up to ~9 px cap (a hub with
+ *  ~50 incident edges). Square root keeps the long tail compressed
+ *  so 200-edge superhubs don't dominate the canvas. */
+function nodeRadius(node: { degree?: number; access_count?: number }): number {
+  const degree = Math.max(0, node.degree ?? 0);
+  const access = Math.max(0, node.access_count ?? 0);
+  const base = 2.5 + Math.sqrt(degree) * 0.8;
+  // Access count is a secondary signal — clamp the boost so a
+  // hot-but-isolated note grows modestly, not as much as a hub.
+  const accessBoost = Math.min(1.5, Math.sqrt(access) * 0.2);
+  return Math.min(9, base + accessBoost);
 }
 
 /** Deterministic palette — a folder always maps to the same color
@@ -294,8 +311,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         const collide = d3
           .forceCollide<SimulationNodeDatum>()
           .radius((node) => {
-            const n = node as SimulationNodeDatum & { access_count?: number };
-            return nodeRadius(n.access_count ?? 0) + 1;
+            const n = node as SimulationNodeDatum & { access_count?: number; degree?: number };
+            return nodeRadius(n) + 1;
           })
           .strength(0.95)
           .iterations(2);
@@ -430,7 +447,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     for (const e of edges) { addEdge(e.from, e.to); addEdge(e.to, e.from); }
 
     return {
-      nodes: nodes.map((n) => ({ ...n })),
+      // Attach `degree` to each node so nodeRadius() can read it directly
+      // without a Map lookup. Degree is the number of distinct neighbours
+      // (undirected); matches what the user sees as "lines coming out of
+      // this node" in the graph view.
+      nodes: nodes.map((n) => ({
+        ...n,
+        degree: adjacency.get(n.id)?.size ?? 0,
+      })),
       links: edges.map((e: GraphEdge) => ({
         source: e.from,
         target: e.to,
@@ -582,9 +606,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   //   - Thin 0.5 px bg-coloured rim so a light-coloured node on
   //     a lighter edge still separates visually.
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const node = rawNode as SimNode & { x?: number; y?: number };
+    const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
-    const r = nodeRadius(node.access_count);
+    const r = nodeRadius(node);
     const fillBase = folderColor(node.folder ?? "");
 
     // Strength + state together in one alpha channel. Prior
@@ -648,9 +672,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
   const paintPointerArea2D = useCallback((rawNode: unknown, color: string, ctx: CanvasRenderingContext2D) => {
-    const node = rawNode as SimNode & { x?: number; y?: number };
+    const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
-    const r = nodeRadius(node.access_count) + 2;
+    const r = nodeRadius(node) + 2;
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
@@ -683,64 +707,60 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
    */
   const paintClusterLabels = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
     if (!nodes.length) return;
-    // Bail if hover-focus is on — cluster labels compete with the
-    // focused subgraph and add visual noise when the user is reading
-    // one neighbourhood.
-    if (focusedNodeId) return;
 
-    const sums = new Map<string, { x: number; y: number; n: number }>();
-    for (const n of nodes as Array<SimNode & { x?: number; y?: number }>) {
+    // Default: render NO cluster labels. The user explicitly asked for
+    // a clean graph — folder labels at every centroid was visual noise.
+    // Only show the label of the cluster the user is currently focused
+    // on (hover/click), so labels surface contextually rather than
+    // permanently. Phase 5 adds a Settings toggle to bring all-on back.
+    if (!focusedNodeId) return;
+
+    // Find the focused node so we know which folder to label.
+    const focused = (nodes as Array<SimNode & { folder?: string; x?: number; y?: number }>)
+      .find((n) => n.id === focusedNodeId);
+    if (!focused) return;
+    const focusedFolder = focused.folder ?? "";
+
+    // Compute centroid + count for the focused folder only — cheap,
+    // O(N) once and only on hover.
+    let sx = 0, sy = 0, count = 0;
+    for (const n of nodes as Array<SimNode & { x?: number; y?: number; folder?: string }>) {
       if (n.x == null || n.y == null) continue;
-      const key = n.folder ?? "";
-      const s = sums.get(key);
-      if (s) { s.x += n.x; s.y += n.y; s.n += 1; }
-      else sums.set(key, { x: n.x, y: n.y, n: 1 });
+      if ((n.folder ?? "") !== focusedFolder) continue;
+      sx += n.x; sy += n.y; count += 1;
     }
+    if (count < 2) return;  // a folder of one isn't a cluster
 
-    // Hide labels when we zoom in past 1.8× — at that point the user
-    // is reading individual node titles, not cluster structure.
-    if (globalScale > 1.8) return;
+    // Hide at very high zoom — user is reading individual titles.
+    if (globalScale > 2.0) return;
 
-    // Font size scales with zoom + cluster size. Bigger clusters get
-    // bigger labels so the eye lands on them first.
+    const cx = sx / count;
+    const cy = sy / count;
+    const color = focusedFolder === "" ? "#9a97b4" : folderColor(focusedFolder);
+    const label = focusedFolder === "" ? "root" : focusedFolder;
+    const weight = Math.min(1, count / 15);
+    const size = (11 + weight * 4) / globalScale;
+
+    ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-
-    for (const [folder, s] of sums) {
-      // Raise the threshold: 5+ notes = real region; smaller = noise.
-      if (s.n < 5) continue;
-      const cx = s.x / s.n;
-      const cy = s.y / s.n;
-      const color = folder === "" ? "#9a97b4" : folderColor(folder);
-      const label = folder === "" ? "root" : folder;
-      // Size: 11-15 px (was 18-28). Huge labels at overview zoom
-      // were dominating the canvas and making the graph feel
-      // cluttered. Shrink + soften so they read as orientation
-      // aids, not hero content.
-      const weight = Math.min(1, s.n / 15);
-      const size = (11 + weight * 4) / globalScale;
-      ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
-
-      // Tighter shadow + lower alpha — labels feel "of" the cluster
-      // rather than pasted on top.
-      ctx.save();
-      ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
-      ctx.shadowBlur = 5 / globalScale;
-      ctx.fillStyle = withAlpha(color, 0.72);
-      ctx.fillText(label, cx, cy);
-      ctx.restore();
-    }
+    ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
+    ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+    ctx.shadowBlur = 5 / globalScale;
+    ctx.fillStyle = withAlpha(color, 0.85);
+    ctx.fillText(label, cx, cy);
+    ctx.restore();
 
     // --- Focus pulse ring. Drawn in the same post-frame pass so it
     // sits on top of nodes + links. Two concentric expanding rings
     // offset in phase for a sonar-ping feel.
     if (focusPulse) {
-      const target = (nodes as Array<SimNode & { x?: number; y?: number }>)
+      const target = (nodes as Array<SimNode & { x?: number; y?: number; degree?: number }>)
         .find((n) => n.id === focusPulse.nodeId);
       if (target && target.x != null && target.y != null) {
         const elapsed = (Date.now() - focusPulse.start) / 1500;
         if (elapsed >= 0 && elapsed <= 1) {
-          const baseR = nodeRadius(target.access_count);
+          const baseR = nodeRadius(target);
           // Ring 1: expands fast, fades out.
           const r1 = baseR + 4 + elapsed * 60;
           const a1 = Math.max(0, 0.8 * (1 - elapsed));
