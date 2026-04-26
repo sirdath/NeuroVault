@@ -371,7 +371,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
                       onClose();
                     }}
                     onMouseEnter={() => setSelectedIndex(myIndex)}
-                    className={`px-4 py-2 cursor-pointer flex items-center gap-3 transition-colors nv-spotlight${selected ? " nv-spotlight-active" : ""}`}
+                    className={`cursor-pointer flex items-center gap-3 transition-colors nv-spotlight${selected ? " nv-spotlight-active" : ""}`}
                     onMouseMove={(e) => {
                       const el = e.currentTarget;
                       const r = el.getBoundingClientRect();
@@ -382,6 +382,11 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
                       backgroundColor: selected ? "var(--color-surface-elevated)" : "transparent",
                       borderLeft: selected ? "2px solid var(--color-amber)" : "2px solid transparent",
                       boxShadow: selected ? "inset 0 0 24px -8px rgba(240, 165, 0, 0.18)" : "none",
+                      // Density-aware row padding — keeps result rows in
+                      // sync with the sidebar's row height.
+                      paddingInline: "var(--pad-x, 16px)",
+                      paddingBlock: "var(--pad-y, 8px)",
+                      minHeight: "var(--row-h, auto)",
                     }}
                   >
                     <SectionIcon kind={item.kind} />

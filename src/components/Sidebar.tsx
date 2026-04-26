@@ -718,11 +718,14 @@ function NoteList({
               >
                 <button
                   onClick={() => onToggleFolder(row.name)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:[background-color:var(--nv-surface)]"
+                  className="w-full flex items-center gap-2 rounded-md text-left transition-colors hover:[background-color:var(--nv-surface)]"
                   style={{
                     color: "var(--nv-text-muted)",
                     background: isDropHover ? "var(--nv-accent-glow)" : undefined,
                     outline: isDropHover ? `1px dashed var(--nv-accent)` : undefined,
+                    // Density-aware: tighter when compact, roomier when comfortable.
+                    paddingInline: "calc(var(--pad-x, 14px) * 0.65)",
+                    paddingBlock: "calc(var(--pad-y, 8px) * 0.5)",
                   }}
                 >
                   <svg
@@ -780,7 +783,7 @@ function NoteList({
               className="py-0.5"
             >
               <div
-                className={`group relative cursor-pointer rounded-lg px-3.5 py-3 transition-all duration-200 nv-spotlight${isActive ? " nv-spotlight-active" : ""}`}
+                className={`group relative cursor-pointer rounded-lg transition-all duration-200 nv-spotlight${isActive ? " nv-spotlight-active" : ""}`}
                 onMouseMove={(e) => {
                   // Track mouse position for the spotlight radial glow
                   const el = e.currentTarget;
@@ -791,6 +794,13 @@ function NoteList({
                 style={{
                   marginLeft: 12 + row.indent * 16,
                   marginRight: 12,
+                  // Density-aware spacing — reads --pad-x/--pad-y set by
+                  // html[data-density] in index.css. Comfortable: 16/12;
+                  // cozy: 14/8; compact: 12/6. Default --pad-x is 16
+                  // which matches the prior hardcoded px-3.5 + py-3 feel.
+                  paddingInline: "var(--pad-x, 14px)",
+                  paddingBlock: "var(--pad-y, 12px)",
+                  minHeight: "var(--row-h, auto)",
                   ...(isActive ? {
                     background: "var(--nv-surface)",
                     border: `1px solid var(--nv-border)`,
