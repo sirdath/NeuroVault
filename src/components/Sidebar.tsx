@@ -837,8 +837,11 @@ function NoteList({
                     )}
 
                     {/* Hover toolbar: rename + delete. Pencil opens the
-                        inline filename editor; × goes straight to trash
-                        (already confirmed via window.confirm upstream). */}
+                        inline filename editor; × triggers handleDelete()
+                        which opens the centered ConfirmDialog (the only
+                        path that ever calls deleteNoteAction — verified
+                        no bypass paths exist). Right-click on the row
+                        offers the same actions via ContextMenu. */}
                     <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
                       <button
                         onClick={(e) => { e.stopPropagation(); onStartRename(note.filename); }}
