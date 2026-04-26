@@ -3,11 +3,41 @@ import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useNoteStore } from "../stores/noteStore";
 import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 import { MarkdownPreview } from "./MarkdownPreview";
+
+const TAB_ORDER_KEY = "nv.tabs.order";
+
+function loadTabOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(TAB_ORDER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
+        return parsed as string[];
+      }
+    }
+  } catch { /* ignore */ }
+  return [];
+}
 
 export function Editor() {
   const activeFilename = useNoteStore((s) => s.activeFilename);
@@ -18,24 +48,56 @@ export function Editor() {
   const selectNote = useNoteStore((s) => s.selectNote);
   const notes = useNoteStore((s) => s.notes);
 
-  // Tab system — track open tabs as filenames
-  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  // Tab system — track open tabs as filenames. Order is user-controllable
+  // via drag-to-reorder (dnd-kit) and persisted to localStorage so the
+  // tab strip looks the way the user left it after a reload.
+  const [openTabs, setOpenTabs] = useState<string[]>(() => loadTabOrder());
 
-  // When a note is selected, add it to tabs if not already there
+  // When a note is selected, add it to tabs if not already there.
   useEffect(() => {
     if (activeFilename && !openTabs.includes(activeFilename)) {
       setOpenTabs((t) => [...t, activeFilename]);
     }
   }, [activeFilename]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const closeTab = (filename: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const next = openTabs.filter((f) => f !== filename);
-    setOpenTabs(next);
-    if (filename === activeFilename && next.length > 0) {
-      selectNote(next[next.length - 1]!);
-    }
-  };
+  // Persist tab order across reloads.
+  useEffect(() => {
+    try {
+      localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(openTabs));
+    } catch { /* quota / private mode */ }
+  }, [openTabs]);
+
+  const closeTab = useCallback(
+    (filename: string) => {
+      setOpenTabs((tabs) => {
+        const next = tabs.filter((f) => f !== filename);
+        if (filename === activeFilename && next.length > 0) {
+          // Select the tab that was visually next-door (the one that
+          // slides into the closed tab's slot). Falls back to last.
+          const idx = tabs.indexOf(filename);
+          const replacement = next[Math.min(idx, next.length - 1)] ?? next[next.length - 1]!;
+          selectNote(replacement);
+        }
+        return next;
+      });
+    },
+    [activeFilename, selectNote]
+  );
+
+  // dnd-kit setup. Pointer sensor with a 6px activation distance so a
+  // plain click on the tab body still fires onClick for navigation —
+  // only an actual drag gesture starts a reorder.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleTabDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setOpenTabs((tabs) => {
+      const oldIdx = tabs.indexOf(active.id as string);
+      const newIdx = tabs.indexOf(over.id as string);
+      if (oldIdx < 0 || newIdx < 0) return tabs;
+      return arrayMove(tabs, oldIdx, newIdx);
+    });
+  }, []);
 
   // Reader mode by default. Only switches to raw CodeMirror when the user
   // explicitly clicks "Edit". Escape flips back to preview.
@@ -119,38 +181,34 @@ export function Editor() {
   return (
     <div className="flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Tab bar */}
+        {/* Tab bar — drag to reorder, middle-click to close, x always visible */}
         {openTabs.length > 1 && (
           <div
             className="flex items-center overflow-x-auto flex-shrink-0"
             style={{ background: "var(--nv-surface)", borderBottom: "1px solid var(--nv-border)" }}
           >
-            {openTabs.map((filename) => {
-              const note = notes.find((n) => n.filename === filename);
-              const title = note?.title ?? filename.replace(/\.md$/, "");
-              const isActive = filename === activeFilename;
-              return (
-                <button
-                  key={filename}
-                  onClick={() => selectNote(filename)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-[Geist,sans-serif] whitespace-nowrap transition-all flex-shrink-0 max-w-[180px]"
-                  style={{
-                    color: isActive ? "var(--nv-text)" : "var(--nv-text-dim)",
-                    borderBottom: isActive ? `2px solid var(--nv-accent)` : "2px solid transparent",
-                    background: isActive ? "var(--nv-surface)" : undefined,
-                  }}
-                >
-                  <span className="truncate">{title}</span>
-                  <span
-                    onClick={(e) => closeTab(filename, e)}
-                    className="opacity-0 group-hover:opacity-100 hover:opacity-100 text-[10px] w-4 h-4 flex items-center justify-center rounded flex-shrink-0"
-                    style={{ color: "var(--nv-text-dim)" }}
-                  >
-                    ×
-                  </span>
-                </button>
-              );
-            })}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleTabDragEnd}
+            >
+              <SortableContext items={openTabs} strategy={horizontalListSortingStrategy}>
+                {openTabs.map((filename) => {
+                  const note = notes.find((n) => n.filename === filename);
+                  const title = note?.title ?? filename.replace(/\.md$/, "");
+                  return (
+                    <SortableTab
+                      key={filename}
+                      filename={filename}
+                      title={title}
+                      isActive={filename === activeFilename}
+                      onSelect={() => selectNote(filename)}
+                      onClose={() => closeTab(filename)}
+                    />
+                  );
+                })}
+              </SortableContext>
+            </DndContext>
           </div>
         )}
 
@@ -282,6 +340,83 @@ function EditorStats({ content }: { content: string }) {
       <span>{stats.chars.toLocaleString()} chars</span>
       <span style={{ color: "var(--nv-text-dim)" }}>·</span>
       <span>{stats.minutes} min read</span>
+    </div>
+  );
+}
+
+/**
+ * One tab in the editor tab strip. Wrapped in dnd-kit's `useSortable`
+ * so the user can grab and drop to reorder. The PointerSensor's 6px
+ * activation distance (set on the parent <DndContext>) means a quick
+ * click still fires `onSelect` cleanly — only an actual drag gesture
+ * starts a reorder.
+ *
+ * Behavioural details worth preserving:
+ *   - Middle-click closes the tab (mouse button 1, matched in onMouseDown
+ *     because some browsers don't fire onClick for the middle button).
+ *   - The × is always visible (was hover-only with a broken
+ *     `group-hover:opacity-100` referencing a parent `group` class that
+ *     didn't exist). It dims to text-muted at rest, brightens on hover.
+ *   - The × button has `e.stopPropagation()` so clicking it doesn't also
+ *     activate the tab on the way down.
+ *   - During an active drag, opacity drops to 0.5 so the user sees which
+ *     tab they've grabbed.
+ */
+function SortableTab({
+  filename,
+  title,
+  isActive,
+  onSelect,
+  onClose,
+}: {
+  filename: string;
+  title: string;
+  isActive: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: filename });
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={onSelect}
+      onMouseDown={(e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          onClose();
+        }
+      }}
+      role="tab"
+      aria-selected={isActive}
+      className="flex items-center gap-2 px-3 py-2 text-[12px] font-[Geist,sans-serif] whitespace-nowrap transition-all flex-shrink-0 max-w-[200px] cursor-pointer select-none"
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+        color: isActive ? "var(--nv-text)" : "var(--nv-text-muted)",
+        borderBottom: isActive ? "2px solid var(--nv-accent)" : "2px solid transparent",
+        background: isActive ? "var(--nv-surface)" : undefined,
+        zIndex: isDragging ? 1 : undefined,
+      }}
+    >
+      <span className="truncate">{title}</span>
+      <span
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="text-[12px] w-5 h-5 flex items-center justify-center rounded leading-none transition-colors hover:[background-color:var(--nv-surface-elevated,var(--nv-surface))]"
+        style={{ color: "var(--nv-text-muted)" }}
+        title="Close"
+        aria-label={`Close ${title}`}
+      >
+        ×
+      </span>
     </div>
   );
 }
