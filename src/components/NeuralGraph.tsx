@@ -12,6 +12,7 @@ import {
   type GraphPalette,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
+import { edgeConfidence } from "../lib/graphMetrics";
 import { readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -877,44 +878,58 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, []);
   const linkColor = useCallback((rawLink: unknown) => {
     const l = rawLink as {
+      from?: string;
+      to?: string;
       similarity: number;
       link_type: string;
       source: string | { id: string };
       target: string | { id: string };
     };
-    // Lower base alpha — edges should read as connective tissue,
-    // not dominant content. Hover-focus brightens the neighbourhood.
-    const baseAlpha = Math.max(0.08, Math.min(0.4, l.similarity * 0.35));
-    // Dim non-neighbourhood edges to ~5% alpha when hover-focus is on.
-    // Identifying the "neighbourhood" edges: either endpoint is the
-    // focused node. (react-force-graph mutates source/target into
-    // node objects once the simulation starts, hence the union type.)
+    // Driven by `edgeConfidence` (semantic + link kind + reciprocity)
+    // not raw similarity. A manual wikilink at sim 0.5 now reads
+    // bolder than an unknown semantic at sim 0.7 — honest fidelity
+    // for what the relationship actually is.
+    const fromId = typeof l.source === "string" ? l.source : l.source.id;
+    const toId = typeof l.target === "string" ? l.target : l.target.id;
+    const conf = edgeConfidence(
+      { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
+      { bidi: graphData.bidi },
+    );
+    const baseAlpha = Math.max(0.08, Math.min(0.55, conf * 0.55));
+    // Dim non-neighbourhood edges when hover-focus is on. (react-force-
+    // graph mutates source/target into node objects once the simulation
+    // starts, hence the union type.)
     if (focusedNodeId) {
-      const from = typeof l.source === "string" ? l.source : l.source.id;
-      const to = typeof l.target === "string" ? l.target : l.target.id;
-      const touchesFocus = from === focusedNodeId || to === focusedNodeId;
-      const a = touchesFocus ? Math.min(0.9, baseAlpha * 2.2) : 0.04;
+      const touchesFocus = fromId === focusedNodeId || toId === focusedNodeId;
+      const a = touchesFocus ? Math.min(0.92, baseAlpha * 2.2) : 0.04;
       return edgeColor(l.link_type, a);
     }
     return edgeColor(l.link_type, baseAlpha);
-  }, [focusedNodeId]);
+  }, [focusedNodeId, graphData.bidi]);
   const linkWidth = useCallback((rawLink: unknown) => {
     const l = rawLink as {
+      from?: string;
+      to?: string;
       similarity: number;
+      link_type: string;
       source: string | { id: string };
       target: string | { id: string };
     };
-    // Thinner edges for a cleaner aesthetic. 0.25-0.65 px at
-    // rest; neighbourhood edges thicken 2.4× during hover-focus
-    // so the active subgraph pops.
-    const base = 0.25 + l.similarity * 0.4;
+    const fromId = typeof l.source === "string" ? l.source : l.source.id;
+    const toId = typeof l.target === "string" ? l.target : l.target.id;
+    const conf = edgeConfidence(
+      { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
+      { bidi: graphData.bidi },
+    );
+    // 0.25 px (weak) to 0.95 px (high-confidence wikilink) at rest.
+    // Was capped at 0.65 — slight headroom now so the strongest edges
+    // really announce themselves.
+    const base = 0.25 + conf * 0.7;
     if (focusedNodeId) {
-      const from = typeof l.source === "string" ? l.source : l.source.id;
-      const to = typeof l.target === "string" ? l.target : l.target.id;
-      if (from === focusedNodeId || to === focusedNodeId) return base * 2.4;
+      if (fromId === focusedNodeId || toId === focusedNodeId) return base * 2.4;
     }
     return base;
-  }, [focusedNodeId]);
+  }, [focusedNodeId, graphData.bidi]);
   // Bidirectional edge curvature: when both A→B and B→A exist, curve
   // them in opposite directions so they no longer draw on top of each
   // other. Each direction gets ±0.15 curvature — subtle enough not
