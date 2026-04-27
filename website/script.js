@@ -51,7 +51,7 @@
       linkEl.href = RELEASES_PAGE;
     } else {
       labelEl.textContent = "Download for Windows";
-      if (subEl) subEl.textContent = "~76 MB · x64 installer";
+      if (subEl) subEl.textContent = "~10 MB · x64 installer";
       linkEl.href = WINDOWS_LATEST;
     }
   }
