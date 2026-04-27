@@ -65,11 +65,13 @@ Open the app, go to **Settings**, and click **Connect Claude Desktop**. It gener
   "mcpServers": {
     "neurovault": {
       "command": "uv",
-      "args": ["--directory", "C:\\path\\to\\NeuroVault\\server", "run", "python", "-m", "neurovault_server"]
+      "args": ["--directory", "C:\\path\\to\\NeuroVault\\server", "run", "python", "mcp_proxy.py"]
     }
   }
 }
 ```
+
+The `mcp_proxy.py` is a tiny stdio-to-HTTP bridge. The real backend (recall, remember, the graph, everything) is the Rust HTTP server bundled inside the Tauri app on `127.0.0.1:8765` — open NeuroVault first, then start your Claude session.
 
 Claude now has persistent memory across conversations. Say things like "remember that I prefer Rust over Go" and NeuroVault saves it. Weeks later, ask "what do I prefer for backend work?" and Claude recalls it instantly.
 
@@ -124,8 +126,12 @@ You ask the agent a question
 
 After meaningful exchanges
   -> Write-back extracts durable facts and saves them as new notes
-  -> Consolidation worker runs every 4h: strengthens, links, spreads activation
+  -> Strength decay reinforces what you keep using; lets unused notes fade
   -> Brain grows from every conversation, decays what you stop touching
+
+(Heavy maintenance — consolidation, theme rollups, code-graph analysis —
+ lives in opt-in Python tools the user invokes on demand. Nothing runs in
+ the background by default after v0.1.1.)
 ```
 
 ---
@@ -236,8 +242,8 @@ On session start, NeuroVault provides layered context:
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://rustup.rs/)
-- [Python](https://www.python.org/) 3.13+
-- [uv](https://docs.astral.sh/uv/)
+- [Python](https://www.python.org/) 3.13+ — only required if you want the opt-in advanced features (compile, PDF ingest, Zotero sync)
+- [uv](https://docs.astral.sh/uv/) — same; not needed for the daily-use path
 
 ### Install
 
@@ -247,24 +253,27 @@ cd NeuroVault
 
 # Frontend
 npm install
-
-# Backend
-cd server && uv sync --extra dev
 ```
 
 ### Run
 
 ```bash
-# Terminal 1: Start the memory server
-cd server && uv run python -m neurovault_server --http-only
+# One terminal. The Tauri shell hosts the React frontend AND the
+# in-process Rust HTTP server on 127.0.0.1:8765 — there's nothing
+# else to start.
+npx tauri dev
+```
 
-# Terminal 2: Start the desktop app
-cargo tauri dev
+For a release build:
+
+```bash
+npx tauri build
+# Installer drops at src-tauri/target/release/bundle/nsis/NeuroVault_*.exe
 ```
 
 ### Connect Claude Desktop
 
-Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+The installed app has a one-click connector under **Settings → Connect Claude Desktop**. For source builds, paste this into your Claude Desktop config:
 
 ```json
 {
@@ -273,33 +282,33 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
       "command": "uv",
       "args": [
         "--directory", "/path/to/NeuroVault/server",
-        "run", "python", "-m", "neurovault_server"
+        "run", "python", "mcp_proxy.py"
       ]
     }
   }
 }
 ```
 
-Restart Claude Desktop. The NeuroVault tools will appear.
+Restart Claude Desktop. The NeuroVault tools appear once NeuroVault.exe is open (the proxy bridges to its HTTP server).
 
 ---
 
 ## MCP tools
 
+The proxy exposes these tools to any MCP-speaking agent (Claude Desktop, Claude Code, Cursor, ...). Every tool accepts an optional `brain` parameter to target a specific brain without switching active brain.
+
 | Tool | What it does |
 |------|-------------|
-| `remember` | Save a memory (triggers full ingestion pipeline). |
-| `recall` | Hybrid search with semantic plus BM25 plus graph fusion. |
-| `forget` | Mark a memory as dormant. |
-| `list_memories` | List all memories with strength and connections. |
-| `get_related` | Find related notes via knowledge graph. |
-| `save_conversation_insights` | Extract and save facts from conversation. |
-| `extract_insights` | Silent regex extractor. Preview or save. Stage 5. |
-| `list_brains` | List all available brains. |
-| `switch_brain` | Switch active memory space. |
-| `create_brain` | Create a new brain for a project. |
-
-Every memory tool accepts an optional `brain` parameter to target a specific brain without switching.
+| `recall(q, mode, limit, rerank?)` | Hybrid search — semantic + BM25 + graph fusion via RRF, optional cross-encoder rerank. PageRank importance prior when Analytics mode is on. |
+| `recall_chunks(q, limit)` | Same retrieval but returns matching paragraphs instead of whole notes. Cheaper. |
+| `related(engram_id, hops, link_types?)` | Direct neighbours of an engram via the graph. ~50× cheaper than a fresh recall. |
+| `remember(content, title?, dedupe?)` | Save a memory (triggers chunk + embed + entity extraction + graph link). |
+| `session_start(agent_id?, since?)` | Wake-up tool: brain stats + L0 identity + top memories + open todos in one call. |
+| `core_memory_set` / `_append` / `_replace` / `_read` | Persona-style always-included blocks (Letta pattern). |
+| `list_brains` / `switch_brain` / `create_brain` | Multi-brain navigation. |
+| `check_duplicate(content, threshold)` | Pure cosine pre-check before remember(). |
+| `list_unnamed_clusters` / `set_cluster_names` | **New v0.1.1**: agent-driven cluster naming for the graph view's Analytics mode. See [docs/graph-analytics.md](docs/graph-analytics.md). |
+| `add_todo` / `claim_todo` / `complete_todo` / `list_todos` | Multi-agent coordination via append-only todos.jsonl. |
 
 ---
 
@@ -307,38 +316,58 @@ Every memory tool accepts an optional `brain` parameter to target a specific bra
 
 ```
 +-------------------------------------------------+
-|  Tauri desktop app (React plus TypeScript)      |
+|  Tauri 2 desktop app (React 19 + TypeScript)    |
 |  Editor / Graph / Compile / Sidebar / Palette   |
 +-----------------------+-------------------------+
-                        | HTTP :8765
+                        | Tauri commands  +  HTTP :8765
 +-----------------------v-------------------------+
-|  Python MCP server (FastMCP)                    |
-|  9 tools / hybrid retrieval / write-back        |
-|  Also: stdio transport for Claude Desktop       |
+|  In-process Rust backend                        |
+|  - axum HTTP server (the MCP proxy talks here)  |
+|  - hybrid retriever (semantic + BM25 + graph)   |
+|  - fastembed-rs (BGE-small ONNX, local)         |
+|  - notify file watcher                          |
 +-----------------------+-------------------------+
-                        | SQL
+                        | SQL + vec0
 +-----------------------v-------------------------+
-|  SQLite plus sqlite-vec                         |
-|  6 tables / 12 indexes / vector search          |
-|  ~/.neurovault/brains/{name}/brain.db           |
+|  SQLite + sqlite-vec  (~/.neurovault/...)       |
+|  brain.db, vault/*.md, raw/, assets/, cache/    |
 +-------------------------------------------------+
+
+External:
+  + Python lives in server/ but is OPT-IN only —
+    spawned as a one-shot subprocess for advanced
+    features (compile pages, PDF ingest, Zotero,
+    code-graph). Never runs at app boot.
+  + mcp_proxy.py is a tiny stdio→HTTP bridge for
+    MCP clients; it doesn't hold state.
 ```
 
 ### Data storage
 
 ```
 ~/.neurovault/
-  brains.json                    # Brain registry
-  brains/
-    default/
-      vault/*.md                 # Your notes (source of truth)
-      brain.db                   # SQLite plus vectors plus knowledge graph
-    project-alpha/
-      vault/*.md
-      brain.db
+├── brains.json                    # Brain registry
+└── brains/
+    └── {brain_id}/
+        ├── brain.db               # SQLite + sqlite-vec index
+        ├── config.json            # Per-brain settings
+        ├── vault/                 # CANONICAL — your markdown notes
+        │   ├── concepts/  decisions/  entities/
+        │   ├── summaries/ inbox/
+        │   ├── index.md, log.md, CLAUDE.md
+        ├── raw/                   # CANONICAL — explicit inputs
+        │   ├── pdfs/ pastes/ clips/ imports/
+        │   └── conversations/{imported,sessions}/
+        ├── assets/                # images / audio referenced by notes
+        ├── cache/                 # DERIVED — bm25/embeddings/rerank scratch
+        ├── consolidated/          # rolled-up theme summaries (Python opt-in)
+        ├── trash/                 # soft delete
+        ├── audit.jsonl            # admin tool log
+        ├── todos.jsonl            # multi-agent coordination
+        └── cluster_names.json     # v0.1.1 — agent-named graph clusters
 ```
 
-Markdown files are always the source of truth. The database is an index. If it breaks, rebuild from files.
+Markdown files in `vault/` and inputs in `raw/` are **canonical**. Everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your brain.
 
 ---
 
@@ -346,18 +375,17 @@ Markdown files are always the source of truth. The database is an index. If it b
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop | Tauri 2.0 (10 MB vs Electron's 150 MB) |
-| Frontend | React 19, TypeScript (strict), Tailwind v4 |
+| Desktop | Tauri 2 (~30 MB installed, no Electron) |
+| Frontend | React 19, TypeScript (strict), Tailwind v4, Zustand |
 | Editor | CodeMirror 6 with custom dark theme |
-| Animation | Framer Motion |
-| State | Zustand |
-| Graph | Canvas API (custom force simulation) |
-| MCP | FastMCP |
+| Graph | `react-force-graph-2d` + `react-force-graph-3d` (lazy-loaded), `@dnd-kit/sortable` for tab drag |
+| **Backend (in-process)** | **Rust + axum HTTP server, fastembed-rs ONNX embeddings, rusqlite + sqlite-vec, notify file watcher, parking_lot, tokio** |
 | Vector search | sqlite-vec (KNN in pure SQL) |
 | Embeddings | BAAI/bge-small-en-v1.5 (384 dims, local, free) |
-| Keywords | rank-bm25 |
-| File watching | watchdog |
-| HTTP API | FastAPI plus uvicorn |
+| Keywords | BM25 (Rust port of Okapi) |
+| Graph metrics | Vanilla TS PageRank + Louvain, ~250 lines, no dependency |
+| MCP bridge | FastMCP — `server/mcp_proxy.py` forwards stdio to HTTP |
+| Advanced features | Python CLI subprocesses (opt-in: compile, PDF, Zotero, code-graph) |
 
 ---
 
@@ -460,22 +488,31 @@ Dark theme with a warm, intentional feel:
 
 ## Roadmap
 
-- [x] Markdown editor with auto-save
-- [x] MCP server with 9 tools
-- [x] Hybrid retrieval (semantic plus BM25 plus graph)
-- [x] Cross-encoder reranking
+### Shipped (v0.1.0 + v0.1.1)
+
+- [x] Markdown editor with auto-save, drag-to-reorder tabs, right-click context menu, safe-delete confirm dialog
+- [x] MCP server with 18+ tools (recall / remember / related / session_start / core_memory_* / multi-brain / todos / clusters)
+- [x] Hybrid retrieval (semantic + BM25 + graph) with optional cross-encoder rerank
 - [x] Memory strength with Ebbinghaus decay
-- [x] Auto write-back from conversations
-- [x] Neural graph view
-- [x] Memory panel with transparency
 - [x] Multi-brain support
-- [x] Performance optimizations (numpy, batch queries, indexes)
-- [x] Silent fact capture (Stage 5: regex extractor plus insight boost in recall)
-- [x] Reproducible usefulness and token benchmark
-- [ ] PyInstaller packaging for one-click install
-- [ ] Cross-platform builds (macOS, Linux)
+- [x] Silent fact capture (8-pattern regex extractor)
+- [x] **Rust in-process backend** — retired the always-on Python sidecar; advanced features are now opt-in subprocesses
+- [x] **Brain layout reshape** — `vault/{concepts,decisions,...}/`, `raw/`, `assets/`, `cache/`, `config.json`
+- [x] **Graph view v2** — palette + shape + cluster-label customization, edge confidence rendering, hover-only labels
+- [x] **Analytics mode** — opt-in PageRank node sizing + Louvain community tints + tip bar
+- [x] **Recall importance boost** — Analytics-gated PageRank prior in the RRF fusion
+- [x] **`/name-clusters` skill** — agent-driven cluster naming via MCP, no API keys
+
+### Backlog (v0.1.2+)
+
+- [ ] Cross-platform builds via GitHub Actions (macOS `.dmg`, Linux `.AppImage`)
+- [ ] Eval matrix run to validate the PageRank recall boost (~1% hit@1 lift expected)
+- [ ] More agent-fix MCP skills: `/find-duplicates`, `/file-inbox`, `/lint-frontmatter`
+- [ ] Conversation substrate — `raw/conversations/sessions/` + auto-distillation pipeline
 - [ ] Benchmark suite (LongMemEval, LoCoMo)
-- [ ] Mobile companion app
+- [ ] Bridge/betweenness graph halos (cut from v0.1.1; revisit if requested)
+- [ ] Code signing / notarization (kills SmartScreen + Gatekeeper warnings)
+- [ ] Mobile companion (read-only — write needs the desktop's local-first guarantees)
 
 ---
 
