@@ -1,121 +1,162 @@
+#  Cross-platform release builds for NeuroVault.
+#
+#  Triggered by pushing a tag matching `v*` (e.g. `git tag v0.1.2 &&
+#  git push --tags`) or manually via the Actions tab. Builds Windows +
+#  macOS (arm64 + Intel) + Linux in parallel and uploads the resulting
+#  installers to a draft GitHub Release.
+#
+#  Why a draft (not auto-publish): release notes get a human pass and we
+#  spot a broken artifact before users grab it. Edit + publish from the
+#  Releases UI when the matrix finishes green.
+#
+#  No code signing. Mac users hit Gatekeeper on first launch (right-click
+#  -> Open -> Open Anyway), Windows users hit SmartScreen. README
+#  documents both. Notarization + EV cert is a separate decision —
+#  Apple Dev = $99/yr, Windows EV = ~$200-400/yr; revisit if there's
+#  demand.
+#
+#  Reproducibility note: SQLITE_VEC_VERSION resolves "latest" from the
+#  upstream releases API on every run. If asg017/sqlite-vec ever ships
+#  a breaking schema change we'd want to pin a known-good version
+#  here; for now floating-latest is the simpler default.
+#
+#  Replaces the pre-v0.1.0 workflow that built a Python sidecar via
+#  PyInstaller. Sidecar was retired in the Rust migration; advanced
+#  features now spawn `python -m neurovault_server.cli.<job>` on demand.
+
 name: Release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    # Manual trigger for testing the workflow without a real tag.
+    # Uses the most recent commit on whatever branch is selected.
 
 jobs:
-  # --- Build Python sidecars per platform ---------------------------------
-  build-sidecar:
-    name: Build sidecar (${{ matrix.os-label }})
+  build:
+    name: Build (${{ matrix.os-label }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             os-label: windows
-            target-triple: x86_64-pc-windows-msvc
-            sidecar-src: server/dist/neurovault-server.exe
-            sidecar-ext: ".exe"
+            rust-target: x86_64-pc-windows-msvc
+            vec_os: windows
+            vec_arch: x86_64
+            vec_archive_ext: zip
           - os: macos-14   # Apple Silicon (M-series)
             os-label: macos-arm64
-            target-triple: aarch64-apple-darwin
-            sidecar-src: server/dist/neurovault-server
-            sidecar-ext: ""
+            rust-target: aarch64-apple-darwin
+            vec_os: macos
+            vec_arch: aarch64
+            vec_archive_ext: tar.gz
           - os: macos-13   # Intel
             os-label: macos-x64
-            target-triple: x86_64-apple-darwin
-            sidecar-src: server/dist/neurovault-server
-            sidecar-ext: ""
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install Python deps + build sidecar
-        working-directory: server
-        run: |
-          uv sync --extra dev
-          uv pip install pyinstaller
-          uv run pyinstaller neurovault_server.spec --clean --noconfirm
-
-      - name: Stage sidecar binary with target triple
-        shell: bash
-        run: |
-          mkdir -p src-tauri/binaries
-          cp "${{ matrix.sidecar-src }}" "src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}"
-          chmod +x "src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}" || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sidecar-${{ matrix.os-label }}
-          path: src-tauri/binaries/neurovault-server-${{ matrix.target-triple }}${{ matrix.sidecar-ext }}
-
-  # --- Build Tauri app per platform ---------------------------------------
-  build-tauri:
-    name: Build app (${{ matrix.os-label }})
-    needs: build-sidecar
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            os-label: windows
-            sidecar-artifact: sidecar-windows
-            rust-target: x86_64-pc-windows-msvc
-          - os: macos-14
-            os-label: macos-arm64
-            sidecar-artifact: sidecar-macos-arm64
-            rust-target: aarch64-apple-darwin
-          - os: macos-13
-            os-label: macos-x64
-            sidecar-artifact: sidecar-macos-x64
             rust-target: x86_64-apple-darwin
+            vec_os: macos
+            vec_arch: x86_64
+            vec_archive_ext: tar.gz
+          - os: ubuntu-22.04   # 22.04 has webkit2gtk-4.1; 24.04 phased it out
+            os-label: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+            vec_os: linux
+            vec_arch: x86_64
+            vec_archive_ext: tar.gz
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: write
+      contents: write   # creates / updates GitHub Releases
     steps:
       - uses: actions/checkout@v4
 
+      # --- Linux system deps -------------------------------------------------
+      # Tauri's canonical apt list. webkit2gtk = embedded webview;
+      # libayatana-appindicator = system tray; librsvg2 = SVG icon
+      # rendering; patchelf is needed by the AppImage bundler.
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      # --- Toolchains --------------------------------------------------------
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      # Cache cargo's target dir per platform. The release profile uses
+      # lto=fat + codegen-units=1, so a cold build is 4-6 minutes.
+      # With this cache, incremental rebuilds drop to ~90s.
+      - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rust-target }}
 
-      - name: Download sidecar
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.sidecar-artifact }}
-          path: src-tauri/binaries
+      # --- vec0 binary -------------------------------------------------------
+      # The sqlite-vec extension we load at runtime. Different filename
+      # per platform: vec0.dll / vec0.dylib / vec0.so. tauri.conf.json
+      # uses a glob (resources/vec0.*) so whichever file is present at
+      # build time gets bundled into the installer. We resolve "latest"
+      # from the upstream releases API so this workflow doesn't rot when
+      # a new sqlite-vec ships.
+      - name: Download sqlite-vec extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources
 
-      - name: Make sidecar executable (macOS/Linux)
-        if: runner.os != 'Windows'
-        run: chmod +x src-tauri/binaries/*
+          # Resolve latest sqlite-vec release tag without jq (Windows
+          # runners don't have it preinstalled).
+          VERSION=$(curl -sSL https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
+            | grep '"tag_name"' | head -n1 | cut -d'"' -f4)
+          if [ -z "$VERSION" ]; then
+            echo "::error::failed to resolve sqlite-vec latest version"
+            exit 1
+          fi
+          echo "Using sqlite-vec ${VERSION}"
 
-      - name: Install frontend deps
+          # Asset name pattern: sqlite-vec-{ver}-loadable-{os}-{arch}.{ext}
+          # ver in the asset is the tag without the leading 'v'.
+          STRIPPED="${VERSION#v}"
+          ASSET="sqlite-vec-${STRIPPED}-loadable-${{ matrix.vec_os }}-${{ matrix.vec_arch }}.${{ matrix.vec_archive_ext }}"
+          URL="https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
+          echo "Fetching ${URL}"
+          curl -fL -o /tmp/vec0-archive "${URL}"
+
+          # Extract just the vec0 binary into src-tauri/resources/.
+          # Both .tar.gz and .zip ship the file at the archive root.
+          if [ "${{ matrix.vec_archive_ext }}" = "zip" ]; then
+            unzip -o /tmp/vec0-archive -d src-tauri/resources/
+          else
+            tar -xzf /tmp/vec0-archive -C src-tauri/resources/
+          fi
+          ls -lh src-tauri/resources/
+
+      # --- Frontend ----------------------------------------------------------
+      - name: Install npm deps
         run: npm ci
 
+      # --- Release notes from CHANGELOG.md ----------------------------------
+      # Pulls the section under `## [<version>]` for the current tag so
+      # the release body matches the changelog without hand-copying.
+      # Falls back to a generic message if the section isn't there yet.
       - name: Extract CHANGELOG section for this tag
         id: changelog
         shell: bash
         run: |
-          # ref_name looks like "v0.1.2"; CHANGELOG headings use "## [0.1.2]".
           VERSION="${GITHUB_REF_NAME#v}"
           body=""
           if [ -f CHANGELOG.md ]; then
@@ -134,12 +175,15 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build Tauri app
+      # --- Tauri build + draft release --------------------------------------
+      # tauri-action runs `npx tauri build --target <rust-target>`,
+      # picks up each platform's bundle output (.exe, .dmg, .deb,
+      # .AppImage), creates / updates a single draft Release for the tag,
+      # and attaches every matrix job's artifacts to it.
+      - name: Build + upload to draft release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: --target ${{ matrix.rust-target }}
           tagName: ${{ github.ref_name }}
@@ -151,12 +195,23 @@ jobs:
 
             ---
 
-            **Windows**: `NeuroVault_x64-setup.exe`
-            **macOS (Apple Silicon)**: `NeuroVault_aarch64.dmg`
-            **macOS (Intel)**: `NeuroVault_x64.dmg`
+            ### Downloads
 
-            The app auto-updates — future releases will be installed automatically.
+            - **Windows**: `NeuroVault_*_x64-setup.exe` (NSIS installer)
+            - **macOS (Apple Silicon)**: `NeuroVault_*_aarch64.dmg`
+            - **macOS (Intel)**: `NeuroVault_*_x64.dmg`
+            - **Linux**: `neurovault_*_amd64.AppImage` or `neurovault_*_amd64.deb`
+
+            ### First-launch warnings
+
+            The macOS and Windows builds aren't code-signed. You'll see a
+            warning the first time you open the app:
+
+            - **macOS** ("damaged, move to trash"): right-click the .app,
+              choose Open, click Open Anyway. Or run
+              `xattr -cr /Applications/NeuroVault.app` once.
+            - **Windows SmartScreen**: click "More info", then "Run anyway".
 
             Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false

@@ -40,7 +40,7 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/vec0.dll"
+      "resources/vec0.*"
     ],
     "icon": [
       "icons/32x32.png",

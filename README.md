@@ -17,14 +17,26 @@ A local-first AI memory system. Claude forgets you after every conversation. Neu
 
 ## Download and install
 
-**Windows:** [NeuroVault_0.1.0_x64-setup.exe](https://github.com/daththeanalyst/NeuroVault/releases/latest) (roughly 30 MB installer).
+Latest release: **[github.com/daththeanalyst/NeuroVault/releases/latest](https://github.com/daththeanalyst/NeuroVault/releases/latest)**
 
-1. Download the installer.
-2. Double-click to install.
-3. Open NeuroVault from the Start menu or desktop shortcut.
-4. Start taking notes. They are saved as plain markdown files in `~/.neurovault/`.
+| Platform | Asset | Status |
+|---|---|---|
+| **Windows x64** | `NeuroVault_*_x64-setup.exe` | Always built |
+| **macOS Apple Silicon** | `NeuroVault_*_aarch64.dmg` | Built via CI (v0.1.2+) |
+| **macOS Intel** | `NeuroVault_*_x64.dmg` | Built via CI (v0.1.2+) |
+| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` | Built via CI (v0.1.2+) |
 
-> **Windows SmartScreen.** The app is not code-signed yet. You will see a "Windows protected your PC" warning on first launch. Click **More info**, then **Run anyway**.
+1. Download the installer for your platform from the release page.
+2. Run it. Notes are saved as plain markdown files in `~/.neurovault/`.
+
+### First-launch warnings
+
+The macOS and Windows builds aren't code-signed yet. First open will warn you. Steps:
+
+- **Windows SmartScreen** ("Windows protected your PC"): click **More info**, then **Run anyway**.
+- **macOS Gatekeeper** ("damaged, move to trash"): right-click NeuroVault.app, choose **Open**, then **Open Anyway**. Or run once: `xattr -cr /Applications/NeuroVault.app`.
+
+Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed.
 
 ## Data safety
 
