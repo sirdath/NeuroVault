@@ -835,13 +835,16 @@ async fn check_duplicate(
             }
             let vec = super::embedder::encode(trimmed)?;
             let conn = db.lock();
+            // vec0 KNN pattern: MATCH operator + k = ?. Returns
+            // chunk_id + distance from the virtual table, then we
+            // join chunks + engrams to get the human-readable bits.
             let mut stmt = conn.prepare(
-                "SELECT c.engram_id, e.title, vec_distance_cosine(cv.embedding, ?1) AS dist \
-                 FROM vec_chunks cv \
-                 JOIN chunks c ON c.id = cv.id \
+                "SELECT c.engram_id, e.title, v.distance \
+                 FROM vec_chunks v \
+                 JOIN chunks c ON c.id = v.chunk_id \
                  JOIN engrams e ON e.id = c.engram_id \
-                 WHERE e.state != 'dormant' \
-                 ORDER BY dist ASC LIMIT 1",
+                 WHERE v.embedding MATCH ?1 AND k = 5 \
+                 ORDER BY v.distance ASC",
             )?;
             let bytes = embedder_bytes(&vec);
             let hit = stmt
@@ -930,25 +933,24 @@ async fn recall_chunks(
         let db = open_brain(&id)?;
         let qvec = super::embedder::encode(&q.q)?;
         let conn = db.lock();
-        let mut stmt = conn.prepare(
-            "WITH ranked AS ( \
-               SELECT c.id, c.engram_id, c.text, c.granularity, \
-                      vec_distance_cosine(cv.embedding, ?1) AS dist, \
-                      ROW_NUMBER() OVER (PARTITION BY c.engram_id ORDER BY vec_distance_cosine(cv.embedding, ?1)) AS rn \
-               FROM vec_chunks cv \
-               JOIN chunks c ON c.id = cv.id \
-               JOIN engrams e ON e.id = c.engram_id \
-               WHERE e.state != 'dormant' \
-             ) \
-             SELECT r.engram_id, e.title, r.text, r.granularity, r.dist \
-             FROM ranked r JOIN engrams e ON e.id = r.engram_id \
-             WHERE r.rn = 1 \
-             ORDER BY r.dist ASC LIMIT ?2",
-        )?;
+        // Over-fetch (limit*5) so we can dedup by engram in Rust
+        // afterwards. vec0's MATCH operator doesn't compose with
+        // window functions cleanly, so a two-stage approach is
+        // both simpler and more reliable.
         let bytes = embedder_bytes(&qvec);
-        let limit = q.limit.min(50) as i64;
-        let rows = stmt
-            .query_map(rusqlite::params![bytes, limit], |r| {
+        let limit = q.limit.min(50);
+        let overfetch = (limit * 5).max(20) as i64;
+        let mut stmt = conn.prepare(
+            "SELECT c.engram_id, e.title, c.content, c.granularity, v.distance \
+             FROM vec_chunks v \
+             JOIN chunks c ON c.id = v.chunk_id \
+             JOIN engrams e ON e.id = c.engram_id \
+             WHERE v.embedding MATCH ?1 AND k = ?2 \
+                   AND e.state != 'dormant' \
+             ORDER BY v.distance ASC",
+        )?;
+        let raw = stmt
+            .query_map(rusqlite::params![bytes, overfetch], |r| {
                 let eid: String = r.get(0)?;
                 let title: String = r.get(1)?;
                 let text: String = r.get(2)?;
@@ -963,6 +965,15 @@ async fn recall_chunks(
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Keep only the best-ranked chunk per engram_id, in order.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut rows: Vec<ChunkHit> = Vec::with_capacity(limit);
+        for hit in raw {
+            if seen.insert(hit.engram_id.clone()) {
+                rows.push(hit);
+                if rows.len() >= limit { break; }
+            }
+        }
         Ok(RecallChunksResponse { hits: rows })
     })
     .await

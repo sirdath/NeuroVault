@@ -44,3 +44,6 @@ eval/*.log
 # Python caches that slip in under subdirs
 **/__pycache__/
 **/*.pyc
+
+# ONNX model cache — auto-downloaded by fastembed-rs on first run
+.fastembed_cache/
