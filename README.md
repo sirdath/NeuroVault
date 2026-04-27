@@ -40,14 +40,15 @@ Full details, including what lives in `~/.neurovault/`, how to delete data, and 
 
 ## What you get
 
-- **Markdown editor** with live preview, auto-save, tabs, and `[[wikilinks]]`.
+- **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
 - **Seven themes.** Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord, Obsidian.
-- **Knowledge graph view** showing how your notes connect.
-- **Hybrid search.** Semantic plus keyword plus knowledge graph, always on, in-process Rust.
+- **Knowledge graph view** showing how your notes connect — with an opt-in **Analytics mode** that sizes nodes by importance and groups them into communities. See [docs/graph-analytics.md](docs/graph-analytics.md).
+- **Hybrid search.** Semantic plus keyword plus knowledge graph, always on, in-process Rust. Analytics mode also boosts recall by note importance (PageRank).
+- **Agent-driven brain maintenance.** Cluster names, future deduplication and folder suggestions all run via your existing Claude / Cursor session. No API keys, no second bill.
 - **Compilation loop.** AI maintains canonical wiki pages from your raw notes. Drives Claude Code directly via the copy-pack flow, no API key needed.
 - **Multi-vault support.** Switch, rename, delete via the dropdown (bottom-left).
 - **Open a folder as vault.** Point NeuroVault at an existing Obsidian vault. The folder stays in place. Deleting the brain never touches the folder.
-- **Folders in the sidebar.** Rename a note to `projects/foo.md` and it moves into a folder tree (created automatically).
+- **Folders in the sidebar.** Rename a note to `projects/foo.md` and it moves into a folder tree. Right-click any note for the rename / reveal / copy-link / delete menu.
 - **Fast-switch.** Ctrl+K, type a brain name, Enter. Per-brain entries in the palette.
 - **100 percent local.** Notes never leave your machine.
 - **Resizable panels.** Drag to customize layout.
