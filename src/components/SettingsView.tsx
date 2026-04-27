@@ -323,7 +323,7 @@ export function SettingsView() {
         </Section>
 
         <Section title="About">
-          <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.0</p>
+          <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.4</p>
           <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
             Local-first AI memory system. Your data never leaves your machine.
           </p>

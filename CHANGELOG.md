@@ -10,6 +10,23 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.4] — 2026-04-27
+
+### Fixed
+- **Server-status indicator was always offline.** The Tauri webview's
+  plain `fetch()` calls to the in-process Rust backend at
+  `http://127.0.0.1:8765` were silently failing the CORS preflight —
+  the webview origin (`tauri://localhost` in production,
+  `http://localhost:1420` in dev) is cross-origin to the backend, and
+  the axum router wasn't sending CORS headers. Most of the app worked
+  because graph + notes traffic goes through Tauri *invoke* (no CORS),
+  but the Settings → Server panel and the top "Server offline" banner
+  both used direct `fetch()` and were stuck showing offline forever.
+  Added a permissive `tower-http::cors::CorsLayer` (any origin /
+  methods / headers). Safe because the listener still binds to
+  127.0.0.1 only — no LAN exposure, so the only origins that can ever
+  reach this port are running on the same machine.
+
 ## [0.1.3] — 2026-04-27
 
 ### Fixed
