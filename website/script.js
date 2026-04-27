@@ -56,11 +56,56 @@
     }
   }
 
-  // Ask the GitHub API for the latest release, pick the Windows setup asset,
-  // and rewrite the Windows download buttons to point directly at the .exe.
-  // On failure (rate-limit, offline, API outage) we keep the releases-page
-  // fallback already set by relabelButton().
-  async function resolveDirectWindowsInstaller() {
+  // Pick the right release asset for the visitor's OS. Patterns match
+  // Tauri's bundle output filenames (NSIS for Windows, DMG for macOS,
+  // AppImage / DEB for Linux). When the asset for the current OS isn't
+  // present yet (e.g. v0.1.1 only has Windows; macOS + Linux ship in
+  // v0.1.2 once the cross-platform CI workflow runs), we just don't
+  // upgrade the link — the relabelButton() fallback already pointed at
+  // the right place ("Build from source" for non-Windows today).
+  function pickAssetForOs(assets) {
+    // Apple Silicon detection is approximate via `userAgent` — Apple
+    // doesn't expose CPU directly; we detect via Safari + macOS
+    // heuristics. Default to arm64 since that's what most modern Macs
+    // are; users on Intel Macs whose UA happens to look "modern" can
+    // grab the x64 .dmg from the releases page.
+    const macIsArm = /Mac/.test(platform) && (
+      /Mac OS X 1[5-9]/.test(ua) ||  // Sequoia+ ships only on Apple Silicon
+      window.matchMedia?.("(prefers-color-scheme: dark)") !== null  // weak signal
+    );
+    let pattern;
+    if (os === "windows") {
+      pattern = /_x64-setup\.exe$/i;
+    } else if (os === "macos") {
+      pattern = macIsArm ? /_aarch64\.dmg$/i : /_x64\.dmg$/i;
+    } else if (os === "linux") {
+      // Prefer AppImage (universally runnable); fall back to .deb if
+      // only that's there.
+      const app = assets.find(
+        (a) => typeof a.name === "string" && /\.AppImage$/i.test(a.name)
+      );
+      if (app) return app;
+      pattern = /_amd64\.deb$/i;
+    } else {
+      return null;
+    }
+    return (
+      assets.find((a) => typeof a.name === "string" && pattern.test(a.name)) ?? null
+    );
+  }
+
+  function osLabel() {
+    if (os === "windows") return "Windows";
+    if (os === "macos")   return "macOS";
+    if (os === "linux")   return "Linux";
+    return "your platform";
+  }
+
+  // Ask the GitHub API for the latest release, pick the asset matching
+  // the visitor's OS, and rewrite the download buttons to point directly
+  // at it. On failure (rate-limit, offline, API outage, or asset not
+  // present yet) we keep the relabelButton() fallback that already ran.
+  async function resolveDirectInstaller() {
     try {
       const res = await fetch(GH_API_LATEST, {
         headers: { Accept: "application/vnd.github+json" },
@@ -68,15 +113,19 @@
       if (!res.ok) return null;
       const data = await res.json();
       const assets = Array.isArray(data.assets) ? data.assets : [];
-      // Tauri NSIS output: NeuroVault_<version>_x64-setup.exe
-      const asset = assets.find(
-        (a) => typeof a.name === "string" && /_x64-setup\.exe$/i.test(a.name)
-      );
+      const asset = pickAssetForOs(assets);
       if (!asset || !asset.browser_download_url) return null;
       const mb = asset.size ? (asset.size / (1024 * 1024)).toFixed(1) : null;
+      const kind =
+        /\.exe$/i.test(asset.name) ? "x64 installer"
+        : /\.dmg$/i.test(asset.name) ? (/aarch64/i.test(asset.name) ? "Apple Silicon · DMG" : "Intel · DMG")
+        : /\.AppImage$/i.test(asset.name) ? "x64 AppImage"
+        : /\.deb$/i.test(asset.name) ? "x64 DEB"
+        : "installer";
       return {
         url: asset.browser_download_url,
-        sizeLabel: mb ? `${mb} MB · x64 installer` : "x64 installer",
+        label: `Download for ${osLabel()}`,
+        sizeLabel: mb ? `${mb} MB · ${kind}` : kind,
         version: data.tag_name || "",
       };
     } catch {
@@ -85,14 +134,17 @@
   }
 
   function applyDirectInstaller(direct) {
-    if (!direct || os !== "windows") return;
+    if (!direct) return;
     const primaryAnchor = document.getElementById("primary-download");
+    const primaryLabel  = document.getElementById("primary-label");
     const primarySub    = document.getElementById("primary-sub");
     if (primaryAnchor) primaryAnchor.href = direct.url;
+    if (primaryLabel) primaryLabel.textContent = direct.label;
     if (primarySub) primarySub.textContent = direct.sizeLabel;
 
     const ctaLabel = document.getElementById("cta-label");
     if (ctaLabel) {
+      ctaLabel.textContent = direct.label;
       const ctaAnchor = ctaLabel.closest("a");
       if (ctaAnchor) ctaAnchor.href = direct.url;
     }
@@ -113,10 +165,13 @@
       relabelButton(ctaLabel, ctaSub, ctaAnchor);
     }
 
-    // Fire-and-forget: upgrade Windows buttons to direct .exe URLs. Fires
-    // after the initial label set so users never see a broken state.
-    if (os === "windows") {
-      resolveDirectWindowsInstaller().then(applyDirectInstaller);
+    // Fire-and-forget: upgrade buttons to a direct download URL for the
+    // visitor's OS. Fires after the initial label set so users never see
+    // a broken state. If no matching asset exists yet (Mac/Linux before
+    // v0.1.2 ships), the upgrade is a no-op and the "Build from source"
+    // fallback set by relabelButton() above stays in place.
+    if (os === "windows" || os === "macos" || os === "linux") {
+      resolveDirectInstaller().then(applyDirectInstaller);
     }
   });
 

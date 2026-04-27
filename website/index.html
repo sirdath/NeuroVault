@@ -82,7 +82,7 @@
   <div class="hero-inner">
     <div class="hero-chip">
       <span class="hero-chip-dot"></span>
-      <span>v0.1.0 · Windows build live · macOS soon</span>
+      <span>v0.1.1 · Analytics graph mode shipped · Windows live · macOS + Linux next release</span>
     </div>
 
     <svg class="hero-logo" viewBox="0 0 1080 220" preserveAspectRatio="xMidYMid meet" role="img" aria-label="NeuroVault">
@@ -115,6 +115,9 @@
     <p class="hero-sub">
       A local-first memory layer for AI agents. Notes, decisions, people, projects —
       captured once, recalled whenever any MCP-speaking agent asks.
+      Analytics mode shows the structure of your brain at a glance: bigger
+      nodes for what gets referenced most, soft tints for clusters of
+      linked notes.
     </p>
 
     <div class="hero-ctas" id="download">
@@ -148,8 +151,8 @@
         <div class="stat-label">cloud round-trip<br/>(fully local)</div>
       </div>
       <div class="stat">
-        <div class="stat-num">311<span class="stat-unit"></span></div>
-        <div class="stat-label">tests green<br/>on every push</div>
+        <div class="stat-num">9.8<span class="stat-unit"> MB</span></div>
+        <div class="stat-label">installer<br/>(was 76 MB)</div>
       </div>
       <div class="stat">
         <div class="stat-num">1<span class="stat-unit">-click</span></div>
@@ -181,6 +184,14 @@
   <div class="marquee-track">
     <span class="marquee-group">
       <span>$ recall("claude forgets")</span>
+      <span class="sep">◆</span>
+      <span>ANALYTICS MODE</span>
+      <span class="sep">◆</span>
+      <span>$ /name-clusters</span>
+      <span class="sep">◆</span>
+      <span>PAGERANK + LOUVAIN</span>
+      <span class="sep">◆</span>
+      <span>NO API KEYS</span>
       <span class="sep">◆</span>
       <span>245 MEMORIES</span>
       <span class="sep">●─●─●</span>
@@ -218,6 +229,14 @@
     <!-- duplicate group for seamless loop -->
     <span class="marquee-group" aria-hidden="true">
       <span>$ recall("claude forgets")</span>
+      <span class="sep">◆</span>
+      <span>ANALYTICS MODE</span>
+      <span class="sep">◆</span>
+      <span>$ /name-clusters</span>
+      <span class="sep">◆</span>
+      <span>PAGERANK + LOUVAIN</span>
+      <span class="sep">◆</span>
+      <span>NO API KEYS</span>
       <span class="sep">◆</span>
       <span>245 MEMORIES</span>
       <span class="sep">●─●─●</span>
@@ -343,6 +362,30 @@
       <p>Recall walks the graph — finds what you meant, not just what you typed.</p>
     </article>
 
+    <article class="feature reveal">
+      <pre class="feature-ascii" aria-label="analytics graph icon">  ●
+ ╱│╲
+● │ ●
+ ╲│╱
+●─●─●</pre>
+      <h3>See your brain's structure</h3>
+      <p>Analytics mode: bigger nodes for what gets referenced most (PageRank),
+        soft tints for clusters of linked notes (Louvain). Tip bar explains
+        each node's role on hover.</p>
+    </article>
+
+    <article class="feature reveal">
+      <pre class="feature-ascii" aria-label="agent skill icon">┌──┐
+│⌘ │
+│/ │
+└──┘
+ ✦</pre>
+      <h3>Your AI session names your clusters</h3>
+      <p>No API keys. The <code>/name-clusters</code> skill runs in your
+        existing Claude / Cursor session via MCP. Same pattern coming for
+        deduplication, folder filing, and frontmatter lint.</p>
+    </article>
+
   </div> <!-- /.feature-grid -->
 </section>
 
@@ -360,9 +403,11 @@
       </div>
       <figcaption>
         <strong>Neural graph.</strong>
-        Force-directed layout. Nodes sized by access frequency, colored by
-        strength state (amber = fresh, teal = connected, gray = dormant).
-        Every node is a real markdown file in the vault.
+        Force-directed layout. Default view: nodes coloured by folder, edges
+        thicker for stronger relationships (manual <code>[[wikilinks]]</code>
+        bolder than weak semantic matches). Flip on Analytics mode and
+        nodes resize by importance, soft background tints group communities,
+        and a tip bar explains each node's role.
       </figcaption>
     </figure>
 
@@ -409,7 +454,8 @@
       <h3>The agent asks</h3>
       <p>Claude calls <code>recall()</code> via MCP. Hybrid search fuses
       semantic, keyword, and graph hits. Cross-encoder reranks the top
-      candidates. Answers now carry context they couldn't have had before.</p>
+      candidates; PageRank importance lifts hub notes when Analytics mode
+      is on. Answers now carry context they couldn't have had before.</p>
     </div>
   </div>
 </section>
@@ -424,7 +470,8 @@
       <li><span class="privacy-dot"></span><strong>No account.</strong> There is no NeuroVault login to create or sign into.</li>
       <li><span class="privacy-dot"></span><strong>No cloud sync.</strong> Your vault is a folder of markdown files. Back it up, sync it, or delete it however you want.</li>
       <li><span class="privacy-dot"></span><strong>Loopback only.</strong> The MCP server binds to <code>127.0.0.1:8765</code>. It refuses connections from other machines.</li>
-      <li><span class="privacy-dot"></span><strong>Network only on request.</strong> Downloading embedding models on first run, or the Claude API for compile pages (your own key). Nothing else.</li>
+      <li><span class="privacy-dot"></span><strong>No API keys.</strong> NeuroVault never holds one. Cluster naming, future deduplication and folder suggestions all delegate to whatever Claude / Cursor session you already have running, via MCP.</li>
+      <li><span class="privacy-dot"></span><strong>Network only on request.</strong> Downloading embedding models on first run. That's the only outbound call NeuroVault makes by default.</li>
     </ul>
   </div>
 </section>
