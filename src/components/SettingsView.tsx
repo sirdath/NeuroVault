@@ -60,7 +60,17 @@ function useServerStatus() {
     } catch { setOnline(false); }
     setChecking(false);
   }, []);
-  useEffect(() => { check(); }, [check]);
+  // Run the check on mount AND every 3 seconds — the in-process Rust
+  // server takes ~5-10 s to come up at first launch (ONNX model load,
+  // vault scan), so a one-shot mount check would race against the
+  // boot sequence and leave the panel showing "Server offline" even
+  // after the backend is healthy. 3 s feels live without DOSing the
+  // health endpoint.
+  useEffect(() => {
+    check();
+    const id = setInterval(check, 3000);
+    return () => clearInterval(id);
+  }, [check]);
   return { online, checking, check };
 }
 
@@ -92,6 +102,16 @@ export function SettingsView() {
       // `port: null` lets the Rust side default to 8765.
       await invoke<string>("nv_start_rust_server", { port: null });
     } catch (e) {
+      // "already running" means the in-process server was started by
+      // the boot-time auto-start and the panel just hadn't caught up
+      // yet. That's exactly the state the user wanted, so we treat it
+      // as success: re-check, drop the starting spinner, no alert.
+      const msg = String(e);
+      if (msg.toLowerCase().includes("already running")) {
+        recheckServer();
+        setStarting(false);
+        return;
+      }
       alert(`Failed to start server: ${e}`);
       setStarting(false);
       return;

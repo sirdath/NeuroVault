@@ -10,6 +10,58 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.3] — 2026-04-27
+
+### Fixed
+- **Start Server button** — the Settings panel's status check ran once
+  at mount, so on a fresh launch (where the Rust backend takes a few
+  seconds to load ONNX + scan the vault) it could land on "Server
+  offline". Clicking *Start Server* then returned "already running"
+  because the backend had finished booting in the meantime. The panel
+  now polls `/api/brains/active` every 3 s and "already running" is
+  treated as success (silently re-checks instead of alerting).
+
+## [0.1.2] — 2026-04-27
+
+### Added — graph polish
+- **Glass-orb shading**: every node now reads as a small marble — 3-stop
+  radial gradient (lighter top-left → base → slightly darker bottom-right)
+  plus a soft white specular highlight on circles + hexes ≥ 3 px.
+- **State-driven finish**: dormant notes desaturate (true grey-shift, not
+  just alpha); fresh notes get a subtle amber halo using the brand
+  status colour.
+- **Per-folder colour overrides** — native colour picker per folder in
+  Settings → Graph; folder list auto-derived from the active brain;
+  hex-validated and persisted.
+- **Per-cluster colour overrides** — only for clusters the user has
+  named (via `/name-clusters` or by hand). Unnamed clusters fall back
+  to the dominant-folder tint because Louvain ids aren't stable.
+
+### Fixed
+- **Big-node overlap**: `forceCollide.radius()` and link distance now
+  follow the same `effectiveNodeRadius()` the painter uses, so two
+  PageRank-boosted hubs no longer overlap when Analytics mode is on.
+  Live ref + reheat keeps the simulation in sync without re-attaching
+  forces.
+- **Settings card overlap**: the Palette swatch grid was overflowing
+  the right-shrunk `SettingRow`. New `SettingBlock` layout (stacked
+  label/description above full-width control, explicit header margin)
+  keeps wide controls inside the section card.
+- **Start Server / Stop Server**: were calling the *retired* Python
+  sidecar's `start_server` / `stop_server` Tauri commands. Both the
+  Settings panel and the top "Server offline" banner now control the
+  in-process Rust HTTP backend via `nv_start_rust_server` /
+  `nv_stop_rust_server`.
+
+### Changed
+- Stale "uv run python -m neurovault_server" hint replaced by "restart
+  NeuroVault to auto-start the in-process backend".
+- Repo cleanup: `Makefile` rewritten for the in-process Rust setup;
+  three dead scripts removed (`scripts/launch-neurovault.bat`, `.vbs`,
+  `pin-legacy-installer.ps1`); `docs/BUILDING_SIDECAR.md` carries a
+  clear deprecation note now that the sidecar isn't required for
+  normal use.
+
 ## [Unreleased]
 
 ### Added — agent ergonomics

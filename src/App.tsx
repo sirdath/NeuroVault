@@ -438,6 +438,15 @@ export default function App() {
                   // The health monitor polls every 1.5s while starting;
                   // it'll clear `starting` automatically when the server responds.
                 } catch (e) {
+                  // "already running" → the backend was already up;
+                  // the banner just hadn't refreshed yet. Treat as
+                  // success: drop the starting spinner and let the
+                  // health monitor's next tick clear the offline flag.
+                  const msg = String(e);
+                  if (msg.toLowerCase().includes("already running")) {
+                    setStarting(false);
+                    return;
+                  }
                   setStarting(false);
                   alert(
                     `Failed to start server: ${e}\n\n` +

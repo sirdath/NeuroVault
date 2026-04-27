@@ -1,7 +1,10 @@
-/** HTTP client for the Python MCP server. Base URL comes from lib/config.
+/** HTTP client for the in-process Rust HTTP backend at 127.0.0.1:8765.
+ *  Base URL comes from `lib/config`. (Originally the Python MCP server
+ *  owned this port; the Rust backend in v0.1.0+ exposes the same
+ *  `/api/*` surface so this client didn't need to change shape.)
  *
  *  Phase-4 note: a handful of read-path calls (`fetchGraph`, `fetchNote`,
- *  `fetchNotesList`) now try the in-process Rust `nv_*` Tauri commands
+ *  `fetchNotesList`) try the in-process Rust `nv_*` Tauri commands
  *  first and fall back to HTTP when those commands aren't registered —
  *  either because we're in plain-browser mode or because the installed
  *  Tauri build predates Phase 4. Callers of `fetchGraph` etc. don't see

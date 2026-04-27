@@ -1,9 +1,20 @@
 # Building the sidecar binary
 
-NeuroVault ships as a Tauri desktop app that talks to a Python MCP server
-on `127.0.0.1:8765`. By default the server runs as a separate process that
-you start manually (see root README Quick Start). For a true one-click
-install experience, the Python server can be packaged as a standalone
+> **As of v0.1.0+, this is no longer required for normal use.** The Rust
+> HTTP backend now lives in-process inside the Tauri desktop binary —
+> `127.0.0.1:8765` is auto-served the moment NeuroVault launches; no
+> separate Python sidecar to start, no PyInstaller bundle to ship.
+>
+> This document is kept for two reasons:
+>
+> 1. Users who want to run the **advanced-feature helpers** (compile,
+>    PDF ingest, code-graph, Zotero) can still build the Python sidecar
+>    and have NeuroVault spawn it on demand via `run_python_job`.
+> 2. Historical reference for the original v0.0.x architecture.
+
+NeuroVault originally shipped as a Tauri desktop app that talked to a
+Python MCP server on `127.0.0.1:8765`. For a true one-click install
+experience, the Python server could be packaged as a standalone
 Windows/macOS/Linux executable and bundled into the Tauri installer as a
 **sidecar**.
 

@@ -1,7 +1,9 @@
 /**
  * Single source of truth for runtime config. Everything that needs to
- * reach the local Python sidecar reads its base URL from here — never
- * hardcode `http://127.0.0.1:8765` directly in a component or store.
+ * reach the in-process Rust HTTP backend reads its base URL from here
+ * — never hardcode `http://127.0.0.1:8765` directly in a component or
+ * store. (The Python sidecar that originally owned this port was
+ * retired in v0.1.0; the Rust server takes over the same surface.)
  *
  * Override via the Vite env var ``VITE_API_HOST`` at build time, e.g.
  *   ``VITE_API_HOST="http://192.168.1.23:8765" npm run dev``
