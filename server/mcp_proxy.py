@@ -577,6 +577,99 @@ def core_memory_replace(label: str, old: str, new: str, brain: str | None = None
     return _http_post(f"/api/core_memory/{urllib.parse.quote(label)}/replace", body)
 
 
+# --- Cluster naming ------------------------------------------------------
+#
+# Two tools that let an MCP-speaking agent name the user's brain
+# clusters. Backed by the Rust HTTP server's /api/clusters and
+# /api/clusters/names endpoints. The shape is:
+#
+#   1. User opens the app and enables Analytics mode in the graph
+#      view. The frontend computes Louvain clusters and pushes
+#      summaries to the Rust HTTP server (in-memory).
+#   2. Agent calls list_unnamed_clusters() to fetch them.
+#   3. Agent reads each cluster's top notes + sample wikilinks,
+#      proposes a 2-4 word name capturing the theme, and calls
+#      set_cluster_names({"3": "API design", ...}).
+#   4. Names persist to ~/.neurovault/brains/{id}/cluster_names.json
+#      and are picked up on next graph render.
+#
+# No API keys. The agent's own model (whatever Claude session the
+# user is running) does the work. Same shape works in v0.1.2 for
+# more "agent fixes the brain" tools (dedupe, folder suggestions).
+
+
+@mcp.tool(annotations={
+    "title": "List unnamed graph clusters",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def list_unnamed_clusters(only_unnamed: bool = True, brain: str | None = None) -> Any:
+    """List Louvain communities in the user's brain that don't have
+    names yet, with sample notes for each so you can propose a name.
+
+    REQUIRES: the user has Analytics mode enabled in the graph view
+    (the app pushes cluster data when Analytics runs Louvain). If
+    `needs_analytics` is true in the response, tell the user to
+    open NeuroVault and click the Analytics toggle in the graph
+    view, then try again.
+
+    Each cluster has:
+      id           — integer to use in `set_cluster_names`
+      size         — total notes in this cluster
+      top_titles   — first 5 most-referenced note titles (the
+                     primary signal you'll use to name the cluster)
+      sample_links — wikilinks observed across cluster members
+      name         — already-saved name (only present when
+                     only_unnamed=False)
+
+    For each cluster propose a 2-4 word theme name based on the
+    top_titles + sample_links. Skip clusters with size < 5 — they're
+    noise. Then call `set_cluster_names` with the dict.
+
+    Args:
+        only_unnamed: when True (default), skip clusters that already
+            have names — repeated runs of /name-clusters won't
+            re-propose names for ones the user has hand-edited.
+        brain: target brain id (defaults to active).
+    """
+    params: dict[str, Any] = {"only_unnamed": str(only_unnamed).lower()}
+    if brain: params["brain_id"] = brain
+    return _http_get("/api/clusters", params)
+
+
+@mcp.tool(annotations={
+    "title": "Save names for graph clusters",
+    "readOnlyHint": False,
+    "destructiveHint": False,   # additive — merges with existing names
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def set_cluster_names(names: dict[str, str], brain: str | None = None) -> Any:
+    """Persist names for one or more Louvain communities. Merges into
+    the existing name registry — clusters not in `names` keep their
+    current name (or stay unnamed). Empty string for a value clears
+    that cluster's name.
+
+    Args:
+        names: map from cluster id (as string) → 2-4 word theme name.
+            Example: {"0": "API design", "1": "Rust migration"}.
+        brain: target brain id (defaults to active).
+
+    Returns:
+        saved        — count of names submitted in this call
+        total_named  — total clusters that now have a name in the
+                       registry (after the merge)
+
+    The user's hand-edits in cluster_names.json are preserved unless
+    you pass an empty string for that id; agents shouldn't overwrite
+    a name they didn't propose.
+    """
+    body: dict[str, Any] = {"names": names}
+    if brain: body["brain_id"] = brain
+    return _http_post("/api/clusters/names", body)
+
+
 # --- Empty prompts / resources handlers ----------------------------------
 #
 # Some MCP clients (Claude Code, Inspector, a few experimental

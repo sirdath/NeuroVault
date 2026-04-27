@@ -956,6 +956,33 @@ fn nv_set_pagerank(
     Ok(())
 }
 
+/// Push Louvain cluster summaries into in-memory state. The Rust
+/// HTTP server exposes them via GET /api/clusters so the
+/// `/name-clusters` skill (or any MCP-speaking agent) can read +
+/// propose names. Frontend calls this whenever Louvain runs in
+/// Analytics mode.
+#[tauri::command]
+fn nv_set_clusters(
+    clusters: Vec<memory::cluster_state::ClusterSummary>,
+    brain_id: Option<String>,
+) -> std::result::Result<(), String> {
+    let (resolved, _db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::cluster_state::set_summaries(&resolved, clusters);
+    Ok(())
+}
+
+/// Read cluster names persisted to disk for the brain. Frontend
+/// reads this on graph load so the analytics view can display
+/// "API design" instead of "Cluster 3" once names exist.
+#[tauri::command]
+fn nv_get_cluster_names(
+    brain_id: Option<String>,
+) -> std::result::Result<std::collections::HashMap<String, String>, String> {
+    let (resolved, _db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let names = memory::cluster_state::read_names(&resolved);
+    Ok(names.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+}
+
 /// Shared state holding the Rust HTTP server handle (if running).
 /// Separate from `ServerState` (which tracks the legacy Python
 /// sidecar) so both can coexist during the migration window — the
@@ -1402,7 +1429,8 @@ pub fn run() {
             // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
             // is the in-process Tauri path; the HTTP server serves
             // MCP proxy + external HTTP clients.
-            nv_recall, nv_set_pagerank, nv_start_rust_server, nv_stop_rust_server,
+            nv_recall, nv_set_pagerank, nv_set_clusters, nv_get_cluster_names,
+            nv_start_rust_server, nv_stop_rust_server,
             // Tier-A agent-efficiency: cheap 1-2 hop neighbour lookup.
             nv_get_related,
             // Phase-7 vault file watcher. Started automatically on

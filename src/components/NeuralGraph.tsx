@@ -14,7 +14,7 @@ import {
 } from "../stores/graphSettingsStore";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
-import { nvSetPagerank, readNote } from "../lib/tauri";
+import { nvSetPagerank, nvSetClusters, nvGetClusterNames, readNote, type NvClusterSummary } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
 // Minimal shape of the ForceGraph3D ref handle we actually touch. The real
@@ -716,23 +716,93 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [analyticsMode, analyticsData, activeBrainId]);
 
+  // Cluster names (community id → human label), loaded from disk
+  // when Analytics mode flips on or the active brain changes. The
+  // /name-clusters skill writes these via the Rust HTTP endpoint;
+  // the frontend reads here so labels surface in the tip bar.
+  const [clusterNames, setClusterNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!analyticsMode) {
+      setClusterNames({});
+      return;
+    }
+    let cancelled = false;
+    nvGetClusterNames(activeBrainId ?? undefined).then((names) => {
+      if (!cancelled) setClusterNames(names);
+    });
+    return () => { cancelled = true; };
+  }, [analyticsMode, activeBrainId, analyticsKey]);
+
+  // Push cluster summaries to the Rust HTTP server whenever Louvain
+  // produces fresh communities. The agent-driven /name-clusters
+  // skill reads these via GET /api/clusters and proposes names.
+  // Empty array clears state when Analytics is disabled.
+  useEffect(() => {
+    if (!analyticsMode || !analyticsData) {
+      nvSetClusters([], activeBrainId ?? undefined);
+      return;
+    }
+    // Build a top-N-titles + sample-links payload per community.
+    // Top-titles by PageRank within the community (best signal for
+    // theming); sample_links from edge endpoints already inside
+    // graphData. Capped to keep MCP payload ergonomic.
+    const byCommunity = new Map<number, { id: string; pr: number; title: string }[]>();
+    for (const n of nodes) {
+      const c = analyticsData.com.get(n.id);
+      if (c == null) continue;
+      const pr = analyticsData.pr.get(n.id) ?? 0;
+      let arr = byCommunity.get(c);
+      if (!arr) { arr = []; byCommunity.set(c, arr); }
+      arr.push({ id: n.id, pr, title: n.title });
+    }
+    const summaries: NvClusterSummary[] = [];
+    for (const [cid, members] of byCommunity) {
+      members.sort((a, b) => b.pr - a.pr);
+      const topMembers = members.slice(0, 5);
+      const top_titles = topMembers.map((m) => m.title);
+      // Sample links: edges where both endpoints are in this cluster.
+      // Cap at 10 — agents need a flavour, not the full subgraph.
+      const memberIds = new Set(members.map((m) => m.id));
+      const sample_links: string[] = [];
+      for (const e of edges) {
+        if (sample_links.length >= 10) break;
+        if (memberIds.has(e.from) && memberIds.has(e.to)) {
+          sample_links.push(`${e.from} → ${e.to} (${e.link_type})`);
+        }
+      }
+      summaries.push({
+        id: cid,
+        size: members.length,
+        top_titles,
+        sample_links,
+      });
+    }
+    nvSetClusters(summaries, activeBrainId ?? undefined);
+  }, [analyticsMode, analyticsData, activeBrainId, nodes, edges]);
+
   // Hover-driven tip bar copy. Active only in Analytics mode; falls
   // through to the idle copy when nothing meaningful is hovered.
   // PR mean is 1.0 by design — 2.0+ is a hub, 0.5- is peripheral.
+  // Cluster name (when set via /name-clusters) replaces "a cluster"
+  // with the actual theme — "in 'API design' (12 notes)".
   const tipBarHoverText = useMemo<string | null>(() => {
     if (!analyticsMode || !analyticsData || !focusedNodeId) return null;
     const pr = analyticsData.pr.get(focusedNodeId) ?? 0;
     const com = analyticsData.com.get(focusedNodeId);
     const size = com != null ? analyticsData.communitySizes.get(com) ?? 0 : 0;
+    const clusterLabel =
+      com != null && clusterNames[String(com)]
+        ? `'${clusterNames[String(com)]}' (${size} notes)`
+        : `a cluster of ${size} linked notes`;
     if (pr >= 2.0) {
       return size > 1
-        ? `Core note · ${pr.toFixed(1)}× the average reference rate · in a cluster of ${size}`
+        ? `Core note · ${pr.toFixed(1)}× the average reference rate · in ${clusterLabel}`
         : `Core note · ${pr.toFixed(1)}× the average reference rate`;
     }
-    if (size >= 3) return `In a cluster of ${size} linked notes`;
+    if (size >= 3) return `In ${clusterLabel}`;
     if (pr <= 0.5) return `Peripheral note · few links to the rest of your brain`;
     return null;
-  }, [analyticsMode, analyticsData, focusedNodeId]);
+  }, [analyticsMode, analyticsData, focusedNodeId, clusterNames]);
 
   // Custom 2D node renderer. Redesigned for a cleaner, more
   // screenshot-worthy aesthetic:

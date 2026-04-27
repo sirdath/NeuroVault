@@ -112,6 +112,8 @@ fn router() -> Router {
         .route("/api/recall", get(recall))
         .route("/api/related/:engram_id", get(related))
         .route("/api/notes", post(remember))
+        .route("/api/clusters", get(clusters_list))
+        .route("/api/clusters/names", post(clusters_set_names))
         .with_state(ServerState {})
 }
 
@@ -549,4 +551,129 @@ async fn remember(
     .map_err(ApiError::from)?;
 
     Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Cluster naming endpoints — backs the `/name-clusters` skill.
+//
+// GET /api/clusters returns the latest Louvain partition's clusters
+// with sample titles + wikilinks. POST /api/clusters/names merges
+// incoming names into ~/.neurovault/brains/{id}/cluster_names.json.
+// State is populated by the frontend via nv_set_clusters whenever
+// Analytics mode runs Louvain (i.e. on graph data change).
+//
+// Why HTTP instead of just a Tauri command: agents (Claude Code,
+// Cursor) reach the brain via the MCP proxy, which forwards to this
+// HTTP server. So agent-driven cluster naming MUST go through HTTP.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ClustersQuery {
+    brain_id: Option<String>,
+    /// When true, only return clusters that don't already have a name
+    /// in cluster_names.json. Default true so the agent can run
+    /// `/name-clusters` repeatedly without re-naming what was named
+    /// already.
+    only_unnamed: Option<bool>,
+}
+
+#[derive(serde::Serialize)]
+struct ClusterListItem {
+    id: u32,
+    size: usize,
+    top_titles: Vec<String>,
+    sample_links: Vec<String>,
+    /// Already-saved name, if any. Agent uses this to skip clusters
+    /// the user has hand-edited.
+    name: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ClusterListResponse {
+    clusters: Vec<ClusterListItem>,
+    /// True when no Analytics-mode push has happened yet this session.
+    /// Agents see this and tell the user "open the app and enable
+    /// Analytics mode first."
+    needs_analytics: bool,
+}
+
+async fn clusters_list(
+    Query(q): Query<ClustersQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ClusterListResponse>, ApiError> {
+    let only_unnamed = q.only_unnamed.unwrap_or(true);
+    let brain_id = q.brain_id.clone();
+
+    let resp = tokio::task::spawn_blocking(move || -> Result<ClusterListResponse, MemoryError> {
+        let id = resolve_brain_id(brain_id.as_deref())?;
+        let summaries = super::cluster_state::get_summaries(&id);
+        let names = super::cluster_state::read_names(&id);
+        let needs_analytics = summaries.is_empty();
+        let clusters = summaries
+            .into_iter()
+            .filter_map(|c| {
+                let existing = names.get(&c.id).cloned();
+                if only_unnamed && existing.is_some() {
+                    return None;
+                }
+                Some(ClusterListItem {
+                    id: c.id,
+                    size: c.size,
+                    top_titles: c.top_titles,
+                    sample_links: c.sample_links,
+                    name: existing,
+                })
+            })
+            .collect();
+        Ok(ClusterListResponse { clusters, needs_analytics })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+#[derive(serde::Deserialize)]
+struct SetClusterNamesBody {
+    /// Map from cluster id (string for JSON ergonomics) to user/agent
+    /// label. Empty string clears that cluster's name.
+    names: std::collections::HashMap<String, String>,
+    brain_id: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct SetClusterNamesResponse {
+    saved: usize,
+    total_named: usize,
+}
+
+async fn clusters_set_names(
+    _s: State<ServerState>,
+    Json(body): Json<SetClusterNamesBody>,
+) -> Result<Json<SetClusterNamesResponse>, ApiError> {
+    let brain_id = body.brain_id.clone();
+    let incoming_str = body.names;
+
+    let resp = tokio::task::spawn_blocking(move || -> Result<SetClusterNamesResponse, MemoryError> {
+        let id = resolve_brain_id(brain_id.as_deref())?;
+        let mut parsed: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        let saved = incoming_str.len();
+        for (k, v) in incoming_str {
+            if let Ok(cid) = k.parse::<u32>() {
+                parsed.insert(cid, v);
+            }
+        }
+        let merged = super::cluster_state::merge_names(&id, parsed)
+            .map_err(MemoryError::Other)?;
+        Ok(SetClusterNamesResponse {
+            saved,
+            total_named: merged.len(),
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
 }

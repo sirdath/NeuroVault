@@ -32,6 +32,7 @@
 
 pub mod bm25;
 pub mod chunker;
+pub mod cluster_state;
 pub mod db;
 pub mod embedder;
 pub mod entities;

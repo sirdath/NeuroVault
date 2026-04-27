@@ -349,6 +349,52 @@ export const nvSetPagerank = (
       })
     : Promise.resolve();
 
+/** Cluster summary the frontend pushes for the agent-driven
+ *  /name-clusters skill to consume. Mirrors the Rust ClusterSummary
+ *  struct in src-tauri/src/memory/cluster_state.rs. */
+export interface NvClusterSummary {
+  id: number;
+  size: number;
+  top_titles: string[];
+  sample_links: string[];
+}
+
+/** Push Louvain cluster summaries into Rust in-process state. The
+ *  Rust HTTP server exposes them via GET /api/clusters; the
+ *  /name-clusters MCP skill reads them and proposes names. Pass
+ *  an empty array to clear (called when Analytics mode is disabled).
+ *  Fails open like nvSetPagerank — never breaks the UI if the
+ *  command is unregistered (older build, web mode, etc). */
+export const nvSetClusters = (
+  clusters: NvClusterSummary[],
+  brainId?: string
+) =>
+  IS_TAURI
+    ? invoke<void>("nv_set_clusters", {
+        clusters,
+        brainId: brainId ?? null,
+      }).catch(() => {
+        /* fail open */
+      })
+    : Promise.resolve();
+
+/** Read cluster names persisted under
+ *  ~/.neurovault/brains/{id}/cluster_names.json. Frontend reads on
+ *  graph load + after the agent's /name-clusters run, so the
+ *  Analytics view can display "API design" instead of "Cluster 3". */
+export const nvGetClusterNames = async (
+  brainId?: string
+): Promise<Record<string, string>> => {
+  if (!IS_TAURI) return {};
+  try {
+    return await invoke<Record<string, string>>("nv_get_cluster_names", {
+      brainId: brainId ?? null,
+    });
+  } catch {
+    return {};
+  }
+};
+
 /** Start/stop the in-process Rust HTTP server on 127.0.0.1:8765.
  *  Exposes the same `/api/*` surface the Python sidecar did so the
  *  MCP proxy keeps working without config changes. Only one of
