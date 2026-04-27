@@ -38,6 +38,7 @@ pub mod entities;
 pub mod http_server;
 pub mod ingest;
 pub mod migrations;
+pub mod pagerank_state;
 pub mod paths;
 pub mod query_parser;
 pub mod read_ops;

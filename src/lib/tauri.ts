@@ -327,6 +327,28 @@ export const nvRecall = (
       })
     : nvReject("nv_recall");
 
+/** Push PageRank scores into Rust in-process state. Retriever applies
+ *  a `1 + 0.15 * ln(1 + score)` boost during recall when state is
+ *  non-empty for the active brain. Frontend calls this on Analytics-
+ *  mode enable + on any subsequent graph data change; passes an
+ *  empty object to clear scores when Analytics mode is disabled,
+ *  restoring identical recall to pre-G7 baseline. */
+export const nvSetPagerank = (
+  scores: Record<string, number>,
+  brainId?: string
+) =>
+  IS_TAURI
+    ? invoke<void>("nv_set_pagerank", {
+        scores,
+        brainId: brainId ?? null,
+      }).catch(() => {
+        // Non-fatal: PageRank is a quality boost, not a correctness
+        // requirement. If the Tauri command isn't registered (older
+        // build) or the brain isn't open, recall just falls back to
+        // the un-boosted RRF — same as before G7.
+      })
+    : Promise.resolve();
+
 /** Start/stop the in-process Rust HTTP server on 127.0.0.1:8765.
  *  Exposes the same `/api/*` surface the Python sidecar did so the
  *  MCP proxy keeps working without config changes. Only one of

@@ -49,6 +49,7 @@ use super::entities::extract_entities_locally;
 use super::query_parser::{self, QueryFilters};
 use super::recall_cache;
 use super::reranker;
+use super::pagerank_state;
 use super::rrf::rrf_score;
 use super::spread::{spread_neighbors, SpreadOpts};
 use super::throttle;
@@ -783,6 +784,22 @@ pub fn hybrid_retrieve(
         sem_top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
         for (eid, s) in sem_top.into_iter().take(10) {
             *rrf_scores.entry(eid.clone()).or_insert(0.0) += s * 0.15;
+        }
+    }
+
+    // PageRank importance boost — only when the frontend has pushed
+    // scores for this brain (= Analytics mode is on). Multiplier
+    // formula `1 + 0.15 * ln(1 + pr)` keeps the boost gentle: PR=1
+    // (mean) → 1.10×; PR=3 → 1.21×; PR=10 → 1.36×. Caps the long tail
+    // so a single super-hub doesn't dominate every recall result.
+    // Skipped when ablated for clean A/B vs no-boost baseline.
+    if !is_ablated(opts, "pagerank") && pagerank_state::has_scores(db.brain_id()) {
+        let brain_id = db.brain_id();
+        for (eid, score) in rrf_scores.iter_mut() {
+            if let Some(pr) = pagerank_state::get(brain_id, eid) {
+                let boost = 1.0 + 0.15 * (1.0_f64 + pr.max(0.0)).ln();
+                *score *= boost;
+            }
         }
     }
 

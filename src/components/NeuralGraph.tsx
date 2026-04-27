@@ -14,7 +14,7 @@ import {
 } from "../stores/graphSettingsStore";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
-import { readNote } from "../lib/tauri";
+import { nvSetPagerank, readNote } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
 // Minimal shape of the ForceGraph3D ref handle we actually touch. The real
@@ -700,6 +700,21 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       setFocusedNodeId(null);
     }
   }, [nodes, focusedNodeId]);
+
+  // Push PageRank scores to the Rust retriever whenever they change.
+  // The retriever applies a gentle ln-based multiplier during recall
+  // when state is non-empty for the active brain. Pushing an empty
+  // object on Analytics-off clears state so recall returns to the
+  // un-boosted baseline — Analytics mode IS the gate.
+  useEffect(() => {
+    if (analyticsMode && analyticsData) {
+      const scores: Record<string, number> = {};
+      for (const [id, v] of analyticsData.pr) scores[id] = v;
+      nvSetPagerank(scores, activeBrainId ?? undefined);
+    } else {
+      nvSetPagerank({}, activeBrainId ?? undefined);
+    }
+  }, [analyticsMode, analyticsData, activeBrainId]);
 
   // Hover-driven tip bar copy. Active only in Analytics mode; falls
   // through to the idle copy when nothing meaningful is hovered.

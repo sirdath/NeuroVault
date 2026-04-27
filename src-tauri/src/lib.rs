@@ -936,6 +936,26 @@ fn nv_recall(
     memory::hybrid_retrieve_throttled(&db, &query, &opts).map_err(|e| e.to_string())
 }
 
+/// Push PageRank scores for a brain into in-memory state. Called by
+/// the frontend whenever Analytics mode is enabled (and recomputed
+/// when the graph data changes). The retriever applies a multiplier
+/// of `1 + 0.15 * ln(1 + score)` to RRF scores during recall when
+/// state is non-empty for the active brain — important notes float
+/// up automatically.
+///
+/// Pass an empty map to clear scores (the frontend does this when
+/// the user disables Analytics mode, restoring identical recall to
+/// the pre-G7 baseline).
+#[tauri::command]
+fn nv_set_pagerank(
+    scores: std::collections::HashMap<String, f64>,
+    brain_id: Option<String>,
+) -> std::result::Result<(), String> {
+    let (resolved, _db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::pagerank_state::set(&resolved, scores);
+    Ok(())
+}
+
 /// Shared state holding the Rust HTTP server handle (if running).
 /// Separate from `ServerState` (which tracks the legacy Python
 /// sidecar) so both can coexist during the migration window — the
@@ -1382,7 +1402,7 @@ pub fn run() {
             // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
             // is the in-process Tauri path; the HTTP server serves
             // MCP proxy + external HTTP clients.
-            nv_recall, nv_start_rust_server, nv_stop_rust_server,
+            nv_recall, nv_set_pagerank, nv_start_rust_server, nv_stop_rust_server,
             // Tier-A agent-efficiency: cheap 1-2 hop neighbour lookup.
             nv_get_related,
             // Phase-7 vault file watcher. Started automatically on
