@@ -431,15 +431,18 @@ export default function App() {
                   const { invoke } = await import("@tauri-apps/api/core");
                   setStarting(true);
                   failCountRef.current = 0;
-                  await invoke<string>("start_server");
+                  // In-process Rust backend — the Python sidecar was
+                  // retired. `port: null` lets the Rust side default
+                  // to 8765.
+                  await invoke<string>("nv_start_rust_server", { port: null });
                   // The health monitor polls every 1.5s while starting;
                   // it'll clear `starting` automatically when the server responds.
                 } catch (e) {
                   setStarting(false);
                   alert(
                     `Failed to start server: ${e}\n\n` +
-                    "If this keeps happening, start manually:\n" +
-                    "cd server && uv run python -m neurovault_server --http-only"
+                    "If this keeps happening, restart the NeuroVault app — " +
+                    "the in-process backend auto-starts at boot."
                   );
                 }
               }}

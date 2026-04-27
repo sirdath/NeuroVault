@@ -1,14 +1,35 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
 import {
   useGraphSettingsStore,
   PALETTES,
+  PALETTE_NEUTRAL,
   type GraphPalette,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
+import { useGraphStore } from "../stores/graphStore";
+import { useBrainStore } from "../stores/brainStore";
+import { nvGetClusterNames } from "../lib/tauri";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
+
+/** Local twin of NeuralGraph's `folderColor()` so the Settings swatches
+ *  preview the same colour the canvas would draw — without forcing a
+ *  cross-component import of a large render module. The two MUST stay
+ *  in sync; if you change the hash here, change it in NeuralGraph too.
+ *  (Only ~10 lines, so the duplication is cheap and explicit.) */
+function previewFolderColor(folder: string, palette: GraphPalette, overrides: Record<string, string>): string {
+  if (overrides[folder]) return overrides[folder]!;
+  if (!folder) return PALETTE_NEUTRAL[palette];
+  let h = 2166136261;
+  for (let i = 0; i < folder.length; i++) {
+    h ^= folder.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  const colors = PALETTES[palette];
+  return colors[h % colors.length]!;
+}
 
 const FONT_SIZES = [
   { label: "Small", value: "small" as const },
@@ -67,14 +88,17 @@ export function SettingsView() {
     setStarting(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("start_server");
+      // In-process Rust backend (the Python sidecar was retired).
+      // `port: null` lets the Rust side default to 8765.
+      await invoke<string>("nv_start_rust_server", { port: null });
     } catch (e) {
       alert(`Failed to start server: ${e}`);
       setStarting(false);
       return;
     }
-    // Poll for up to 60s — first boot takes 10-30s (ONNX model load + vault
-    // ingest of all existing notes). Re-check every 2s until it responds.
+    // Poll for up to 60s — first boot takes 10-30s (ONNX model load +
+    // vault ingest of all existing notes). Subsequent restarts are
+    // typically <2s but the longer deadline is harmless.
     const deadline = Date.now() + 60_000;
     const poll = async () => {
       try {
@@ -97,14 +121,15 @@ export function SettingsView() {
 
   const handleStopServer = async () => {
     setStopping(true);
-    // Try BOTH methods — Tauri kills the child we spawned (works for
-    // sidecars we started). HTTP /api/shutdown works regardless of who
-    // started the server (terminal, external, Tauri-spawned after the
-    // app was reopened with a stale state). Running both is safe:
-    // whichever actually killed the process wins, the other no-ops.
+    // Drop the in-process Rust HTTP server. The Tauri command takes
+    // the live ServerHandle from RustServerState and `.stop()`s it,
+    // so the Settings toggle stays consistent with the actual state.
+    // The `/api/shutdown` HTTP path is kept as a belt-and-braces
+    // fallback for the case where the user is running an older app
+    // version where RustServerState wasn't tracking the handle.
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("stop_server").catch(() => null);
+      await invoke("nv_stop_rust_server").catch(() => null);
     } catch { /* ignore */ }
     try {
       await fetch(`${SERVER_URL}/api/shutdown`, { method: "POST", signal: AbortSignal.timeout(2000) });
@@ -251,7 +276,7 @@ export function SettingsView() {
             </div>
           )}
 
-          <SettingRow label="Address" description="Python backend address">
+          <SettingRow label="Address" description="In-process Rust backend address">
             <span className="text-[13px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{API_DISPLAY}</span>
           </SettingRow>
           <SettingRow label="Data" description="Notes and database location">
@@ -324,8 +349,8 @@ function GraphSection() {
 
   return (
     <Section title="Graph">
-      <SettingRow label="Palette" description="Folder colors in the graph view">
-        <div className="grid grid-cols-2 gap-2 w-full">
+      <SettingBlock label="Palette" description="Folder colors in the graph view">
+        <div className="grid grid-cols-2 gap-2">
           {PALETTE_LABELS.map((p) => {
             const colors = PALETTES[p.value];
             const selected = palette === p.value;
@@ -360,7 +385,7 @@ function GraphSection() {
             );
           })}
         </div>
-      </SettingRow>
+      </SettingBlock>
 
       <SettingRow label="Node shape" description="Geometry of each node on the canvas">
         <div className="flex gap-1 rounded-xl p-1" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
@@ -392,6 +417,9 @@ function GraphSection() {
           ariaLabel="Toggle folder labels"
         />
       </SettingRow>
+
+      <FolderColorsBlock />
+      <ClusterColorsBlock />
 
       {/* Analytics defaults — control which Analytics-mode overlays
           light up when the user flips the in-graph Analytics pill.
@@ -778,6 +806,195 @@ function ClaudeCodeMcpSection() {
 }
 
 
+/** Per-folder colour override editor. Lists every folder currently in
+ *  the active brain's graph (derived from the live node set), with an
+ *  inline native colour picker + reset. Empty list = no graph loaded
+ *  yet, so we render a hint instead of nothing. */
+function FolderColorsBlock() {
+  const palette = useGraphSettingsStore((s) => s.palette);
+  const folderColors = useGraphSettingsStore((s) => s.folderColors);
+  const setFolderColor = useGraphSettingsStore((s) => s.setFolderColor);
+  const clearFolderColors = useGraphSettingsStore((s) => s.clearFolderColors);
+  const nodes = useGraphStore((s) => s.nodes);
+
+  // Sorted unique folder list — root first, then alphabetical. Memoised
+  // so flipping a colour doesn't churn this work.
+  const folders = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of nodes) set.add(n.folder ?? "");
+    const arr = Array.from(set);
+    arr.sort((a, b) => {
+      if (a === "" && b !== "") return -1;
+      if (b === "" && a !== "") return 1;
+      return a.localeCompare(b);
+    });
+    return arr;
+  }, [nodes]);
+
+  const overrideCount = Object.keys(folderColors).length;
+
+  return (
+    <SettingBlock
+      label="Folder colors"
+      description={
+        folders.length === 0
+          ? "Open a brain to see its folders here."
+          : `Override the palette colour for any folder. ${overrideCount > 0 ? `${overrideCount} customised.` : "Click a swatch to pick."}`
+      }
+    >
+      {folders.length > 0 && (
+        <>
+          <div
+            className="rounded-xl divide-y overflow-hidden"
+            style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)", borderColor: "var(--nv-border)" }}
+          >
+            {folders.map((folder) => (
+              <ColorRow
+                key={folder || "__root__"}
+                label={folder === "" ? "root" : folder}
+                color={previewFolderColor(folder, palette, folderColors)}
+                customised={folder in folderColors}
+                onChange={(c) => setFolderColor(folder, c)}
+                onReset={() => setFolderColor(folder, null)}
+              />
+            ))}
+          </div>
+          {overrideCount > 0 && (
+            <button
+              onClick={clearFolderColors}
+              className="text-[11px] font-[Geist,sans-serif] mt-2 px-3 py-1.5 rounded-lg transition-all"
+              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+            >
+              Reset all to palette
+            </button>
+          )}
+        </>
+      )}
+    </SettingBlock>
+  );
+}
+
+/** Per-cluster colour override editor — only lists clusters the user
+ *  has named. Unnamed clusters fall back to their dominant-folder
+ *  colour because Louvain ids aren't stable across edits. Cluster
+ *  names are loaded from the active brain's `cluster_names.json` via
+ *  the Rust HTTP server. */
+function ClusterColorsBlock() {
+  const palette = useGraphSettingsStore((s) => s.palette);
+  const folderColors = useGraphSettingsStore((s) => s.folderColors);
+  const clusterColors = useGraphSettingsStore((s) => s.clusterColors);
+  const setClusterColor = useGraphSettingsStore((s) => s.setClusterColor);
+  const clearClusterColors = useGraphSettingsStore((s) => s.clearClusterColors);
+  const activeBrainId = useBrainStore((s) => s.activeBrainId);
+
+  // Map<communityId, name>. We only care about the values (the names).
+  const [clusterNames, setClusterNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    nvGetClusterNames(activeBrainId ?? undefined).then((names) => {
+      if (!cancelled) setClusterNames(names);
+    });
+    return () => { cancelled = true; };
+  }, [activeBrainId]);
+
+  // Sorted unique cluster names. Same key the override store uses.
+  const names = useMemo(() => {
+    const set = new Set(Object.values(clusterNames));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [clusterNames]);
+
+  const overrideCount = Object.keys(clusterColors).length;
+
+  return (
+    <SettingBlock
+      label="Cluster colors"
+      description={
+        names.length === 0
+          ? "Run /name-clusters in your Claude session to name clusters; they'll show here."
+          : `Override the background tint for any named cluster. ${overrideCount > 0 ? `${overrideCount} customised.` : ""}`
+      }
+    >
+      {names.length > 0 && (
+        <>
+          <div
+            className="rounded-xl divide-y overflow-hidden"
+            style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)", borderColor: "var(--nv-border)" }}
+          >
+            {names.map((name) => (
+              <ColorRow
+                key={name}
+                label={name}
+                // Preview falls back to the folder-hash space using the
+                // cluster name itself — same as the canvas does for
+                // unnamed clusters via `__comm_${id}`.
+                color={clusterColors[name] ?? previewFolderColor(name, palette, folderColors)}
+                customised={name in clusterColors}
+                onChange={(c) => setClusterColor(name, c)}
+                onReset={() => setClusterColor(name, null)}
+              />
+            ))}
+          </div>
+          {overrideCount > 0 && (
+            <button
+              onClick={clearClusterColors}
+              className="text-[11px] font-[Geist,sans-serif] mt-2 px-3 py-1.5 rounded-lg transition-all"
+              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+            >
+              Reset all
+            </button>
+          )}
+        </>
+      )}
+    </SettingBlock>
+  );
+}
+
+/** One row of [swatch | label | reset]. The swatch is also the click
+ *  target for the native `<input type="color">` — overlaid invisibly
+ *  so the swatch itself looks like the button. The native picker is
+ *  ugly on Windows but zero-dep and works everywhere. */
+function ColorRow({
+  label, color, customised, onChange, onReset,
+}: {
+  label: string; color: string; customised: boolean;
+  onChange: (color: string) => void; onReset: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-3 py-2">
+      <label className="relative w-7 h-7 rounded-lg cursor-pointer flex-shrink-0" title="Click to change colour">
+        <span
+          className="block w-full h-full rounded-lg"
+          style={{ background: color, border: "1px solid var(--nv-border)" }}
+        />
+        <input
+          type="color"
+          value={color}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+          aria-label={`Colour for ${label}`}
+        />
+      </label>
+      <span
+        className="text-[12px] font-[Geist,sans-serif] truncate flex-1 min-w-0"
+        style={{ color: "var(--nv-text)" }}
+        title={label}
+      >
+        {label}
+      </span>
+      {customised && (
+        <button
+          onClick={onReset}
+          className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors flex-shrink-0"
+          style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-dim)" }}
+          title="Revert to palette default"
+        >
+          Reset
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-10">
@@ -797,6 +1014,28 @@ function SettingRow({ label, description, children }: { label: string; descripti
         <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>{description}</p>
       </div>
       <div className="flex-shrink-0">{children}</div>
+    </div>
+  );
+}
+
+/** Stacked variant of SettingRow — label/description on top, control
+ *  full-width below. Use for controls that don't fit alongside a label
+ *  in the ~520-px-wide Settings card (e.g. the Palette swatch grid,
+ *  per-folder colour pickers). Avoids the overflow that plain
+ *  SettingRow's `flex-shrink-0` produces when the right side is wide.
+ *
+ *  The header sits in its OWN wrapping div with an explicit bottom
+ *  margin — without that wrapper the parent Section's `space-y-5`
+ *  treats label/description/children as siblings of the wrong scope
+ *  and the header visually overlaps the first child of the control. */
+function SettingBlock({ label, description, children }: { label: string; description: string; children: React.ReactNode }) {
+  return (
+    <div className="block">
+      <div className="mb-4">
+        <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{label}</p>
+        <p className="text-[11px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>{description}</p>
+      </div>
+      <div className="block">{children}</div>
     </div>
   );
 }

@@ -88,6 +88,25 @@ function nodeRadius(node: { degree?: number; access_count?: number }): number {
   return Math.min(9, base + accessBoost);
 }
 
+/** Radius the user actually sees, after the optional Analytics-mode
+ *  PageRank boost. Centralised so the painter, the pointer hit area,
+ *  and the d3-force collision force agree on the same number — when
+ *  they don't (e.g. collide using `nodeRadius` while paint uses the
+ *  PR-boosted size), big hub nodes overlap. PR mean is 1.0; sqrt-
+ *  scaled boost compresses the long tail (a PR=10 hub stays ~9px,
+ *  capped at 11px). */
+function effectiveNodeRadius(
+  node: { id?: string; degree?: number; access_count?: number },
+  prMap: Map<string, number> | null,
+  applyPRBoost: boolean,
+): number {
+  const r = nodeRadius(node);
+  if (!applyPRBoost || !prMap || !node.id) return r;
+  const pr = prMap.get(node.id) ?? 1;
+  const prBoost = Math.min(2.5, Math.sqrt(Math.max(0, pr - 1)) * 1.4);
+  return Math.min(11, r + prBoost);
+}
+
 /** Deterministic palette — a folder always maps to the same color
  *  within a session and across reloads, regardless of which palette
  *  the user picks. The hash → index step is stable; only the array
@@ -98,7 +117,14 @@ function nodeRadius(node: { degree?: number; access_count?: number }): number {
  *  to show off their brain", colour harmony matters more than
  *  colour variety. Eight cohesive tones per palette group folders
  *  without making the canvas feel like a toy chest. */
-function folderColor(folder: string, palette: GraphPalette): string {
+function folderColor(
+  folder: string,
+  palette: GraphPalette,
+  overrides?: Record<string, string>,
+): string {
+  // User-set per-folder colour wins over the palette hash. Empty
+  // string is the root folder; we look it up the same way.
+  if (overrides && overrides[folder]) return overrides[folder]!;
   if (!folder) return PALETTE_NEUTRAL[palette];
   // Simple FNV-ish hash so the mapping is stable across sessions without
   // pulling in a real hashing lib.
@@ -150,6 +176,60 @@ function drawNodeShape(
   } else {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
   }
+}
+
+/** Cache derived colours (lighten / darken / desaturate) — string
+ *  parsing + math is the hot path of `paintNode2D` at 60fps × 250+
+ *  nodes. Keyed by `${op}${amount.toFixed(2)}_${hex}` so the same
+ *  request returns the same string in O(1). Cleared implicitly on
+ *  page reload; no eviction needed at our scale (≤ ~50 distinct
+ *  hexes × 3 ops = ~150 entries max).
+ */
+const COLOR_DERIV_CACHE = new Map<string, string>();
+
+function toHexByte(n: number): string {
+  return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+}
+
+/** Blend `hex` toward pure white (`target=255`) or black (`target=0`)
+ *  by fraction `t` (0..1). 0 returns the input, 1 returns the target.
+ *  Cheap RGB-space blend — gamma is wrong, but for graph node shading
+ *  the perceptual difference is invisible and the cost is one-eighth
+ *  of a proper sRGB↔linear conversion. */
+function blendHex(hex: string, target: number, t: number): string {
+  if (!(hex.startsWith("#") && hex.length === 7)) return hex;
+  const k = `B${target}_${t.toFixed(2)}_${hex}`;
+  const cached = COLOR_DERIV_CACHE.get(k);
+  if (cached) return cached;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const out = `#${toHexByte(r + (target - r) * t)}${toHexByte(g + (target - g) * t)}${toHexByte(b + (target - b) * t)}`;
+  COLOR_DERIV_CACHE.set(k, out);
+  return out;
+}
+
+const lightenHex = (hex: string, t: number) => blendHex(hex, 255, t);
+const darkenHex  = (hex: string, t: number) => blendHex(hex, 0, t);
+
+/** Reduce the saturation of `hex` toward grayscale by fraction
+ *  `amount` (0..1). 1 = full grayscale. Used for `dormant` nodes —
+ *  combined with a small alpha drop, dormant reads as "this exists
+ *  but isn't currently part of the live conversation" without
+ *  vanishing. */
+function desaturateHex(hex: string, amount: number): string {
+  if (!(hex.startsWith("#") && hex.length === 7)) return hex;
+  const k = `D${amount.toFixed(2)}_${hex}`;
+  const cached = COLOR_DERIV_CACHE.get(k);
+  if (cached) return cached;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  // Rec.601 luma — close enough to perceptual grey for our purposes.
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  const out = `#${toHexByte(r + (lum - r) * amount)}${toHexByte(g + (lum - g) * amount)}${toHexByte(b + (lum - b) * amount)}`;
+  COLOR_DERIV_CACHE.set(k, out);
+  return out;
 }
 
 /** Turn a CSS/hex color into an rgba() with the given alpha. Handles
@@ -243,6 +323,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const fg2dRef = useRef<unknown>(undefined);
   const bloomAttachedRef = useRef(false);
   const clusterAttachedRef = useRef(false);
+  // Live snapshot the d3-force collide+link callbacks read on every
+  // tick. Keeping it in a ref avoids re-attaching the forces (which
+  // would restart the simulation) every time analytics state flips.
+  // Updated by the effect below whenever PR data or the toggle moves.
+  const analyticsRadiusRef = useRef<{
+    applyPRBoost: boolean;
+    prMap: Map<string, number> | null;
+  }>({ applyPRBoost: false, prMap: null });
 
   // On toggle into 3D, lazy-import UnrealBloomPass and inject it into the
   // composer. Kept separate from the 2D path so the bloom module (and its
@@ -352,18 +440,42 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         const collide = d3
           .forceCollide<SimulationNodeDatum>()
           .radius((node) => {
-            const n = node as SimulationNodeDatum & { access_count?: number; degree?: number };
-            return nodeRadius(n) + 1;
+            const n = node as SimulationNodeDatum & {
+              access_count?: number; degree?: number; id?: string;
+            };
+            const { applyPRBoost, prMap } = analyticsRadiusRef.current;
+            // +2 buffer (was +1) so even at the largest 11-px hub the
+            // gap between centres is ≥ 4 px — prevents the "two index
+            // hubs overlap" symptom when Analytics resize is on.
+            return effectiveNodeRadius(n, prMap, applyPRBoost) + 2;
           })
           .strength(0.95)
           .iterations(2);
         fg.d3Force("collide", collide);
         fg.d3Force("cluster", createClusterForce(0.025));
         const linkForce = (fg as unknown as {
-          d3Force: (n: string) => { distance?: (d: number) => unknown } | undefined;
+          d3Force: (n: string) => {
+            distance?: (d: number | ((l: unknown) => number)) => unknown;
+          } | undefined;
         }).d3Force("link");
         if (linkForce && typeof linkForce.distance === "function") {
-          linkForce.distance(26);
+          // Per-link distance instead of a fixed 26 — when Analytics
+          // resize is on, hubs need more room. Adds up to 8 px when
+          // either endpoint is a PR-boosted hub.
+          linkForce.distance((rawLink: unknown) => {
+            const { applyPRBoost, prMap } = analyticsRadiusRef.current;
+            if (!applyPRBoost || !prMap) return 26;
+            const l = rawLink as {
+              source: { id?: string } | string;
+              target: { id?: string } | string;
+            };
+            const sId = typeof l.source === "string" ? l.source : l.source.id;
+            const tId = typeof l.target === "string" ? l.target : l.target.id;
+            const sPr = sId ? (prMap.get(sId) ?? 1) : 1;
+            const tPr = tId ? (prMap.get(tId) ?? 1) : 1;
+            const maxBoost = Math.sqrt(Math.max(0, Math.max(sPr, tPr) - 1)) * 1.4;
+            return 26 + Math.min(8, maxBoost * 3);
+          });
         }
         fg.d3ReheatSimulation?.();
         clusterAttachedRef.current = true;
@@ -391,6 +503,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const palette = useGraphSettingsStore((s) => s.palette);
   const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
   const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
+  // User colour overrides — folder name → hex, cluster name → hex.
+  // Selecting individually so a change to one doesn't rerender the
+  // other consumer.
+  const folderColors = useGraphSettingsStore((s) => s.folderColors);
+  const clusterColors = useGraphSettingsStore((s) => s.clusterColors);
   // Analytics-mode master toggle + per-layer toggles. The master
   // gates whether anything analytics-y renders at all; the per-layer
   // booleans decide which specific overlays light up.
@@ -571,6 +688,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // it explicitly is what makes the memo refresh on graph change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyticsMode, analyticsKey]);
+
+  // Keep the d3-force radius/distance ref in sync with the live
+  // analytics state. Re-heating the simulation when this flips lets
+  // the existing collide+link forces relax with the new sizes — no
+  // need to detach/re-attach forces (which would feel jumpy).
+  useEffect(() => {
+    analyticsRadiusRef.current = {
+      applyPRBoost: analyticsMode && analyticsResizeByImportance,
+      prMap: analyticsData?.pr ?? null,
+    };
+    const fg = fg2dRef.current as { d3ReheatSimulation?: () => void } | undefined;
+    fg?.d3ReheatSimulation?.();
+  }, [analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   // (Hover-driven tip bar copy lives further down, after focusedNodeId
   //  is declared.)
@@ -804,39 +934,46 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     return null;
   }, [analyticsMode, analyticsData, focusedNodeId, clusterNames]);
 
-  // Custom 2D node renderer. Redesigned for a cleaner, more
-  // screenshot-worthy aesthetic:
-  //   - Small discs (2.5-7 px radius) — the graph reads as a
-  //     *network*, not a pile of disks.
-  //   - Folder colour is the ONLY visual channel for identity;
-  //     state encoded via alpha (fresh=1.0, dormant=0.45) instead
-  //     of a competing ring colour. Removes the "dartboard" look
-  //     that the prior 1.5 px state-ring produced on small nodes.
-  //   - No glow halo per-node. Soft inner shadow (single 2 px
-  //     blur) gives depth without noise. Hover-focus takes the
-  //     place of always-on highlights.
-  //   - Thin 0.5 px bg-coloured rim so a light-coloured node on
-  //     a lighter edge still separates visually.
+  // Custom 2D node renderer. "Glass-orb" aesthetic with state-driven
+  // finish:
+  //   - Each node is filled with a 3-stop radial gradient (light → base
+  //     → slightly dark) centred ~30% top-left so it reads like a small
+  //     marble lit from over the shoulder. Beats flat fill at making
+  //     the canvas feel like an actual object scene.
+  //   - A small specular highlight (white, soft) reinforces the orb
+  //     read on circles + hexes. Skipped on squares (looks weird) and
+  //     on tiny / focus-dimmed nodes (would just be noise).
+  //   - Dormant state desaturates the base colour (true grey-shift,
+  //     not just alpha) so the canvas reads "live vs. archived" at a
+  //     glance instead of "bright vs. dim".
+  //   - Fresh state gets a 1-px amber halo — same brand colour as the
+  //     status pill — so newly-arrived notes pop without screaming.
+  //   - 0.5-px dark rim still drawn last so light nodes separate from
+  //     light edges.
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
-    let r = nodeRadius(node);
-    // Analytics mode + "resize by importance" toggle blends PageRank
-    // into the radius. PR mean is 1.0; sqrt-scaled boost keeps the
-    // long tail compressed (a PR=10 hub stays ~9px, doesn't blow up).
-    if (analyticsMode && analyticsResizeByImportance && analyticsData) {
-      const pr = analyticsData.pr.get(node.id) ?? 1;
-      const prBoost = Math.min(2.5, Math.sqrt(Math.max(0, pr - 1)) * 1.4);
-      r = Math.min(11, r + prBoost);
-    }
-    const fillBase = folderColor(node.folder ?? "", palette);
+    const r = effectiveNodeRadius(
+      node,
+      analyticsData?.pr ?? null,
+      analyticsMode && analyticsResizeByImportance,
+    );
 
-    // Strength + state together in one alpha channel. Prior
-    // design overloaded both into a ring *and* a glow; this is
-    // cleaner. Dormant = 0.45 floor (visible but clearly faded),
-    // fresh/active = full.
-    const stateScale = node.state === "dormant" ? 0.5 : 1.0;
-    const strengthAlpha = (0.45 + 0.55 * Math.min(1, Math.max(0, node.strength))) * stateScale;
+    const isDormant = node.state === "dormant";
+    const isFresh = node.state === "fresh";
+
+    // Resolve base colour, then apply state finish in colour-space:
+    // dormant → desaturate 60% (grey-shifted), fresh/connected/active
+    // → keep the saturated folder colour. Alpha is still used for
+    // strength fade, but no longer carries the dormant signal alone.
+    const folderHue = folderColor(node.folder ?? "", palette, folderColors);
+    const baseColor = isDormant ? desaturateHex(folderHue, 0.6) : folderHue;
+
+    // Strength alpha — independent of state now. Dormant gets a small
+    // additional alpha drop on top of the desaturation so the two
+    // signals reinforce each other.
+    const stateScale = isDormant ? 0.78 : 1.0;
+    const strengthAlpha = (0.55 + 0.45 * Math.min(1, Math.max(0, node.strength))) * stateScale;
 
     // Hover-focus dimming unchanged — still the right UX.
     let focusAlpha = 1;
@@ -849,17 +986,63 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
 
     const alpha = strengthAlpha * focusAlpha;
 
-    // Subtle drop shadow for depth — makes the graph look like
-    // it has atmosphere instead of flat 2D pancake. Only drawn
-    // once per node, cheap.
+    // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
+    // shadow follows the orb shape, not just the path.
     ctx.save();
     ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
     ctx.shadowBlur = 3;
     ctx.shadowOffsetY = 0.5;
+
+    // 3-stop radial gradient. Centre offset toward top-left of the
+    // node so the highlight reads as overhead lighting. Inner radius
+    // small but non-zero — a hard pinhole highlight looks plastic;
+    // 0.1·r softens it.
+    const gx = node.x - r * 0.32;
+    const gy = node.y - r * 0.38;
+    const grad = ctx.createRadialGradient(gx, gy, r * 0.1, node.x, node.y, r * 1.05);
+    const lighter = lightenHex(baseColor, 0.34);
+    const darker  = darkenHex(baseColor, 0.22);
+    grad.addColorStop(0,   withAlpha(lighter, alpha));
+    grad.addColorStop(0.55, withAlpha(baseColor, alpha));
+    grad.addColorStop(1,   withAlpha(darker, alpha));
+
     drawNodeShape(ctx, node.x, node.y, r, nodeShape);
-    ctx.fillStyle = withAlpha(fillBase, alpha);
+    ctx.fillStyle = grad;
     ctx.fill();
     ctx.restore();
+
+    // Specular highlight — small soft white spot, top-left. Only on
+    // circle / hex (square would look like a sticker corner), only
+    // when the node is large enough (≥3 px) and not focus-dimmed.
+    if (focusAlpha > 0.4 && nodeShape !== "square" && r >= 3) {
+      const sx = node.x - r * 0.42;
+      const sy = node.y - r * 0.46;
+      const sr = Math.max(0.7, r * 0.3);
+      const specGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, sr);
+      specGrad.addColorStop(0, `rgba(255, 255, 255, ${0.42 * alpha})`);
+      specGrad.addColorStop(1, `rgba(255, 255, 255, 0)`);
+      ctx.save();
+      ctx.fillStyle = specGrad;
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Fresh-state amber halo — drawn after fill, before the dark rim,
+    // so it sits as a glow at the boundary rather than competing with
+    // the orb body. Using the brand amber (#f0a500) keeps "fresh" tied
+    // to the same colour the status pill uses elsewhere.
+    if (isFresh && focusAlpha > 0.5) {
+      ctx.save();
+      drawNodeShape(ctx, node.x, node.y, r + 1.6 / globalScale, nodeShape);
+      ctx.lineWidth = 1.4 / globalScale;
+      ctx.strokeStyle = `rgba(240, 165, 0, ${0.42 * focusAlpha})`;
+      ctx.shadowColor = "rgba(240, 165, 0, 0.55)";
+      ctx.shadowBlur = 4;
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Thin BG-coloured rim so any pair of near-colour nodes still
     // separates visually. 0.5 px divided by zoom so it stays
@@ -885,18 +1068,22 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
       ctx.fillText(truncated, node.x, node.y + r + 2);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
   const paintPointerArea2D = useCallback((rawNode: unknown, color: string, ctx: CanvasRenderingContext2D) => {
     const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
-    const r = nodeRadius(node) + 2;
+    const r = effectiveNodeRadius(
+      node,
+      analyticsData?.pr ?? null,
+      analyticsMode && analyticsResizeByImportance,
+    ) + 2;
     ctx.fillStyle = color;
     drawNodeShape(ctx, node.x, node.y, r, nodeShape);
     ctx.fill();
-  }, [nodeShape]);
+  }, [nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   /** Native hover tooltip for edges. react-force-graph-2d reads this
    *  and renders a lightweight DOM tooltip on mouseover — no extra
@@ -955,7 +1142,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           if (s.n < 5) continue;
           const cx = s.x / s.n;
           const cy = s.y / s.n;
-          const color = folder === "" ? PALETTE_NEUTRAL[palette] : folderColor(folder, palette);
+          const color = folder === ""
+            ? (folderColors[""] ?? PALETTE_NEUTRAL[palette])
+            : folderColor(folder, palette, folderColors);
           const label = folder === "" ? "root" : folder;
           const weight = Math.min(1, s.n / 15);
           const size = (11 + weight * 4) / globalScale;
@@ -984,8 +1173,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           const cx = sx / count;
           const cy = sy / count;
           const color = focusedFolder === ""
-            ? PALETTE_NEUTRAL[palette]
-            : folderColor(focusedFolder, palette);
+            ? (folderColors[""] ?? PALETTE_NEUTRAL[palette])
+            : folderColor(focusedFolder, palette, folderColors);
           const label = focusedFolder === "" ? "root" : focusedFolder;
           const weight = Math.min(1, count / 15);
           const size = (11 + weight * 4) / globalScale;
@@ -1034,7 +1223,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         }
       }
     }
-  }, [nodes, focusedNodeId, focusPulse, palette, showClusterLabels]);
+  }, [nodes, focusedNodeId, focusPulse, palette, folderColors, showClusterLabels]);
 
   /** Community background tints — gated on Analytics mode + the
    *  "group by community" toggle. Drawn in `onRenderFramePre` so
@@ -1091,7 +1280,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         const d = raw.degree ?? 0;
         if (d > bestDegree) { bestDegree = d; dominantFolder = raw.folder; }
       }
-      const tint = folderColor(dominantFolder ?? `__comm_${comId}`, palette);
+      // Cluster-name override wins (only present once the user has
+      // named this cluster via /name-clusters or by hand). Otherwise
+      // tint from the dominant folder, with the same per-folder
+      // override path used elsewhere.
+      const clusterName = clusterNames[String(comId)];
+      const tint = (clusterName && clusterColors[clusterName])
+        ? clusterColors[clusterName]!
+        : folderColor(dominantFolder ?? `__comm_${comId}`, palette, folderColors);
 
       ctx.save();
       ctx.fillStyle = withAlpha(tint, 0.10);
@@ -1100,15 +1296,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fill();
       ctx.restore();
     }
-  }, [analyticsMode, analyticsGroupByCommunity, analyticsData, nodes, palette]);
+  }, [analyticsMode, analyticsGroupByCommunity, analyticsData, nodes, palette, folderColors, clusterColors, clusterNames]);
 
   // Color accessors shared by 2D + 3D. 3D uses folder color too — so
   // orbiting the scene, you see folders as clearly-colored clouds of
   // nodes rather than a monochromatic swarm.
   const nodeColor = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
-    return folderColor(n.folder ?? "", palette);
-  }, [palette]);
+    return folderColor(n.folder ?? "", palette, folderColors);
+  }, [palette, folderColors]);
   const nodeVal = useCallback((rawNode: unknown) => {
     const n = rawNode as SimNode;
     // nodeVal is an area (2D) / volume (3D) multiplier — map our 6-20px

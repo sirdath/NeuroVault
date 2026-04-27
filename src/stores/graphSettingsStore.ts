@@ -91,6 +91,17 @@ interface GraphSettings {
   analyticsResizeByImportance: boolean;
   /** When analyticsMode is on: also tint backgrounds by community. */
   analyticsGroupByCommunity: boolean;
+  /** Per-folder colour overrides — keyed by folder name (vault
+   *  subfolder). Empty string ("") is the root folder. Overrides win
+   *  over the palette hash; folders not present here fall back to the
+   *  palette as before. Persisted. */
+  folderColors: Record<string, string>;
+  /** Per-cluster colour overrides — keyed by the cluster's NAME. Only
+   *  applies after the user has named a cluster (via /name-clusters or
+   *  by editing config.json); unnamed clusters keep their dominant-folder
+   *  derived tint because numeric Louvain ids aren't stable across
+   *  brain edits. */
+  clusterColors: Record<string, string>;
 }
 
 const STORAGE_KEY = "nv.graph.settings";
@@ -102,7 +113,23 @@ const DEFAULTS: GraphSettings = {
   analyticsMode: false,
   analyticsResizeByImportance: true,
   analyticsGroupByCommunity: true,
+  folderColors: {},
+  clusterColors: {},
 };
+
+/** Tight `#rrggbb` validator. We only persist colours that match this
+ *  shape so a corrupt store entry can't smuggle invalid CSS into the
+ *  canvas. */
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function sanitizeColorMap(input: unknown): Record<string, string> {
+  if (!input || typeof input !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof v === "string" && HEX_RE.test(v)) out[k] = v.toLowerCase();
+  }
+  return out;
+}
 
 function load(): GraphSettings {
   try {
@@ -129,6 +156,8 @@ function load(): GraphSettings {
         analyticsMode: bool("analyticsMode", false),
         analyticsResizeByImportance: bool("analyticsResizeByImportance", true),
         analyticsGroupByCommunity: bool("analyticsGroupByCommunity", true),
+        folderColors: sanitizeColorMap(parsed.folderColors),
+        clusterColors: sanitizeColorMap(parsed.clusterColors),
       };
     }
   } catch { /* corrupt / private mode */ }
@@ -143,6 +172,13 @@ interface GraphSettingsStore extends GraphSettings {
   toggleAnalyticsMode: () => void;
   setAnalyticsResizeByImportance: (v: boolean) => void;
   setAnalyticsGroupByCommunity: (v: boolean) => void;
+  /** Set or clear (`null`) the colour for one folder. Invalid hex is
+   *  silently ignored. Empty-string folder is the root folder. */
+  setFolderColor: (folder: string, color: string | null) => void;
+  /** Wipe every folder override at once — used by the "Reset all" button. */
+  clearFolderColors: () => void;
+  setClusterColor: (clusterName: string, color: string | null) => void;
+  clearClusterColors: () => void;
 }
 
 function persist(s: GraphSettings) {
@@ -181,5 +217,37 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setAnalyticsGroupByCommunity: (analyticsGroupByCommunity) => {
     set({ analyticsGroupByCommunity });
     persist({ ...get(), analyticsGroupByCommunity });
+  },
+  setFolderColor: (folder, color) => {
+    const next = { ...get().folderColors };
+    if (color == null) {
+      delete next[folder];
+    } else if (HEX_RE.test(color)) {
+      next[folder] = color.toLowerCase();
+    } else {
+      return;
+    }
+    set({ folderColors: next });
+    persist({ ...get(), folderColors: next });
+  },
+  clearFolderColors: () => {
+    set({ folderColors: {} });
+    persist({ ...get(), folderColors: {} });
+  },
+  setClusterColor: (clusterName, color) => {
+    const next = { ...get().clusterColors };
+    if (color == null) {
+      delete next[clusterName];
+    } else if (HEX_RE.test(color)) {
+      next[clusterName] = color.toLowerCase();
+    } else {
+      return;
+    }
+    set({ clusterColors: next });
+    persist({ ...get(), clusterColors: next });
+  },
+  clearClusterColors: () => {
+    set({ clusterColors: {} });
+    persist({ ...get(), clusterColors: {} });
   },
 }));
