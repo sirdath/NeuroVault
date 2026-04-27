@@ -31,6 +31,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tower_http::cors::{Any, CorsLayer};
 
 use super::db::open_brain;
 use super::ingest;
@@ -131,6 +132,19 @@ fn router() -> Router {
         .route("/api/todos/:id/complete", post(todos_complete))
         .route("/api/clusters", get(clusters_list))
         .route("/api/clusters/names", post(clusters_set_names))
+        // The Tauri webview's origin (`tauri://localhost` in production,
+        // `http://localhost:1420` in dev) is cross-origin to this server,
+        // so plain `fetch()` from the React side fails the preflight
+        // without these headers. Permissive CORS is safe here because
+        // the listener binds to 127.0.0.1 only — there is no LAN
+        // exposure, so the only origins that can ever reach this port
+        // are running on the same machine as the user.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(ServerState {})
 }
 
