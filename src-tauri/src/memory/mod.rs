@@ -33,6 +33,7 @@
 pub mod bm25;
 pub mod chunker;
 pub mod cluster_state;
+pub mod core_memory;
 pub mod db;
 pub mod embedder;
 pub mod entities;
@@ -40,6 +41,7 @@ pub mod http_server;
 pub mod ingest;
 pub mod migrations;
 pub mod pagerank_state;
+pub mod todos;
 pub mod paths;
 pub mod query_parser;
 pub mod read_ops;

@@ -38,8 +38,10 @@ use super::read_ops::{
     brain_stats, get_graph, get_note, list_brains_with_stats, list_notes, resolve_brain_id,
     BrainStats, BrainSummary, FullNote, NoteListRow,
 };
+use super::core_memory::{self, CoreBlock};
 use super::related::{get_related_checked, RelatedHit, RelatedOpts};
 use super::retriever::{hybrid_retrieve_throttled, RecallHit, RecallOpts};
+use super::todos::{self, AddTodoArgs, Todo};
 use super::types::{GraphData, MemoryError};
 
 /// Default bind port. Matches Python's `SERVER_PORT` default. Kept as
@@ -110,8 +112,23 @@ fn router() -> Router {
         .route("/api/notes/:engram_id", get(notes_detail))
         .route("/api/graph", get(graph))
         .route("/api/recall", get(recall))
+        .route("/api/recall/chunks", get(recall_chunks))
         .route("/api/related/:engram_id", get(related))
         .route("/api/notes", post(remember))
+        .route("/api/brains", post(brains_create))
+        .route("/api/check_duplicate", post(check_duplicate))
+        .route("/api/session_start", get(session_start))
+        .route("/api/changes", get(changes_feed))
+        .route("/api/core_memory", get(core_memory_list))
+        .route("/api/core_memory/:label", get(core_memory_read))
+        .route("/api/core_memory/:label", axum::routing::put(core_memory_set))
+        .route("/api/core_memory/:label/append", post(core_memory_append))
+        .route("/api/core_memory/:label/replace", post(core_memory_replace))
+        .route("/api/todos", get(todos_list))
+        .route("/api/todos", post(todos_add))
+        .route("/api/todos/:id", get(todos_get))
+        .route("/api/todos/:id/claim", post(todos_claim))
+        .route("/api/todos/:id/complete", post(todos_complete))
         .route("/api/clusters", get(clusters_list))
         .route("/api/clusters/names", post(clusters_set_names))
         .with_state(ServerState {})
@@ -676,4 +693,639 @@ async fn clusters_set_names(
     .map_err(ApiError::from)?;
 
     Ok(Json(resp))
+}
+
+// ===========================================================================
+// Endpoints ported from the Python sidecar in v0.1.1.1.
+// ===========================================================================
+//
+// The Python `api.py` had these routes; the Rust HTTP server initially
+// shipped without them, so MCP tools that the proxy still advertised
+// (session_start, recall_chunks, check_duplicate, core_memory_*, todos,
+// changes, POST /api/brains) returned 404. This block restores them.
+// ===========================================================================
+
+// --- POST /api/brains  (create_brain bug fix) ----------------------------
+
+#[derive(Deserialize)]
+struct CreateBrainBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    vault_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateBrainResponse {
+    id: String,
+    name: String,
+}
+
+async fn brains_create(
+    _s: State<ServerState>,
+    Json(body): Json<CreateBrainBody>,
+) -> Result<Json<CreateBrainResponse>, ApiError> {
+    use std::fs;
+
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "name required".into()));
+    }
+
+    let resp = tokio::task::spawn_blocking(move || -> Result<CreateBrainResponse, MemoryError> {
+        let mut id = String::new();
+        for ch in name.chars() {
+            if ch.is_ascii_alphanumeric() {
+                id.push(ch.to_ascii_lowercase());
+            } else if ch == ' ' || ch == '-' || ch == '_' {
+                id.push('-');
+            }
+        }
+        if id.is_empty() {
+            return Err(MemoryError::Other("name had no usable chars".into()));
+        }
+
+        let registry_path = super::paths::registry_path();
+        let raw = fs::read_to_string(&registry_path).unwrap_or_else(|_| "{\"brains\":[]}".into());
+        let mut json: serde_json::Value = serde_json::from_str(&raw).map_err(MemoryError::Json)?;
+
+        let brains_arr = json
+            .get_mut("brains")
+            .and_then(|v| v.as_array_mut())
+            .ok_or_else(|| MemoryError::Other("brains.json malformed".into()))?;
+
+        let mut final_id = id.clone();
+        let mut n = 2;
+        while brains_arr.iter().any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&final_id)) {
+            final_id = format!("{}-{}", id, n);
+            n += 1;
+        }
+
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        let mut entry = serde_json::json!({
+            "id": final_id,
+            "name": name,
+            "description": body.description,
+            "created_at": now,
+        });
+        if let Some(vp) = body.vault_path {
+            if !vp.is_empty() {
+                entry["vault_path"] = serde_json::Value::String(vp);
+            }
+        }
+        brains_arr.push(entry);
+
+        let tmp = registry_path.with_extension("json.tmp");
+        fs::write(&tmp, serde_json::to_string_pretty(&json).map_err(MemoryError::Json)?)
+            .map_err(MemoryError::Io)?;
+        std::fs::rename(&tmp, &registry_path).map_err(MemoryError::Io)?;
+
+        let _db = open_brain(&final_id)?;
+        Ok(CreateBrainResponse {
+            id: final_id,
+            name,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+// --- POST /api/check_duplicate -------------------------------------------
+
+#[derive(Deserialize)]
+struct CheckDuplicateBody {
+    content: String,
+    #[serde(default = "default_dupe_threshold")]
+    threshold: f64,
+    brain: Option<String>,
+}
+
+fn default_dupe_threshold() -> f64 { 0.85 }
+
+#[derive(Serialize)]
+struct CheckDuplicateResponse {
+    found: bool,
+    engram_id: Option<String>,
+    similarity: Option<f64>,
+    title: Option<String>,
+}
+
+async fn check_duplicate(
+    _s: State<ServerState>,
+    Json(body): Json<CheckDuplicateBody>,
+) -> Result<Json<CheckDuplicateResponse>, ApiError> {
+    let resp = tokio::task::spawn_blocking(
+        move || -> Result<CheckDuplicateResponse, MemoryError> {
+            let id = resolve_brain_id(body.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            let trimmed = body.content.trim();
+            if trimmed.is_empty() {
+                return Ok(CheckDuplicateResponse {
+                    found: false,
+                    engram_id: None,
+                    similarity: None,
+                    title: None,
+                });
+            }
+            let vec = super::embedder::encode(trimmed)?;
+            let conn = db.lock();
+            let mut stmt = conn.prepare(
+                "SELECT c.engram_id, e.title, vec_distance_cosine(cv.embedding, ?1) AS dist \
+                 FROM vec_chunks cv \
+                 JOIN chunks c ON c.id = cv.id \
+                 JOIN engrams e ON e.id = c.engram_id \
+                 WHERE e.state != 'dormant' \
+                 ORDER BY dist ASC LIMIT 1",
+            )?;
+            let bytes = embedder_bytes(&vec);
+            let hit = stmt
+                .query_row(rusqlite::params![bytes], |r| {
+                    let eid: String = r.get(0)?;
+                    let title: String = r.get(1)?;
+                    let dist: f64 = r.get(2)?;
+                    Ok((eid, title, dist))
+                })
+                .ok();
+            match hit {
+                Some((eid, title, dist)) => {
+                    let sim = 1.0 - dist;
+                    if sim >= body.threshold {
+                        Ok(CheckDuplicateResponse {
+                            found: true,
+                            engram_id: Some(eid),
+                            similarity: Some(sim),
+                            title: Some(title),
+                        })
+                    } else {
+                        Ok(CheckDuplicateResponse {
+                            found: false,
+                            engram_id: None,
+                            similarity: Some(sim),
+                            title: None,
+                        })
+                    }
+                }
+                None => Ok(CheckDuplicateResponse {
+                    found: false,
+                    engram_id: None,
+                    similarity: None,
+                    title: None,
+                }),
+            }
+        },
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+fn embedder_bytes(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+// --- GET /api/recall/chunks ----------------------------------------------
+
+#[derive(Deserialize)]
+struct RecallChunksQuery {
+    q: String,
+    #[serde(default = "default_chunks_limit")]
+    limit: usize,
+    brain: Option<String>,
+}
+
+fn default_chunks_limit() -> usize { 10 }
+
+#[derive(Serialize)]
+struct ChunkHit {
+    engram_id: String,
+    title: String,
+    chunk_text: String,
+    granularity: String,
+    similarity: f64,
+}
+
+#[derive(Serialize)]
+struct RecallChunksResponse {
+    hits: Vec<ChunkHit>,
+}
+
+async fn recall_chunks(
+    Query(q): Query<RecallChunksQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<RecallChunksResponse>, ApiError> {
+    let resp = tokio::task::spawn_blocking(move || -> Result<RecallChunksResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let qvec = super::embedder::encode(&q.q)?;
+        let conn = db.lock();
+        let mut stmt = conn.prepare(
+            "WITH ranked AS ( \
+               SELECT c.id, c.engram_id, c.text, c.granularity, \
+                      vec_distance_cosine(cv.embedding, ?1) AS dist, \
+                      ROW_NUMBER() OVER (PARTITION BY c.engram_id ORDER BY vec_distance_cosine(cv.embedding, ?1)) AS rn \
+               FROM vec_chunks cv \
+               JOIN chunks c ON c.id = cv.id \
+               JOIN engrams e ON e.id = c.engram_id \
+               WHERE e.state != 'dormant' \
+             ) \
+             SELECT r.engram_id, e.title, r.text, r.granularity, r.dist \
+             FROM ranked r JOIN engrams e ON e.id = r.engram_id \
+             WHERE r.rn = 1 \
+             ORDER BY r.dist ASC LIMIT ?2",
+        )?;
+        let bytes = embedder_bytes(&qvec);
+        let limit = q.limit.min(50) as i64;
+        let rows = stmt
+            .query_map(rusqlite::params![bytes, limit], |r| {
+                let eid: String = r.get(0)?;
+                let title: String = r.get(1)?;
+                let text: String = r.get(2)?;
+                let gran: String = r.get(3)?;
+                let dist: f64 = r.get(4)?;
+                Ok(ChunkHit {
+                    engram_id: eid,
+                    title,
+                    chunk_text: text,
+                    granularity: gran,
+                    similarity: 1.0 - dist,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(RecallChunksResponse { hits: rows })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+// --- GET /api/session_start ----------------------------------------------
+
+#[derive(Deserialize)]
+struct SessionStartQuery {
+    brain: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TopMemorySummary {
+    engram_id: String,
+    title: String,
+    strength: f64,
+    state: String,
+    access_count: i64,
+}
+
+#[derive(Serialize)]
+struct SessionStartResponse {
+    brain: Option<BrainSummary>,
+    stats: Option<BrainStats>,
+    core_memory: Vec<CoreBlock>,
+    top_memories: Vec<TopMemorySummary>,
+    open_todos: Vec<Todo>,
+}
+
+async fn session_start(
+    Query(q): Query<SessionStartQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<SessionStartResponse>, ApiError> {
+    let resp = tokio::task::spawn_blocking(move || -> Result<SessionStartResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let stats = brain_stats(&id).ok();
+        let brain = list_brains_with_stats()
+            .ok()
+            .and_then(|all| all.into_iter().find(|b| b.id == id));
+        let core_memory = core_memory::list_blocks(&id).unwrap_or_default();
+        let open_todos = todos::list_todos(&id, Some("open")).unwrap_or_default();
+
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, strength, state, access_count \
+             FROM engrams \
+             WHERE state != 'dormant' \
+             ORDER BY strength DESC, access_count DESC LIMIT 5",
+        )?;
+        let top = stmt
+            .query_map([], |r| {
+                Ok(TopMemorySummary {
+                    engram_id: r.get(0)?,
+                    title: r.get(1)?,
+                    strength: r.get(2)?,
+                    state: r.get(3)?,
+                    access_count: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(SessionStartResponse {
+            brain,
+            stats,
+            core_memory,
+            top_memories: top,
+            open_todos,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+// --- GET /api/changes (diff feed) ----------------------------------------
+
+#[derive(Deserialize)]
+struct ChangesQuery {
+    since: Option<String>,
+    brain: Option<String>,
+    #[serde(default = "default_changes_limit")]
+    limit: usize,
+}
+
+fn default_changes_limit() -> usize { 50 }
+
+#[derive(Serialize)]
+struct ChangeRow {
+    engram_id: String,
+    title: String,
+    updated_at: String,
+    state: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct ChangesResponse {
+    changes: Vec<ChangeRow>,
+}
+
+async fn changes_feed(
+    Query(q): Query<ChangesQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ChangesResponse>, ApiError> {
+    let resp = tokio::task::spawn_blocking(move || -> Result<ChangesResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let limit = q.limit.min(500) as i64;
+        let since = q.since.unwrap_or_default();
+        let mut rows: Vec<ChangeRow> = Vec::new();
+        if since.is_empty() {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, COALESCE(updated_at, ''), state, COALESCE(kind, '') \
+                 FROM engrams ORDER BY updated_at DESC LIMIT ?1",
+            )?;
+            let it = stmt.query_map(rusqlite::params![limit], |r| {
+                Ok(ChangeRow {
+                    engram_id: r.get(0)?,
+                    title: r.get(1)?,
+                    updated_at: r.get(2)?,
+                    state: r.get(3)?,
+                    kind: r.get(4)?,
+                })
+            })?;
+            for row in it { rows.push(row?); }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, COALESCE(updated_at, ''), state, COALESCE(kind, '') \
+                 FROM engrams WHERE updated_at > ?1 ORDER BY updated_at DESC LIMIT ?2",
+            )?;
+            let it = stmt.query_map(rusqlite::params![since, limit], |r| {
+                Ok(ChangeRow {
+                    engram_id: r.get(0)?,
+                    title: r.get(1)?,
+                    updated_at: r.get(2)?,
+                    state: r.get(3)?,
+                    kind: r.get(4)?,
+                })
+            })?;
+            for row in it { rows.push(row?); }
+        }
+        Ok(ChangesResponse { changes: rows })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(resp))
+}
+
+// --- /api/core_memory ----------------------------------------------------
+
+#[derive(Deserialize)]
+struct CoreMemoryQuery {
+    brain: Option<String>,
+}
+
+async fn core_memory_list(
+    Query(q): Query<CoreMemoryQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<CoreBlock>>, ApiError> {
+    let blocks = tokio::task::spawn_blocking(move || -> Result<Vec<CoreBlock>, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        core_memory::list_blocks(&id)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(blocks))
+}
+
+async fn core_memory_read(
+    Path(label): Path<String>,
+    Query(q): Query<CoreMemoryQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Option<CoreBlock>>, ApiError> {
+    let block = tokio::task::spawn_blocking(move || -> Result<Option<CoreBlock>, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        core_memory::read_block(&id, &label)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(block))
+}
+
+#[derive(Deserialize)]
+struct CoreMemorySetBody {
+    value: String,
+    brain: Option<String>,
+}
+
+async fn core_memory_set(
+    Path(label): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<CoreMemorySetBody>,
+) -> Result<Json<CoreBlock>, ApiError> {
+    let block = tokio::task::spawn_blocking(move || -> Result<CoreBlock, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        core_memory::set_block(&id, &label, body.value)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(block))
+}
+
+#[derive(Deserialize)]
+struct CoreMemoryAppendBody {
+    text: String,
+    brain: Option<String>,
+}
+
+async fn core_memory_append(
+    Path(label): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<CoreMemoryAppendBody>,
+) -> Result<Json<CoreBlock>, ApiError> {
+    let block = tokio::task::spawn_blocking(move || -> Result<CoreBlock, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        core_memory::append_block(&id, &label, &body.text)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(block))
+}
+
+#[derive(Deserialize)]
+struct CoreMemoryReplaceBody {
+    old: String,
+    new: String,
+    brain: Option<String>,
+}
+
+async fn core_memory_replace(
+    Path(label): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<CoreMemoryReplaceBody>,
+) -> Result<Json<Option<CoreBlock>>, ApiError> {
+    let block = tokio::task::spawn_blocking(move || -> Result<Option<CoreBlock>, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        core_memory::replace_in_block(&id, &label, &body.old, &body.new)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(block))
+}
+
+// --- /api/todos ----------------------------------------------------------
+
+#[derive(Deserialize)]
+struct TodosListQuery {
+    status: Option<String>,
+    brain: Option<String>,
+}
+
+async fn todos_list(
+    Query(q): Query<TodosListQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<Todo>>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<Todo>, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        todos::list_todos(&id, q.status.as_deref())
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct TodosAddBody {
+    text: String,
+    agent_match: Option<String>,
+    priority: Option<String>,
+    created_by: Option<String>,
+    note: Option<String>,
+    brain: Option<String>,
+}
+
+async fn todos_add(
+    _s: State<ServerState>,
+    Json(body): Json<TodosAddBody>,
+) -> Result<Json<Todo>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Todo, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        todos::add_todo(&id, AddTodoArgs {
+            text: body.text,
+            agent_match: body.agent_match,
+            priority: body.priority,
+            created_by: body.created_by,
+            note: body.note,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+async fn todos_get(
+    Path(id): Path<String>,
+    Query(q): Query<TodosListQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Option<Todo>>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Option<Todo>, MemoryError> {
+        let bid = resolve_brain_id(q.brain.as_deref())?;
+        todos::get_todo(&bid, &id)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct TodosClaimBody {
+    agent_id: String,
+    brain: Option<String>,
+}
+
+async fn todos_claim(
+    Path(id): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<TodosClaimBody>,
+) -> Result<Json<Option<Todo>>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Option<Todo>, MemoryError> {
+        let bid = resolve_brain_id(body.brain.as_deref())?;
+        todos::claim_todo(&bid, &id, &body.agent_id)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct TodosCompleteBody {
+    brain: Option<String>,
+}
+
+async fn todos_complete(
+    Path(id): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<TodosCompleteBody>,
+) -> Result<Json<Todo>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Todo, MemoryError> {
+        let bid = resolve_brain_id(body.brain.as_deref())?;
+        todos::complete_todo(&bid, &id)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
 }
