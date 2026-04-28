@@ -18,8 +18,8 @@
   --border:       rgba(255, 175, 135, 0.12);
   --border-hot:   rgba(222, 115, 86, 0.45);
   --text:         #f4ece7;
-  --text-muted:   #c9bdb6;
-  --text-dim:     #8a7f78;
+  --text-muted:   #d4cac3;
+  --text-dim:     #9c9089;
 
   --peach:        #DE7356;
   --peach-soft:   #FFAF87;
@@ -47,8 +47,8 @@
   --border:       rgba(168, 229, 240, 0.12);
   --border-hot:   rgba(77, 212, 232, 0.45);
   --text:         #f0f7fa;
-  --text-muted:   #a2b5c8;
-  --text-dim:     #5d7490;
+  --text-muted:   #b8c8d8;
+  --text-dim:     #7a90ad;
 
   --peach:        #4dd4e8;   /* bright cyan, matches neural-network nodes */
   --peach-soft:   #a8e5f0;   /* pale cyan for highlights */
@@ -64,7 +64,10 @@ body {
   font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.55;
+  /* Bumped from 16px / 1.55 for legibility; the hero / pitch / privacy
+     sections still set their own larger sizes where appropriate. */
+  font-size: 17px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
@@ -330,7 +333,8 @@ code { font-family: var(--mono); font-size: 0.9em;
 .hero-sub {
   margin: 18px auto 36px;
   max-width: 640px;
-  font-size: 17px;
+  font-size: 18px;
+  line-height: 1.65;
   color: var(--text-muted);
 }
 
@@ -662,10 +666,11 @@ code { font-family: var(--mono); font-size: 0.9em;
   margin: 0 0 18px;
 }
 .pitch-body {
-  max-width: 620px;
+  max-width: 640px;
   margin: 0 auto;
   color: var(--text-muted);
-  font-size: 17px;
+  font-size: 18px;
+  line-height: 1.65;
 }
 
 /* ============================================================
@@ -867,16 +872,16 @@ code { font-family: var(--mono); font-size: 0.9em;
 }
 
 .feature h3 {
-  margin: 0 0 4px;
-  font-size: 15.5px;
+  margin: 0 0 6px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 .feature p {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 15px;
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 /* ============================================================
