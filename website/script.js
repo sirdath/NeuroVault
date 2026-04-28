@@ -204,8 +204,20 @@
     if (os === "windows" || os === "macos" || os === "linux") {
       resolveDirectInstaller().then(applyDirectInstaller);
     }
-    // Always wire the dedicated Mac glass buttons regardless of OS.
-    applyMacDirectDownload();
+    // The dedicated Mac glass button is redundant for visitors who are
+    // already on macOS — the primary auto-detect button already says
+    // "Download for macOS". Hide both Mac buttons in that case so the
+    // page doesn't show two Mac CTAs side by side. Windows / Linux /
+    // mobile visitors still see the Mac button so they can share the
+    // page with Mac friends.
+    if (os === "macos") {
+      for (const id of ["mac-download", "cta-mac-download"]) {
+        const el = document.getElementById(id);
+        if (el) el.hidden = true;
+      }
+    } else {
+      applyMacDirectDownload();
+    }
   });
 
   // ----- Reveal on scroll --------------------------------------------------
