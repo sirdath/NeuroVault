@@ -371,17 +371,91 @@ code { font-family: var(--mono); font-size: 0.9em;
   opacity: 0.75;
   font-family: var(--mono);
 }
+/* The primary download (Windows today, OS-detected at runtime) gets a
+   warm / branded treatment that's deliberately distinct from the cool
+   glass Mac button: a multi-stop peach aurora that slowly drifts across
+   the surface, a gentle glow pulse, and a vertical light-pass on hover
+   (perpendicular to the Mac sheen so they read as siblings, not twins). */
 .btn-primary {
-  background: linear-gradient(135deg, var(--peach) 0%, #c3624a 100%);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(120deg,
+    var(--peach) 0%,
+    var(--peach-soft) 28%,
+    var(--peach) 52%,
+    #c3624a 78%,
+    var(--peach) 100%);
+  background-size: 220% 220%;
   color: #1a0b06;
-  border-color: rgba(255, 175, 135, 0.4);
-  box-shadow: 0 10px 30px -10px var(--peach-glow),
-              inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 175, 135, 0.42);
+  box-shadow:
+    0 10px 30px -10px var(--peach-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  animation: nv-aurora-pan 9s ease-in-out infinite,
+             nv-aurora-pulse 5s ease-in-out infinite;
+}
+/* Keep content above the sheen (::before, z-index 0) without disturbing
+   the icon's `position: absolute` from the .btn-icon base class. */
+.btn-primary > span { position: relative; z-index: 1; }
+.btn-primary > .btn-icon { z-index: 1; }
+.btn-primary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.22) 48%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.22) 52%,
+    transparent 100%);
+  transform: translateY(-130%);
+  transition: transform 0.8s cubic-bezier(.2,.7,.3,1);
+  pointer-events: none;
+  z-index: 0;
 }
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 14px 40px -10px var(--peach-glow),
-              inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 215, 190, 0.6);
+  box-shadow:
+    0 16px 44px -10px var(--peach-glow),
+    0 0 0 1px rgba(255, 175, 135, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  animation-duration: 4s, 2.4s;
+}
+.btn-primary:hover::before { transform: translateY(130%); }
+.btn-primary:focus-visible {
+  outline: 2px solid var(--peach-soft);
+  outline-offset: 3px;
+}
+@keyframes nv-aurora-pan {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes nv-aurora-pulse {
+  0%, 100% {
+    box-shadow:
+      0 10px 30px -10px var(--peach-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.20),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+  50% {
+    box-shadow:
+      0 12px 36px -10px var(--peach-glow),
+      0 0 0 1px rgba(255, 175, 135, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.26),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-primary {
+    animation: none;
+    background-position: 0% 50%;
+  }
+  .btn-primary::before { transition: none; }
 }
 .btn-secondary {
   background: rgba(255, 175, 135, 0.05);
