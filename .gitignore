@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+dist-mac/
 src-tauri/target/
 
 # Environment

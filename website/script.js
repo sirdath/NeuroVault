@@ -38,9 +38,9 @@
   function relabelButton(labelEl, subEl, linkEl) {
     if (!labelEl || !linkEl) return;
     if (os === "macos") {
-      labelEl.textContent = "Build from source (macOS)";
-      if (subEl) subEl.textContent = "Binary coming soon · uv + Tauri";
-      linkEl.href = REPO_SOURCE;
+      labelEl.textContent = "Download for macOS";
+      if (subEl) subEl.textContent = "Apple Silicon · DMG";
+      linkEl.href = WINDOWS_LATEST;
     } else if (os === "linux") {
       labelEl.textContent = "Build from source (Linux)";
       if (subEl) subEl.textContent = "Binary coming soon · uv + Tauri";
@@ -150,6 +150,39 @@
     }
   }
 
+  // Resolve the Apple Silicon DMG asset specifically and wire both
+  // glass Mac buttons (hero + bottom CTA) to the direct download URL.
+  // Always-on regardless of visitor OS, so a Windows user sharing the
+  // page with a Mac friend gets a working button.
+  async function applyMacDirectDownload() {
+    try {
+      const res = await fetch(GH_API_LATEST, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const assets = Array.isArray(data.assets) ? data.assets : [];
+      const dmg = assets.find(
+        (a) => typeof a.name === "string" && /_aarch64\.dmg$/i.test(a.name)
+      );
+      if (!dmg || !dmg.browser_download_url) return;
+      const mb = dmg.size ? (dmg.size / (1024 * 1024)).toFixed(1) : null;
+      const sub = mb ? `${mb} MB · Apple Silicon DMG` : "Apple Silicon · DMG";
+      const targets = [
+        { a: "mac-download", l: "mac-label", s: "mac-sub" },
+        { a: "cta-mac-download", l: "cta-mac-label", s: "cta-mac-sub" },
+      ];
+      for (const t of targets) {
+        const anchor = document.getElementById(t.a);
+        const subEl  = document.getElementById(t.s);
+        if (anchor) anchor.href = dmg.browser_download_url;
+        if (subEl)  subEl.textContent = sub;
+      }
+    } catch {
+      /* keep the /releases/latest fallback already in the markup */
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     relabelButton(
       document.getElementById("primary-label"),
@@ -167,12 +200,12 @@
 
     // Fire-and-forget: upgrade buttons to a direct download URL for the
     // visitor's OS. Fires after the initial label set so users never see
-    // a broken state. If no matching asset exists yet (Mac/Linux before
-    // v0.1.2 ships), the upgrade is a no-op and the "Build from source"
-    // fallback set by relabelButton() above stays in place.
+    // a broken state.
     if (os === "windows" || os === "macos" || os === "linux") {
       resolveDirectInstaller().then(applyDirectInstaller);
     }
+    // Always wire the dedicated Mac glass buttons regardless of OS.
+    applyMacDirectDownload();
   });
 
   // ----- Reveal on scroll --------------------------------------------------

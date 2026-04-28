@@ -46,7 +46,11 @@ jobs:
             rust-target: x86_64-pc-windows-msvc
             vec_os: windows
             vec_arch: x86_64
-            vec_archive_ext: zip
+            # Upstream sqlite-vec only ships windows builds as tar.gz (no
+            # zip variant). Git Bash on the Windows runner has tar built
+            # in, so the else-branch of the extract step handles it the
+            # same way as macOS / Linux.
+            vec_archive_ext: tar.gz
           - os: macos-14   # Apple Silicon (M-series)
             os-label: macos-arm64
             rust-target: aarch64-apple-darwin

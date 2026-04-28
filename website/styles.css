@@ -395,6 +395,72 @@ code { font-family: var(--mono); font-size: 0.9em;
   transform: translateY(-2px);
 }
 
+/* Glass macOS download button. Frosted-glass surface, subtle inner
+   highlight, animated sheen on hover. The sheen is a separate child
+   element so we can clip it with overflow:hidden without breaking
+   the icon's absolute positioning. */
+.btn-mac {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--text);
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.04) 60%,
+      rgba(255, 175, 135, 0.06) 100%);
+  border-color: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.28),
+    0 2px 8px rgba(255, 175, 135, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.20);
+}
+[data-theme="blue"] .btn-mac {
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.04) 60%,
+      rgba(77, 212, 232, 0.08) 100%);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.32),
+    0 2px 8px rgba(77, 212, 232, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.20);
+}
+.btn-mac .btn-mac-sheen {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(115deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 70%);
+  transform: translateX(-130%);
+  transition: transform 0.9s cubic-bezier(.2,.7,.3,1);
+  pointer-events: none;
+}
+.btn-mac:hover .btn-mac-sheen { transform: translateX(130%); }
+.btn-mac:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, 0.34),
+    0 4px 14px var(--peach-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.20);
+}
+.btn-mac:focus-visible {
+  outline: 2px solid var(--peach-soft);
+  outline-offset: 3px;
+}
+.btn-icon-apple { color: var(--text); }
+@media (prefers-reduced-motion: reduce) {
+  .btn-mac .btn-mac-sheen { transition: none; }
+}
+
 .hero-alt {
   margin-top: 22px;
   display: flex;
