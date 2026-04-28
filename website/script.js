@@ -39,7 +39,7 @@
     if (!labelEl || !linkEl) return;
     if (os === "macos") {
       labelEl.textContent = "Download for macOS";
-      if (subEl) subEl.textContent = "Apple Silicon · DMG";
+      if (subEl) subEl.textContent = "Apple Silicon (M1 / M2 / M3 / M4) · DMG";
       linkEl.href = WINDOWS_LATEST;
     } else if (os === "linux") {
       labelEl.textContent = "Build from source (Linux)";
@@ -118,7 +118,7 @@
       const mb = asset.size ? (asset.size / (1024 * 1024)).toFixed(1) : null;
       const kind =
         /\.exe$/i.test(asset.name) ? "x64 installer"
-        : /\.dmg$/i.test(asset.name) ? (/aarch64/i.test(asset.name) ? "Apple Silicon · DMG" : "Intel · DMG")
+        : /\.dmg$/i.test(asset.name) ? (/aarch64/i.test(asset.name) ? "Apple Silicon (M1 / M2 / M3 / M4) · DMG" : "Intel · DMG")
         : /\.AppImage$/i.test(asset.name) ? "x64 AppImage"
         : /\.deb$/i.test(asset.name) ? "x64 DEB"
         : "installer";
@@ -167,7 +167,7 @@
       );
       if (!dmg || !dmg.browser_download_url) return;
       const mb = dmg.size ? (dmg.size / (1024 * 1024)).toFixed(1) : null;
-      const sub = mb ? `${mb} MB · Apple Silicon DMG` : "Apple Silicon · DMG";
+      const sub = mb ? `${mb} MB · Apple Silicon (M1 / M2 / M3 / M4)` : "Apple Silicon (M1 / M2 / M3 / M4) · DMG";
       const targets = [
         { a: "mac-download", l: "mac-label", s: "mac-sub" },
         { a: "cta-mac-download", l: "cta-mac-label", s: "cta-mac-sub" },
@@ -215,6 +215,11 @@
         const el = document.getElementById(id);
         if (el) el.hidden = true;
       }
+      // Mac visitors also get a small "On an Intel Mac?" escape hatch.
+      // CPU architecture is not exposed by the browser on macOS, so we
+      // surface the link to anyone on Mac and let them self-select.
+      const intelHint = document.getElementById("intel-mac-hint");
+      if (intelHint) intelHint.hidden = false;
     } else {
       applyMacDirectDownload();
     }
