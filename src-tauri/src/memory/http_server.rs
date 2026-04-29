@@ -116,6 +116,8 @@ fn router() -> Router {
         .route("/api/recall/chunks", get(recall_chunks))
         .route("/api/related/:engram_id", get(related))
         .route("/api/notes", post(remember))
+        .route("/api/notes", axum::routing::put(notes_save))
+        .route("/api/notes", axum::routing::delete(notes_delete))
         .route("/api/brains", post(brains_create))
         .route("/api/check_duplicate", post(check_duplicate))
         .route("/api/session_start", get(session_start))
@@ -581,6 +583,92 @@ async fn remember(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
 
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Save / delete by filename. POST /api/notes (the `remember` endpoint
+// above) always creates a new note with an auto-generated filename;
+// these two are the symmetric write paths the desktop UI's save and
+// delete buttons need, exposed over HTTP so the VS Code extension
+// webview can drive them when the Tauri-only invoke() path is not
+// available.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct SaveBody {
+    filename: String,
+    content: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteBody {
+    filename: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct WriteResponse {
+    status: String,
+    engram_id: String,
+    filename: String,
+    brain_id: String,
+}
+
+async fn notes_save(
+    _s: State<ServerState>,
+    Json(body): Json<SaveBody>,
+) -> Result<Json<WriteResponse>, ApiError> {
+    if body.content.len() > REMEMBER_MAX_BYTES {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "content is {} bytes; save accepts up to {} bytes.",
+                body.content.len(),
+                REMEMBER_MAX_BYTES
+            ),
+        ));
+    }
+    let result = tokio::task::spawn_blocking(move || -> Result<WriteResponse, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+        let res = super::write_ops::save_note(&ctx, &body.filename, &body.content)?;
+        Ok(WriteResponse {
+            status: res.status,
+            engram_id: res.engram_id,
+            filename: body.filename,
+            brain_id: id,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+async fn notes_delete(
+    _s: State<ServerState>,
+    Json(body): Json<DeleteBody>,
+) -> Result<Json<WriteResponse>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<WriteResponse, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+        let res = super::write_ops::delete_note(&ctx, &body.filename)?;
+        Ok(WriteResponse {
+            status: res.status,
+            engram_id: res.engram_id,
+            filename: body.filename,
+            brain_id: id,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 

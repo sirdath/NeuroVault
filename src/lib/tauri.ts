@@ -67,6 +67,41 @@ async function httpReadNote(filename: string): Promise<string> {
   return detail.content ?? "";
 }
 
+// --- Generic HTTP helpers used by every nv_* fallback below -----------
+
+async function httpJsonGet<T>(path: string, query?: Record<string, unknown>): Promise<T> {
+  let url = `${HTTP_BASE}${path}`;
+  if (query) {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined || v === null) continue;
+      sp.set(k, String(v));
+    }
+    const qs = sp.toString();
+    if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${path} HTTP ${res.status}`);
+  return (await res.json()) as T;
+}
+
+async function httpJsonSend<T>(
+  path: string,
+  method: "POST" | "PUT" | "DELETE" | "PATCH",
+  body: unknown,
+): Promise<T> {
+  const res = await fetch(`${HTTP_BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${method} ${path} HTTP ${res.status}: ${text}`);
+  }
+  return (await res.json()) as T;
+}
+
 // --- Exports --------------------------------------------------------------
 
 export const getVaultPath = () =>
@@ -93,41 +128,49 @@ export const readNote = (filename: string) =>
  *  need to know which path ran. */
 
 export const saveNote = async (filename: string, content: string) => {
-  if (!IS_TAURI) throw new Error("save_note requires Tauri runtime");
-  try {
-    await invoke<NvWriteResult>("nv_save_note", {
-      filename,
-      content,
-      brainId: null,
-    });
-  } catch {
-    await invoke<void>("save_note", { filename, content });
+  if (IS_TAURI) {
+    try {
+      await invoke<NvWriteResult>("nv_save_note", { filename, content, brainId: null });
+    } catch {
+      await invoke<void>("save_note", { filename, content });
+    }
+    return;
   }
+  await httpJsonSend<NvWriteResult>("/api/notes", "PUT", { filename, content });
 };
 
 export const createNote = async (title: string): Promise<string> => {
-  if (!IS_TAURI) throw new Error("create_note requires Tauri runtime");
-  try {
-    const res = await invoke<NvWriteResult>("nv_create_note", {
-      title,
-      brainId: null,
-    });
-    return res.filename;
-  } catch {
-    return await invoke<string>("create_note", { title });
+  if (IS_TAURI) {
+    try {
+      const res = await invoke<NvWriteResult>("nv_create_note", { title, brainId: null });
+      return res.filename;
+    } catch {
+      return await invoke<string>("create_note", { title });
+    }
   }
+  // POST /api/notes (the `remember` endpoint) generates the filename.
+  // Seed the body with the same `# {title}\n\n` shape that
+  // write_ops::create_note uses so the title is captured even when
+  // the user has not yet typed any body.
+  const seed = `# ${title}\n\n`;
+  const res = await httpJsonSend<NvWriteResult & { filename?: string }>(
+    "/api/notes",
+    "POST",
+    { title, content: seed },
+  );
+  return res.filename ?? "";
 };
 
 export const deleteNote = async (filename: string) => {
-  if (!IS_TAURI) throw new Error("delete_note requires Tauri runtime");
-  try {
-    await invoke<NvWriteResult>("nv_delete_note", {
-      filename,
-      brainId: null,
-    });
-  } catch {
-    await invoke<void>("delete_note", { filename });
+  if (IS_TAURI) {
+    try {
+      await invoke<NvWriteResult>("nv_delete_note", { filename, brainId: null });
+    } catch {
+      await invoke<void>("delete_note", { filename });
+    }
+    return;
   }
+  await httpJsonSend<NvWriteResult>("/api/notes", "DELETE", { filename });
 };
 
 // --- Phase-4 Rust memory commands ------------------------------------------
@@ -232,18 +275,24 @@ const nvReject = (cmd: string) =>
 export const nvListNotes = (brainId?: string) =>
   IS_TAURI
     ? invoke<NvNoteListRow[]>("nv_list_notes", { brainId: brainId ?? null })
-    : nvReject("nv_list_notes");
+    : httpJsonGet<NvNoteListRow[]>("/api/notes", { brain: brainId });
 
 export const nvGetNote = (engramId: string, brainId?: string) =>
   IS_TAURI
     ? invoke<NvFullNote>("nv_get_note", { engramId, brainId: brainId ?? null })
-    : nvReject("nv_get_note");
+    : httpJsonGet<NvFullNote>(`/api/notes/${encodeURIComponent(engramId)}`, {
+        brain: brainId,
+      });
 
 export const nvListBrains = () =>
-  IS_TAURI ? invoke<NvBrainSummary[]>("nv_list_brains") : nvReject("nv_list_brains");
+  IS_TAURI
+    ? invoke<NvBrainSummary[]>("nv_list_brains")
+    : httpJsonGet<NvBrainSummary[]>("/api/brains");
 
 export const nvBrainStats = (brainId: string) =>
-  IS_TAURI ? invoke<NvBrainStats>("nv_brain_stats", { brainId }) : nvReject("nv_brain_stats");
+  IS_TAURI
+    ? invoke<NvBrainStats>("nv_brain_stats", { brainId })
+    : httpJsonGet<NvBrainStats>(`/api/brains/${encodeURIComponent(brainId)}/stats`);
 
 export const nvGetGraph = (opts?: {
   brainId?: string;
@@ -256,7 +305,11 @@ export const nvGetGraph = (opts?: {
         includeObservations: opts?.includeObservations ?? null,
         minSimilarity: opts?.minSimilarity ?? null,
       })
-    : nvReject("nv_get_graph");
+    : httpJsonGet<NvGraphData>("/api/graph", {
+        brain: opts?.brainId,
+        include_observations: opts?.includeObservations,
+        min_similarity: opts?.minSimilarity,
+      });
 
 // --- Phase-5 write-path: full ingest pipeline (chunk/embed/link/BM25) ---
 
@@ -277,7 +330,11 @@ export const nvSaveNote = (filename: string, content: string, brainId?: string) 
         content,
         brainId: brainId ?? null,
       })
-    : nvReject("nv_save_note");
+    : httpJsonSend<NvWriteResult>("/api/notes", "PUT", {
+        filename,
+        content,
+        brain: brainId,
+      });
 
 export const nvCreateNote = (title: string, brainId?: string) =>
   IS_TAURI
@@ -285,7 +342,11 @@ export const nvCreateNote = (title: string, brainId?: string) =>
         title,
         brainId: brainId ?? null,
       })
-    : nvReject("nv_create_note");
+    : httpJsonSend<NvWriteResult>("/api/notes", "POST", {
+        title,
+        content: `# ${title}\n\n`,
+        brain: brainId,
+      });
 
 export const nvDeleteNote = (filename: string, brainId?: string) =>
   IS_TAURI
@@ -293,7 +354,10 @@ export const nvDeleteNote = (filename: string, brainId?: string) =>
         filename,
         brainId: brainId ?? null,
       })
-    : nvReject("nv_delete_note");
+    : httpJsonSend<NvWriteResult>("/api/notes", "DELETE", {
+        filename,
+        brain: brainId,
+      });
 
 // --- Phase-6 recall + Rust HTTP server --------------------------------------
 
@@ -325,7 +389,14 @@ export const nvRecall = (
         includeObservations: opts?.includeObservations ?? null,
         asOf: opts?.asOf ?? null,
       })
-    : nvReject("nv_recall");
+    : httpJsonGet<NvRecallHit[]>("/api/recall", {
+        q: query,
+        brain: opts?.brainId,
+        limit: opts?.limit,
+        spread_hops: opts?.spreadHops,
+        include_observations: opts?.includeObservations,
+        as_of: opts?.asOf,
+      });
 
 /** Push PageRank scores into Rust in-process state. Retriever applies
  *  a `1 + 0.15 * ln(1 + score)` boost during recall when state is
