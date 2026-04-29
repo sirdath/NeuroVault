@@ -50,10 +50,16 @@ jobs:
             platform: darwin-arm64
             rust-target: aarch64-apple-darwin
             bin-name: neurovault-server
-          - os: macos-13
-            platform: darwin-x64
-            rust-target: x86_64-apple-darwin
-            bin-name: neurovault-server
+          # macos-13 (Intel) is intentionally omitted from the default
+          # matrix because the public macos-13 runner pool has had
+          # multi-hour queue times that block the package-extension
+          # job. Apple Silicon covers the vast majority of active Macs
+          # for now. To re-enable Intel builds once the queue
+          # stabilises, add the entry back here:
+          #   - os: macos-13
+          #     platform: darwin-x64
+          #     rust-target: x86_64-apple-darwin
+          #     bin-name: neurovault-server
           - os: ubuntu-22.04
             platform: linux-x64
             rust-target: x86_64-unknown-linux-gnu
@@ -153,17 +159,30 @@ jobs:
       - name: Stage server binaries
         working-directory: vscode-extension
         run: |
+          # Stage every platform artifact that build-binary actually
+          # produced. The conditional copies keep this step robust to
+          # matrix entries being added or removed (e.g. darwin-x64,
+          # which is currently disabled while the Intel runner queue
+          # is unreliable).
           for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
             mkdir -p "server-bin/$plat"
           done
-          cp "../artifacts/server-bin-win32-x64/neurovault-server.exe"   "server-bin/win32-x64/"
-          cp "../artifacts/server-bin-darwin-arm64/neurovault-server"    "server-bin/darwin-arm64/"
-          cp "../artifacts/server-bin-darwin-x64/neurovault-server"      "server-bin/darwin-x64/"
-          cp "../artifacts/server-bin-linux-x64/neurovault-server"       "server-bin/linux-x64/"
-          chmod +x server-bin/darwin-arm64/neurovault-server \
-                   server-bin/darwin-x64/neurovault-server \
-                   server-bin/linux-x64/neurovault-server
-          ls -la server-bin/*/
+          [ -f "../artifacts/server-bin-win32-x64/neurovault-server.exe" ] \
+            && cp "../artifacts/server-bin-win32-x64/neurovault-server.exe"   "server-bin/win32-x64/"   \
+            || echo "skip: win32-x64 binary missing"
+          [ -f "../artifacts/server-bin-darwin-arm64/neurovault-server" ] \
+            && cp "../artifacts/server-bin-darwin-arm64/neurovault-server"    "server-bin/darwin-arm64/" \
+            && chmod +x server-bin/darwin-arm64/neurovault-server \
+            || echo "skip: darwin-arm64 binary missing"
+          [ -f "../artifacts/server-bin-darwin-x64/neurovault-server" ] \
+            && cp "../artifacts/server-bin-darwin-x64/neurovault-server"      "server-bin/darwin-x64/"   \
+            && chmod +x server-bin/darwin-x64/neurovault-server \
+            || echo "skip: darwin-x64 binary missing"
+          [ -f "../artifacts/server-bin-linux-x64/neurovault-server" ] \
+            && cp "../artifacts/server-bin-linux-x64/neurovault-server"       "server-bin/linux-x64/"    \
+            && chmod +x server-bin/linux-x64/neurovault-server \
+            || echo "skip: linux-x64 binary missing"
+          ls -la server-bin/*/ || true
 
       - name: Resolve version
         id: version
