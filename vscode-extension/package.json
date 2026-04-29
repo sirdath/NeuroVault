@@ -1,0 +1,122 @@
+{
+  "name": "neurovault",
+  "displayName": "NeuroVault",
+  "description": "Local-first AI memory for Claude. Persistent memory, graph view, and MCP integration in one VS Code panel.",
+  "version": "0.1.0",
+  "publisher": "daththeanalyst",
+  "license": "MIT",
+  "homepage": "https://github.com/daththeanalyst/NeuroVault",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daththeanalyst/NeuroVault.git",
+    "directory": "vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/daththeanalyst/NeuroVault/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Notebooks",
+    "AI"
+  ],
+  "keywords": [
+    "memory",
+    "claude",
+    "mcp",
+    "rag",
+    "knowledge-graph",
+    "local-first",
+    "embeddings"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0b0b12",
+    "theme": "dark"
+  },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "neurovault",
+          "title": "NeuroVault",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "neurovault": [
+        {
+          "id": "neurovault.sidebar",
+          "name": "NeuroVault",
+          "type": "webview",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "NeuroVault"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "neurovault.open",
+        "title": "Open NeuroVault",
+        "category": "NeuroVault",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "neurovault.restartServer",
+        "title": "Restart Local Server",
+        "category": "NeuroVault"
+      },
+      {
+        "command": "neurovault.showLogs",
+        "title": "Show Server Logs",
+        "category": "NeuroVault"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "neurovault.open",
+          "when": "view == neurovault.sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "NeuroVault",
+      "properties": {
+        "neurovault.serverPort": {
+          "type": "number",
+          "default": 8765,
+          "description": "Port the bundled NeuroVault server binds to on 127.0.0.1."
+        },
+        "neurovault.vaultPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the default vault location (~/.neurovault). Leave empty to use the default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "compile": "tsc -p ./",
+    "assets": "node scripts/package-assets.mjs",
+    "package": "npm run build && npm run assets && vsce package --out neurovault-vscode.vsix",
+    "publish": "npm run build && npm run assets && vsce publish"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}
