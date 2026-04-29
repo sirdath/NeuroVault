@@ -1,0 +1,215 @@
+# Cross-platform release pipeline for the NeuroVault VS Code extension.
+#
+# Trigger: push a tag matching `vscode-v*` (e.g. `git tag vscode-v0.1.0
+# && git push --tags`) OR run manually from the Actions tab.
+#
+# Pipeline:
+#   1. Build the standalone neurovault-server Rust binary on each
+#      target platform in parallel (windows / macos-arm64 / macos-x64 /
+#      linux-x64). Upload each as a workflow artifact.
+#   2. On a single Linux runner: build the React UI, download every
+#      platform binary into vscode-extension/server-bin/<platform>/,
+#      run `vsce package` to produce a multi-platform .vsix that
+#      works on every OS the Marketplace serves, attach it to a draft
+#      GitHub Release.
+#
+# Marketplace publishing is intentionally NOT wired in this version.
+# To enable it, set the VSCE_PAT secret (Azure DevOps PAT with
+# Marketplace publish scope on the daththeanalyst publisher) and add a
+# `vsce publish --packagePath ...` step after the package step.
+#
+# Why a separate workflow from release.yml: the desktop app's release
+# pipeline builds a Tauri-wrapped installer; the extension uses the
+# same Rust crate but only the standalone bin target. Splitting keeps
+# both pipelines independent — a flaky desktop signing step doesn't
+# block the extension publish, and vice versa.
+
+name: Release VS Code Extension
+
+on:
+  push:
+    tags:
+      - "vscode-v*"
+  workflow_dispatch:
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Stage 1: build the neurovault-server binary on each target platform.
+  # -------------------------------------------------------------------------
+  build-binary:
+    name: Build server (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32-x64
+            rust-target: x86_64-pc-windows-msvc
+            bin-name: neurovault-server.exe
+          - os: macos-14
+            platform: darwin-arm64
+            rust-target: aarch64-apple-darwin
+            bin-name: neurovault-server
+          - os: macos-13
+            platform: darwin-x64
+            rust-target: x86_64-apple-darwin
+            bin-name: neurovault-server
+          - os: ubuntu-22.04
+            platform: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+            bin-name: neurovault-server
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's Linux apt list. The neurovault-server bin does not
+      # use Tauri itself, but the crate it lives in does — cargo will
+      # try to compile every transitive Tauri dep regardless of which
+      # binary target we ask for. Installing these prevents link
+      # failures during that compilation pass.
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      # Cache Cargo's target dir per platform. Release profile uses
+      # lto=fat + codegen-units=1, so a cold build is 4-6 minutes.
+      # With this cache, incremental rebuilds drop to ~90s.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rust-target }}-server
+
+      - name: Build neurovault-server (release)
+        working-directory: src-tauri
+        run: cargo build --release --bin neurovault-server --target ${{ matrix.rust-target }}
+
+      # Strip executable bit gymnastics: actions/upload-artifact@v4
+      # preserves Unix permissions on a tar / zip when archiving the
+      # parent directory, but a single file upload on Windows loses the
+      # mode. We upload as a single-file artifact and chmod +x in the
+      # downstream package step.
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-bin-${{ matrix.platform }}
+          path: src-tauri/target/${{ matrix.rust-target }}/release/${{ matrix.bin-name }}
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # Stage 2: package the .vsix on a single Linux runner. Pulls every
+  # platform binary from stage 1, builds the React UI, runs vsce.
+  # -------------------------------------------------------------------------
+  package-extension:
+    name: Package .vsix
+    needs: build-binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed by softprops/action-gh-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Build React UI
+        run: npm run build
+
+      - name: Stage React UI inside vscode-extension/
+        run: |
+          mkdir -p vscode-extension/ui
+          cp -r dist/* vscode-extension/ui/
+
+      - name: Install extension deps
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Bundle extension JS (esbuild)
+        working-directory: vscode-extension
+        run: npm run build
+
+      - name: Download all server binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: server-bin-*
+
+      - name: Stage server binaries
+        working-directory: vscode-extension
+        run: |
+          for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
+            mkdir -p "server-bin/$plat"
+          done
+          cp "../artifacts/server-bin-win32-x64/neurovault-server.exe"   "server-bin/win32-x64/"
+          cp "../artifacts/server-bin-darwin-arm64/neurovault-server"    "server-bin/darwin-arm64/"
+          cp "../artifacts/server-bin-darwin-x64/neurovault-server"      "server-bin/darwin-x64/"
+          cp "../artifacts/server-bin-linux-x64/neurovault-server"       "server-bin/linux-x64/"
+          chmod +x server-bin/darwin-arm64/neurovault-server \
+                   server-bin/darwin-x64/neurovault-server \
+                   server-bin/linux-x64/neurovault-server
+          ls -la server-bin/*/
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/vscode-v* ]]; then
+            v="${GITHUB_REF_NAME#vscode-v}"
+          else
+            v=$(node -p "require('./vscode-extension/package.json').version")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $v"
+
+      - name: Package .vsix
+        working-directory: vscode-extension
+        run: npx vsce package --out "neurovault-${{ steps.version.outputs.version }}.vsix"
+
+      - name: Upload .vsix as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurovault-vscode-${{ steps.version.outputs.version }}
+          path: vscode-extension/*.vsix
+          retention-days: 30
+
+      # Only attach to a GitHub Release when triggered by a tag push;
+      # workflow_dispatch runs publish only the workflow artifact above.
+      - name: Attach .vsix to draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/vscode-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "NeuroVault for VS Code ${{ github.ref_name }}"
+          draft: true
+          prerelease: false
+          body: |
+            ## NeuroVault for VS Code ${{ github.ref_name }}
+
+            ### Install (manual, before Marketplace publish)
+            1. Download the `.vsix` below.
+            2. In VS Code or Cursor: Ctrl+Shift+P → "Extensions: Install from VSIX"
+            3. Pick the downloaded file.
+
+            Once published to the Marketplace this release page is
+            informational only — most users will install via
+            `ext install daththeanalyst.neurovault` or the Marketplace
+            UI.
+
+            Bundled binaries cover Windows x64, macOS Apple Silicon,
+            macOS Intel, and Linux x64.
+          files: vscode-extension/*.vsix
