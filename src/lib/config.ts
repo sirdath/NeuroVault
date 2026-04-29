@@ -12,10 +12,31 @@
 
 const DEFAULT_API_HOST = "http://127.0.0.1:8765";
 
-// import.meta.env is Vite-provided at build time. We read it once and
-// freeze the value so swapping env mid-session doesn't fracture the app.
+// Resolution order:
+//   1. window.__NEUROVAULT_CONFIG__.serverUrl  (injected by the VS Code
+//      extension host at webview boot — the extension probes a free
+//      port in the 8765..8784 range, so the actual port may not be the
+//      default if the desktop app is also running.)
+//   2. import.meta.env.VITE_API_HOST            (Vite-provided at build
+//      time, used for remote-brain dev / docker compose / custom ports.)
+//   3. DEFAULT_API_HOST                         (the conventional
+//      127.0.0.1:8765 the desktop Tauri app and MCP proxy assume.)
+//
+// Resolved once at module load and frozen for the session so swapping
+// env or config mid-flight cannot fracture the app.
+interface RuntimeConfig {
+  host?: string;
+  serverUrl?: string;
+}
+const runtimeConfig: RuntimeConfig | undefined =
+  typeof window !== "undefined"
+    ? (window as unknown as { __NEUROVAULT_CONFIG__?: RuntimeConfig }).__NEUROVAULT_CONFIG__
+    : undefined;
+
 export const API_HOST: string =
-  (import.meta.env.VITE_API_HOST as string | undefined)?.trim() || DEFAULT_API_HOST;
+  runtimeConfig?.serverUrl?.trim() ||
+  (import.meta.env.VITE_API_HOST as string | undefined)?.trim() ||
+  DEFAULT_API_HOST;
 
 /** Human-readable host:port for UI display (e.g. "127.0.0.1:8765"). */
 export const API_DISPLAY: string = API_HOST.replace(/^https?:\/\//, "");
