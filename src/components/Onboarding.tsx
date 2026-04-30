@@ -44,6 +44,29 @@ export function Onboarding({ onOpenSettings, onCreateFirstNote }: OnboardingProp
       title: "Welcome to NeuroVault",
       body: (
         <>
+          <div className="flex justify-center mb-5">
+            <svg
+              viewBox="0 0 24 24"
+              className="w-20 h-20"
+              style={{ color: "var(--nv-accent)" }}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-label="NeuroVault"
+            >
+              <circle cx="12" cy="12" r="9.5" />
+              <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
+              <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
+              <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
+              <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="12"   cy="12.8" r="1.4" />
+              <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
+            </svg>
+          </div>
           <p className="text-sm leading-relaxed" style={{ color: "var(--nv-text)" }}>
             Claude forgets you after every conversation. NeuroVault doesn't.
           </p>

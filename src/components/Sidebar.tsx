@@ -402,12 +402,14 @@ export function Sidebar({
         style={{ borderTop: "1px solid var(--nv-border)" }}
       >
         <BrainSelector />
-        {/* Small NeuroVault mark — three connected nodes, a neural-graph
-            motif that matches the product's memory-as-graph framing. */}
+        {/* NeuroVault mark — outer ring, three nodes, key hub.
+            Uses currentColor so the accent / dim state inherits
+            cleanly. Mirrors media/activity-icon.svg in the VS Code
+            extension and assets/favicon.svg on the website. */}
         <svg
           viewBox="0 0 24 24"
           className="w-4 h-4 flex-shrink-0"
-          style={{ color: "var(--nv-accent)", opacity: 0.85 }}
+          style={{ color: "var(--nv-accent)", opacity: 0.9 }}
           fill="none"
           stroke="currentColor"
           strokeWidth={1.4}
@@ -415,13 +417,15 @@ export function Sidebar({
           strokeLinejoin="round"
           aria-label="NeuroVault"
         >
-          <path d="M7 8l5 4 5-4" />
-          <path d="M7 8v8l5 4" />
-          <path d="M17 8v8l-5 4" />
-          <circle cx="7" cy="8" r="1.5" fill="currentColor" />
-          <circle cx="17" cy="8" r="1.5" fill="currentColor" />
-          <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-          <circle cx="12" cy="20" r="1.5" fill="currentColor" />
+          <circle cx="12" cy="12" r="9.5" />
+          <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
+          <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
+          <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
+          <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="12"   cy="12.8" r="1.4" />
+          <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
         </svg>
         <button
           onClick={() => onSettingsOpen?.()}
