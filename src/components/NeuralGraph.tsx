@@ -682,14 +682,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
     isolatedIds.sort();
 
-    // Geometry: ring radius adapts to whether semantic edges are
-    // currently rendered. With them OFF the connected cluster is
-    // small (only manual + entity links), so a tight ring at 280
-    // keeps everything compact. With them ON the cluster sprawls
-    // outward, and connected outliers used to cross the orphan ring;
-    // bumping to 460 in that mode keeps the halo outside the sprawl.
+    // Geometry: scales with the size of the connected cluster so a
+    // brain with 50 notes, 500 notes, or 5000 notes all read at the
+    // right density.
+    //
+    // d3-force packs nodes into a roughly disk-shaped area; per-node
+    // area at our draw scale is ~22²/π ≈ 154 px², so the cluster
+    // radius is approximately sqrt(N) * 22. We then place the first
+    // orphan ring 80 px outside that estimate, which gives connected
+    // outliers (drift past the natural cluster edge) somewhere to
+    // sit without crossing the halo.
+    //
+    // No more `showSemanticEdges ? 460 : 280` switch — the formula
+    // handles it automatically. Semantic OFF: connectedCount is low,
+    // ring is tight. Semantic ON: connectedCount is high, ring
+    // expands. Same code path for both.
+    const connectedCount = nodes.length - isolatedIds.length;
+    const estClusterR = Math.max(150, Math.sqrt(connectedCount) * 22);
     const SPACING = 22;
-    const FIRST_RING_R = showSemanticEdges ? 460 : 280;
+    const FIRST_RING_R = estClusterR + 80;
     const RING_GAP = 32;
     const orphanPos = new Map<string, { fx: number; fy: number }>();
     let placed = 0;
