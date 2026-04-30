@@ -453,6 +453,18 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           .iterations(2);
         fg.d3Force("collide", collide);
         fg.d3Force("cluster", createClusterForce(0.025));
+        // Containment forces: gently pull every (non-pinned) node
+        // toward (0, 0). Without this, loosely-connected sub-components
+        // float apart freely and the connected graph can stretch into
+        // a tall thin shape that escapes the orphan ring entirely
+        // (especially in Semantic-on mode where there are more weak
+        // bridges between sub-components). Strength 0.04 is gentle —
+        // it doesn't flatten the d3 layout, just keeps drifting
+        // outliers from running away. Pinned orphan nodes (fx/fy set
+        // by the graphData memo) ignore this force, so the halo
+        // stays where we put it.
+        fg.d3Force("centerX", d3.forceX(0).strength(0.04));
+        fg.d3Force("centerY", d3.forceY(0).strength(0.04));
         const linkForce = (fg as unknown as {
           d3Force: (n: string) => {
             distance?: (d: number | ((l: unknown) => number)) => unknown;
