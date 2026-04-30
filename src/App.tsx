@@ -483,44 +483,17 @@ export default function App() {
           boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
         }}
       >
-        <div className="flex items-center gap-3">
-          {/* Brand mark, top-left. Sized to fill most of the 44 px bar
-              so it reads as the app's identity at a glance. Uses
-              currentColor so the accent variable drives the tint;
-              matches the activity-icon SVG and website favicon. */}
-          <svg
-            viewBox="0 0 24 24"
-            className="w-7 h-7 flex-shrink-0"
-            style={{ color: theme.accent }}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.4}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-label="NeuroVault"
-          >
-            <circle cx="12" cy="12" r="9.5" />
-            <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
-            <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
-            <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
-            <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
-            <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
-            <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
-            <circle cx="12"   cy="12.8" r="1.4" />
-            <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
-          </svg>
-          <div
-            className="flex items-center gap-0.5 rounded-xl p-1"
-            style={{
-              background: theme.surface,
-              border: `1px solid ${theme.border}`,
-              boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
-            }}
-          >
-            <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" theme={theme} />
-            <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" theme={theme} />
-            <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" theme={theme} />
-          </div>
+        <div
+          className="flex items-center gap-0.5 rounded-xl p-1"
+          style={{
+            background: theme.surface,
+            border: `1px solid ${theme.border}`,
+            boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
+          }}
+        >
+          <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" theme={theme} />
+          <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" theme={theme} />
+          <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" theme={theme} />
         </div>
 
         <div className="flex items-center gap-4">
