@@ -215,8 +215,12 @@ export function Editor() {
   return (
     <div className="flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Tab bar — drag to reorder, middle-click to close, x always visible */}
-        {openTabs.length > 1 && (
+        {/* Tab bar — drag to reorder, middle-click to close, x always
+            visible. Shown whenever any note is open so a single-tab
+            session is still closeable (was hidden < v0.1.8 when only
+            one tab was open, leaving the user no way to close it
+            without opening a second). */}
+        {openTabs.length > 0 && (
           <div
             className="flex items-center overflow-x-auto flex-shrink-0"
             style={{ background: "var(--nv-surface)", borderBottom: "1px solid var(--nv-border)" }}
