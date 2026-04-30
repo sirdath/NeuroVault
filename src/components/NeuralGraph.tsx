@@ -654,37 +654,48 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
     for (const e of edges) { addEdge(e.from, e.to); addEdge(e.to, e.from); }
 
-    // Pre-compute pinned positions for isolated nodes (degree 0).
-    // Without a layer force, react-force-graph's charge force pushes
-    // them apart into a halo of random floaters around the canvas
-    // when the user zooms out. Pinning them into a deterministic grid
-    // below the main cluster keeps the canvas tidy: orphans become a
-    // visible "shelf" the user can scan, and the connected graph
-    // doesn't have to fight charge repulsion from every loose node.
+    // Pin isolated nodes (degree 0) onto concentric rings AROUND the
+    // connected brain. The connected graph clusters near (0,0) by
+    // d3-force defaults; orphans form an outer halo at radii 280+.
+    // Reads as: "your brain is the centre, these notes haven't been
+    // integrated yet but they're not lost."
     //
-    // Heuristic: line for ≤16 isolates, square grid otherwise.
-    // Positions are in d3-force coordinate space (the connected graph
-    // clusters near (0,0) by default), so the grid ends up just below
-    // the main cluster at every zoom level.
+    // Packing: walk outward, each ring sized to keep neighbour
+    // spacing ≈ 22 px. 250 orphans → 3 rings (~80/88/97 capacity at
+    // r=280/310/340). Sort order is by node id so the rings are the
+    // same on every reload.
     const isolatedIds: string[] = [];
     for (const n of nodes) {
       if ((adjacency.get(n.id)?.size ?? 0) === 0) isolatedIds.push(n.id);
     }
-    isolatedIds.sort(); // deterministic order so the layout doesn't reshuffle on every reload
-    const cols = isolatedIds.length <= 16
-      ? Math.max(1, isolatedIds.length)
-      : Math.ceil(Math.sqrt(isolatedIds.length));
+    isolatedIds.sort();
+
     const SPACING = 22;
-    const SHELF_OFFSET_Y = 220; // px below the connected cluster
+    const FIRST_RING_R = 280;
+    const RING_GAP = 30;
     const orphanPos = new Map<string, { fx: number; fy: number }>();
-    isolatedIds.forEach((id, i) => {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      orphanPos.set(id, {
-        fx: (col - (cols - 1) / 2) * SPACING,
-        fy: SHELF_OFFSET_Y + row * SPACING,
-      });
-    });
+    let placed = 0;
+    let ringIdx = 0;
+    while (placed < isolatedIds.length) {
+      const r = FIRST_RING_R + ringIdx * RING_GAP;
+      const capacity = Math.max(1, Math.floor((2 * Math.PI * r) / SPACING));
+      const taking = Math.min(capacity, isolatedIds.length - placed);
+      // Stagger every other ring by half-step so adjacent rings
+      // don't have nodes pointing at the same angle (Moiré-like
+      // aliasing when two close rings are perfectly aligned).
+      const angleOffset = ringIdx % 2 === 0 ? 0 : Math.PI / taking;
+      for (let i = 0; i < taking; i++) {
+        const angle = (i / taking) * 2 * Math.PI + angleOffset;
+        const id = isolatedIds[placed + i];
+        if (!id) continue;
+        orphanPos.set(id, {
+          fx: r * Math.cos(angle),
+          fy: r * Math.sin(angle),
+        });
+      }
+      placed += taking;
+      ringIdx += 1;
+    }
 
     return {
       // Attach `degree` to each node so nodeRadius() can read it directly
@@ -1005,11 +1016,18 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
     if (node.x == null || node.y == null) return;
+    // Orphan = degree 0 = pinned to a ring around the connected
+    // brain by the graphData layout. Render them smaller and with
+    // muted alpha so the eye reads them as peripheral satellites,
+    // not equal-weight peers of the linked notes.
+    const isOrphan = (node.degree ?? 0) === 0;
+    const orphanScale = isOrphan ? 0.55 : 1.0;
+    const orphanAlphaMult = isOrphan ? 0.65 : 1.0;
     const r = effectiveNodeRadius(
       node,
       analyticsData?.pr ?? null,
       analyticsMode && analyticsResizeByImportance,
-    );
+    ) * orphanScale;
 
     const isDormant = node.state === "dormant";
     const isFresh = node.state === "fresh";
@@ -1036,7 +1054,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       focusAlpha = (isSelf || isNeighbour) ? 1 : 0.08;
     }
 
-    const alpha = strengthAlpha * focusAlpha;
+    const alpha = strengthAlpha * focusAlpha * orphanAlphaMult;
 
     // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
     // shadow follows the orb shape, not just the path.
