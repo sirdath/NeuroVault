@@ -530,6 +530,42 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const showSemanticEdges = useGraphSettingsStore((s) => s.showSemanticEdges);
   const toggleShowSemanticEdges = useGraphSettingsStore((s) => s.toggleShowSemanticEdges);
 
+  // Screenshot the current 2D canvas to a transparent PNG. The
+  // ForceGraph2D component renders into a <canvas> with
+  // `backgroundColor="rgba(0,0,0,0)"`, so the canvas is already
+  // transparent except where nodes / edges are drawn — toBlob()
+  // gives us a clean PNG with no backdrop. 3D mode uses a WebGL
+  // renderer that needs a different capture path; for now the
+  // button shows a polite message in 3D.
+  const handleScreenshot = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (mode === "3d") {
+      window.alert("Screenshot is currently 2D-only. Switch to 2D to capture.");
+      return;
+    }
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
+    if (!canvas) {
+      window.alert("Canvas not ready yet — try again in a second.");
+      return;
+    }
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `neurovault-graph-${ts}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoke after a tick so the browser actually finishes the
+      // download — Chrome occasionally aborts if we revoke
+      // synchronously while it's still resolving the blob.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
+  }, [mode]);
+
   // Filter the raw edges from the store BEFORE anything else consumes
   // them. When `showSemanticEdges` is false (default), drop every edge
   // whose link_type is "semantic" — these are auto-computed cosine
@@ -1573,6 +1609,26 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
               {semanticEdgeCount}
             </span>
           )}
+        </button>
+        {/* Screenshot button — exports the current 2D canvas to PNG
+            with transparent background (the canvas itself is already
+            transparent thanks to backgroundColor="rgba(0,0,0,0)"). */}
+        <button
+          onClick={handleScreenshot}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
+          style={{
+            background: "var(--nv-surface)",
+            color: "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-label="Save graph as PNG"
+          title="Save graph as transparent PNG"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+            <circle cx="12" cy="13" r="4" />
+          </svg>
+          Save
         </button>
       </div>
 

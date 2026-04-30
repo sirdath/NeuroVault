@@ -44,6 +44,35 @@ export default function App() {
     });
   }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Sidebar collapse — when true, the left sidebar hides entirely and
+  // the editor / graph / compile view fills the full width. Toggled
+  // via the leftmost button in the top bar or Ctrl+B (VS Code's
+  // shortcut). Persisted to localStorage so the choice survives
+  // reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("nv.sidebar.collapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("nv.sidebar.collapsed", sidebarCollapsed ? "1" : "0"); }
+    catch { /* ignore */ }
+  }, [sidebarCollapsed]);
+  // Ctrl+B (Cmd+B on macOS) toggles the sidebar — same chord VS Code
+  // uses, so the muscle memory carries.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (e.key !== "b" && e.key !== "B") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      setSidebarCollapsed((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [triggerNewNote, setTriggerNewNote] = useState(0);
@@ -483,17 +512,80 @@ export default function App() {
           boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
         }}
       >
-        <div
-          className="flex items-center gap-0.5 rounded-xl p-1"
-          style={{
-            background: theme.surface,
-            border: `1px solid ${theme.border}`,
-            boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
-          }}
-        >
-          <TabButton active={view === "editor"} onClick={() => setView("editor")} label="Notes" theme={theme} />
-          <TabButton active={view === "graph"} onClick={() => setView("graph")} label="Graph" theme={theme} />
-          <TabButton active={view === "compile"} onClick={() => setView("compile")} label="Compile" theme={theme} />
+        <div className="flex items-center gap-2">
+          {/* Sidebar toggle — collapses / restores the left sidebar.
+              VS Code's chord (Ctrl+B) also bound globally. */}
+          <button
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title={sidebarCollapsed ? "Show sidebar (Ctrl+B)" : "Hide sidebar (Ctrl+B)"}
+            aria-label="Toggle sidebar"
+            className="w-7 h-7 flex items-center justify-center rounded-md transition-colors"
+            style={{
+              color: sidebarCollapsed ? theme.textDim : theme.textMuted,
+              background: "transparent",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = theme.surface; e.currentTarget.style.color = theme.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = sidebarCollapsed ? theme.textDim : theme.textMuted; }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="9" y1="4" x2="9" y2="20" />
+              {!sidebarCollapsed && <line x1="6" y1="9" x2="6" y2="9.01" />}
+            </svg>
+          </button>
+          <div
+            className="flex items-center gap-0.5 rounded-xl p-1"
+            style={{
+              background: theme.surface,
+              border: `1px solid ${theme.border}`,
+              boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
+            }}
+          >
+          <TabButton
+            active={view === "editor"}
+            onClick={() => setView("editor")}
+            label="Notes"
+            theme={theme}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="8" y1="13" x2="16" y2="13" />
+                <line x1="8" y1="17" x2="13" y2="17" />
+              </svg>
+            }
+          />
+          <TabButton
+            active={view === "graph"}
+            onClick={() => setView("graph")}
+            label="Graph"
+            theme={theme}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                <circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
+                <circle cx="18" cy="6" r="2" fill="currentColor" stroke="none" />
+                <circle cx="12" cy="18" r="2" fill="currentColor" stroke="none" />
+                <line x1="7.4" y1="7.4" x2="10.6" y2="16.6" />
+                <line x1="16.6" y1="7.4" x2="13.4" y2="16.6" />
+                <line x1="8" y1="6" x2="16" y2="6" />
+              </svg>
+            }
+          />
+          <TabButton
+            active={view === "compile"}
+            onClick={() => setView("compile")}
+            label="Compile"
+            theme={theme}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                <path d="M4 4h11l5 5v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+                <polyline points="15 4 15 9 20 9" />
+                <path d="M8 14h8" />
+                <path d="M8 17h6" />
+              </svg>
+            }
+          />
+          </div>
         </div>
 
         <div className="flex items-center gap-4">
@@ -538,12 +630,14 @@ export default function App() {
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          triggerNewNote={triggerNewNote}
-          triggerSearch={triggerSearch}
-          onNoteSelect={() => { if (view !== "editor") setView("editor"); }}
-          onSettingsOpen={() => setSettingsOpen(true)}
-        />
+        {!sidebarCollapsed && (
+          <Sidebar
+            triggerNewNote={triggerNewNote}
+            triggerSearch={triggerSearch}
+            onNoteSelect={() => { if (view !== "editor") setView("editor"); }}
+            onSettingsOpen={() => setSettingsOpen(true)}
+          />
+        )}
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
@@ -666,11 +760,11 @@ function IngestBanner() {
   );
 }
 
-function TabButton({ active, onClick, label, theme }: { active: boolean; onClick: () => void; label: string; theme: Theme }) {
+function TabButton({ active, onClick, label, theme, icon }: { active: boolean; onClick: () => void; label: string; theme: Theme; icon?: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
-      className="px-4 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200"
+      className="flex items-center gap-1.5 px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200"
       style={active ? {
         background: theme.surface,
         color: theme.text,
@@ -681,6 +775,7 @@ function TabButton({ active, onClick, label, theme }: { active: boolean; onClick
         border: "1px solid transparent",
       }}
     >
+      {icon && <span className="flex-shrink-0">{icon}</span>}
       {label}
     </button>
   );
