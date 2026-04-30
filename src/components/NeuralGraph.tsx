@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from "react";
 import type { SimulationNodeDatum } from "d3-force";
 import { useGraphStore } from "../stores/graphStore";
+import { GraphFilterPanel } from "./GraphFilterPanel";
 import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
@@ -453,16 +454,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           .iterations(2);
         fg.d3Force("collide", collide);
         fg.d3Force("cluster", createClusterForce(0.025));
-        // Containment forces: gently pull every (non-pinned) node
-        // toward (0, 0). Without this, loosely-connected sub-components
-        // float apart freely and the connected graph can stretch into
-        // a tall thin shape that escapes the orphan ring entirely
-        // (especially in Semantic-on mode where there are more weak
-        // bridges between sub-components). Strength 0.04 is gentle —
-        // it doesn't flatten the d3 layout, just keeps drifting
-        // outliers from running away. Pinned orphan nodes (fx/fy set
-        // by the graphData memo) ignore this force, so the halo
-        // stays where we put it.
+        // Containment forces. See README on store for `centeringStrength`.
+        // Initial values come from the store; a separate effect
+        // updates them live when the user moves the panel slider.
         fg.d3Force("centerX", d3.forceX(0).strength(0.04));
         fg.d3Force("centerY", d3.forceY(0).strength(0.04));
         const linkForce = (fg as unknown as {
@@ -528,7 +522,77 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
   const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
   const showSemanticEdges = useGraphSettingsStore((s) => s.showSemanticEdges);
-  const toggleShowSemanticEdges = useGraphSettingsStore((s) => s.toggleShowSemanticEdges);
+  // -- v0.1.8 graph filter panel inputs ----------------------------------
+  const searchQuery = useGraphSettingsStore((s) => s.searchQuery);
+  const showOrphans = useGraphSettingsStore((s) => s.showOrphans);
+  const manualOnly = useGraphSettingsStore((s) => s.manualOnly);
+  const nodeSizeScale = useGraphSettingsStore((s) => s.nodeSizeScale);
+  const linkThicknessScale = useGraphSettingsStore((s) => s.linkThicknessScale);
+  const labelZoomThreshold = useGraphSettingsStore((s) => s.labelZoomThreshold);
+  const showArrows = useGraphSettingsStore((s) => s.showArrows);
+  const centeringStrength = useGraphSettingsStore((s) => s.centeringStrength);
+  const chargeStrength = useGraphSettingsStore((s) => s.chargeStrength);
+  const linkDistanceCfg = useGraphSettingsStore((s) => s.linkDistance);
+  const layoutShape = useGraphSettingsStore((s) => s.layoutShape);
+  const timelapseSpeedSec = useGraphSettingsStore((s) => s.timelapseSpeedSec);
+
+  // Filter panel open/close state — local, not persisted.
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+
+  // Time-lapse: when active, nodes appear progressively in
+  // chronological order. tlStartMs is the wall-clock start of the
+  // current playback (null = idle); tlProgress drifts 0..1 from a
+  // requestAnimationFrame loop. paintNode2D / linkWidth gate
+  // rendering on the per-node fraction (sorted ascending by
+  // created_at index).
+  const [tlStartMs, setTlStartMs] = useState<number | null>(null);
+  const [tlProgress, setTlProgress] = useState(1);
+  const tlActive = tlStartMs != null;
+
+  // Reactive force tuning — when the user moves a slider in the
+  // filter panel, mutate the existing force instances in place.
+  // Re-attaching the simulation would restart it (jarring); calling
+  // .strength() / .distance() on the already-attached force keeps
+  // positions and just retunes the gradient.
+  useEffect(() => {
+    if (mode !== "2d") return;
+    type ForceWithSetters = {
+      strength?: (n: number) => unknown;
+      distance?: (n: number) => unknown;
+      radius?: (n: number) => unknown;
+    };
+    type ForceFactory = {
+      forceRadial: (radius: number, x: number, y: number) => ForceWithSetters;
+    };
+    const fg = fg2dRef.current as
+      | {
+          d3Force: (n: string, f?: unknown) => ForceWithSetters | undefined;
+          d3ReheatSimulation?: () => void;
+        }
+      | undefined;
+    if (!fg || typeof fg.d3Force !== "function") return;
+    fg.d3Force("centerX")?.strength?.(centeringStrength);
+    fg.d3Force("centerY")?.strength?.(centeringStrength);
+    fg.d3Force("charge")?.strength?.(chargeStrength);
+    fg.d3Force("link")?.distance?.(linkDistanceCfg);
+    // Layout shape: "circle" attaches a forceRadial pulling every
+    // (non-pinned) node onto a ring at radius 200 with strength 0.08.
+    // "organic" clears it so the d3 default reasserts itself.
+    if (layoutShape === "circle") {
+      // Lazy import keeps d3-force out of the initial bundle for the
+      // organic-layout default.
+      import("d3-force").then((d3) => {
+        const factory = d3 as unknown as ForceFactory;
+        const ring = factory.forceRadial(220, 0, 0);
+        ring.strength?.(0.08);
+        fg.d3Force("ring", ring);
+        fg.d3ReheatSimulation?.();
+      });
+    } else {
+      fg.d3Force("ring", null);
+    }
+    fg.d3ReheatSimulation?.();
+  }, [mode, centeringStrength, chargeStrength, linkDistanceCfg, layoutShape]);
 
   // Screenshot the current 2D canvas to a transparent PNG. The
   // ForceGraph2D component renders into a <canvas> with
@@ -567,19 +631,95 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [mode]);
 
   // Filter the raw edges from the store BEFORE anything else consumes
-  // them. When `showSemanticEdges` is false (default), drop every edge
-  // whose link_type is "semantic" — these are auto-computed cosine
-  // similarities, not anything the user authored. Manual wikilinks
-  // and entity co-mentions stay. The downstream graphData / adjacency /
-  // bidi memos read this filtered list, so the visual graph and the
-  // hover-focus neighbourhood match what the user actually wrote.
-  const edges = useMemo(
-    () => (showSemanticEdges ? rawEdges : rawEdges.filter((e) => e.link_type !== "semantic")),
-    [rawEdges, showSemanticEdges],
-  );
+  // them. Three layers stack:
+  //   1. manualOnly  → keep only `manual` (typed [[wikilinks]])
+  //   2. showSemanticEdges=false → drop `semantic` (auto cosine)
+  //   3. otherwise → keep everything
+  // The downstream graphData / adjacency / bidi memos read this
+  // filtered list, so the visual graph and the hover-focus
+  // neighbourhood match what the user actually wrote.
+  const edges = useMemo(() => {
+    if (manualOnly) return rawEdges.filter((e) => e.link_type === "manual");
+    if (!showSemanticEdges) return rawEdges.filter((e) => e.link_type !== "semantic");
+    return rawEdges;
+  }, [rawEdges, showSemanticEdges, manualOnly]);
   const semanticEdgeCount = useMemo(
     () => rawEdges.filter((e) => e.link_type === "semantic").length,
     [rawEdges],
+  );
+
+  // Lower-cased search query, computed once. Empty → no filter.
+  const searchLower = searchQuery.trim().toLowerCase();
+  // Per-node "match" set: which nodes pass the current search. Empty
+  // search → null (every node passes; we skip the dim path entirely).
+  const searchMatches = useMemo<Set<string> | null>(() => {
+    if (!searchLower) return null;
+    const out = new Set<string>();
+    for (const n of nodes) {
+      if (n.title.toLowerCase().includes(searchLower)) out.add(n.id);
+    }
+    return out;
+  }, [nodes, searchLower]);
+
+  // Time-lapse fractions — index of each node in created-at order, /
+  // (count - 1). Recomputed when the node set changes. Used by paint
+  // gating during playback. We use access_count as a fallback when
+  // a node has no created_at (some legacy rows). The fraction is
+  // stable across the lifetime of a node so the simulation forces
+  // do not need to be re-attached.
+  const tlFractions = useMemo<Map<string, number>>(() => {
+    const sorted = [...nodes].sort((a, b) => {
+      const ax = (a as { updated_at?: string }).updated_at ?? "";
+      const bx = (b as { updated_at?: string }).updated_at ?? "";
+      return ax.localeCompare(bx);
+    });
+    const m = new Map<string, number>();
+    if (sorted.length === 0) return m;
+    if (sorted.length === 1) {
+      m.set(sorted[0]!.id, 0);
+      return m;
+    }
+    sorted.forEach((n, i) => m.set(n.id, i / (sorted.length - 1)));
+    return m;
+  }, [nodes]);
+
+  // Drive the playback animation. Updates tlProgress every animation
+  // frame from tlStartMs. Auto-stops when progress hits 1.
+  useEffect(() => {
+    if (tlStartMs == null) return;
+    let raf = 0;
+    const totalMs = Math.max(1000, timelapseSpeedSec * 1000);
+    const tick = () => {
+      const now = performance.now();
+      const p = Math.min(1, (now - tlStartMs) / totalMs);
+      setTlProgress(p);
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else setTlStartMs(null);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [tlStartMs, timelapseSpeedSec]);
+
+  const startTimelapse = useCallback(() => {
+    setTlProgress(0);
+    setTlStartMs(performance.now());
+  }, []);
+  const stopTimelapse = useCallback(() => {
+    setTlStartMs(null);
+    setTlProgress(1);
+  }, []);
+
+  // Helper: is this node visible at the current playback progress?
+  // Always true when not playing back. During playback, true only
+  // when the node's chronological fraction is at or before the
+  // current progress.
+  const isNodeVisibleAtTl = useCallback(
+    (id: string): boolean => {
+      if (!tlActive) return true;
+      const f = tlFractions.get(id);
+      return f == null ? true : f <= tlProgress;
+    },
+    [tlActive, tlFractions, tlProgress],
   );
 
   // Cmd+Shift+A toggles analytics. Cmd+A is select-all in editor
@@ -1086,13 +1226,23 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // muted alpha so the eye reads them as peripheral satellites,
     // not equal-weight peers of the linked notes.
     const isOrphan = (node.degree ?? 0) === 0;
+    // showOrphans=false: skip painting orphans entirely (they are
+    // still in the simulation, just invisible). Time-lapse: skip
+    // nodes whose chronological fraction is past the current playback
+    // progress.
+    if (isOrphan && !showOrphans) return;
+    if (!isNodeVisibleAtTl(node.id)) return;
     const orphanScale = isOrphan ? 0.55 : 1.0;
     const orphanAlphaMult = isOrphan ? 0.65 : 1.0;
+    // Search dim: non-matching nodes render at low alpha so the user
+    // can still see the surrounding context but the matches pop.
+    const searchAlphaMult =
+      searchMatches && !searchMatches.has(node.id) ? 0.18 : 1.0;
     const r = effectiveNodeRadius(
       node,
       analyticsData?.pr ?? null,
       analyticsMode && analyticsResizeByImportance,
-    ) * orphanScale;
+    ) * orphanScale * nodeSizeScale;
 
     const isDormant = node.state === "dormant";
     const isFresh = node.state === "fresh";
@@ -1119,7 +1269,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       focusAlpha = (isSelf || isNeighbour) ? 1 : 0.08;
     }
 
-    const alpha = strengthAlpha * focusAlpha * orphanAlphaMult;
+    const alpha = strengthAlpha * focusAlpha * orphanAlphaMult * searchAlphaMult;
 
     // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
     // shadow follows the orb shape, not just the path.
@@ -1194,12 +1344,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // a wall of text. Smaller font than before (was 12 px) to
     // match the smaller nodes.
     const focusLabelBoost = focusAlpha === 1 && focusedNodeId != null;
-    // Bumped from 1.4 to 3.2 so labels only appear once the user has
-    // zoomed in far enough that the canvas is genuinely sparse —
-    // before that the wall of titles read as clutter, especially with
-    // the orphan halo also drawing names. Hovering / focus-mode
+    // Threshold is user-tunable in the Filters panel (Display →
+    // "Show labels at zoom"). Default 3.2. Hovering / focus-mode
     // still surface the label early via focusLabelBoost regardless.
-    if (globalScale >= 3.2 || focusLabelBoost) {
+    if (globalScale >= labelZoomThreshold || focusLabelBoost) {
       const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
       ctx.fillStyle = withAlpha("#a8a6c0", Math.max(0.35, focusAlpha));
@@ -1492,19 +1640,23 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
     const fromId = typeof l.source === "string" ? l.source : l.source.id;
     const toId = typeof l.target === "string" ? l.target : l.target.id;
+    // Time-lapse: an edge is visible only when BOTH endpoints have
+    // appeared yet. Returning 0 width hides it without disturbing
+    // the simulation; the link force still applies.
+    if (!isNodeVisibleAtTl(fromId) || !isNodeVisibleAtTl(toId)) return 0;
+    // Search dim: edges that touch a non-matching node go thin.
+    const searchOk =
+      !searchMatches || (searchMatches.has(fromId) && searchMatches.has(toId));
     const conf = edgeConfidence(
       { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
       { bidi: graphData.bidi },
     );
-    // 0.25 px (weak) to 0.95 px (high-confidence wikilink) at rest.
-    // Was capped at 0.65 — slight headroom now so the strongest edges
-    // really announce themselves.
-    const base = 0.25 + conf * 0.7;
+    const base = (0.25 + conf * 0.7) * linkThicknessScale * (searchOk ? 1 : 0.25);
     if (focusedNodeId) {
       if (fromId === focusedNodeId || toId === focusedNodeId) return base * 2.4;
     }
     return base;
-  }, [focusedNodeId, graphData.bidi]);
+  }, [focusedNodeId, graphData.bidi, linkThicknessScale, isNodeVisibleAtTl, searchMatches]);
   // Bidirectional edge curvature: when both A→B and B→A exist, curve
   // them in opposite directions so they no longer draw on top of each
   // other. Each direction gets ±0.15 curvature — subtle enough not
@@ -1575,40 +1727,27 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           />
           Analytics
         </button>
-        {/* Semantic-edges toggle. Off by default — auto-computed cosine
-            similarity edges create a hairball on dense brains, and they
-            represent inferred relationships rather than authored ones.
-            Toggling on adds the inferred layer back; the count tells the
-            user how many edges they're hiding. */}
+        {/* Filters panel toggle. Replaces the old standalone Semantic
+            pill — Semantic, Orphans, sliders, time-lapse, etc. all
+            live inside the panel now. */}
         <button
-          onClick={toggleShowSemanticEdges}
+          onClick={() => setFilterPanelOpen((o) => !o)}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
           style={{
-            background: showSemanticEdges ? "var(--nv-accent)" : "var(--nv-surface)",
-            color: showSemanticEdges ? "var(--nv-bg)" : "var(--nv-text-muted)",
+            background: filterPanelOpen ? "var(--nv-accent)" : "var(--nv-surface)",
+            color: filterPanelOpen ? "var(--nv-bg)" : "var(--nv-text-muted)",
             border: "1px solid var(--nv-border)",
           }}
-          aria-pressed={showSemanticEdges}
-          aria-label="Toggle semantic-similarity edges"
-          title={
-            showSemanticEdges
-              ? `Semantic edges shown (${semanticEdgeCount}). Click to hide.`
-              : `Semantic edges hidden (${semanticEdgeCount} would render). Click to show.`
-          }
+          aria-pressed={filterPanelOpen}
+          aria-label="Toggle graph filters panel"
+          title={filterPanelOpen ? "Close filters" : "Filters · Display · Time-lapse"}
         >
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: showSemanticEdges ? "var(--nv-bg)" : "var(--nv-text-dim)" }}
-          />
-          Semantic
-          {semanticEdgeCount > 0 && (
-            <span
-              className="ml-0.5 opacity-70"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {semanticEdgeCount}
-            </span>
-          )}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="7" y1="12" x2="17" y2="12" />
+            <line x1="10" y1="18" x2="14" y2="18" />
+          </svg>
+          Filters
         </button>
         {/* Screenshot button — exports the current 2D canvas to PNG
             with transparent background (the canvas itself is already
@@ -1635,6 +1774,21 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {/* Analytics tip bar — appears below the toolbar when analytics
           mode is on. Idle copy + per-hover swap + dismiss-for-session. */}
       <AnalyticsTipBar visible={analyticsMode} hoverText={tipBarHoverText} />
+
+      {/* Filters / Display / Layout / Time-lapse panel — slides in
+          from the right when the toolbar's Filters pill is on.
+          Reads + writes the graph settings store, which the render
+          paths above subscribe to. */}
+      <GraphFilterPanel
+        open={filterPanelOpen}
+        onClose={() => setFilterPanelOpen(false)}
+        nodeCount={nodes.length}
+        orphanCount={nodes.filter((n) => (graphData.adjacency.get(n.id)?.size ?? 0) === 0).length}
+        semanticEdgeCount={semanticEdgeCount}
+        onTimelapseStart={startTimelapse}
+        onTimelapseStop={stopTimelapse}
+        timelapseActive={tlActive}
+      />
 
       <Suspense fallback={
         <div className="absolute inset-0 flex items-center justify-center">
@@ -1663,6 +1817,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkWidth={linkWidth}
             linkCurvature={linkCurvature}
             linkDirectionalParticles={0}
+            linkDirectionalArrowLength={showArrows ? 3.5 : 0}
+            linkDirectionalArrowRelPos={0.92}
             onRenderFramePre={paintBackgroundTints}
             onRenderFramePost={paintClusterLabels}
             cooldownTicks={100}
