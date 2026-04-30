@@ -72,12 +72,21 @@ export function Editor() {
     (filename: string) => {
       setOpenTabs((tabs) => {
         const next = tabs.filter((f) => f !== filename);
-        if (filename === activeFilename && next.length > 0) {
-          // Select the tab that was visually next-door (the one that
-          // slides into the closed tab's slot). Falls back to last.
-          const idx = tabs.indexOf(filename);
-          const replacement = next[Math.min(idx, next.length - 1)] ?? next[next.length - 1]!;
-          selectNote(replacement);
+        if (filename === activeFilename) {
+          if (next.length > 0) {
+            // Select the tab that was visually next-door (the one
+            // that slides into the closed tab's slot). Falls back
+            // to last.
+            const idx = tabs.indexOf(filename);
+            const replacement = next[Math.min(idx, next.length - 1)] ?? next[next.length - 1]!;
+            selectNote(replacement);
+          } else {
+            // Closed the last tab AND it was the active one → drop
+            // back to the editor's empty state. Without this the
+            // note's content keeps rendering even though the tab
+            // strip is empty, which reads as a bug.
+            useNoteStore.setState({ activeFilename: null, activeContent: "", isDirty: false });
+          }
         }
         return next;
       });
@@ -94,14 +103,10 @@ export function Editor() {
     [activeFilename, selectNote]
   );
 
-  // Close everything. The editor will show its empty state.
+  // Close everything — empty tab strip AND empty editor body.
   const closeAll = useCallback(() => {
     setOpenTabs([]);
-    // Note: the noteStore retains an activeFilename but with no open
-    // tabs the tab strip vanishes; the body shows whatever the store
-    // says. If the user wants a true empty state, we could clear
-    // active here — leaving as-is keeps "click a sidebar note to
-    // re-open" predictable.
+    useNoteStore.setState({ activeFilename: null, activeContent: "", isDirty: false });
   }, []);
 
   // Right-click context menu state. Tracks which tab was clicked
