@@ -654,15 +654,49 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
     for (const e of edges) { addEdge(e.from, e.to); addEdge(e.to, e.from); }
 
+    // Pre-compute pinned positions for isolated nodes (degree 0).
+    // Without a layer force, react-force-graph's charge force pushes
+    // them apart into a halo of random floaters around the canvas
+    // when the user zooms out. Pinning them into a deterministic grid
+    // below the main cluster keeps the canvas tidy: orphans become a
+    // visible "shelf" the user can scan, and the connected graph
+    // doesn't have to fight charge repulsion from every loose node.
+    //
+    // Heuristic: line for ≤16 isolates, square grid otherwise.
+    // Positions are in d3-force coordinate space (the connected graph
+    // clusters near (0,0) by default), so the grid ends up just below
+    // the main cluster at every zoom level.
+    const isolatedIds: string[] = [];
+    for (const n of nodes) {
+      if ((adjacency.get(n.id)?.size ?? 0) === 0) isolatedIds.push(n.id);
+    }
+    isolatedIds.sort(); // deterministic order so the layout doesn't reshuffle on every reload
+    const cols = isolatedIds.length <= 16
+      ? Math.max(1, isolatedIds.length)
+      : Math.ceil(Math.sqrt(isolatedIds.length));
+    const SPACING = 22;
+    const SHELF_OFFSET_Y = 220; // px below the connected cluster
+    const orphanPos = new Map<string, { fx: number; fy: number }>();
+    isolatedIds.forEach((id, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      orphanPos.set(id, {
+        fx: (col - (cols - 1) / 2) * SPACING,
+        fy: SHELF_OFFSET_Y + row * SPACING,
+      });
+    });
+
     return {
       // Attach `degree` to each node so nodeRadius() can read it directly
       // without a Map lookup. Degree is the number of distinct neighbours
       // (undirected); matches what the user sees as "lines coming out of
-      // this node" in the graph view.
-      nodes: nodes.map((n) => ({
-        ...n,
-        degree: adjacency.get(n.id)?.size ?? 0,
-      })),
+      // this node" in the graph view. Orphans also get fx/fy from the
+      // grid layout above so they snap to the shelf.
+      nodes: nodes.map((n) => {
+        const degree = adjacency.get(n.id)?.size ?? 0;
+        const pos = orphanPos.get(n.id);
+        return pos ? { ...n, degree, fx: pos.fx, fy: pos.fy } : { ...n, degree };
+      }),
       links: edges.map((e: GraphEdge) => ({
         source: e.from,
         target: e.to,
