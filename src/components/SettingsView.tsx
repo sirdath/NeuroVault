@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
 import {
@@ -50,28 +50,60 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 const SERVER_URL = API_HOST;
 
 function useServerStatus() {
-  const [online, setOnline] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const check = useCallback(async () => {
-    setChecking(true);
+  // null = first probe hasn't completed yet. We treat that as "still
+  // checking" in the UI rather than flashing "Server offline" before
+  // the backend has had a chance to bind.
+  const [online, setOnline] = useState<boolean | null>(null);
+  // Spinner state is only true on initial mount or an explicit user-
+  // triggered re-check. Background polls run silently — flipping
+  // "Checking..." into the status row every 3 s reads as a glitch
+  // and was the visible flicker the user reported.
+  const [checking, setChecking] = useState(true);
+  // Hysteresis: a single failed probe (transient socket close, GC
+  // pause, brief overload) flipped `online` to false in the previous
+  // implementation, then snapped back to true on the next 3 s tick.
+  // Now we require N consecutive failures before declaring offline.
+  // Successful probes reset the counter immediately.
+  const failures = useRef(0);
+  const FAIL_THRESHOLD = 2;
+
+  const probe = useCallback(async (silent: boolean) => {
+    if (!silent) setChecking(true);
     try {
-      const r = await fetch(`${SERVER_URL}/api/brains/active`, { signal: AbortSignal.timeout(3000) });
-      setOnline(r.ok);
-    } catch { setOnline(false); }
-    setChecking(false);
+      const r = await fetch(`${SERVER_URL}/api/brains/active`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (r.ok) {
+        failures.current = 0;
+        setOnline(true);
+      } else {
+        failures.current += 1;
+        if (failures.current >= FAIL_THRESHOLD) setOnline(false);
+      }
+    } catch {
+      failures.current += 1;
+      if (failures.current >= FAIL_THRESHOLD) setOnline(false);
+    } finally {
+      if (!silent) setChecking(false);
+    }
   }, []);
-  // Run the check on mount AND every 3 seconds — the in-process Rust
-  // server takes ~5-10 s to come up at first launch (ONNX model load,
-  // vault scan), so a one-shot mount check would race against the
-  // boot sequence and leave the panel showing "Server offline" even
-  // after the backend is healthy. 3 s feels live without DOSing the
-  // health endpoint.
+
+  const check = useCallback(() => probe(false), [probe]);
+
+  // First-launch boot can take 5-10 s (ONNX load, vault scan), so we
+  // need to keep polling. 5 s cadence + silent polls + threshold-2
+  // flip-flop is the right balance of "live" vs "stable".
   useEffect(() => {
     check();
-    const id = setInterval(check, 3000);
+    const id = setInterval(() => probe(true), 5000);
     return () => clearInterval(id);
-  }, [check]);
-  return { online, checking, check };
+  }, [check, probe]);
+
+  // Outside this hook we expose `online` as a definite boolean.
+  // Pre-first-probe state (null) reads as "not yet known offline",
+  // which we surface as `true` so the UI defaults to optimistic and
+  // the `checking` flag drives the spinner.
+  return { online: online !== false, checking, check };
 }
 
 export function SettingsView() {

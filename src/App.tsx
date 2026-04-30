@@ -137,12 +137,18 @@ export default function App() {
         })
         .catch(() => {
           failCountRef.current += 1;
-          setServerUp(false);
-          // If we've never connected (cold start), show the banner on the
-          // FIRST failed check — no 15s wait. If we were connected and the
-          // server dropped, wait 3 checks to avoid flashing on blips.
+          // Hysteresis: a single failed probe (transient socket close,
+          // GC pause, dev-server reload blip) used to flip serverUp to
+          // false immediately, then snap back to true on the next 5 s
+          // tick. That caused a visible flicker on the connected /
+          // offline dot. Now the dot only flips AFTER the same
+          // threshold the banner uses, so transient hiccups are
+          // invisible to the user.
           const threshold = everConnectedRef.current ? 3 : 1;
-          if (failCountRef.current >= threshold) setServerDown(true);
+          if (failCountRef.current >= threshold) {
+            setServerUp(false);
+            setServerDown(true);
+          }
         });
     };
     check();
