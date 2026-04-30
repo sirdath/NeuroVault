@@ -110,7 +110,47 @@ interface GraphSettings {
    *  derived tint because numeric Louvain ids aren't stable across
    *  brain edits. */
   clusterColors: Record<string, string>;
+  // -- v0.1.8 graph filter panel additions ----------------------------
+  /** Free-text node filter. When non-empty, nodes whose title does not
+   *  match (case-insensitive substring) are dimmed out. Edges that
+   *  touch a non-matching node are also dimmed. */
+  searchQuery: string;
+  /** When false, isolated (degree-0) nodes are completely hidden from
+   *  the canvas. Default true — they render in the orphan halo. */
+  showOrphans: boolean;
+  /** When true, only manually-authored wikilinks render. Overrides
+   *  showSemanticEdges; entity edges are also hidden. */
+  manualOnly: boolean;
+  /** Multiplicative scale on every node's drawn radius. 1.0 default,
+   *  user-tunable 0.5..2.0 via the Display section slider. */
+  nodeSizeScale: number;
+  /** Multiplicative scale on every link's drawn width. */
+  linkThicknessScale: number;
+  /** globalScale threshold above which node titles render. Higher =
+   *  zoom in more before labels appear. Default 3.2. */
+  labelZoomThreshold: number;
+  /** Draw arrowheads on directed edges (manual wikilinks). Default
+   *  off — undirected look reads cleaner at typical zoom. */
+  showArrows: boolean;
+  /** d3-force gentle "stay near origin" pull strength on every
+   *  non-pinned node. 0 disables, 0.04 default. Higher = tighter
+   *  cluster, less sprawl. */
+  centeringStrength: number;
+  /** d3-forceManyBody charge strength. More negative = more node
+   *  repulsion = more spread out. Default -90. */
+  chargeStrength: number;
+  /** d3-forceLink target distance for connected nodes. Default 26. */
+  linkDistance: number;
+  /** Layout shape for the connected component. "organic" is the
+   *  default d3-force layout; "circle" pulls connected nodes onto a
+   *  ring around the centre via forceRadial. */
+  layoutShape: GraphLayoutShape;
+  /** Time-lapse playback speed in seconds (full graph reveal time).
+   *  Lower = faster. Default 15 s. */
+  timelapseSpeedSec: number;
 }
+
+export type GraphLayoutShape = "organic" | "circle";
 
 const STORAGE_KEY = "nv.graph.settings";
 
@@ -124,6 +164,18 @@ const DEFAULTS: GraphSettings = {
   showSemanticEdges: false,
   folderColors: {},
   clusterColors: {},
+  searchQuery: "",
+  showOrphans: true,
+  manualOnly: false,
+  nodeSizeScale: 1.0,
+  linkThicknessScale: 1.0,
+  labelZoomThreshold: 3.2,
+  showArrows: false,
+  centeringStrength: 0.04,
+  chargeStrength: -90,
+  linkDistance: 26,
+  layoutShape: "organic",
+  timelapseSpeedSec: 15,
 };
 
 /** Tight `#rrggbb` validator. We only persist colours that match this
@@ -158,6 +210,12 @@ function load(): GraphSettings {
           : "circle";
       const bool = (key: string, fallback: boolean): boolean =>
         typeof parsed[key] === "boolean" ? parsed[key] : fallback;
+      const num = (key: string, fallback: number, min: number, max: number): number => {
+        const v = parsed[key];
+        return typeof v === "number" && v >= min && v <= max ? v : fallback;
+      };
+      const layoutShape: GraphLayoutShape =
+        parsed.layoutShape === "circle" ? "circle" : "organic";
       return {
         palette,
         nodeShape,
@@ -168,6 +226,18 @@ function load(): GraphSettings {
         showSemanticEdges: bool("showSemanticEdges", false),
         folderColors: sanitizeColorMap(parsed.folderColors),
         clusterColors: sanitizeColorMap(parsed.clusterColors),
+        searchQuery: typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
+        showOrphans: bool("showOrphans", true),
+        manualOnly: bool("manualOnly", false),
+        nodeSizeScale: num("nodeSizeScale", 1.0, 0.3, 3.0),
+        linkThicknessScale: num("linkThicknessScale", 1.0, 0.3, 3.0),
+        labelZoomThreshold: num("labelZoomThreshold", 3.2, 0.5, 8.0),
+        showArrows: bool("showArrows", false),
+        centeringStrength: num("centeringStrength", 0.04, 0, 0.5),
+        chargeStrength: num("chargeStrength", -90, -300, -10),
+        linkDistance: num("linkDistance", 26, 5, 120),
+        layoutShape,
+        timelapseSpeedSec: num("timelapseSpeedSec", 15, 3, 90),
       };
     }
   } catch { /* corrupt / private mode */ }
@@ -191,6 +261,18 @@ interface GraphSettingsStore extends GraphSettings {
   clearFolderColors: () => void;
   setClusterColor: (clusterName: string, color: string | null) => void;
   clearClusterColors: () => void;
+  setSearchQuery: (q: string) => void;
+  setShowOrphans: (v: boolean) => void;
+  setManualOnly: (v: boolean) => void;
+  setNodeSizeScale: (v: number) => void;
+  setLinkThicknessScale: (v: number) => void;
+  setLabelZoomThreshold: (v: number) => void;
+  setShowArrows: (v: boolean) => void;
+  setCenteringStrength: (v: number) => void;
+  setChargeStrength: (v: number) => void;
+  setLinkDistance: (v: number) => void;
+  setLayoutShape: (v: GraphLayoutShape) => void;
+  setTimelapseSpeedSec: (v: number) => void;
 }
 
 function persist(s: GraphSettings) {
@@ -271,4 +353,16 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
     set({ clusterColors: {} });
     persist({ ...get(), clusterColors: {} });
   },
+  setSearchQuery: (searchQuery) => { set({ searchQuery }); persist({ ...get(), searchQuery }); },
+  setShowOrphans: (showOrphans) => { set({ showOrphans }); persist({ ...get(), showOrphans }); },
+  setManualOnly: (manualOnly) => { set({ manualOnly }); persist({ ...get(), manualOnly }); },
+  setNodeSizeScale: (nodeSizeScale) => { set({ nodeSizeScale }); persist({ ...get(), nodeSizeScale }); },
+  setLinkThicknessScale: (linkThicknessScale) => { set({ linkThicknessScale }); persist({ ...get(), linkThicknessScale }); },
+  setLabelZoomThreshold: (labelZoomThreshold) => { set({ labelZoomThreshold }); persist({ ...get(), labelZoomThreshold }); },
+  setShowArrows: (showArrows) => { set({ showArrows }); persist({ ...get(), showArrows }); },
+  setCenteringStrength: (centeringStrength) => { set({ centeringStrength }); persist({ ...get(), centeringStrength }); },
+  setChargeStrength: (chargeStrength) => { set({ chargeStrength }); persist({ ...get(), chargeStrength }); },
+  setLinkDistance: (linkDistance) => { set({ linkDistance }); persist({ ...get(), linkDistance }); },
+  setLayoutShape: (layoutShape) => { set({ layoutShape }); persist({ ...get(), layoutShape }); },
+  setTimelapseSpeedSec: (timelapseSpeedSec) => { set({ timelapseSpeedSec }); persist({ ...get(), timelapseSpeedSec }); },
 }));

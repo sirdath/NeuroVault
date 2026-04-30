@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useNoteStore } from "../stores/noteStore";
+import { ContextMenu } from "./ContextMenu";
 import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
@@ -83,6 +84,34 @@ export function Editor() {
     },
     [activeFilename, selectNote]
   );
+
+  // Close every other tab. The right-clicked one becomes active.
+  const closeOthers = useCallback(
+    (keepFilename: string) => {
+      setOpenTabs([keepFilename]);
+      if (keepFilename !== activeFilename) selectNote(keepFilename);
+    },
+    [activeFilename, selectNote]
+  );
+
+  // Close everything. The editor will show its empty state.
+  const closeAll = useCallback(() => {
+    setOpenTabs([]);
+    // Note: the noteStore retains an activeFilename but with no open
+    // tabs the tab strip vanishes; the body shows whatever the store
+    // says. If the user wants a true empty state, we could clear
+    // active here — leaving as-is keeps "click a sidebar note to
+    // re-open" predictable.
+  }, []);
+
+  // Right-click context menu state. Tracks which tab was clicked
+  // so the close-others / close-all actions know the target.
+  const [tabMenu, setTabMenu] = useState<{
+    open: boolean;
+    x: number;
+    y: number;
+    filename: string;
+  }>({ open: false, x: 0, y: 0, filename: "" });
 
   // dnd-kit setup. Pointer sensor with a 6px activation distance so a
   // plain click on the tab body still fires onClick for navigation —
@@ -204,6 +233,10 @@ export function Editor() {
                       isActive={filename === activeFilename}
                       onSelect={() => selectNote(filename)}
                       onClose={() => closeTab(filename)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setTabMenu({ open: true, x: e.clientX, y: e.clientY, filename });
+                      }}
                     />
                   );
                 })}
@@ -295,6 +328,34 @@ export function Editor() {
         <EditorStats content={activeContent} />
       </div>
 
+      {/* Right-click context menu for tabs. Only rendered when the
+          user has actually right-clicked a tab; the ContextMenu
+          component handles outside-click / Escape / blur dismissal. */}
+      <ContextMenu
+        open={tabMenu.open}
+        x={tabMenu.x}
+        y={tabMenu.y}
+        items={[
+          {
+            label: "Close",
+            hint: "Middle-click",
+            onSelect: () => closeTab(tabMenu.filename),
+          },
+          {
+            label: "Close others",
+            disabled: openTabs.length <= 1,
+            onSelect: () => closeOthers(tabMenu.filename),
+          },
+          { divider: true },
+          {
+            label: "Close all",
+            destructive: true,
+            disabled: openTabs.length === 0,
+            onSelect: () => closeAll(),
+          },
+        ]}
+        onClose={() => setTabMenu((m) => ({ ...m, open: false }))}
+      />
     </div>
   );
 }
@@ -368,12 +429,14 @@ function SortableTab({
   isActive,
   onSelect,
   onClose,
+  onContextMenu,
 }: {
   filename: string;
   title: string;
   isActive: boolean;
   onSelect: () => void;
   onClose: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: filename });
@@ -390,6 +453,7 @@ function SortableTab({
           onClose();
         }
       }}
+      onContextMenu={onContextMenu}
       role="tab"
       aria-selected={isActive}
       className="flex items-center gap-2 px-3 py-2 text-[12px] font-[Geist,sans-serif] whitespace-nowrap transition-all flex-shrink-0 max-w-[200px] cursor-pointer select-none"
