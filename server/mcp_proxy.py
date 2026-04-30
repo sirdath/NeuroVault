@@ -713,6 +713,95 @@ def status() -> Any:
 
 
 @mcp.tool(annotations={
+    "title": "Prepare a wiki compile pack",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def compile_prepare(topic: str, brain: str | None = None, limit: int = 12) -> Any:
+    """Build a source pack for compiling a wiki page on `topic`. Step
+    1 of the agent-driven compile flow.
+
+    WHEN TO CALL:
+    - User asks you to "write a wiki page on X" / "summarise everything
+      I've said about X" / "compile what we know about X"
+    - You want to author a canonical reference page that the user can
+      then review and approve
+
+    Returns:
+        topic        — the requested topic, trimmed
+        brain_id     — which brain the pack is from
+        sources      — top-N most relevant engrams, each with
+                       {id, short_id, title, kind, content}
+        existing_wiki — if a wiki page on this topic already exists,
+                        its current content (so you can update vs
+                        rewrite). Omitted on the first compile.
+        schema       — CLAUDE.md or schema.md from the vault root, if
+                       present. Use this to match house style.
+
+    Next step: write the wiki markdown yourself from this pack, then
+    call `compile_submit` to persist it as `pending` for the user to
+    review in the Compile tab of the desktop app.
+
+    Args:
+        topic: short title for the page, e.g. "Auth migration".
+        brain: target brain id (defaults to active).
+        limit: source pack size. Default 12.
+    """
+    body: dict[str, Any] = {"topic": topic, "limit": limit}
+    if brain:
+        body["brain"] = brain
+    return _http_post("/api/compilations/prepare", body)
+
+
+@mcp.tool(annotations={
+    "title": "Submit a compiled wiki for review",
+    "readOnlyHint": False,
+    "destructiveHint": False,  # writes a new wiki engram + a pending row
+    "idempotentHint": False,   # repeat calls create more pending rows
+    "openWorldHint": False,
+})
+def compile_submit(
+    topic: str,
+    wiki_markdown: str,
+    source_engram_ids: list[str] | None = None,
+    brain: str | None = None,
+) -> Any:
+    """Submit your compiled wiki page for the user to review. Step 2
+    of the agent-driven compile flow, after `compile_prepare`.
+
+    Writes the wiki markdown to vault/wiki/<slug>.md, marks the
+    engram as kind='wiki', and inserts a row in the compilations
+    table with status='pending'. The desktop app's Compile tab
+    surfaces it the same way an LLM-driven compile would, so the
+    user can diff old vs new and approve / reject.
+
+    Returns:
+        compilation_id   — the pending row's id
+        wiki_engram_id   — the engram id of the written wiki page
+        wiki_filename    — relative path inside the vault
+        brain_id         — which brain it landed in
+        status           — always "pending" on submit
+
+    Args:
+        topic: same topic you passed to `compile_prepare`.
+        wiki_markdown: the full wiki body you authored. No code fences,
+            no preamble — just the markdown.
+        source_engram_ids: list of source engram ids (from the prepare
+            pack) you actually used. Persisted for provenance.
+        brain: target brain id (defaults to active).
+    """
+    body: dict[str, Any] = {
+        "topic": topic,
+        "wiki_markdown": wiki_markdown,
+        "source_engram_ids": source_engram_ids or [],
+    }
+    if brain:
+        body["brain"] = brain
+    return _http_post("/api/compilations/submit", body)
+
+
+@mcp.tool(annotations={
     "title": "Update brain (re-scan vault, refresh index)",
     "readOnlyHint": False,
     # Idempotent in the "calling twice in a row is fine" sense — the

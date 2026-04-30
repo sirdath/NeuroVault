@@ -119,6 +119,8 @@ fn router() -> Router {
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))
         .route("/api/update", post(update_brain))
+        .route("/api/compilations/prepare", post(compile_prepare))
+        .route("/api/compilations/submit", post(compile_submit))
         .route("/api/brains", post(brains_create))
         .route("/api/check_duplicate", post(check_duplicate))
         .route("/api/session_start", get(session_start))
@@ -861,6 +863,259 @@ async fn update_brain(
             unchanged,
             deleted,
             elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Compilations: agent-driven wiki compile flow.
+//
+// Two endpoints, designed for an agent (Claude Code, Cursor) to drive
+// end-to-end without the desktop UI in the loop:
+//
+//   POST /api/compilations/prepare  body: {topic, brain?}
+//     → {topic, sources[], existing_wiki?, schema?}
+//   POST /api/compilations/submit   body: {topic, wiki_markdown,
+//                                          source_engram_ids?, brain?}
+//     → {compilation_id, wiki_engram_id, status}
+//
+// Agent flow:
+//   1. Call prepare with a topic. We run hybrid_retrieve to find the
+//      most relevant engrams, return them as "sources" plus any
+//      existing wiki page on the topic.
+//   2. Agent generates the wiki page from the pack with its own LLM.
+//   3. Call submit with the markdown. We write the wiki engram into
+//      vault/wiki/<slug>.md, INSERT a `compilations` row with status
+//      `pending` so the UI's review panel picks it up the same way an
+//      LLM-driven compile would.
+//
+// Approve / reject endpoints stay UI-only for now — agents shouldn't
+// finalise their own work.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct CompilePrepareBody {
+    topic: String,
+    #[serde(default)]
+    brain: Option<String>,
+    /// Optional override for the source pack size. Default 12 — enough
+    /// context for a wiki page, not so much we drown the agent in
+    /// duplicates.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Serialize)]
+struct CompileSourceItem {
+    id: String,
+    short_id: String,
+    title: String,
+    kind: String,
+    content: String,
+}
+
+#[derive(serde::Serialize)]
+struct CompileExistingWiki {
+    id: String,
+    content: String,
+}
+
+#[derive(serde::Serialize)]
+struct CompilePreparePack {
+    topic: String,
+    brain_id: String,
+    sources: Vec<CompileSourceItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    existing_wiki: Option<CompileExistingWiki>,
+    schema: String,
+}
+
+async fn compile_prepare(
+    _s: State<ServerState>,
+    Json(body): Json<CompilePrepareBody>,
+) -> Result<Json<CompilePreparePack>, ApiError> {
+    let topic = body.topic.trim().to_string();
+    if topic.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "topic is required".into(),
+        ));
+    }
+    let result = tokio::task::spawn_blocking(move || -> Result<CompilePreparePack, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = super::db::open_brain(&id)?;
+        // Find sources via hybrid retrieve. Same pipeline the recall
+        // tool uses, just at a slightly larger top_k so the agent has
+        // headroom to pick what is relevant.
+        let opts = super::retriever::RecallOpts {
+            top_k: body.limit.unwrap_or(12),
+            spread_hops: 1,
+            exclude_kinds: vec!["observation".to_string()],
+            as_of: None,
+            use_reranker: false,
+            ablate: Vec::new(),
+        };
+        let hits = super::retriever::hybrid_retrieve(&db, &topic, &opts)?;
+        let sources: Vec<CompileSourceItem> = {
+            let conn = db.lock();
+            let mut out = Vec::with_capacity(hits.len());
+            for h in &hits {
+                let kind: String = conn
+                    .query_row(
+                        "SELECT COALESCE(kind, 'note') FROM engrams WHERE id = ?1",
+                        [&h.engram_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or_else(|_| "note".to_string());
+                let short_id: String = h.engram_id.chars().take(8).collect();
+                out.push(CompileSourceItem {
+                    id: h.engram_id.clone(),
+                    short_id,
+                    title: h.title.clone(),
+                    kind,
+                    content: h.content.clone(),
+                });
+            }
+            out
+        };
+        // Existing wiki engram for this topic, if any. Match by slug
+        // of the topic in the filename — same naming convention the
+        // submit handler will use to write a new one.
+        let slug = slug::slugify(&topic);
+        let wiki_filename = format!("wiki/{}.md", slug);
+        let existing_wiki: Option<CompileExistingWiki> = {
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT id, COALESCE(content, '') FROM engrams \
+                 WHERE filename = ?1 AND state != 'dormant'",
+                [&wiki_filename],
+                |r| {
+                    Ok(CompileExistingWiki {
+                        id: r.get::<_, String>(0)?,
+                        content: r.get::<_, String>(1)?,
+                    })
+                },
+            )
+            .ok()
+        };
+        // Optional CLAUDE.md / brain schema. Best-effort; missing file
+        // is fine, just return empty.
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let schema = std::fs::read_to_string(vault.join("CLAUDE.md"))
+            .or_else(|_| std::fs::read_to_string(vault.join("schema.md")))
+            .unwrap_or_default();
+        Ok(CompilePreparePack {
+            topic,
+            brain_id: id,
+            sources,
+            existing_wiki,
+            schema,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct CompileSubmitBody {
+    topic: String,
+    wiki_markdown: String,
+    #[serde(default)]
+    source_engram_ids: Vec<String>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CompileSubmitResult {
+    compilation_id: String,
+    wiki_engram_id: String,
+    wiki_filename: String,
+    brain_id: String,
+    status: String,
+}
+
+async fn compile_submit(
+    _s: State<ServerState>,
+    Json(body): Json<CompileSubmitBody>,
+) -> Result<Json<CompileSubmitResult>, ApiError> {
+    if body.topic.trim().is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "topic is required".into()));
+    }
+    if body.wiki_markdown.trim().is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "wiki_markdown is required".into(),
+        ));
+    }
+    let result = tokio::task::spawn_blocking(move || -> Result<CompileSubmitResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+        let slug = slug::slugify(&body.topic);
+        let wiki_filename = format!("wiki/{}.md", slug);
+        // Look up the existing wiki engram (if any) to capture old
+        // content for the compilations row.
+        let old_content: Option<String> = {
+            let conn = ctx.db.lock();
+            conn.query_row(
+                "SELECT COALESCE(content, '') FROM engrams WHERE filename = ?1",
+                [&wiki_filename],
+                |r| r.get(0),
+            )
+            .ok()
+        };
+        // Write through the standard save_note path so the file lands
+        // on disk + the engram is re-ingested with correct chunks /
+        // embeddings / kind.
+        let write = super::write_ops::save_note(&ctx, &wiki_filename, &body.wiki_markdown)?;
+        // Mark the engram kind as wiki so it shows up correctly in
+        // the graph + retrieval.
+        {
+            let conn = ctx.db.lock();
+            conn.execute(
+                "UPDATE engrams SET kind = 'wiki' WHERE id = ?1",
+                [&write.engram_id],
+            )?;
+        }
+        // Persist a compilations row with status='pending'. The
+        // reviewer panel + future approve/reject endpoints will key
+        // off this. compilation id is a fresh uuid; we store the
+        // sources as a JSON array of engram ids.
+        let compilation_id = uuid::Uuid::new_v4().to_string();
+        let sources_json = serde_json::to_string(&body.source_engram_ids)
+            .map_err(MemoryError::Json)?;
+        {
+            let conn = ctx.db.lock();
+            conn.execute(
+                "INSERT INTO compilations \
+                 (id, topic, wiki_engram_id, old_content, new_content, \
+                  changelog_json, sources_json, model, input_tokens, \
+                  output_tokens, status, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'agent-driven', \
+                  0, 0, 'pending', strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+                rusqlite::params![
+                    compilation_id,
+                    body.topic,
+                    write.engram_id,
+                    old_content,
+                    body.wiki_markdown,
+                    sources_json,
+                ],
+            )?;
+        }
+        Ok(CompileSubmitResult {
+            compilation_id,
+            wiki_engram_id: write.engram_id,
+            wiki_filename,
+            brain_id: id,
+            status: "pending".to_string(),
         })
     })
     .await
