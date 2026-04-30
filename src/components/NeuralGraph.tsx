@@ -670,12 +670,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
     isolatedIds.sort();
 
-    // Geometry: pushed the first ring further out (was 280) so the
-    // connected brain has visible breathing room and any connected
-    // outliers that drift away from centre still sit comfortably
-    // inside the orphan halo instead of crossing it.
+    // Geometry: ring radius adapts to whether semantic edges are
+    // currently rendered. With them OFF the connected cluster is
+    // small (only manual + entity links), so a tight ring at 280
+    // keeps everything compact. With them ON the cluster sprawls
+    // outward, and connected outliers used to cross the orphan ring;
+    // bumping to 460 in that mode keeps the halo outside the sprawl.
     const SPACING = 22;
-    const FIRST_RING_R = 460;
+    const FIRST_RING_R = showSemanticEdges ? 460 : 280;
     const RING_GAP = 32;
     const orphanPos = new Map<string, { fx: number; fy: number }>();
     let placed = 0;
@@ -721,7 +723,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       bidi,
       adjacency,
     };
-  }, [nodes, edges]);
+  }, [nodes, edges, showSemanticEdges]);
 
   // Cache key for analytics computations — same brain state = same key.
   // Used by the analyticsData memo below so toggling analytics off and
