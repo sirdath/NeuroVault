@@ -670,9 +670,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
     isolatedIds.sort();
 
+    // Geometry: pushed the first ring further out (was 280) so the
+    // connected brain has visible breathing room and any connected
+    // outliers that drift away from centre still sit comfortably
+    // inside the orphan halo instead of crossing it.
     const SPACING = 22;
-    const FIRST_RING_R = 280;
-    const RING_GAP = 30;
+    const FIRST_RING_R = 460;
+    const RING_GAP = 32;
     const orphanPos = new Map<string, { fx: number; fy: number }>();
     let placed = 0;
     let ringIdx = 0;
@@ -1129,7 +1133,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // a wall of text. Smaller font than before (was 12 px) to
     // match the smaller nodes.
     const focusLabelBoost = focusAlpha === 1 && focusedNodeId != null;
-    if (globalScale >= 1.4 || focusLabelBoost) {
+    // Bumped from 1.4 to 3.2 so labels only appear once the user has
+    // zoomed in far enough that the canvas is genuinely sparse —
+    // before that the wall of titles read as clutter, especially with
+    // the orphan halo also drawing names. Hovering / focus-mode
+    // still surface the label early via focusLabelBoost regardless.
+    if (globalScale >= 3.2 || focusLabelBoost) {
       const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
       ctx.fillStyle = withAlpha("#a8a6c0", Math.max(0.35, focusAlpha));
