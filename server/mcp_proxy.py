@@ -671,6 +671,48 @@ def set_cluster_names(names: dict[str, str], brain: str | None = None) -> Any:
 
 
 @mcp.tool(annotations={
+    "title": "Brain health status",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def status() -> Any:
+    """Quick brain-health snapshot. Use this to answer "is the user's
+    brain in good shape?" in one call without scraping multiple
+    endpoints.
+
+    WHEN TO CALL:
+    - User asks "how's my brain doing" / "is everything working" /
+      "what's the status"
+    - You want to confirm the sidecar is up + the active brain has
+      data before doing other work
+    - Before suggesting a recall-heavy task, sanity-check there are
+      enough notes to recall from
+
+    Returns:
+        brain        — active brain id
+        memories     — non-dormant engram count
+        chunks       — total chunk rows (each engram has 1-N chunks)
+        entities     — distinct entities extracted across the vault
+        connections  — total engram_link rows (graph edges)
+        freshness    — { fresh, active, dormant, total } counts.
+                       "fresh" is recently touched, "active" is
+                       stable, "dormant" has decayed past the recall
+                       threshold. A healthy brain typically has
+                       fresh + active >> dormant.
+        links        — { manual, entity, semantic, other, total }
+                       counts. "manual" is wikilinks the user typed,
+                       "entity" is auto-extracted shared mentions,
+                       "semantic" is cosine-similarity edges. Lots
+                       of semantic and few manual is normal; lots of
+                       manual signals a heavily curated brain.
+
+    Cheap (~5-10 ms) so calling on every conversation start is fine.
+    """
+    return _http_get("/api/status")
+
+
+@mcp.tool(annotations={
     "title": "Update brain (re-scan vault, refresh index)",
     "readOnlyHint": False,
     # Idempotent in the "calling twice in a row is fine" sense — the

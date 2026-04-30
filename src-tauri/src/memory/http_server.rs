@@ -193,18 +193,40 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 #[derive(Serialize)]
+struct FreshnessBreakdown {
+    fresh: i64,
+    active: i64,
+    dormant: i64,
+    total: i64,
+}
+
+#[derive(Serialize)]
+struct LinkBreakdown {
+    manual: i64,
+    entity: i64,
+    semantic: i64,
+    other: i64,
+    total: i64,
+}
+
+#[derive(Serialize)]
 struct StatusBody {
     brain: String,
+    // Existing fields — kept stable for older consumers (SettingsView,
+    // session_start). Do not rename or remove without bumping the
+    // shape version.
     memories: i64,
     chunks: i64,
     entities: i64,
     connections: i64,
+    // New in v0.1.6+: brain-health snapshot. Backs the MCP `status`
+    // tool so an agent can probe "is this brain healthy?" in one call
+    // without scraping multiple endpoints.
+    freshness: FreshnessBreakdown,
+    links: LinkBreakdown,
 }
 
 async fn status(_s: State<ServerState>) -> Result<Json<StatusBody>, ApiError> {
-    // Simple SELECT COUNT queries against the active brain. Matches
-    // what Python's `/api/status` returns minus `indexing` (which
-    // was always an empty list in the Rust stub anyway).
     let id = resolve_brain_id(None)?;
     let db = open_brain(&id)?;
     let conn = db.lock();
@@ -224,12 +246,55 @@ async fn status(_s: State<ServerState>) -> Result<Json<StatusBody>, ApiError> {
     let connections: i64 = conn
         .query_row("SELECT COUNT(*) FROM engram_links", [], |r| r.get(0))
         .unwrap_or(0);
+    // Freshness breakdown — single GROUP BY query, three buckets +
+    // total. "fresh" = recently created or accessed (Ebbinghaus prior
+    // is high); "active" = stable in circulation; "dormant" = decayed
+    // past the threshold and excluded from default recall results.
+    let count_state = |state: &str| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM engrams WHERE state = ?1",
+            [state],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+    let f_fresh = count_state("fresh");
+    let f_active = count_state("active");
+    let f_dormant = count_state("dormant");
+    let f_total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM engrams", [], |r| r.get(0))
+        .unwrap_or(0);
+    let count_link = |kind: &str| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM engram_links WHERE link_type = ?1",
+            [kind],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+    let l_manual = count_link("manual");
+    let l_entity = count_link("entity");
+    let l_semantic = count_link("semantic");
+    let l_other = (connections - l_manual - l_entity - l_semantic).max(0);
     Ok(Json(StatusBody {
         brain: id,
         memories,
         chunks,
         entities,
         connections,
+        freshness: FreshnessBreakdown {
+            fresh: f_fresh,
+            active: f_active,
+            dormant: f_dormant,
+            total: f_total,
+        },
+        links: LinkBreakdown {
+            manual: l_manual,
+            entity: l_entity,
+            semantic: l_semantic,
+            other: l_other,
+            total: connections,
+        },
     }))
 }
 
