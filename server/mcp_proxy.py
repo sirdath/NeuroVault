@@ -670,6 +670,55 @@ def set_cluster_names(names: dict[str, str], brain: str | None = None) -> Any:
     return _http_post("/api/clusters/names", body)
 
 
+@mcp.tool(annotations={
+    "title": "Update brain (re-scan vault, refresh index)",
+    "readOnlyHint": False,
+    # Idempotent in the "calling twice in a row is fine" sense — the
+    # second call sees content_hash matches and skips re-ingest.
+    "idempotentHint": True,
+    # Destructive only in the soft-delete-orphans sense: rows whose
+    # markdown file has disappeared from disk get state='dormant'.
+    # The markdown files themselves are untouched.
+    "destructiveHint": False,
+    "openWorldHint": False,
+})
+def update(brain: str | None = None) -> Any:
+    """Re-scan the active brain's vault, re-ingest changed files, and
+    soft-delete rows whose file has disappeared on disk. Idempotent and
+    cheap when nothing changed — each file is read once and the
+    content_hash short-circuit skips DB work.
+
+    WHEN TO CALL:
+    - User edited markdown files outside the desktop app (Obsidian,
+      vim, Drive sync) and wants the index to catch up immediately
+      without restarting the app.
+    - User deleted files in the file manager and wants the
+      corresponding engrams + connections cleaned up.
+    - You want to sanity-check that what's in the index matches what's
+      on disk before a recall-heavy task.
+
+    Returns:
+        scanned      — total .md files found under the vault
+        ingested     — files re-ingested (new or content_hash changed)
+        unchanged    — files where content_hash matched (no DB work)
+        deleted      — engrams whose file is gone from disk
+                       (soft-deleted, markdown files untouched)
+        elapsed_ms   — wall-clock runtime
+        brain_id     — which brain was updated
+
+    Args:
+        brain: target brain id (defaults to active).
+
+    Note: when the desktop app is running, the vault watcher already
+    re-ingests files as they are saved. This tool is the manual
+    fallback for batch / out-of-band edits.
+    """
+    body: dict[str, Any] = {}
+    if brain:
+        body["brain"] = brain
+    return _http_post("/api/update", body)
+
+
 # --- Empty prompts / resources handlers ----------------------------------
 #
 # Some MCP clients (Claude Code, Inspector, a few experimental

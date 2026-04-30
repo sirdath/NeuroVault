@@ -118,6 +118,7 @@ fn router() -> Router {
         .route("/api/notes", post(remember))
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))
+        .route("/api/update", post(update_brain))
         .route("/api/brains", post(brains_create))
         .route("/api/check_duplicate", post(check_duplicate))
         .route("/api/session_start", get(session_start))
@@ -664,6 +665,131 @@ async fn notes_delete(
             engram_id: res.engram_id,
             filename: body.filename,
             brain_id: id,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Full-brain update: re-scan the vault, re-ingest anything whose content
+// hash has changed, soft-delete engrams whose markdown file no longer
+// exists on disk. Idempotent and cheap when nothing changed (the
+// content_hash short-circuit in ingest::ingest_file means each file
+// reads its bytes once and exits without touching the DB).
+//
+// Backs the `/update` MCP command. Useful when the user has edited
+// markdown files outside the desktop app (Obsidian, vim, Drive sync)
+// and wants the index to catch up without restarting the app.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct UpdateBody {
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateResult {
+    brain_id: String,
+    scanned: u32,
+    ingested: u32,
+    unchanged: u32,
+    deleted: u32,
+    elapsed_ms: u64,
+}
+
+fn collect_md_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Skip dotfile dirs / files (.git, .obsidian, .DS_Store, …).
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            // Skip the trash subdirectory — those are soft-deleted notes
+            // we do NOT want to re-ingest. Anything else recurses.
+            if name == "trash" {
+                continue;
+            }
+            collect_md_files(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            out.push(path);
+        }
+    }
+}
+
+async fn update_brain(
+    _s: State<ServerState>,
+    body: Option<Json<UpdateBody>>,
+) -> Result<Json<UpdateResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> Result<UpdateResult, MemoryError> {
+        let started = std::time::Instant::now();
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let db = super::db::open_brain(&id)?;
+
+        // Pass 1 — walk the vault and re-ingest anything that changed.
+        let mut files = Vec::new();
+        collect_md_files(&vault, &mut files);
+        let scanned = files.len() as u32;
+        let mut ingested = 0u32;
+        let mut unchanged = 0u32;
+        for path in &files {
+            match super::ingest::ingest_file(path, Some(&vault), &db) {
+                Ok(Some(_)) => ingested += 1,
+                Ok(None) => unchanged += 1,
+                Err(e) => eprintln!("[update] ingest failed for {}: {}", path.display(), e),
+            }
+        }
+
+        // Pass 2 — find engrams whose file no longer exists on disk and
+        // soft-delete them. Cheap: one query, one HashSet build, then a
+        // membership check per engram.
+        let mut on_disk: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for p in &files {
+            if let Ok(rel) = p.strip_prefix(&vault) {
+                on_disk.insert(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+        let rows: Vec<(String, String)> = {
+            let conn = db.lock();
+            let mut stmt = conn
+                .prepare("SELECT id, filename FROM engrams WHERE state != 'dormant'")?;
+            let mapped = stmt.query_map([], |r| {
+                let id: String = r.get(0)?;
+                let fname: String = r.get(1)?;
+                Ok((id, fname))
+            })?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+        let mut deleted = 0u32;
+        for (engram_id, filename) in rows {
+            if !on_disk.contains(&filename)
+                && super::ingest::soft_delete_engram(&db, &engram_id).is_ok()
+            {
+                deleted += 1;
+            }
+        }
+
+        Ok(UpdateResult {
+            brain_id: id,
+            scanned,
+            ingested,
+            unchanged,
+            deleted,
+            elapsed_ms: started.elapsed().as_millis() as u64,
         })
     })
     .await
