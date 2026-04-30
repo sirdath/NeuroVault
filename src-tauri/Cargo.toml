@@ -4,6 +4,12 @@ version = "0.1.5"
 description = "AI-native memory system for Claude"
 authors = ["you"]
 edition = "2021"
+# Two binary targets exist in this crate:
+#   - `neurovault`         the Tauri desktop app (src/main.rs)
+#   - `neurovault-server`  the standalone HTTP server (src/bin/...)
+# `cargo run` and `tauri dev` need to know which one is "the app";
+# declare it explicitly so neither command panics with "ambiguous bin".
+default-run = "neurovault"
 
 [lib]
 name = "neurovault_lib"
