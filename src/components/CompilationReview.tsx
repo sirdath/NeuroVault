@@ -532,6 +532,8 @@ interface PreparedPack {
  * The submit endpoint persists a compilations row with status='pending'
  * so the reviewer panel picks it up identical to an LLM-driven compile.
  */
+const AUTO_APPROVE_KEY = "nv.compile.autoApprove";
+
 function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
   const [open, setOpen] = useState(false);
   const [topic, setTopic] = useState("");
@@ -539,6 +541,20 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
   const [wikiDraft, setWikiDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Auto-approve toggle. Persists to localStorage so the user's
+  // preference survives reloads. When on, the submit handler tells
+  // the backend to insert the row with status='approved' rather than
+  // 'pending', skipping the review step entirely. Useful when the
+  // user trusts the agent (e.g. their own Claude Code session) and
+  // doesn't want to manually approve every compile.
+  const [autoApprove, setAutoApprove] = useState<boolean>(() => {
+    try { return localStorage.getItem(AUTO_APPROVE_KEY) === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(AUTO_APPROVE_KEY, autoApprove ? "1" : "0"); }
+    catch { /* ignore */ }
+  }, [autoApprove]);
 
   const prepare = async () => {
     if (!topic.trim()) return;
@@ -594,11 +610,12 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
           topic: pack.topic,
           wiki_markdown: wikiDraft,
           source_engram_ids: pack.sources.map((s) => s.id),
+          auto_approve: autoApprove,
         }),
       });
       const data = await r.json();
       if (data.error) { setErr(data.error); return; }
-      toast.success(`Wiki submitted — pending review`);
+      toast.success(autoApprove ? `Wiki auto-approved` : `Wiki submitted — pending review`);
       setPack(null);
       setWikiDraft("");
       setTopic("");
@@ -681,12 +698,27 @@ function AgentCompilePanel({ onSubmitted }: { onSubmitted: () => void }) {
                 className={`w-full text-[11.5px] px-3 py-2 rounded-md focus:outline-none font-mono [background-color:var(--nv-surface)] border ${BORDER} ${TEXT} resize-y leading-relaxed placeholder:[color:var(--nv-text-dim)]`}
               />
 
+              <label className={`flex items-center gap-2 text-[11px] ${TEXT_MUTED} font-[Geist,sans-serif] cursor-pointer select-none`}>
+                <input
+                  type="checkbox"
+                  checked={autoApprove}
+                  onChange={(e) => setAutoApprove(e.target.checked)}
+                  className="accent-current w-3 h-3 cursor-pointer"
+                />
+                <span>Auto-approve on submit</span>
+                <span className={`text-[10px] ${TEXT_DIM} ml-auto`}>
+                  {autoApprove
+                    ? "skips review queue"
+                    : "queues for review"}
+                </span>
+              </label>
+
               <button
                 onClick={submit}
                 disabled={busy || !wikiDraft.trim()}
                 className={`w-full text-[11px] font-[Geist,sans-serif] px-3 py-2 rounded-md ${ACCENT_BG} ${ACCENT} hover:brightness-110 disabled:opacity-40 transition-colors font-medium`}
               >
-                {busy ? "Submitting…" : "Submit wiki for review"}
+                {busy ? "Submitting…" : (autoApprove ? "Submit + auto-approve" : "Submit wiki for review")}
               </button>
             </div>
           )}

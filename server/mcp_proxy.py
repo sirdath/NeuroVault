@@ -766,22 +766,24 @@ def compile_submit(
     wiki_markdown: str,
     source_engram_ids: list[str] | None = None,
     brain: str | None = None,
+    auto_approve: bool = False,
 ) -> Any:
-    """Submit your compiled wiki page for the user to review. Step 2
-    of the agent-driven compile flow, after `compile_prepare`.
+    """Submit your compiled wiki page for the user to review (or
+    auto-approve it). Step 2 of the agent-driven compile flow, after
+    `compile_prepare`.
 
     Writes the wiki markdown to vault/wiki/<slug>.md, marks the
     engram as kind='wiki', and inserts a row in the compilations
-    table with status='pending'. The desktop app's Compile tab
-    surfaces it the same way an LLM-driven compile would, so the
-    user can diff old vs new and approve / reject.
+    table. By default status='pending' so the desktop app's Compile
+    tab can show the diff for human review. Pass auto_approve=True
+    to skip the review queue and mark it approved on the spot.
 
     Returns:
-        compilation_id   — the pending row's id
+        compilation_id   — the row's id
         wiki_engram_id   — the engram id of the written wiki page
         wiki_filename    — relative path inside the vault
         brain_id         — which brain it landed in
-        status           — always "pending" on submit
+        status           — "pending" or "approved" depending on flag
 
     Args:
         topic: same topic you passed to `compile_prepare`.
@@ -790,11 +792,17 @@ def compile_submit(
         source_engram_ids: list of source engram ids (from the prepare
             pack) you actually used. Persisted for provenance.
         brain: target brain id (defaults to active).
+        auto_approve: when True, skip the review queue and mark the
+            compilation approved immediately. Use only when the user
+            has explicitly opted into auto-approve (the desktop app's
+            Compile tab has a toggle for this) or has explicitly
+            instructed you to auto-approve in this conversation.
     """
     body: dict[str, Any] = {
         "topic": topic,
         "wiki_markdown": wiki_markdown,
         "source_engram_ids": source_engram_ids or [],
+        "auto_approve": auto_approve,
     }
     if brain:
         body["brain"] = brain

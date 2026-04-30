@@ -121,6 +121,11 @@ fn router() -> Router {
         .route("/api/update", post(update_brain))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
+        .route("/api/compilations", get(compilations_list))
+        .route("/api/compilations/pending", get(compilations_pending))
+        .route("/api/compilations/:id", get(compilations_get))
+        .route("/api/compilations/:id/approve", post(compilations_approve))
+        .route("/api/compilations/:id/reject", post(compilations_reject))
         .route("/api/brains", post(brains_create))
         .route("/api/check_duplicate", post(check_duplicate))
         .route("/api/session_start", get(session_start))
@@ -1030,6 +1035,12 @@ struct CompileSubmitBody {
     source_engram_ids: Vec<String>,
     #[serde(default)]
     brain: Option<String>,
+    /// When true, the new row is created with status='approved' and a
+    /// review_comment of 'auto-approved'. Used by the UI's
+    /// auto-approve toggle and by trusted MCP flows where a human is
+    /// not in the loop.
+    #[serde(default)]
+    auto_approve: Option<bool>,
 }
 
 #[derive(serde::Serialize)]
@@ -1084,39 +1095,327 @@ async fn compile_submit(
                 [&write.engram_id],
             )?;
         }
-        // Persist a compilations row with status='pending'. The
-        // reviewer panel + future approve/reject endpoints will key
-        // off this. compilation id is a fresh uuid; we store the
-        // sources as a JSON array of engram ids.
+        // Persist a compilations row. Status depends on the
+        // auto_approve flag: pending (the default — user reviews in
+        // the Compile tab) or approved (auto-approved on submit).
         let compilation_id = uuid::Uuid::new_v4().to_string();
         let sources_json = serde_json::to_string(&body.source_engram_ids)
             .map_err(MemoryError::Json)?;
+        let auto = body.auto_approve.unwrap_or(false);
+        let initial_status = if auto { "approved" } else { "pending" };
         {
             let conn = ctx.db.lock();
-            conn.execute(
-                "INSERT INTO compilations \
-                 (id, topic, wiki_engram_id, old_content, new_content, \
-                  changelog_json, sources_json, model, input_tokens, \
-                  output_tokens, status, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'agent-driven', \
-                  0, 0, 'pending', strftime('%Y-%m-%d %H:%M:%f', 'now'))",
-                rusqlite::params![
-                    compilation_id,
-                    body.topic,
-                    write.engram_id,
-                    old_content,
-                    body.wiki_markdown,
-                    sources_json,
-                ],
-            )?;
+            if auto {
+                conn.execute(
+                    "INSERT INTO compilations \
+                     (id, topic, wiki_engram_id, old_content, new_content, \
+                      changelog_json, sources_json, model, input_tokens, \
+                      output_tokens, status, created_at, reviewed_at, \
+                      review_comment) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'agent-driven', \
+                      0, 0, 'approved', \
+                      strftime('%Y-%m-%d %H:%M:%f', 'now'), \
+                      strftime('%Y-%m-%d %H:%M:%f', 'now'), \
+                      'auto-approved')",
+                    rusqlite::params![
+                        compilation_id,
+                        body.topic,
+                        write.engram_id,
+                        old_content,
+                        body.wiki_markdown,
+                        sources_json,
+                    ],
+                )?;
+            } else {
+                conn.execute(
+                    "INSERT INTO compilations \
+                     (id, topic, wiki_engram_id, old_content, new_content, \
+                      changelog_json, sources_json, model, input_tokens, \
+                      output_tokens, status, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'agent-driven', \
+                      0, 0, 'pending', strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+                    rusqlite::params![
+                        compilation_id,
+                        body.topic,
+                        write.engram_id,
+                        old_content,
+                        body.wiki_markdown,
+                        sources_json,
+                    ],
+                )?;
+            }
         }
         Ok(CompileSubmitResult {
             compilation_id,
             wiki_engram_id: write.engram_id,
             wiki_filename,
             brain_id: id,
-            status: "pending".to_string(),
+            status: initial_status.to_string(),
         })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Compilations review queue — endpoints the desktop UI's Compile tab
+// loads on open. Without these the tab errors with 404 the moment it
+// mounts. Mirrors the shape `src/lib/api.ts` expects for
+// CompilationSummary / CompilationDetail.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct CompilationSummary {
+    id: String,
+    topic: String,
+    status: String,
+    model: String,
+    change_count: i64,
+    source_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    created_at: String,
+    reviewed_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CompilationDetail {
+    id: String,
+    topic: String,
+    status: String,
+    model: String,
+    change_count: i64,
+    source_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    created_at: String,
+    reviewed_at: Option<String>,
+    wiki_engram_id: Option<String>,
+    old_content: String,
+    new_content: String,
+    changelog: serde_json::Value,
+    sources: serde_json::Value,
+    review_comment: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CompilationsListQuery {
+    status: Option<String>,
+    limit: Option<i64>,
+}
+
+fn read_summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CompilationSummary> {
+    let changelog_json: String = r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "[]".into());
+    let sources_json: String = r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into());
+    let change_count = serde_json::from_str::<serde_json::Value>(&changelog_json)
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.len() as i64))
+        .unwrap_or(0);
+    let source_count = serde_json::from_str::<serde_json::Value>(&sources_json)
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.len() as i64))
+        .unwrap_or(0);
+    Ok(CompilationSummary {
+        id: r.get(0)?,
+        topic: r.get(1)?,
+        status: r.get(2)?,
+        model: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        input_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+        output_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+        created_at: r.get(6)?,
+        reviewed_at: r.get(7)?,
+        change_count,
+        source_count,
+    })
+}
+
+async fn compilations_list(
+    Query(q): Query<CompilationsListQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<CompilationSummary>>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<CompilationSummary>, MemoryError> {
+        let id = resolve_brain_id(None)?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let limit = q.limit.unwrap_or(50).clamp(1, 500);
+        let rows: Vec<CompilationSummary> = if let Some(st) = q.status.as_deref() {
+            let mut stmt = conn.prepare(
+                "SELECT id, topic, status, model, input_tokens, output_tokens, \
+                 created_at, reviewed_at, changelog_json, sources_json \
+                 FROM compilations WHERE status = ?1 \
+                 ORDER BY created_at DESC LIMIT ?2",
+            )?;
+            let mapped = stmt.query_map(rusqlite::params![st, limit], read_summary_row)?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, topic, status, model, input_tokens, output_tokens, \
+                 created_at, reviewed_at, changelog_json, sources_json \
+                 FROM compilations \
+                 ORDER BY created_at DESC LIMIT ?1",
+            )?;
+            let mapped = stmt.query_map(rusqlite::params![limit], read_summary_row)?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+async fn compilations_pending(
+    s: State<ServerState>,
+) -> Result<Json<Vec<CompilationSummary>>, ApiError> {
+    compilations_list(
+        Query(CompilationsListQuery {
+            status: Some("pending".to_string()),
+            limit: Some(50),
+        }),
+        s,
+    )
+    .await
+}
+
+async fn compilations_get(
+    _s: State<ServerState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<CompilationDetail>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<CompilationDetail, MemoryError> {
+        let bid = resolve_brain_id(None)?;
+        let db = open_brain(&bid)?;
+        let conn = db.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic, status, model, input_tokens, output_tokens, \
+             created_at, reviewed_at, changelog_json, sources_json, \
+             wiki_engram_id, old_content, new_content, review_comment \
+             FROM compilations WHERE id = ?1",
+        )?;
+        stmt.query_row([&id], |r| {
+            let changelog_json: String =
+                r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "[]".into());
+            let sources_json: String =
+                r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into());
+            let changelog = serde_json::from_str(&changelog_json)
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let sources = serde_json::from_str(&sources_json)
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let change_count = changelog.as_array().map(|a| a.len() as i64).unwrap_or(0);
+            let source_count = sources.as_array().map(|a| a.len() as i64).unwrap_or(0);
+            Ok(CompilationDetail {
+                id: r.get(0)?,
+                topic: r.get(1)?,
+                status: r.get(2)?,
+                model: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                input_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                output_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                created_at: r.get(6)?,
+                reviewed_at: r.get(7)?,
+                wiki_engram_id: r.get(10)?,
+                old_content: r.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                new_content: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                review_comment: r.get(13)?,
+                changelog,
+                sources,
+                change_count,
+                source_count,
+            })
+        })
+        .map_err(MemoryError::from)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e: MemoryError| match &e {
+        MemoryError::Database(db_err) if matches!(db_err, rusqlite::Error::QueryReturnedNoRows) => {
+            ApiError(StatusCode::NOT_FOUND, "compilation not found".into())
+        }
+        _ => ApiError::from(e),
+    })?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ReviewBody {
+    #[serde(default)]
+    review_comment: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ReviewResult {
+    status: String,
+    id: String,
+}
+
+async fn compilations_approve(
+    _s: State<ServerState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: Option<Json<ReviewBody>>,
+) -> Result<Json<ReviewResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> Result<ReviewResult, MemoryError> {
+        let bid = resolve_brain_id(None)?;
+        let db = open_brain(&bid)?;
+        let conn = db.lock();
+        let n = conn.execute(
+            "UPDATE compilations SET status = 'approved', \
+             reviewed_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), \
+             review_comment = ?1 WHERE id = ?2",
+            rusqlite::params![body.review_comment, id],
+        )?;
+        if n == 0 {
+            return Err(MemoryError::Other(format!("compilation not found: {}", id)));
+        }
+        Ok(ReviewResult { status: "approved".to_string(), id })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+async fn compilations_reject(
+    _s: State<ServerState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: Option<Json<ReviewBody>>,
+) -> Result<Json<ReviewResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> Result<ReviewResult, MemoryError> {
+        let bid = resolve_brain_id(None)?;
+        let db = open_brain(&bid)?;
+        let conn = db.lock();
+        // Revert: read old_content, write it back to the wiki engram, then
+        // mark rejected. If old_content is empty (this was a brand-new
+        // wiki page), we leave the wiki engram in place — the user can
+        // delete it manually if they want.
+        let row: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT wiki_engram_id, old_content FROM compilations WHERE id = ?1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        if let Some((Some(eid), Some(old))) = row {
+            if !old.is_empty() {
+                let _ = conn.execute(
+                    "UPDATE engrams SET content = ?1, \
+                     updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?2",
+                    rusqlite::params![old, eid],
+                );
+            }
+        }
+        let n = conn.execute(
+            "UPDATE compilations SET status = 'rejected', \
+             reviewed_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), \
+             review_comment = ?1 WHERE id = ?2",
+            rusqlite::params![body.review_comment, id],
+        )?;
+        if n == 0 {
+            return Err(MemoryError::Other(format!("compilation not found: {}", id)));
+        }
+        Ok(ReviewResult { status: "rejected".to_string(), id })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
