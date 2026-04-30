@@ -378,7 +378,7 @@ export function SettingsView() {
               <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
             </svg>
             <div>
-              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.5</p>
+              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.6</p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
                 Local-first AI memory system. Your data never leaves your machine.
               </p>

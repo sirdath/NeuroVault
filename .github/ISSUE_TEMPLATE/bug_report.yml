@@ -17,8 +17,8 @@ body:
     id: version
     attributes:
       label: NeuroVault version
-      description: Help → About, or the installer filename (e.g. NeuroVault_0.1.5_x64-setup.exe)
-      placeholder: "0.1.5"
+      description: Help → About, or the installer filename (e.g. NeuroVault_0.1.6_x64-setup.exe)
+      placeholder: "0.1.6"
     validations:
       required: true
   - type: dropdown

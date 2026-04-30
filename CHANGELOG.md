@@ -10,6 +10,31 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.6] — 2026-04-30
+
+### Changed
+- **Brand mark redrawn and fully re-rendered.** The new mark (heavier
+  blue strokes, properly centered) replaces the previous version
+  across every surface: Tauri installer + window + taskbar icons,
+  VS Code extension Marketplace icon, website nav / hero / favicon,
+  in-app sidebar / Settings → About / Onboarding. The icons now fill
+  the entire canvas (the outer ring touches the edges), about three
+  times bigger than the v0.1.5 attempt.
+
+### Fixed
+- **Server-status indicator flicker.** Two pollers in App.tsx (top
+  status dot) and SettingsView.tsx (Settings → Server) were flipping
+  their "online" flags to false on a single transient HTTP failure,
+  then back to true on the next successful poll. Both now require
+  multiple consecutive failures before declaring offline, and the
+  Settings poller runs silently in the background without flashing
+  "Checking..." every 3 seconds.
+- **`update-logo.py` autocrop.** The bbox detection used the raw
+  alpha channel, which counted near-white background texture (alpha
+  values like 10-15) as opaque content and pulled the crop bounds
+  out to the full canvas. Now thresholds at alpha ≥ 64 so only
+  meaningfully-visible pixels participate in the bbox.
+
 ## [0.1.5] — 2026-04-29
 
 ### Added
