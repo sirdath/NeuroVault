@@ -830,9 +830,11 @@ fn nv_brain_stats(brain_id: String) -> std::result::Result<memory::BrainStats, S
 }
 
 /// Knowledge graph payload for the given (or active) brain. Replaces
-/// `GET /api/graph`. Defaults match Python: observations excluded,
-/// `min_similarity = 0.75`. The frontend's `graphFromDisk.ts` already
-/// consumes this exact shape.
+/// `GET /api/graph`. Defaults: observations excluded, `min_similarity
+/// = 0.85` (raised from the 0.75 Python legacy in v0.1.7 — the
+/// looser threshold turned dense brains into a visually unreadable
+/// hairball). The frontend's `graphFromDisk.ts` already consumes
+/// this exact shape.
 #[tauri::command]
 fn nv_get_graph(
     brain_id: Option<String>,
@@ -844,7 +846,7 @@ fn nv_get_graph(
     memory::get_graph(
         &db,
         include_observations.unwrap_or(false),
-        min_similarity.unwrap_or(0.75),
+        min_similarity.unwrap_or(0.85),
     )
     .map_err(|e| e.to_string())
 }

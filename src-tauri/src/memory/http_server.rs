@@ -324,7 +324,13 @@ async fn graph(
     Ok(Json(get_graph(
         &db,
         q.include_observations.unwrap_or(false),
-        q.min_similarity.unwrap_or(0.75),
+        // Bumped from 0.75 to 0.85 in v0.1.7. At 0.75 a typical brain
+        // ends up with 80+ edges per node (hairball) because most notes
+        // share enough vocabulary to score weakly similar to most other
+        // notes. 0.85 keeps the real semantic links and drops the
+        // noise — measured on NeuroVaultBrain1, edges drop from 11758
+        // to 2202 (avg 15/node, which actually reads as a graph).
+        q.min_similarity.unwrap_or(0.85),
     )?))
 }
 
