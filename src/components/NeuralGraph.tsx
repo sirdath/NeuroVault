@@ -492,7 +492,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
   }, [mode]);
 
-  const { nodes, edges, loadGraph, setSelected } = useGraphStore();
+  const { nodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
   const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
@@ -515,6 +515,24 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const toggleAnalyticsMode = useGraphSettingsStore((s) => s.toggleAnalyticsMode);
   const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
   const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
+  const showSemanticEdges = useGraphSettingsStore((s) => s.showSemanticEdges);
+  const toggleShowSemanticEdges = useGraphSettingsStore((s) => s.toggleShowSemanticEdges);
+
+  // Filter the raw edges from the store BEFORE anything else consumes
+  // them. When `showSemanticEdges` is false (default), drop every edge
+  // whose link_type is "semantic" — these are auto-computed cosine
+  // similarities, not anything the user authored. Manual wikilinks
+  // and entity co-mentions stay. The downstream graphData / adjacency /
+  // bidi memos read this filtered list, so the visual graph and the
+  // hover-focus neighbourhood match what the user actually wrote.
+  const edges = useMemo(
+    () => (showSemanticEdges ? rawEdges : rawEdges.filter((e) => e.link_type !== "semantic")),
+    [rawEdges, showSemanticEdges],
+  );
+  const semanticEdgeCount = useMemo(
+    () => rawEdges.filter((e) => e.link_type === "semantic").length,
+    [rawEdges],
+  );
 
   // Cmd+Shift+A toggles analytics. Cmd+A is select-all in editor
   // contexts, hence the Shift disambiguator. Skipped if focus is in
@@ -1434,6 +1452,41 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             style={{ background: analyticsMode ? "var(--nv-bg)" : "var(--nv-text-dim)" }}
           />
           Analytics
+        </button>
+        {/* Semantic-edges toggle. Off by default — auto-computed cosine
+            similarity edges create a hairball on dense brains, and they
+            represent inferred relationships rather than authored ones.
+            Toggling on adds the inferred layer back; the count tells the
+            user how many edges they're hiding. */}
+        <button
+          onClick={toggleShowSemanticEdges}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
+          style={{
+            background: showSemanticEdges ? "var(--nv-accent)" : "var(--nv-surface)",
+            color: showSemanticEdges ? "var(--nv-bg)" : "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-pressed={showSemanticEdges}
+          aria-label="Toggle semantic-similarity edges"
+          title={
+            showSemanticEdges
+              ? `Semantic edges shown (${semanticEdgeCount}). Click to hide.`
+              : `Semantic edges hidden (${semanticEdgeCount} would render). Click to show.`
+          }
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: showSemanticEdges ? "var(--nv-bg)" : "var(--nv-text-dim)" }}
+          />
+          Semantic
+          {semanticEdgeCount > 0 && (
+            <span
+              className="ml-0.5 opacity-70"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {semanticEdgeCount}
+            </span>
+          )}
         </button>
       </div>
 

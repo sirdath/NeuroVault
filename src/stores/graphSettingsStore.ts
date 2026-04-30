@@ -91,6 +91,14 @@ interface GraphSettings {
   analyticsResizeByImportance: boolean;
   /** When analyticsMode is on: also tint backgrounds by community. */
   analyticsGroupByCommunity: boolean;
+  /** When false (default), edges with link_type === "semantic" are
+   *  filtered out of the graph view. Manual wikilinks and entity
+   *  co-mentions still render. Default is off because on a brain
+   *  with a few hundred notes the auto-computed semantic-similarity
+   *  edges create a fully-connected hairball that obscures real
+   *  structure. Toggled via the floating "Semantic links" pill in
+   *  the graph view. Persisted. */
+  showSemanticEdges: boolean;
   /** Per-folder colour overrides — keyed by folder name (vault
    *  subfolder). Empty string ("") is the root folder. Overrides win
    *  over the palette hash; folders not present here fall back to the
@@ -113,6 +121,7 @@ const DEFAULTS: GraphSettings = {
   analyticsMode: false,
   analyticsResizeByImportance: true,
   analyticsGroupByCommunity: true,
+  showSemanticEdges: false,
   folderColors: {},
   clusterColors: {},
 };
@@ -156,6 +165,7 @@ function load(): GraphSettings {
         analyticsMode: bool("analyticsMode", false),
         analyticsResizeByImportance: bool("analyticsResizeByImportance", true),
         analyticsGroupByCommunity: bool("analyticsGroupByCommunity", true),
+        showSemanticEdges: bool("showSemanticEdges", false),
         folderColors: sanitizeColorMap(parsed.folderColors),
         clusterColors: sanitizeColorMap(parsed.clusterColors),
       };
@@ -172,6 +182,8 @@ interface GraphSettingsStore extends GraphSettings {
   toggleAnalyticsMode: () => void;
   setAnalyticsResizeByImportance: (v: boolean) => void;
   setAnalyticsGroupByCommunity: (v: boolean) => void;
+  setShowSemanticEdges: (v: boolean) => void;
+  toggleShowSemanticEdges: () => void;
   /** Set or clear (`null`) the colour for one folder. Invalid hex is
    *  silently ignored. Empty-string folder is the root folder. */
   setFolderColor: (folder: string, color: string | null) => void;
@@ -217,6 +229,15 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setAnalyticsGroupByCommunity: (analyticsGroupByCommunity) => {
     set({ analyticsGroupByCommunity });
     persist({ ...get(), analyticsGroupByCommunity });
+  },
+  setShowSemanticEdges: (showSemanticEdges) => {
+    set({ showSemanticEdges });
+    persist({ ...get(), showSemanticEdges });
+  },
+  toggleShowSemanticEdges: () => {
+    const next = !get().showSemanticEdges;
+    set({ showSemanticEdges: next });
+    persist({ ...get(), showSemanticEdges: next });
   },
   setFolderColor: (folder, color) => {
     const next = { ...get().folderColors };
