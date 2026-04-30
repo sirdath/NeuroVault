@@ -1,13 +1,25 @@
-<!-- Activity-bar icon. VS Code expects a 24x24 monochrome SVG that uses
-     `currentColor` so it inherits the active / inactive sidebar tint.
-     Stylised neural-graph: three nodes, two edges, NeuroVault's symbol. -->
+<!-- Activity-bar icon (24x24, monochrome). Re-drawn from the source
+     mark so it stays crisp at small sizes; uses currentColor so VS
+     Code's active / inactive sidebar tint applies. The structure
+     mirrors the brand mark: outer ring, three filled nodes, key
+     hub at the centre. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-     stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+     stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
      stroke-linejoin="round">
-  <circle cx="12" cy="5"  r="2.2" fill="currentColor"/>
-  <circle cx="5"  cy="17" r="2.2" fill="currentColor"/>
-  <circle cx="19" cy="17" r="2.2" fill="currentColor"/>
-  <line x1="12" y1="7.2" x2="5"  y2="14.8"/>
-  <line x1="12" y1="7.2" x2="19" y2="14.8"/>
-  <line x1="7.2" y1="17" x2="16.8" y2="17"/>
+  <!-- Outer ring -->
+  <circle cx="12" cy="12" r="9.5"/>
+
+  <!-- Connecting lines from each node to the central hub -->
+  <line x1="12"   y1="8.4"  x2="12"   y2="11.6"/>
+  <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8"/>
+  <line x1="16.5" y1="15.6" x2="13.3" y2="13.8"/>
+
+  <!-- Three filled nodes (triangular arrangement) -->
+  <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none"/>
+  <circle cx="6.4"  cy="16.0" r="1.5" fill="currentColor" stroke="none"/>
+  <circle cx="17.6" cy="16.0" r="1.5" fill="currentColor" stroke="none"/>
+
+  <!-- Central hub + key tail -->
+  <circle cx="12" cy="12.8" r="1.4"/>
+  <line x1="12" y1="14.2" x2="12" y2="15.7"/>
 </svg>
