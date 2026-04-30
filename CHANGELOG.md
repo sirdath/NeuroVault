@@ -10,6 +10,60 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.5] — 2026-04-29
+
+### Added
+- **New brand mark.** Outer ring + three connected nodes + key hub.
+  Rolled out across the desktop app icons (Windows installer, macOS
+  .icns, Microsoft-Store style tiles), the VS Code extension
+  Marketplace icon and activity-bar SVG, and the website nav, hero
+  image, and favicon. Visible inside the running app in three places:
+  sidebar bottom bar, Settings → About, and the first-launch
+  Onboarding welcome slide.
+- **VS Code extension.** New `vscode-extension/` folder ships a
+  Marketplace-ready extension that hosts the existing React UI in a
+  webview tab and spawns the standalone server binary as a sidecar.
+  First milestone: read + write parity with the desktop app via HTTP.
+  Sidesteps macOS code-signing entirely because Microsoft signs every
+  Marketplace install. See `vscode-extension/README.md`.
+- **Standalone `neurovault-server` binary.** Cargo bin target inside
+  the existing crate (`src-tauri/src/bin/neurovault-server.rs`).
+  Same axum HTTP server the desktop app embeds, but launchable as
+  its own process. Used by the VS Code extension; also handy for
+  headless / server deployments.
+- **HTTP write endpoints.** `PUT /api/notes` and `DELETE /api/notes`
+  expose `write_ops::save_note` / `write_ops::delete_note` over HTTP
+  so non-Tauri clients (the VS Code extension webview, agents over
+  MCP, future browser PWAs) can drive the full write path. Existing
+  `POST /api/notes` (the `remember` endpoint) is untouched.
+- **Runtime API_HOST detection.** `src/lib/config.ts` now reads
+  `window.__NEUROVAULT_CONFIG__.serverUrl` first when present, falling
+  through to the Vite env var and the conventional `127.0.0.1:8765`.
+  Unblocks the VS Code extension where the sidecar may bind to a
+  non-default port if the desktop app is already running.
+
+### Fixed
+- **Windows release CI.** The Windows job was failing at the
+  sqlite-vec download step with curl exit 22 because upstream only
+  ships Windows builds as `.tar.gz`, not `.zip`. Workflow now asks
+  for `tar.gz` and lets the existing extract step handle it. Future
+  tag pushes will produce a Windows installer automatically; manual
+  uploads no longer needed.
+
+### Changed
+- **Body type bumped for readability.** The website now renders body
+  copy at 17px / 1.6 (was 16px / 1.55), hero and pitch at 18px / 1.65,
+  and feature card paragraphs at 15px / 1.6 (were 13.5px / 1.5).
+  `--text-muted` and `--text-dim` lifted a few stops on both peach
+  and blue themes so secondary copy stops fading.
+- **Mac download UX.** The website's primary download button now
+  spells out the chips covered ("Apple Silicon (M1 / M2 / M3 / M4)"),
+  and Mac visitors see an "On an Intel Mac? Build from source" hint
+  in the Other platforms row so they self-select correctly.
+- **Glassmorphism Mac button + animated peach Windows button.** The
+  hero CTAs now have distinct treatments so they read as siblings
+  rather than twins.
+
 ## [0.1.4] — 2026-04-27
 
 ### Fixed
