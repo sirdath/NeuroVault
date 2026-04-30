@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklascodes/tauri-docs/refs/heads/main/src/content/docs/_schema/config.schema.json",
   "productName": "NeuroVault",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.neurovault.app",
   "build": {
     "frontendDist": "../dist",

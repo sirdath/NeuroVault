@@ -10,6 +10,61 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.7] — 2026-04-30
+
+### Added
+- **MCP `/update` tool + `POST /api/update`.** Re-scans the brain's
+  vault, re-ingests files whose `content_hash` has changed, and
+  soft-deletes engrams whose markdown file disappeared from disk.
+  Idempotent (re-running on a clean vault is a no-op). Useful after
+  out-of-band edits (Obsidian, vim, Drive sync).
+- **MCP `/status` tool + extended `/api/status`.** One-call brain
+  health snapshot: memories / chunks / entities / connections totals,
+  freshness breakdown (`fresh` / `active` / `dormant`), link
+  breakdown (`manual` / `entity` / `semantic` / `other`).
+- **MCP `compile_prepare` + `compile_submit` + matching HTTP
+  endpoints.** Agent-driven wiki compile flow: `prepare` returns a
+  source pack for a topic, `submit` writes the agent-authored markdown
+  to `vault/wiki/<slug>.md` and queues a `pending` compilation row
+  for human review. Replaces the dead Python-only endpoints the
+  CompilationReview UI was calling since v0.1.0.
+- **Semantic-edges toggle in the graph view.** New "Semantic <count>"
+  pill in the top-right toolbar. Default off — auto-computed cosine
+  similarity edges are hidden so the graph reflects authored +
+  grounded structure first. Click to bring them back.
+- **Orphan ring layout.** Nodes with no rendered edges are pinned
+  onto concentric rings around the connected brain, with smaller
+  radius (× 0.55) and dimmer alpha (× 0.65) so they read as a halo
+  rather than equal-weight peers. Ring radius scales with
+  `sqrt(connectedCount) * 22 + 80`, so it adapts as the brain grows.
+
+### Changed
+- **Default `min_similarity` raised from 0.75 to 0.85.** At 0.75 the
+  meta-brain rendered with 11k+ semantic edges (~83 / node, hairball);
+  0.85 drops to ~2k (~15 / node, readable). The Semantic toggle
+  hides them entirely by default regardless.
+- **Centering forces added to the graph simulation.** `forceX(0)` +
+  `forceY(0)` at strength 0.04 keep multi-component layouts from
+  sprawling indefinitely. Pinned orphan ring nodes ignore the force
+  and stay where the layout puts them.
+- **Server-status indicators no longer flicker.** Both the top status
+  dot (App.tsx) and the Settings server panel (SettingsView.tsx) now
+  require multiple consecutive failures before flipping to "offline";
+  background polls run silently instead of flashing "Checking…" every
+  3 seconds.
+- **Node label-render threshold raised** from `globalScale ≥ 1.4` to
+  `≥ 3.2`. Default zoom reads as a clean shape; titles only appear
+  when you zoom in. Hover / focus still surface the label early.
+
+### Fixed
+- **`update-logo.py` autocrop bug** that pulled icon bounds out to the
+  full canvas (raw alpha treated near-white texture as opaque). Now
+  thresholds at alpha ≥ 64 so only meaningfully-visible pixels
+  participate in the bbox.
+- **`cargo run` ambiguity** between the `neurovault` and
+  `neurovault-server` binary targets — added `default-run` to
+  Cargo.toml so `tauri dev` picks the desktop app.
+
 ## [0.1.6] — 2026-04-30
 
 ### Changed
