@@ -29,7 +29,10 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      # `v[0-9]*` matches semver tags like v0.1.5 / v1.0.0 but not
+      # the VS Code extension's `vscode-v*` tags, which have their own
+      # release-vscode.yml pipeline.
+      - "v[0-9]*"
   workflow_dispatch:
     # Manual trigger for testing the workflow without a real tag.
     # Uses the most recent commit on whatever branch is selected.
