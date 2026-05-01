@@ -55,7 +55,7 @@ We treat these as security bugs and will prioritize them:
 
 **Preferred: GitHub Security Advisories.**
 Open a private advisory at
-[github.com/daththeanalyst/NeuroVault/security/advisories/new](https://github.com/daththeanalyst/NeuroVault/security/advisories/new).
+[github.com/sirdath/NeuroVault/security/advisories/new](https://github.com/sirdath/NeuroVault/security/advisories/new).
 Include:
 
 - Version you tested (from the About dialog or `neurovault --version`)
@@ -65,7 +65,7 @@ Include:
 - Your suggested severity (CVSS is optional)
 
 **If you'd rather email**, use the GitHub profile contact for
-[@daththeanalyst](https://github.com/daththeanalyst). Please don't open
+[@sirdath](https://github.com/sirdath). Please don't open
 a public issue for anything that might expose real users.
 
 ## Response SLA

@@ -3,16 +3,16 @@
   "displayName": "NeuroVault",
   "description": "Local-first AI memory for Claude. Persistent memory, graph view, and MCP integration in one VS Code panel.",
   "version": "0.1.3",
-  "publisher": "daththeanalyst",
+  "publisher": "sirdath",
   "license": "MIT",
-  "homepage": "https://github.com/daththeanalyst/NeuroVault",
+  "homepage": "https://github.com/sirdath/NeuroVault",
   "repository": {
     "type": "git",
-    "url": "https://github.com/daththeanalyst/NeuroVault.git",
+    "url": "https://github.com/sirdath/NeuroVault.git",
     "directory": "vscode-extension"
   },
   "bugs": {
-    "url": "https://github.com/daththeanalyst/NeuroVault/issues"
+    "url": "https://github.com/sirdath/NeuroVault/issues"
   },
   "engines": {
     "vscode": "^1.85.0"

@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement by opening a private [GitHub Security Advisory](https://github.com/daththeanalyst/NeuroVault/security/advisories/new) or by contacting [@daththeanalyst](https://github.com/daththeanalyst) directly. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement by opening a private [GitHub Security Advisory](https://github.com/sirdath/NeuroVault/security/advisories/new) or by contacting [@sirdath](https://github.com/sirdath) directly. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

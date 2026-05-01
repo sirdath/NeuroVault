@@ -22,12 +22,12 @@ python -m http.server 8080
 
 In the repo's **Settings → Pages**, point the source at
 `main` branch / `/website` folder. The page will be live at
-`https://daththeanalyst.github.io/NeuroVault/` within a minute.
+`https://sirdath.github.io/NeuroVault/` within a minute.
 
 ## Updating the download link
 
 The primary CTA points at
-`https://github.com/daththeanalyst/NeuroVault/releases/latest` — GitHub
+`https://github.com/sirdath/NeuroVault/releases/latest` — GitHub
 resolves that to whichever release was tagged most recently, so the
 button keeps working across versions without touching this folder.
 

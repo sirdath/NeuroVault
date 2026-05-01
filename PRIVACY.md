@@ -66,7 +66,7 @@ The app will only make network calls in these exact situations:
 | When | To where | Why |
 |---|---|---|
 | First launch, if models aren't cached | huggingface.co | Download `bge-small-en-v1.5` (~90 MB) for local embeddings. After the first successful download the models live at `~/.cache/fastembed/` and are never re-downloaded. |
-| You click "Check for updates" in Settings OR (after v0.2) auto-update checks run | github.com/daththeanalyst/NeuroVault/releases | Tauri updater manifest check. Metadata only — no identifier sent. We receive: the fact that SOMEONE checked for updates. We do not receive: who you are. |
+| You click "Check for updates" in Settings OR (after v0.2) auto-update checks run | github.com/sirdath/NeuroVault/releases | Tauri updater manifest check. Metadata only — no identifier sent. We receive: the fact that SOMEONE checked for updates. We do not receive: who you are. |
 | You use the `ingest_pdf` tool on a PDF that contains remote images | host of the remote image | PyMuPDF may fetch images referenced in the PDF. Does not happen for plain-text PDFs. |
 | You connect Claude Desktop (or any MCP client) and use recall/remember | Anthropic's servers (or whichever LLM host you connected) | **This is the LLM provider's network call, not NeuroVault's.** NeuroVault's MCP server runs entirely on localhost (127.0.0.1:8765). The LLM client reads the tool results locally and sends them to the LLM's API as part of your conversation. |
 | You run compile with an `ANTHROPIC_API_KEY` set (opt-in) | api.anthropic.com | Compile calls the Claude API with your key to synthesize wiki pages. Skip the API key and use the agent-driven `compile_page` flow to avoid any network call. |
@@ -123,7 +123,7 @@ ships this document will describe the threat model it covers.
 ## Questions, issues, corrections
 
 Email: via GitHub Issues at
-[github.com/daththeanalyst/NeuroVault/issues](https://github.com/daththeanalyst/NeuroVault/issues)
+[github.com/sirdath/NeuroVault/issues](https://github.com/sirdath/NeuroVault/issues)
 
 For security-specific concerns (e.g. vulnerability in the local server
 binding), see [SECURITY.md](SECURITY.md).

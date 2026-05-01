@@ -409,5 +409,5 @@ Unreleased section above when this version is tagged.
 
 ---
 
-[Unreleased]: https://github.com/daththeanalyst/NeuroVault/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/daththeanalyst/NeuroVault/releases/tag/v0.1.0
+[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/sirdath/NeuroVault/releases/tag/v0.1.0

@@ -14,7 +14,7 @@ Local-first AI memory for Claude. Persistent memory, neural graph view, and MCP 
 Once published:
 
 ```
-ext install daththeanalyst.neurovault
+ext install sirdath.neurovault
 ```
 
 For local development, see the parent repo's `vscode-extension/` folder.

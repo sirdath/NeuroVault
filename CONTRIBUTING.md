@@ -45,7 +45,7 @@ Prerequisites:
 Clone + install once:
 
 ```bash
-git clone https://github.com/daththeanalyst/NeuroVault.git
+git clone https://github.com/sirdath/NeuroVault.git
 cd NeuroVault
 make install
 ```

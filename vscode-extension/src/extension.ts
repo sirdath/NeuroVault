@@ -351,7 +351,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
 <button class="secondary" onclick="vscode.postMessage({type:'logs'})">View logs</button>
 <div class="meta">
   Vault: ~/.neurovault &middot; MIT licensed<br/>
-  <a href="https://github.com/daththeanalyst/NeuroVault">GitHub</a>
+  <a href="https://github.com/sirdath/NeuroVault">GitHub</a>
 </div>
 <script>const vscode=acquireVsCodeApi();</script>
 </body></html>`;

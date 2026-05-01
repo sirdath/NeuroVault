@@ -27,10 +27,10 @@
   // Fallback: the releases page (always works). The GitHub API lookup below
   // upgrades this to a direct `.exe` URL so clicks trigger a download instead
   // of opening a page where the user has to hunt for the asset.
-  const WINDOWS_LATEST = "https://github.com/daththeanalyst/NeuroVault/releases/latest";
-  const RELEASES_PAGE  = "https://github.com/daththeanalyst/NeuroVault/releases";
-  const REPO_SOURCE    = "https://github.com/daththeanalyst/NeuroVault#for-developers";
-  const GH_API_LATEST  = "https://api.github.com/repos/daththeanalyst/NeuroVault/releases/latest";
+  const WINDOWS_LATEST = "https://github.com/sirdath/NeuroVault/releases/latest";
+  const RELEASES_PAGE  = "https://github.com/sirdath/NeuroVault/releases";
+  const REPO_SOURCE    = "https://github.com/sirdath/NeuroVault#for-developers";
+  const GH_API_LATEST  = "https://api.github.com/repos/sirdath/NeuroVault/releases/latest";
 
   // Present the most relevant download copy for the visitor. Windows is the
   // only platform with a published binary right now, so non-Windows visitors

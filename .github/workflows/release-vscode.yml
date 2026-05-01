@@ -15,7 +15,7 @@
 #
 # Marketplace publishing is intentionally NOT wired in this version.
 # To enable it, set the VSCE_PAT secret (Azure DevOps PAT with
-# Marketplace publish scope on the daththeanalyst publisher) and add a
+# Marketplace publish scope on the sirdath publisher) and add a
 # `vsce publish --packagePath ...` step after the package step.
 #
 # Why a separate workflow from release.yml: the desktop app's release
@@ -226,7 +226,7 @@ jobs:
 
             Once published to the Marketplace this release page is
             informational only — most users will install via
-            `ext install daththeanalyst.neurovault` or the Marketplace
+            `ext install sirdath.neurovault` or the Marketplace
             UI.
 
             Bundled binaries cover Windows x64, macOS Apple Silicon,

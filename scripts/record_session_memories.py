@@ -208,7 +208,7 @@ MEMORIES: list[dict] = [
         "content": (
             "Local-first AI memory system with Tauri desktop app + Python MCP server. "
             "Meta-brain `NeuroVaultBrain1` (208+ memories) documents the project "
-            "itself. Repo: daththeanalyst/NeuroVault on GitHub. Desktop exe at "
+            "itself. Repo: sirdath/NeuroVault on GitHub. Desktop exe at "
             "C:\\Users\\Dath\\AppData\\Local\\NeuroVault\\neurovault.exe (~15MB). "
             "Installer NeuroVault_0.1.0_x64-setup.exe (~76MB). Tests: 249 passing "
             "(237 existing + 12 new todos tests). Session commits (newest first): "

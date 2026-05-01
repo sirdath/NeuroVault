@@ -17,7 +17,7 @@ A local-first AI memory system. Claude forgets you after every conversation. Neu
 
 ## Download and install
 
-Latest release: **[github.com/daththeanalyst/NeuroVault/releases/latest](https://github.com/daththeanalyst/NeuroVault/releases/latest)**
+Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github.com/sirdath/NeuroVault/releases/latest)**
 
 | Platform | Asset | Status |
 |---|---|---|
@@ -267,7 +267,7 @@ On session start, NeuroVault provides layered context:
 ### Install
 
 ```bash
-git clone https://github.com/daththeanalyst/NeuroVault.git
+git clone https://github.com/sirdath/NeuroVault.git
 cd NeuroVault
 
 # Frontend

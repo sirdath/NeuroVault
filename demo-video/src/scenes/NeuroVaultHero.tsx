@@ -405,7 +405,7 @@ export const NeuroVaultHero: React.FC = () => {
             fontFamily: "'JetBrains Mono', monospace",
           }}
         >
-          github.com/daththeanalyst/NeuroVault
+          github.com/sirdath/NeuroVault
         </div>
       </div>
     </AbsoluteFill>
