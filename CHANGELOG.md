@@ -10,6 +10,54 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.1.8] — 2026-05-01
+
+### Added
+- **GraphFilterPanel** — Obsidian-style slide-out panel in the graph
+  view (top-right toolbar → "Filters" pill). Sections:
+  - **Filters**: search nodes, show orphans, show semantic edges,
+    manual links only, show arrows.
+  - **Display**: node-size slider, link-thickness slider, label-zoom
+    threshold slider, show all folder labels.
+  - **Appearance**: palette picker, node-shape picker, per-folder
+    + per-cluster colour-override editors.
+  - **Layout**: organic / circle layout shape, centering pull,
+    charge strength, link distance — all live sliders.
+  - **Time-lapse**: replays the brain's creation order. Nodes
+    appear chronologically, edges fade in once both endpoints are
+    visible. Adjustable duration (3-60 s).
+- **Graph screenshot** button next to the Filters pill — exports the
+  current canvas as a transparent PNG named
+  `neurovault-graph-<timestamp>.png` (Obsidian-style).
+- **Sidebar collapse**. New toggle at the leftmost edge of the top
+  app bar hides the entire left sidebar; bound globally to **Ctrl+B**
+  (Cmd+B on macOS). Persists to localStorage.
+- **Tab right-click menu** in the Notes view: Close / Close others /
+  Close all. Middle-click and the existing × button still work.
+- **Tab strip always visible** when at least one note is open
+  (previously hidden when only one tab was open, leaving no way to
+  close it).
+- **Tab icons** on Notes / Graph / Compile.
+- **Compile review queue endpoints** that the CompilationReview UI
+  has been calling since v0.1.0 but were never ported from Python:
+  `GET /api/compilations`, `/pending`, `/:id`,
+  `POST /:id/approve`, `/:id/reject`. The Compile tab loads cleanly
+  again instead of 404'ing on open.
+- **Auto-approve on submit** toggle in the agent compile panel.
+  Persists to localStorage. When on, the new wiki goes straight to
+  `status='approved'` instead of `'pending'`. Same flag exposed to
+  MCP via `compile_submit(auto_approve=true)`.
+
+### Changed
+- **Graph appearance settings moved** from the global Settings panel
+  into the in-graph Filters panel. Removes a confusing duplication
+  where palette, node shape, cluster labels, and analytics-layer
+  toggles existed in both places.
+- **Close all + closing the last tab** now actually empties the
+  editor body (clears the active filename), so the
+  "Select a note to start reading" placeholder appears as expected
+  instead of leaving the previously-active note rendered.
+
 ## [0.1.7] — 2026-04-30
 
 ### Added

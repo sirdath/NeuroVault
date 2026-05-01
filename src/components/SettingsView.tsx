@@ -1,35 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
-import {
-  useGraphSettingsStore,
-  PALETTES,
-  PALETTE_NEUTRAL,
-  type GraphPalette,
-  type GraphNodeShape,
-} from "../stores/graphSettingsStore";
-import { useGraphStore } from "../stores/graphStore";
-import { useBrainStore } from "../stores/brainStore";
-import { nvGetClusterNames } from "../lib/tauri";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 
-/** Local twin of NeuralGraph's `folderColor()` so the Settings swatches
- *  preview the same colour the canvas would draw — without forcing a
- *  cross-component import of a large render module. The two MUST stay
- *  in sync; if you change the hash here, change it in NeuralGraph too.
- *  (Only ~10 lines, so the duplication is cheap and explicit.) */
-function previewFolderColor(folder: string, palette: GraphPalette, overrides: Record<string, string>): string {
-  if (overrides[folder]) return overrides[folder]!;
-  if (!folder) return PALETTE_NEUTRAL[palette];
-  let h = 2166136261;
-  for (let i = 0; i < folder.length; i++) {
-    h ^= folder.charCodeAt(i);
-    h = (h * 16777619) >>> 0;
-  }
-  const colors = PALETTES[palette];
-  return colors[h % colors.length]!;
-}
 
 const FONT_SIZES = [
   { label: "Small", value: "small" as const },
@@ -286,7 +260,10 @@ export function SettingsView() {
 
         </Section>
 
-        <GraphSection />
+        {/* Graph appearance settings (palette, node shape, analytics
+            overlay layers) moved to the in-graph Filters panel in
+            v0.1.8 — open the graph view and click the Filters pill in
+            the top-right toolbar. */}
 
         {/* Server */}
         <Section title="Server">
@@ -378,7 +355,7 @@ export function SettingsView() {
               <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
             </svg>
             <div>
-              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.7</p>
+              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.8</p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
                 Local-first AI memory system. Your data never leaves your machine.
               </p>
@@ -387,181 +364,6 @@ export function SettingsView() {
         </Section>
       </div>
     </div>
-  );
-}
-
-/**
- * Settings section for the graph view's user-pickable visual options.
- * Three controls: palette (4 presets), node shape (3 options), and
- * "show all folder labels" toggle. All persist to localStorage via
- * useGraphSettingsStore. Changes apply live — the graph rerenders as
- * the user clicks because it subscribes to the same store.
- */
-function GraphSection() {
-  const palette = useGraphSettingsStore((s) => s.palette);
-  const setPalette = useGraphSettingsStore((s) => s.setPalette);
-  const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
-  const setNodeShape = useGraphSettingsStore((s) => s.setNodeShape);
-  const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
-  const setShowClusterLabels = useGraphSettingsStore((s) => s.setShowClusterLabels);
-  // Per-layer Analytics defaults — control which overlays light up
-  // when the user flips the in-graph Analytics toggle.
-  const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
-  const setAnalyticsResizeByImportance = useGraphSettingsStore((s) => s.setAnalyticsResizeByImportance);
-  const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
-  const setAnalyticsGroupByCommunity = useGraphSettingsStore((s) => s.setAnalyticsGroupByCommunity);
-
-  const PALETTE_LABELS: { value: GraphPalette; label: string; hint: string }[] = [
-    { value: "warm",  label: "Warm",  hint: "Peach + cohesive cools (default)" },
-    { value: "cool",  label: "Cool",  hint: "Blues, teals, violets" },
-    { value: "mono",  label: "Mono",  hint: "Single hue gradient" },
-    { value: "vivid", label: "Vivid", hint: "High-saturation, demo-ready" },
-  ];
-
-  const SHAPE_LABELS: { value: GraphNodeShape; label: string }[] = [
-    { value: "circle", label: "Circle" },
-    { value: "square", label: "Square" },
-    { value: "hex",    label: "Hex" },
-  ];
-
-  return (
-    <Section title="Graph">
-      <SettingBlock label="Palette" description="Folder colors in the graph view">
-        <div className="grid grid-cols-2 gap-2">
-          {PALETTE_LABELS.map((p) => {
-            const colors = PALETTES[p.value];
-            const selected = palette === p.value;
-            return (
-              <button
-                key={p.value}
-                onClick={() => setPalette(p.value)}
-                title={p.hint}
-                className="text-left rounded-lg p-2.5 transition-all border"
-                style={{
-                  background: "var(--nv-surface)",
-                  borderColor: selected ? "var(--nv-accent)" : "var(--nv-border)",
-                  boxShadow: selected ? "0 0 14px var(--nv-accent-glow)" : undefined,
-                }}
-              >
-                <div className="flex gap-1 mb-2">
-                  {colors.slice(0, 6).map((c, i) => (
-                    <span
-                      key={i}
-                      className="w-3.5 h-3.5 rounded-full"
-                      style={{ background: c }}
-                    />
-                  ))}
-                </div>
-                <p className="text-[12px] font-medium font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
-                  {p.label}
-                </p>
-                <p className="text-[10px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-muted)" }}>
-                  {p.hint}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </SettingBlock>
-
-      <SettingRow label="Node shape" description="Geometry of each node on the canvas">
-        <div className="flex gap-1 rounded-xl p-1" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-          {SHAPE_LABELS.map((s) => (
-            <button
-              key={s.value}
-              onClick={() => setNodeShape(s.value)}
-              className="px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all"
-              style={nodeShape === s.value ? {
-                background: "var(--nv-surface)",
-                color: "var(--nv-text)",
-                border: "1px solid var(--nv-border)",
-                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-              } : { color: "var(--nv-text-muted)" }}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </SettingRow>
-
-      <SettingRow
-        label="Show all folder labels"
-        description="By default, only the cluster you hover gets labelled. Turn on to label every cluster permanently."
-      >
-        <ToggleSwitch
-          on={showClusterLabels}
-          onChange={() => setShowClusterLabels(!showClusterLabels)}
-          ariaLabel="Toggle folder labels"
-        />
-      </SettingRow>
-
-      <FolderColorsBlock />
-      <ClusterColorsBlock />
-
-      {/* Analytics defaults — control which Analytics-mode overlays
-          light up when the user flips the in-graph Analytics pill.
-          Both default ON; users who only want one half (e.g. node
-          sizing without the tints) opt the other off here. */}
-      <div
-        className="text-[11px] uppercase tracking-wider mt-6 mb-2 font-[Geist,sans-serif]"
-        style={{ color: "var(--nv-text-muted)" }}
-      >
-        Analytics defaults
-      </div>
-      <SettingRow
-        label="Resize nodes by importance"
-        description="Bigger nodes for notes that other notes link to more often (PageRank). Only shows in Analytics mode."
-      >
-        <ToggleSwitch
-          on={analyticsResizeByImportance}
-          onChange={() => setAnalyticsResizeByImportance(!analyticsResizeByImportance)}
-          ariaLabel="Toggle node-size by importance"
-        />
-      </SettingRow>
-      <SettingRow
-        label="Group notes by community"
-        description="Soft background tints behind notes that link to each other a lot. Only shows in Analytics mode."
-      >
-        <ToggleSwitch
-          on={analyticsGroupByCommunity}
-          onChange={() => setAnalyticsGroupByCommunity(!analyticsGroupByCommunity)}
-          ariaLabel="Toggle community grouping"
-        />
-      </SettingRow>
-    </Section>
-  );
-}
-
-/** Small reusable iOS-style toggle. Extracted so the three toggles
- *  in this section don't repeat their own DOM. */
-function ToggleSwitch({
-  on,
-  onChange,
-  ariaLabel,
-}: {
-  on: boolean;
-  onChange: () => void;
-  ariaLabel: string;
-}) {
-  return (
-    <button
-      onClick={onChange}
-      className="relative w-10 h-6 rounded-full transition-colors"
-      style={{
-        background: on ? "var(--nv-accent)" : "var(--nv-surface)",
-        border: "1px solid var(--nv-border)",
-      }}
-      aria-label={ariaLabel}
-      aria-pressed={on}
-    >
-      <span
-        className="absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full transition-transform"
-        style={{
-          background: on ? "var(--nv-bg)" : "var(--nv-text-muted)",
-          transform: on ? "translateX(16px)" : "translateX(0)",
-        }}
-      />
-    </button>
   );
 }
 
@@ -887,190 +689,11 @@ function ClaudeCodeMcpSection() {
  *  the active brain's graph (derived from the live node set), with an
  *  inline native colour picker + reset. Empty list = no graph loaded
  *  yet, so we render a hint instead of nothing. */
-function FolderColorsBlock() {
-  const palette = useGraphSettingsStore((s) => s.palette);
-  const folderColors = useGraphSettingsStore((s) => s.folderColors);
-  const setFolderColor = useGraphSettingsStore((s) => s.setFolderColor);
-  const clearFolderColors = useGraphSettingsStore((s) => s.clearFolderColors);
-  const nodes = useGraphStore((s) => s.nodes);
-
-  // Sorted unique folder list — root first, then alphabetical. Memoised
-  // so flipping a colour doesn't churn this work.
-  const folders = useMemo(() => {
-    const set = new Set<string>();
-    for (const n of nodes) set.add(n.folder ?? "");
-    const arr = Array.from(set);
-    arr.sort((a, b) => {
-      if (a === "" && b !== "") return -1;
-      if (b === "" && a !== "") return 1;
-      return a.localeCompare(b);
-    });
-    return arr;
-  }, [nodes]);
-
-  const overrideCount = Object.keys(folderColors).length;
-
-  return (
-    <SettingBlock
-      label="Folder colors"
-      description={
-        folders.length === 0
-          ? "Open a brain to see its folders here."
-          : `Override the palette colour for any folder. ${overrideCount > 0 ? `${overrideCount} customised.` : "Click a swatch to pick."}`
-      }
-    >
-      {folders.length > 0 && (
-        <>
-          <div
-            className="rounded-xl divide-y overflow-hidden"
-            style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)", borderColor: "var(--nv-border)" }}
-          >
-            {folders.map((folder) => (
-              <ColorRow
-                key={folder || "__root__"}
-                label={folder === "" ? "root" : folder}
-                color={previewFolderColor(folder, palette, folderColors)}
-                customised={folder in folderColors}
-                onChange={(c) => setFolderColor(folder, c)}
-                onReset={() => setFolderColor(folder, null)}
-              />
-            ))}
-          </div>
-          {overrideCount > 0 && (
-            <button
-              onClick={clearFolderColors}
-              className="text-[11px] font-[Geist,sans-serif] mt-2 px-3 py-1.5 rounded-lg transition-all"
-              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
-            >
-              Reset all to palette
-            </button>
-          )}
-        </>
-      )}
-    </SettingBlock>
-  );
-}
-
-/** Per-cluster colour override editor — only lists clusters the user
- *  has named. Unnamed clusters fall back to their dominant-folder
- *  colour because Louvain ids aren't stable across edits. Cluster
- *  names are loaded from the active brain's `cluster_names.json` via
- *  the Rust HTTP server. */
-function ClusterColorsBlock() {
-  const palette = useGraphSettingsStore((s) => s.palette);
-  const folderColors = useGraphSettingsStore((s) => s.folderColors);
-  const clusterColors = useGraphSettingsStore((s) => s.clusterColors);
-  const setClusterColor = useGraphSettingsStore((s) => s.setClusterColor);
-  const clearClusterColors = useGraphSettingsStore((s) => s.clearClusterColors);
-  const activeBrainId = useBrainStore((s) => s.activeBrainId);
-
-  // Map<communityId, name>. We only care about the values (the names).
-  const [clusterNames, setClusterNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    let cancelled = false;
-    nvGetClusterNames(activeBrainId ?? undefined).then((names) => {
-      if (!cancelled) setClusterNames(names);
-    });
-    return () => { cancelled = true; };
-  }, [activeBrainId]);
-
-  // Sorted unique cluster names. Same key the override store uses.
-  const names = useMemo(() => {
-    const set = new Set(Object.values(clusterNames));
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [clusterNames]);
-
-  const overrideCount = Object.keys(clusterColors).length;
-
-  return (
-    <SettingBlock
-      label="Cluster colors"
-      description={
-        names.length === 0
-          ? "Run /name-clusters in your Claude session to name clusters; they'll show here."
-          : `Override the background tint for any named cluster. ${overrideCount > 0 ? `${overrideCount} customised.` : ""}`
-      }
-    >
-      {names.length > 0 && (
-        <>
-          <div
-            className="rounded-xl divide-y overflow-hidden"
-            style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)", borderColor: "var(--nv-border)" }}
-          >
-            {names.map((name) => (
-              <ColorRow
-                key={name}
-                label={name}
-                // Preview falls back to the folder-hash space using the
-                // cluster name itself — same as the canvas does for
-                // unnamed clusters via `__comm_${id}`.
-                color={clusterColors[name] ?? previewFolderColor(name, palette, folderColors)}
-                customised={name in clusterColors}
-                onChange={(c) => setClusterColor(name, c)}
-                onReset={() => setClusterColor(name, null)}
-              />
-            ))}
-          </div>
-          {overrideCount > 0 && (
-            <button
-              onClick={clearClusterColors}
-              className="text-[11px] font-[Geist,sans-serif] mt-2 px-3 py-1.5 rounded-lg transition-all"
-              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
-            >
-              Reset all
-            </button>
-          )}
-        </>
-      )}
-    </SettingBlock>
-  );
-}
 
 /** One row of [swatch | label | reset]. The swatch is also the click
  *  target for the native `<input type="color">` — overlaid invisibly
  *  so the swatch itself looks like the button. The native picker is
  *  ugly on Windows but zero-dep and works everywhere. */
-function ColorRow({
-  label, color, customised, onChange, onReset,
-}: {
-  label: string; color: string; customised: boolean;
-  onChange: (color: string) => void; onReset: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 px-3 py-2">
-      <label className="relative w-7 h-7 rounded-lg cursor-pointer flex-shrink-0" title="Click to change colour">
-        <span
-          className="block w-full h-full rounded-lg"
-          style={{ background: color, border: "1px solid var(--nv-border)" }}
-        />
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => onChange(e.target.value)}
-          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-          aria-label={`Colour for ${label}`}
-        />
-      </label>
-      <span
-        className="text-[12px] font-[Geist,sans-serif] truncate flex-1 min-w-0"
-        style={{ color: "var(--nv-text)" }}
-        title={label}
-      >
-        {label}
-      </span>
-      {customised && (
-        <button
-          onClick={onReset}
-          className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors flex-shrink-0"
-          style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-dim)" }}
-          title="Revert to palette default"
-        >
-          Reset
-        </button>
-      )}
-    </div>
-  );
-}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -1105,17 +728,6 @@ function SettingRow({ label, description, children }: { label: string; descripti
  *  margin — without that wrapper the parent Section's `space-y-5`
  *  treats label/description/children as siblings of the wrong scope
  *  and the header visually overlaps the first child of the control. */
-function SettingBlock({ label, description, children }: { label: string; description: string; children: React.ReactNode }) {
-  return (
-    <div className="block">
-      <div className="mb-4">
-        <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{label}</p>
-        <p className="text-[11px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>{description}</p>
-      </div>
-      <div className="block">{children}</div>
-    </div>
-  );
-}
 
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (

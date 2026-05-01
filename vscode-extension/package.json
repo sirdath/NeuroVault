@@ -2,7 +2,7 @@
   "name": "neurovault",
   "displayName": "NeuroVault",
   "description": "Local-first AI memory for Claude. Persistent memory, graph view, and MCP integration in one VS Code panel.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "daththeanalyst",
   "license": "MIT",
   "homepage": "https://github.com/daththeanalyst/NeuroVault",
