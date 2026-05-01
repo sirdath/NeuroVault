@@ -1356,7 +1356,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
       ctx.fillText(truncated, node.x, node.y + r + 2);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
