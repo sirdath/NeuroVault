@@ -48,7 +48,34 @@
 <!-- Nav -->
 <header class="nav">
   <a href="#top" class="nav-logo" aria-label="NeuroVault home">
-    <img src="./assets/app-icon.png" srcset="./assets/app-icon.png 1x, ./assets/app-icon@2x.png 2x" alt="" class="nav-logo-icon" width="32" height="32" />
+    <!-- Inline SVG so the mark inherits currentColor — controlled by
+         the theme via var(--peach). Default theme renders the logo in
+         peach; data-theme="blue" rebinds --peach to cyan and the mark
+         follows. Same SVG geometry as the in-app activity icon and
+         the favicon, so the brand reads consistently. -->
+    <svg
+      viewBox="0 0 24 24"
+      class="nav-logo-icon"
+      width="32"
+      height="32"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      style="color: var(--peach);"
+    >
+      <circle cx="12" cy="12" r="9.5" />
+      <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
+      <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
+      <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
+      <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="12"   cy="12.8" r="1.4" />
+      <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
+    </svg>
     <span class="nav-logo-text">NeuroVault</span>
   </a>
   <nav class="nav-links">
