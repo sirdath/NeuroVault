@@ -105,13 +105,20 @@ Concretely, NeuroVault is:
 
 Every memory is a plain `.md` file. The database is an index. If the index breaks, rebuild from files. You own your brain.
 
-![NeuroVault neural graph view](docs/screenshots/neural-graph.png)
+![NeuroVault graph view with the Filters panel open](website/assets/screenshots/02-filter-panel.png)
 
-*The neural graph view: force-directed layout, three automatic link types (semantic, entity, wikilinks). Nodes sized by access frequency, colored by strength state (amber is fresh, teal is connected, gray is dormant). Every node is a real markdown file in the vault.*
+*The graph view with the Filters panel open. Force-directed brain in the centre, orphan halo around it. The right-side panel groups every customisation knob — search, edge-type filters, node-size slider, layout shape, force tuning, time-lapse playback. Live: drag any slider and the graph updates without a re-render.*
 
-![Unified Cmd+K command palette](docs/screenshots/command-palette.png)
+### More views
 
-*Cmd+K is the primary nav verb. Three sections in one palette: **Commands** (local fuzzy match), **Notes** (fuzzy title search), and **Memory** (debounced semantic `/api/recall`, appears once you type 3+ chars). Single up/down flow across all sections, kind-specific icons.*
+| | |
+|---|---|
+| ![Semantic edges enabled](website/assets/screenshots/04-graph-semantic-on.png) | ![Cmd+K command palette](website/assets/screenshots/07-palette.png) |
+| **Semantic edges enabled.** Toggle the inferred-similarity layer. `manual` wikilinks, `entity` co-mentions, `semantic` embedding matches each have their own colour. | **Cmd+K command palette.** Three sections in one prompt — *Commands* (fuzzy), *Notes* (title search), *Memory* (semantic recall after 3+ characters). |
+| ![Compile review queue + agent compile flow](website/assets/screenshots/08-compile-agent.png) | ![Note tabs](website/assets/screenshots/05-tabs-context-menu.png) |
+| **Compile review queue.** Pending compiles wait in the left rail; clicking one shows the wiki page and a changelog with paragraph-level provenance back to the sources. Approve or reject. The `auto-approve` toggle skips the queue for trusted agent runs. | **VS Code-style tabs.** Drag to reorder, middle-click to close, right-click for Close / Close others / Close all. Always visible when any note is open. |
+| ![Sidebar collapsed](website/assets/screenshots/06-sidebar-collapsed.png) | ![Settings — About](website/assets/screenshots/09-settings-about.png) |
+| **Sidebar collapse (Ctrl+B).** Hide the left sidebar so the editor or graph fills the full width. Persists across sessions. | **Settings — About.** Brand mark + version. Theme, density, server controls, MCP connection diagnostics live above this section. |
 
 ---
 

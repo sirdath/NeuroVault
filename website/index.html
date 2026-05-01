@@ -12,7 +12,7 @@
 <meta property="og:description" content="Claude forgets you after every conversation. NeuroVault doesn't." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://github.com/daththeanalyst/NeuroVault" />
-<meta property="og:image" content="./assets/neural-graph.png" />
+<meta property="og:image" content="./assets/screenshots/02-filter-panel.png" />
 
 <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -426,33 +426,72 @@
 <section class="screens">
   <div class="section-head reveal">
     <div class="section-kicker">SEE IT</div>
-    <h2 class="section-title">Two views, one memory.</h2>
+    <h2 class="section-title">Every surface, customisable.</h2>
   </div>
 
   <div class="screens-grid">
     <figure class="screen reveal">
       <div class="screen-frame">
-        <img src="./assets/neural-graph.png" alt="NeuroVault neural graph — force-directed knowledge graph" loading="lazy" />
+        <img src="./assets/screenshots/02-filter-panel.png" alt="NeuroVault graph view with the Filters panel open — sliders for node size, link thickness, layout shape, and time-lapse" loading="lazy" />
       </div>
       <figcaption>
-        <strong>Neural graph.</strong>
-        Force-directed layout. Default view: nodes coloured by folder, edges
-        thicker for stronger relationships (manual <code>[[wikilinks]]</code>
-        bolder than weak semantic matches). Flip on Analytics mode and
-        nodes resize by importance, soft background tints group communities,
-        and a tip bar explains each node's role.
+        <strong>Graph view + Filters panel.</strong>
+        Force-directed brain in the centre, orphan halo around it, full
+        Obsidian-style customisation panel on the right. Search, filter by
+        edge type, scale node size and link thickness, switch layout
+        shapes, retune the d3-force simulation, all live.
       </figcaption>
     </figure>
 
     <figure class="screen reveal">
       <div class="screen-frame">
-        <img src="./assets/command-palette.png" alt="NeuroVault command palette — commands, notes, and semantic memory in one prompt" loading="lazy" />
+        <img src="./assets/screenshots/04-graph-semantic-on.png" alt="NeuroVault graph view with semantic edges enabled — every inferred relationship visible at once" loading="lazy" />
+      </div>
+      <figcaption>
+        <strong>Semantic edges on.</strong>
+        Toggle the inferred similarity layer back on and watch the brain
+        densify. <code>manual</code> wikilinks, <code>entity</code>
+        co-mentions, and <code>semantic</code> embedding matches each have
+        their own colour. Hide them by default to read the structure;
+        bring them back when you want the full neighbourhood.
+      </figcaption>
+    </figure>
+
+    <figure class="screen reveal">
+      <div class="screen-frame">
+        <img src="./assets/screenshots/07-palette.png" alt="NeuroVault command palette — commands, notes, and semantic memory in one prompt" loading="lazy" />
       </div>
       <figcaption>
         <strong>Command palette.</strong>
         <code>⌘K</code> is the primary nav verb. Three sections in one
         palette — <em>Commands</em> (fuzzy), <em>Notes</em> (title search),
         <em>Memory</em> (semantic recall after three characters).
+      </figcaption>
+    </figure>
+
+    <figure class="screen reveal">
+      <div class="screen-frame">
+        <img src="./assets/screenshots/08-compile-agent.png" alt="NeuroVault Compile tab with the agent compile flow expanded — topic, source pack, auto-approve toggle" loading="lazy" />
+      </div>
+      <figcaption>
+        <strong>Agent-driven compile.</strong>
+        Type a topic, hit Prepare. NeuroVault gathers every relevant
+        engram, hands the source pack to your agent. The agent writes a
+        canonical wiki page, you review and approve — or flip the
+        <code>auto-approve</code> toggle and let trusted compiles ship
+        straight to the vault.
+      </figcaption>
+    </figure>
+
+    <figure class="screen reveal">
+      <div class="screen-frame">
+        <img src="./assets/screenshots/05-tabs-context-menu.png" alt="NeuroVault Notes view with multiple tabs and right-click context menu — Close, Close others, Close all" loading="lazy" />
+      </div>
+      <figcaption>
+        <strong>VS Code-style note tabs.</strong>
+        Open as many notes as you like. Drag to reorder, middle-click to
+        close, right-click for Close / Close others / Close all. Behaves
+        like the editor you already use all day.
       </figcaption>
     </figure>
   </div>
