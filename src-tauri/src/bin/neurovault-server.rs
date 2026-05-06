@@ -24,7 +24,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use neurovault_lib::memory::api_gateway::{start_gateway, GatewayConfig, GatewayHandle};
+use neurovault_lib::memory::api_gateway::{start_gateway, GatewayHandle};
 use neurovault_lib::memory::api_keys::{self, Scope};
 use neurovault_lib::memory::http_server::start_server;
 use tokio::signal;
@@ -132,14 +132,20 @@ async fn main() -> ExitCode {
     // bind. Keep this format stable.
     println!("ready 127.0.0.1:{}", handle.port);
 
-    // Optional API gateway. Default OFF — only starts when the
-    // developer sets NEUROVAULT_API_GATEWAY=1. Phase 8 of the
-    // gateway work moves this knob into Settings; today it lives
-    // in the env so we can smoke-test before any UI lands.
+    // Optional API gateway. Two ways to enable:
+    //   1. Persisted config at ~/.neurovault/api_gateway.json
+    //      with `enabled: true`. Set via Settings → API Access.
+    //   2. NEUROVAULT_API_GATEWAY=1 env override. Forces enable
+    //      with default config (loopback + 8767). Useful for
+    //      smoke-testing without persisting state.
+    // The persisted config wins if both are set; env override is
+    // the fallback when there's no config file yet.
     let mut gateway_handle: Option<GatewayHandle> = None;
-    if env::var("NEUROVAULT_API_GATEWAY").as_deref() == Ok("1") {
-        let cfg = GatewayConfig::default();
-        match start_gateway(cfg).await {
+    let env_force = env::var("NEUROVAULT_API_GATEWAY").as_deref() == Ok("1");
+    let cfg = neurovault_lib::memory::api_gateway::load_config();
+    if cfg.enabled || env_force {
+        let resolved = if cfg.enabled { cfg } else { Default::default() };
+        match start_gateway(resolved).await {
             Ok(h) => {
                 eprintln!("[neurovault-server] api gateway up on {}", h.addr);
                 gateway_handle = Some(h);
