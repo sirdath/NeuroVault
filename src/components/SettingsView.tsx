@@ -316,6 +316,7 @@ export function SettingsView() {
         <McpSection />
         <ClaudeCodeMcpSection />
         <MCPTierSection />
+        <APIAccessSection />
 
         {/* Shortcuts */}
         <Section title="Keyboard Shortcuts">
@@ -802,6 +803,378 @@ function MCPTierSection() {
       </p>
     </Section>
   );
+}
+
+/**
+ *  API Access — manage external-facing API keys for agents that
+ *  call NeuroVault over HTTP (LangChain, n8n, custom Python scripts,
+ *  future hosted teams). Per docs/api-gateway-design.md.
+ *
+ *  Security contract: plaintext keys are shown EXACTLY ONCE at
+ *  creation. Storage holds blake3 hashes only. Revocation is
+ *  reversible-into-audit-trail (revoked rows stay for accounting).
+ *
+ *  This section drives the loopback-only endpoints
+ *  /api/api_keys (GET, POST) and /api/api_keys/:id (DELETE). It
+ *  does NOT contact the gateway directly — the gateway has no
+ *  endpoints for managing its own keys, on purpose.
+ */
+type ApiKeyScope = "read" | "write" | "admin";
+type ApiKeyPublic = {
+  id: string;
+  label: string;
+  scope: ApiKeyScope;
+  brain_allowlist: string[];
+  created_at: string;
+  last_used_at: string | null;
+  use_count: number;
+  revoked_at: string | null;
+};
+
+const SCOPE_LABELS: { value: ApiKeyScope; label: string; description: string }[] = [
+  { value: "read", label: "Read", description: "recall, list, view — no writes." },
+  { value: "write", label: "Write", description: "Read + create/update/delete engrams + edit links + bulk metadata." },
+  { value: "admin", label: "Admin", description: "Write + reindex_embeddings + optimize_disk + brain creation." },
+];
+
+function APIAccessSection() {
+  const [keys, setKeys] = useState<ApiKeyPublic[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newPlaintext, setNewPlaintext] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const loadKeys = useCallback(async () => {
+    try {
+      const r = await fetch(`${SERVER_URL}/api/api_keys`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      setKeys(j.keys ?? []);
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => { loadKeys(); }, [loadKeys]);
+
+  const onRevoke = useCallback(async (id: string) => {
+    if (!confirm(`Revoke API key ${id}? Existing requests using it will fail with 401 immediately. This can't be undone.`)) return;
+    setRevoking(id);
+    try {
+      const r = await fetch(`${SERVER_URL}/api/api_keys/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadKeys();
+    } catch (e) {
+      alert(`Couldn't revoke: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRevoking(null);
+    }
+  }, [loadKeys]);
+
+  const activeKeys = (keys ?? []).filter((k) => !k.revoked_at);
+  const revokedKeys = (keys ?? []).filter((k) => !!k.revoked_at);
+
+  return (
+    <Section title="API Access (External Agents)">
+      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+        Generate API keys for external agents (LangChain, n8n, custom scripts) that call NeuroVault over HTTP. Each key has a scope and an optional brain allowlist. <strong>Plaintext is shown exactly once at creation</strong> — copy it then; you can't recover it later.
+      </p>
+
+      {loadError && (
+        <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-negative, #ef4444)" }}>
+          Couldn't load keys: {loadError}
+        </p>
+      )}
+
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+          {activeKeys.length} active{revokedKeys.length > 0 ? ` • ${revokedKeys.length} revoked` : ""}
+        </span>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all"
+          style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+        >
+          + New key
+        </button>
+      </div>
+
+      {keys === null ? (
+        <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>Loading…</p>
+      ) : activeKeys.length === 0 && revokedKeys.length === 0 ? (
+        <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+          No API keys yet. Create one to let an external agent call this brain.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {activeKeys.map((k) => (
+            <APIKeyRow key={k.id} k={k} revoking={revoking === k.id} onRevoke={() => onRevoke(k.id)} />
+          ))}
+          {revokedKeys.length > 0 && (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-[11px] uppercase tracking-wider font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+                Show {revokedKeys.length} revoked
+              </summary>
+              <div className="mt-2 space-y-2">
+                {revokedKeys.map((k) => (
+                  <APIKeyRow key={k.id} k={k} revoking={false} onRevoke={() => {}} />
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      {showCreate && (
+        <APIKeyCreateModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(plaintext) => {
+            setShowCreate(false);
+            setNewPlaintext(plaintext);
+            loadKeys();
+          }}
+        />
+      )}
+
+      {newPlaintext && (
+        <APIKeyPlaintextModal
+          plaintext={newPlaintext}
+          onClose={() => setNewPlaintext(null)}
+        />
+      )}
+    </Section>
+  );
+}
+
+function APIKeyRow({ k, revoking, onRevoke }: { k: ApiKeyPublic; revoking: boolean; onRevoke: () => void }) {
+  const isRevoked = !!k.revoked_at;
+  return (
+    <div
+      className="rounded-lg p-3"
+      style={{
+        background: "var(--nv-bg)",
+        border: "1px solid var(--nv-border)",
+        opacity: isRevoked ? 0.5 : 1,
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-mono text-[11px]" style={{ color: "var(--nv-text-dim)" }}>{k.id}</span>
+            <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-1.5 py-0.5 rounded"
+                  style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)" }}>
+              {k.scope}
+            </span>
+            {isRevoked && (
+              <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-1.5 py-0.5 rounded"
+                    style={{ background: "var(--nv-negative, #ef4444)", color: "var(--nv-bg)" }}>
+                revoked
+              </span>
+            )}
+          </div>
+          <p className="text-[13px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>{k.label}</p>
+          <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
+            Brains: {k.brain_allowlist.length === 0 ? "all" : k.brain_allowlist.join(", ")}
+            {" · "}
+            Last used: {k.last_used_at ? formatRelative(k.last_used_at) : "never"}
+            {" · "}
+            {k.use_count} call{k.use_count === 1 ? "" : "s"}
+          </p>
+        </div>
+        {!isRevoked && (
+          <button
+            onClick={onRevoke}
+            disabled={revoking}
+            className="text-[11px] font-medium font-[Geist,sans-serif] px-2 py-1 rounded transition-all disabled:opacity-30 flex-shrink-0"
+            style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+          >
+            {revoking ? "..." : "Revoke"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function APIKeyCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (plaintext: string) => void }) {
+  const [label, setLabel] = useState("");
+  const [scope, setScope] = useState<ApiKeyScope>("read");
+  const [allowlistText, setAllowlistText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSubmit = async () => {
+    if (!label.trim()) {
+      setError("Label is required");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const brain_allowlist = allowlistText
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const r = await fetch(`${SERVER_URL}/api/api_keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim(), scope, brain_allowlist }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error ?? `HTTP ${r.status}`);
+      }
+      const j = await r.json();
+      onCreated(j.plaintext);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50 pointer-events-auto"
+      style={{ background: "rgba(0,0,0,0.5)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="rounded-2xl p-6 w-[440px] max-w-[90vw]" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+        <h3 className="text-[15px] font-semibold font-[Geist,sans-serif] mb-4" style={{ color: "var(--nv-text)" }}>Create API key</h3>
+
+        <label className="block mb-3">
+          <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Label</span>
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. n8n workflow on Linode"
+            autoFocus
+            className="mt-1 w-full px-3 py-2 rounded-lg text-[13px] font-[Geist,sans-serif] outline-none"
+            style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+          />
+        </label>
+
+        <div className="mb-3">
+          <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Scope</span>
+          <div className="mt-1 space-y-1">
+            {SCOPE_LABELS.map((s) => (
+              <label key={s.value} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white/5">
+                <input
+                  type="radio"
+                  name="api-scope"
+                  checked={scope === s.value}
+                  onChange={() => setScope(s.value)}
+                  className="mt-0.5"
+                />
+                <div>
+                  <div className="text-[13px] font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text)" }}>{s.label}</div>
+                  <div className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{s.description}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <label className="block mb-4">
+          <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Brain allowlist (optional)</span>
+          <input
+            value={allowlistText}
+            onChange={(e) => setAllowlistText(e.target.value)}
+            placeholder="Empty = all brains. Comma-separated brain ids to restrict."
+            className="mt-1 w-full px-3 py-2 rounded-lg text-[13px] font-[Geist,sans-serif] outline-none"
+            style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+          />
+        </label>
+
+        {error && <p className="text-[12px] font-[Geist,sans-serif] mb-3" style={{ color: "var(--nv-negative, #ef4444)" }}>{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="text-[12px] font-medium font-[Geist,sans-serif] px-3 py-2 rounded-lg"
+            style={{ color: "var(--nv-text-muted)" }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSubmit}
+            disabled={submitting}
+            className="text-[12px] font-medium font-[Geist,sans-serif] px-3 py-2 rounded-lg disabled:opacity-50"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+          >
+            {submitting ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function APIKeyPlaintextModal({ plaintext, onClose }: { plaintext: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(plaintext);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — user can still copy manually */
+    }
+  };
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50 pointer-events-auto"
+      style={{ background: "rgba(0,0,0,0.5)" }}
+    >
+      <div className="rounded-2xl p-6 w-[480px] max-w-[90vw]" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+        <h3 className="text-[15px] font-semibold font-[Geist,sans-serif] mb-2" style={{ color: "var(--nv-text)" }}>Save your API key</h3>
+        <p className="text-[12px] font-[Geist,sans-serif] mb-4" style={{ color: "var(--nv-text-muted)" }}>
+          This is the only time the key will be shown. Copy it now — there's no way to recover it later. If you lose it, revoke and create a new one.
+        </p>
+        <div className="rounded-lg p-3 mb-4 font-mono text-[12px] break-all"
+             style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>
+          {plaintext}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCopy}
+            className="text-[12px] font-medium font-[Geist,sans-serif] px-3 py-2 rounded-lg"
+            style={{
+              background: copied ? "var(--nv-positive, #10b981)" : "var(--nv-surface)",
+              color: copied ? "var(--nv-bg)" : "var(--nv-text-muted)",
+              border: "1px solid var(--nv-border)",
+            }}
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+          <button
+            onClick={onClose}
+            className="text-[12px] font-medium font-[Geist,sans-serif] px-3 py-2 rounded-lg"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+          >
+            I've copied it — close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatRelative(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const ageMs = Date.now() - t;
+  const sec = Math.floor(ageMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  return iso.slice(0, 10);
 }
 
 /** Per-folder colour override editor. Lists every folder currently in

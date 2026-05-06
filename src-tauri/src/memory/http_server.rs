@@ -120,6 +120,11 @@ fn router() -> Router {
         .route("/api/temporal_recall", get(temporal_recall))
         .route("/api/optimize_disk", post(optimize_disk))
         .route("/api/mcp_tier", get(mcp_tier_get).put(mcp_tier_set))
+        // API key management — loopback-mounted ONLY. The gateway
+        // does NOT mount these (deliberate: external clients must
+        // not manage their own keys).
+        .route("/api/api_keys", get(api_keys_list).post(api_keys_create))
+        .route("/api/api_keys/:id", axum::routing::delete(api_keys_revoke))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))

@@ -2644,6 +2644,108 @@ pub async fn mcp_tier_set(
 }
 
 // ---------------------------------------------------------------------------
+// API key management — loopback-mounted ONLY. The gateway must
+// never expose these; an external client managing its own keys
+// is a footgun (and a privilege-escalation pathway).
+//
+// The Settings UI calls these from the Tauri webview over the
+// loopback port. Three endpoints:
+//
+//   GET    /api/api_keys              list public metadata (no hashes)
+//   POST   /api/api_keys              create + return plaintext ONCE
+//   DELETE /api/api_keys/:id          revoke (sets revoked_at)
+//
+// Per docs/api-gateway-design.md: plaintext is shown once at
+// creation, never recoverable; revocation keeps the row for audit.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+pub struct ApiKeyListResponse {
+    pub keys: Vec<super::api_keys::ApiKeyPublic>,
+}
+
+pub async fn api_keys_list(
+    _s: State<ServerState>,
+) -> Result<Json<ApiKeyListResponse>, ApiError> {
+    let store = super::api_keys::current();
+    let keys = store
+        .keys
+        .iter()
+        .map(super::api_keys::ApiKeyPublic::from)
+        .collect();
+    Ok(Json(ApiKeyListResponse { keys }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ApiKeyCreateBody {
+    pub label: String,
+    /// "read" | "write" | "admin". Case-insensitive.
+    pub scope: String,
+    /// Optional. Empty = all brains permitted.
+    #[serde(default)]
+    pub brain_allowlist: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ApiKeyCreateResponse {
+    /// Plaintext key. Shown to the UI ONCE, never stored or
+    /// retrievable again. UI is responsible for the "copy this
+    /// now" modal and never logging this string.
+    pub plaintext: String,
+    pub key: super::api_keys::ApiKeyPublic,
+}
+
+pub async fn api_keys_create(
+    _s: State<ServerState>,
+    Json(body): Json<ApiKeyCreateBody>,
+) -> Result<Json<ApiKeyCreateResponse>, ApiError> {
+    let label = body.label.trim();
+    if label.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "label is required".into(),
+        ));
+    }
+    let scope = match body.scope.trim().to_lowercase().as_str() {
+        "read" => super::api_keys::Scope::Read,
+        "write" => super::api_keys::Scope::Write,
+        "admin" => super::api_keys::Scope::Admin,
+        other => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("scope must be 'read' | 'write' | 'admin', got {:?}", other),
+            ))
+        }
+    };
+    let minted = super::api_keys::create_key(label, scope, body.brain_allowlist)
+        .map_err(ApiError::from)?;
+    let key = super::api_keys::ApiKeyPublic::from(&minted.record);
+    Ok(Json(ApiKeyCreateResponse {
+        plaintext: minted.plaintext,
+        key,
+    }))
+}
+
+#[derive(serde::Serialize)]
+pub struct ApiKeyRevokeResponse {
+    pub revoked: bool,
+}
+
+pub async fn api_keys_revoke(
+    Path(id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<ApiKeyRevokeResponse>, ApiError> {
+    let revoked = super::api_keys::revoke_key(&id).map_err(ApiError::from)?;
+    if !revoked {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("api key not found: {}", id),
+        ));
+    }
+    Ok(Json(ApiKeyRevokeResponse { revoked: true }))
+}
+
+// ---------------------------------------------------------------------------
 // Compilations: agent-driven wiki compile flow.
 //
 // Two endpoints, designed for an agent (Claude Code, Cursor) to drive
