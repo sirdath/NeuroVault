@@ -149,6 +149,23 @@ fn router() -> Router {
         // POST that's still read-scope: dedupe check is a query, not
         // a write — body just carries the candidate content.
         .route("/v1/check_duplicate", post(handlers::check_duplicate))
+        // Phase 5 — WRITE endpoints. Same handlers as the loopback
+        // path, mounted under /v1/. Scope: write (which implies
+        // read via Scope::satisfies).
+        .route("/v1/notes", post(handlers::remember))
+        .route("/v1/notes", axum::routing::put(handlers::notes_save))
+        .route("/v1/notes", axum::routing::delete(handlers::notes_delete))
+        .route("/v1/engrams/delete", post(handlers::engrams_delete))
+        .route("/v1/engrams/bulk_set_kind", post(handlers::bulk_set_kind))
+        .route("/v1/engrams/bulk_add_tag", post(handlers::bulk_add_tag))
+        .route("/v1/contradictions/:id/resolve", post(handlers::contradictions_resolve))
+        .route("/v1/links", post(handlers::links_add))
+        .route("/v1/links", axum::routing::delete(handlers::links_remove))
+        .route("/v1/import_folder", post(handlers::import_folder))
+        .route("/v1/update", post(handlers::update_brain))
+        .route("/v1/core_memory/:label", axum::routing::put(handlers::core_memory_set))
+        .route("/v1/core_memory/:label/append", post(handlers::core_memory_append))
+        .route("/v1/core_memory/:label/replace", post(handlers::core_memory_replace))
         // Auth runs FIRST (outermost), then scope check. Both fire
         // before any handler. Order matters: scope_middleware reads
         // the AuthedKey that auth_middleware just inserted.
@@ -210,33 +227,69 @@ async fn auth_middleware(mut req: Request, next: Next) -> Response {
 // resolve to their template string, not the concrete URL.
 // ---------------------------------------------------------------------------
 
-fn required_scope_for(path: &str) -> Option<Scope> {
-    // Read scope — most of the surface
-    if matches!(
-        path,
-        "/v1/status"
-            | "/v1/recall"
-            | "/v1/recall/chunks"
-            | "/v1/recall_across_brains"
-            | "/v1/related/:engram_id"
-            | "/v1/notes"
-            | "/v1/notes/:engram_id"
-            | "/v1/notes/:engram_id/versions"
-            | "/v1/notes/:engram_id/versions/:version"
-            | "/v1/temporal_recall"
-            | "/v1/contradictions"
-            | "/v1/orphan_links"
-            | "/v1/clutter"
-            | "/v1/list_images"
-            | "/v1/brains"
-            | "/v1/brains/:brain_id/stats"
-            | "/v1/session_start"
-            | "/v1/changes"
-            | "/v1/core_memory"
-            | "/v1/core_memory/:label"
-            | "/v1/check_duplicate"
-    ) {
+/// Look up the required scope for a (method, path) pair. Path is the
+/// matched route template (e.g. "/v1/notes/:engram_id"), method is
+/// the HTTP verb. Method-aware because the same path serves
+/// different scopes at different verbs — GET /v1/notes is read,
+/// POST /v1/notes is write, DELETE /v1/notes is write.
+///
+/// Returns None when no policy is registered. The middleware fails
+/// closed on None — refuse rather than accidentally allow.
+fn required_scope_for(method: &axum::http::Method, path: &str) -> Option<Scope> {
+    use axum::http::Method;
+    // Read scope — GET endpoints + the one POST that's a query
+    // (check_duplicate returns whether content matches existing
+    // engrams; reads no permanent state).
+    if method == Method::GET {
+        if matches!(
+            path,
+            "/v1/status"
+                | "/v1/recall"
+                | "/v1/recall/chunks"
+                | "/v1/recall_across_brains"
+                | "/v1/related/:engram_id"
+                | "/v1/notes"
+                | "/v1/notes/:engram_id"
+                | "/v1/notes/:engram_id/versions"
+                | "/v1/notes/:engram_id/versions/:version"
+                | "/v1/temporal_recall"
+                | "/v1/contradictions"
+                | "/v1/orphan_links"
+                | "/v1/clutter"
+                | "/v1/list_images"
+                | "/v1/brains"
+                | "/v1/brains/:brain_id/stats"
+                | "/v1/session_start"
+                | "/v1/changes"
+                | "/v1/core_memory"
+                | "/v1/core_memory/:label"
+        ) {
+            return Some(Scope::Read);
+        }
+    }
+    if method == Method::POST && path == "/v1/check_duplicate" {
         return Some(Scope::Read);
+    }
+    // Write scope — mutating endpoints. POST/PUT/DELETE on
+    // engram-affecting paths.
+    let is_write_method = matches!(*method, Method::POST | Method::PUT | Method::DELETE);
+    if is_write_method
+        && matches!(
+            path,
+            "/v1/notes"
+                | "/v1/engrams/delete"
+                | "/v1/engrams/bulk_set_kind"
+                | "/v1/engrams/bulk_add_tag"
+                | "/v1/contradictions/:id/resolve"
+                | "/v1/links"
+                | "/v1/import_folder"
+                | "/v1/update"
+                | "/v1/core_memory/:label"
+                | "/v1/core_memory/:label/append"
+                | "/v1/core_memory/:label/replace"
+        )
+    {
+        return Some(Scope::Write);
     }
     None
 }
@@ -254,7 +307,8 @@ async fn scope_middleware(req: Request, next: Next) -> Response {
         // rather than 403. We don't want auth-aware error leakage.
         return next.run(req).await;
     };
-    let Some(required) = required_scope_for(&path) else {
+    let method = req.method().clone();
+    let Some(required) = required_scope_for(&method, &path) else {
         // Route exists in the router but no scope policy declared.
         // Fail closed: refuse rather than accidentally exposing.
         return forbidden(
