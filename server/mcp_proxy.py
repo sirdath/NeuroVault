@@ -406,6 +406,70 @@ def recall_chunks(query: str, limit: int = 10, brain: str | None = None) -> Any:
 
 
 @mcp.tool(annotations={
+    "title": "Recall across every brain (federated search)",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def recall_across_brains(
+    query: str,
+    top_k: int = 10,
+    per_brain: int = 5,
+    brains: str | None = None,
+    include_observations: bool = False,
+    rerank: bool = False,
+) -> Any:
+    """Run hybrid retrieval against EVERY brain in the registry (or a
+    caller-supplied subset) and merge by score. Each hit comes back
+    annotated with `brain_id` + `brain_name` so the agent can answer
+    "where does this live?" alongside the content.
+
+    WHEN TO CALL:
+    - User asks something but you don't know which brain holds it.
+    - User says "search everywhere for X" / "across all my notes".
+    - You ran `recall` against the active brain and got nothing
+      relevant — try federated before giving up.
+
+    Caveats:
+    - RRF scores are unitless and brain-relative; comparing across
+      brains is approximate. Use this as "anywhere this exists",
+      not "globally ranked best answer."
+    - Cost is linear in brain count. Each per-brain search runs
+      through the throttled hybrid path; with 6 brains and the
+      defaults you fan out to 30 hits.
+
+    Args:
+        query: search query (same operators as `recall`).
+        top_k: total hits returned after merge. Default 10, max 50.
+        per_brain: cap per-brain hits before merge. Default 5,
+            max 20. Lower = faster, higher = better recall when one
+            brain dominates the right answer.
+        brains: comma-separated brain ids to scope the search.
+            Empty/missing = every brain in the registry. Unknown
+            ids are silently dropped.
+        include_observations: include kind='observation' engrams
+            (auto-extracted, noisier). Default False.
+        rerank: cross-encoder rerank pass. Default False.
+
+    Returns:
+        query, brains_searched, total
+        hits: [{ brain_id, brain_name, engram_id, title, content,
+                 score, strength, state }]  sorted by score desc.
+    """
+    return _http_get(
+        "/api/recall_across_brains",
+        {
+            "q": query,
+            "top_k": top_k,
+            "per_brain": per_brain,
+            "brains": brains,
+            "include_observations": "true" if include_observations else "false",
+            "rerank": "true" if rerank else "false",
+        },
+    )
+
+
+@mcp.tool(annotations={
     "title": "Session bootstrap",
     "readOnlyHint": True,
     "idempotentHint": True,
