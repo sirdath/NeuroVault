@@ -126,6 +126,7 @@ fn router() -> Router {
         .route("/api/links", post(links_add))
         .route("/api/links", axum::routing::delete(links_remove))
         .route("/api/orphan_links", get(orphan_links))
+        .route("/api/temporal_recall", get(temporal_recall))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -1529,6 +1530,166 @@ async fn orphan_links(
             threshold,
             total,
             pairs,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Temporal recall — surface rows from `temporal_facts`, optionally as
+// of a past instant. The retriever already biases live recall against
+// superseded facts; this endpoint lets an agent ask the bitemporal
+// table directly: "what did I believe about X" or "what did I believe
+// about X on date Y?". Two time axes:
+//
+//   • valid time   — the period the fact described reality
+//                    [valid_from, valid_until)
+//   • system time  — when we knew the fact; `expired_at` is set when
+//                    we *retracted* the row (vs. simply ending its
+//                    valid interval).
+//
+// `as_of` filters on valid time + system time together: the fact's
+// valid interval must contain `as_of`, AND the row must not have been
+// retracted before `as_of`. So the response is exactly the set of
+// facts the system would have asserted at that moment.
+//
+// `include_superseded=true` drops the validity filter and returns
+// every matching row, current or not — useful when the agent is
+// auditing the history of a topic ("show me the full timeline for
+// the database choice").
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct TemporalRecallQuery {
+    /// Free-text substring matched against `fact`. Case-insensitive.
+    /// Empty / missing returns the most recent facts in the brain.
+    #[serde(default)]
+    query: Option<String>,
+    /// ISO timestamp ("2026-01-15" or "2026-01-15T12:00:00") to time-
+    /// travel to. Default = now (only currently-valid facts).
+    #[serde(default)]
+    as_of: Option<String>,
+    /// If set, scope to facts attached to this engram only.
+    #[serde(default)]
+    engram_id: Option<String>,
+    /// When true, ignore the validity filter and return every match —
+    /// current, ended, and retracted alike.
+    #[serde(default)]
+    include_superseded: bool,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct TemporalFactEntry {
+    id: String,
+    engram_id: String,
+    engram_title: String,
+    fact: String,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+    is_current: bool,
+    superseded_by: Option<String>,
+    expired_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct TemporalRecallResponse {
+    brain_id: String,
+    query: String,
+    as_of: Option<String>,
+    include_superseded: bool,
+    total: usize,
+    facts: Vec<TemporalFactEntry>,
+}
+
+async fn temporal_recall(
+    Query(q): Query<TemporalRecallQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<TemporalRecallResponse>, ApiError> {
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<TemporalRecallResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        let query_text = q.query.unwrap_or_default();
+        let like_pat = format!("%{}%", query_text);
+        let has_query = !query_text.is_empty();
+        let has_engram = q.engram_id.is_some();
+
+        // Two SQL shapes: time-travel vs. live. The bitemporal filter
+        // matches on validity AND system-time (`expired_at` either NULL
+        // or in the future relative to `as_of`). When the caller passes
+        // `include_superseded`, we drop both filters and return raw
+        // history.
+        let mut sql = String::from(
+            "SELECT t.id, t.engram_id, e.title, t.fact, t.valid_from, t.valid_until, \
+                    t.is_current, t.superseded_by, t.expired_at \
+             FROM temporal_facts t \
+             JOIN engrams e ON e.id = t.engram_id \
+             WHERE e.state != 'dormant'",
+        );
+        let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+
+        if !q.include_superseded {
+            if let Some(ref cutoff) = q.as_of {
+                sql.push_str(
+                    " AND (t.valid_from IS NULL OR t.valid_from <= ?) \
+                       AND (t.valid_until IS NULL OR t.valid_until > ?) \
+                       AND (t.expired_at IS NULL OR t.expired_at > ?)",
+                );
+                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+            } else {
+                sql.push_str(" AND t.is_current = 1 AND t.expired_at IS NULL");
+            }
+        }
+
+        if has_query {
+            sql.push_str(" AND t.fact LIKE ? COLLATE NOCASE");
+            binds.push(rusqlite::types::Value::Text(like_pat));
+        }
+        if has_engram {
+            sql.push_str(" AND t.engram_id = ?");
+            binds.push(rusqlite::types::Value::Text(q.engram_id.clone().unwrap_or_default()));
+        }
+
+        // Most-recent first by valid_from; ties broken by id for
+        // stable pagination.
+        sql.push_str(" ORDER BY COALESCE(t.valid_from, '') DESC, t.id ASC LIMIT ?");
+        binds.push(rusqlite::types::Value::Integer(limit));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mapped = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
+            let is_current_int: i64 = r.get(6)?;
+            Ok(TemporalFactEntry {
+                id: r.get(0)?,
+                engram_id: r.get(1)?,
+                engram_title: r.get(2)?,
+                fact: r.get(3)?,
+                valid_from: r.get(4)?,
+                valid_until: r.get(5)?,
+                is_current: is_current_int != 0,
+                superseded_by: r.get(7)?,
+                expired_at: r.get(8)?,
+            })
+        })?;
+        let facts: Vec<TemporalFactEntry> = mapped.filter_map(std::result::Result::ok).collect();
+        let total = facts.len();
+        Ok(TemporalRecallResponse {
+            brain_id: id,
+            query: query_text,
+            as_of: q.as_of,
+            include_superseded: q.include_superseded,
+            total,
+            facts,
         })
     })
     .await
