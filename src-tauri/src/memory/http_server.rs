@@ -121,6 +121,8 @@ fn router() -> Router {
         .route("/api/update", post(update_brain))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))
+        .route("/api/contradictions", get(contradictions_list))
+        .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -1110,6 +1112,156 @@ async fn engrams_delete(
             not_found,
             failed,
         })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Contradictions endpoint — surfaces fact-level conflicts that the
+// ingest pipeline has already auto-detected and stored in the
+// `contradictions` table. Until v0.1.9 these were silently
+// accumulating with no read path; agents now query this to audit
+// the brain. Each row carries both contradicting facts and pointers
+// back to their source engrams so the caller can show provenance
+// when proposing a resolution.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct ContradictionsQuery {
+    /// Filter by resolution state. None → all rows. Some(false) →
+    /// only unresolved (the common case for "show me what to fix").
+    /// Some(true) → only resolved.
+    #[serde(default)]
+    resolved: Option<bool>,
+    #[serde(default)]
+    brain: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct ContradictionEntry {
+    id: String,
+    fact_a: String,
+    fact_b: String,
+    engram_a_id: String,
+    engram_a_title: String,
+    engram_b_id: String,
+    engram_b_title: String,
+    detected_at: String,
+    resolved: bool,
+    resolution: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ContradictionsResponse {
+    brain_id: String,
+    total: usize,
+    contradictions: Vec<ContradictionEntry>,
+}
+
+async fn contradictions_list(
+    Query(q): Query<ContradictionsQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ContradictionsResponse>, ApiError> {
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<ContradictionsResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        let where_clause = match q.resolved {
+            None => "",
+            Some(true) => " WHERE c.resolved = 1",
+            Some(false) => " WHERE c.resolved = 0",
+        };
+        let sql = format!(
+            "SELECT c.id, c.fact_a, c.fact_b, \
+                    c.engram_a, ea.title, \
+                    c.engram_b, eb.title, \
+                    c.detected_at, c.resolved, c.resolution \
+             FROM contradictions c \
+             JOIN engrams ea ON ea.id = c.engram_a \
+             JOIN engrams eb ON eb.id = c.engram_b \
+             {} \
+             ORDER BY c.detected_at DESC \
+             LIMIT ?1",
+            where_clause,
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mapped = stmt.query_map([limit], |r| {
+            Ok(ContradictionEntry {
+                id: r.get(0)?,
+                fact_a: r.get(1)?,
+                fact_b: r.get(2)?,
+                engram_a_id: r.get(3)?,
+                engram_a_title: r.get(4)?,
+                engram_b_id: r.get(5)?,
+                engram_b_title: r.get(6)?,
+                detected_at: r.get(7)?,
+                resolved: r.get::<_, i64>(8)? != 0,
+                resolution: r.get(9)?,
+            })
+        })?;
+        let contradictions: Vec<ContradictionEntry> = mapped.filter_map(std::result::Result::ok).collect();
+        let total = contradictions.len();
+        Ok(ContradictionsResponse {
+            brain_id: id,
+            total,
+            contradictions,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct ContradictionResolveBody {
+    /// Optional human-readable note about why one fact wins or how
+    /// the conflict is reconciled. Stored verbatim. The endpoint just
+    /// flips the resolved flag — it does NOT delete or modify the
+    /// underlying engrams. Resolution is annotation, not action.
+    #[serde(default)]
+    resolution: Option<String>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ContradictionResolveResult {
+    id: String,
+    resolved: bool,
+}
+
+async fn contradictions_resolve(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    _s: State<ServerState>,
+    body: Option<Json<ContradictionResolveBody>>,
+) -> Result<Json<ContradictionResolveResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or(ContradictionResolveBody {
+        resolution: None,
+        brain: None,
+    });
+    let result = tokio::task::spawn_blocking(move || -> Result<ContradictionResolveResult, MemoryError> {
+        let brain_id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&brain_id)?;
+        let conn = db.lock();
+        let updated = conn.execute(
+            "UPDATE contradictions SET resolved = 1, resolution = ?2 WHERE id = ?1",
+            rusqlite::params![&id, &body.resolution],
+        )?;
+        if updated == 0 {
+            return Err(MemoryError::Other(format!(
+                "contradiction {} not found",
+                id
+            )));
+        }
+        Ok(ContradictionResolveResult { id, resolved: true })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

@@ -810,6 +810,98 @@ def compile_submit(
 
 
 @mcp.tool(annotations={
+    "title": "Find contradictions — facts that conflict with each other",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def find_contradictions(
+    resolved: bool | None = False,
+    brain: str | None = None,
+    limit: int = 50,
+) -> Any:
+    """Surface auto-detected fact-level conflicts in the brain. The
+    ingest pipeline flags contradictions whenever two engrams assert
+    incompatible things (e.g. "user prefers Rust" then later "user
+    prefers Go"). They sit in the contradictions table waiting for
+    review.
+
+    WHEN TO CALL:
+    - User asks "what conflicts in my brain" / "what changed my mind"
+    - You're about to make a confident assertion in a recall response
+      and want to check if it's been superseded
+    - Auditing the brain after a long session of writes
+
+    Returns:
+        brain_id        — which brain was queried
+        total           — number of contradictions in the response
+        contradictions  — list of:
+            { id, fact_a, fact_b,
+              engram_a_id, engram_a_title,
+              engram_b_id, engram_b_title,
+              detected_at, resolved, resolution }
+        Each row includes both engram titles so you can quote them
+        when proposing a resolution.
+
+    Args:
+        resolved: filter by state. False (default) shows only
+            unresolved — the actionable list. True shows the audit
+            trail of past resolutions. None shows everything.
+        brain: target brain id (defaults to active).
+        limit: cap. Default 50, max 500.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if resolved is not None:
+        params["resolved"] = str(resolved).lower()
+    if brain:
+        params["brain"] = brain
+    return _http_get("/api/contradictions", params)
+
+
+@mcp.tool(annotations={
+    "title": "Resolve a contradiction — mark it reviewed",
+    "readOnlyHint": False,
+    "destructiveHint": False,  # annotation only; no engram changes
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def resolve_contradiction(
+    contradiction_id: str,
+    resolution: str | None = None,
+    brain: str | None = None,
+) -> Any:
+    """Mark a contradiction as resolved with an optional human-
+    readable note explaining the call. Does NOT delete or rewrite
+    the underlying engrams — resolution is annotation, not action.
+
+    WHEN TO CALL:
+    - After find_contradictions() and the user has decided how to
+      reconcile a specific conflict
+    - When you've written a new engram that supersedes one of the
+      facts and want the conflict closed
+
+    To actually fix the underlying data, the user should edit the
+    out-of-date engram (or use `delete_engrams` if it should be
+    removed entirely). This tool just clears the entry from the
+    "needs review" list.
+
+    Args:
+        contradiction_id: id from find_contradictions()
+        resolution: optional note explaining the resolution
+        brain: target brain id (defaults to active).
+    """
+    body: dict[str, Any] = {}
+    if resolution is not None:
+        body["resolution"] = resolution
+    if brain:
+        body["brain"] = brain
+    return _http_post(
+        f"/api/contradictions/{contradiction_id}/resolve",
+        body,
+    )
+
+
+@mcp.tool(annotations={
     "title": "Find clutter — surface engrams that look like noise",
     "readOnlyHint": True,
     "idempotentHint": True,
