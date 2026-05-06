@@ -755,8 +755,17 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // pulse ring whenever the store fires a new `requestFocus`. Runs
   // only when the request timestamp changes; repeated focus requests
   // for the same node still re-tween because `at` bumps each call.
+  //
+  // `lastHandledAtRef` guards against re-firing when the `nodes`
+  // array reference shuffles (graph reload, ResizeObserver, etc.).
+  // Without it, any unrelated state churn would yank the user's
+  // wheel-zoom back to 2.2× because the effect would re-run with a
+  // still-set `focusRequest`.
+  const lastHandledAtRef = useRef<number>(0);
   useEffect(() => {
     if (!focusRequest) return;
+    if (focusRequest.at === lastHandledAtRef.current) return;
+    lastHandledAtRef.current = focusRequest.at;
     if (mode !== "2d") return; // 3D camera tween would need a different API
     const target = (nodes as Array<SimNode & { x?: number; y?: number }>)
       .find((n) => n.id === focusRequest.nodeId);
@@ -778,6 +787,56 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     const id = window.setTimeout(() => setFocusPulse(null), 1500);
     return () => window.clearTimeout(id);
   }, [focusRequest, mode, nodes]);
+
+  // Camera control handlers used by the +/− /fit toolbar buttons.
+  // 2D goes through d3-zoom (multiplicative steps); 3D nudges the
+  // camera distance via cameraPosition() since OrbitControls don't
+  // expose a clean dolly. `zoomToFit` reframes the whole graph.
+  const handleZoomIn = useCallback(() => {
+    if (mode === "2d") {
+      type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
+      const fg = fg2dRef.current as CamApi | undefined;
+      if (!fg) return;
+      const cur = (fg.zoom() as number) ?? 1;
+      fg.zoom(Math.min(50, cur * 1.4), 220);
+    } else {
+      type Cam3 = {
+        cameraPosition: (p: Partial<{x: number; y: number; z: number}>, lookAt?: unknown, ms?: number) => unknown;
+      };
+      const fg = fg3dRef.current as Cam3 | undefined;
+      const pos = fg?.cameraPosition({}) as { x: number; y: number; z: number } | undefined;
+      if (!fg || !pos) return;
+      fg.cameraPosition({ x: pos.x * 0.75, y: pos.y * 0.75, z: pos.z * 0.75 }, undefined, 220);
+    }
+  }, [mode]);
+  const handleZoomOut = useCallback(() => {
+    if (mode === "2d") {
+      type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
+      const fg = fg2dRef.current as CamApi | undefined;
+      if (!fg) return;
+      const cur = (fg.zoom() as number) ?? 1;
+      fg.zoom(Math.max(0.05, cur / 1.4), 220);
+    } else {
+      type Cam3 = {
+        cameraPosition: (p: Partial<{x: number; y: number; z: number}>, lookAt?: unknown, ms?: number) => unknown;
+      };
+      const fg = fg3dRef.current as Cam3 | undefined;
+      const pos = fg?.cameraPosition({}) as { x: number; y: number; z: number } | undefined;
+      if (!fg || !pos) return;
+      fg.cameraPosition({ x: pos.x / 0.75, y: pos.y / 0.75, z: pos.z / 0.75 }, undefined, 220);
+    }
+  }, [mode]);
+  const handleZoomFit = useCallback(() => {
+    if (mode === "2d") {
+      type CamApi = { zoomToFit: (ms?: number, padding?: number) => unknown };
+      const fg = fg2dRef.current as CamApi | undefined;
+      fg?.zoomToFit?.(400, 80);
+    } else {
+      type Cam3 = { zoomToFit: (ms?: number, padding?: number) => unknown };
+      const fg = fg3dRef.current as Cam3 | undefined;
+      fg?.zoomToFit?.(400, 80);
+    }
+  }, [mode]);
 
   // During the pulse window, kick a per-frame repaint so the ring
   // actually animates. force-graph's internal render loop goes idle
@@ -1709,6 +1768,36 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             </button>
           ))}
         </div>
+        {/* Zoom controls — work in both 2D (d3-zoom) and 3D (camera
+            dolly). Wheel-zoom on the canvas still works in parallel;
+            these are a discoverable fallback for users who don't
+            realise wheel works, and a guaranteed path on devices
+            where wheel events get intercepted. */}
+        <div className="flex gap-0.5 rounded-lg p-0.5"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+        >
+          <button
+            onClick={handleZoomOut}
+            className="px-2 py-1 text-[12px] font-[Geist,sans-serif] font-medium rounded transition-colors hover:bg-white/5"
+            style={{ color: "var(--nv-text-muted)" }}
+            aria-label="Zoom out"
+            title="Zoom out"
+          >−</button>
+          <button
+            onClick={handleZoomFit}
+            className="px-2 py-1 text-[10px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors hover:bg-white/5"
+            style={{ color: "var(--nv-text-muted)" }}
+            aria-label="Fit to screen"
+            title="Fit graph to screen"
+          >Fit</button>
+          <button
+            onClick={handleZoomIn}
+            className="px-2 py-1 text-[12px] font-[Geist,sans-serif] font-medium rounded transition-colors hover:bg-white/5"
+            style={{ color: "var(--nv-text-muted)" }}
+            aria-label="Zoom in"
+            title="Zoom in"
+          >+</button>
+        </div>
         <button
           onClick={toggleAnalyticsMode}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
@@ -1825,6 +1914,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
             enableNodeDrag={true}
+            enableZoomInteraction={true}
+            enablePanInteraction={true}
+            minZoom={0.05}
+            maxZoom={50}
           />
         ) : (
           <ForceGraph3D
