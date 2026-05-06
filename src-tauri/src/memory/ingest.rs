@@ -597,6 +597,58 @@ fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<()>
     Ok(())
 }
 
+/// Re-embed a single engram in place: re-chunk its content, batch-
+/// encode under the current model, replace chunks + vec_chunks rows.
+/// Used by the bulk reindex endpoint when the embedding model is
+/// upgraded (or to recover from a corrupted vec_chunks table).
+///
+/// Returns the number of chunks written. Engrams with no content
+/// (or that produce zero chunks) return 0 without touching the DB
+/// beyond the chunk delete.
+///
+/// Does NOT update engrams.content_hash or any other engram-level
+/// metadata — pure embedding refresh.
+pub fn reembed_engram(db: &BrainDb, engram_id: &str) -> Result<u32> {
+    let content: Option<String> = {
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT content FROM engrams WHERE id = ?1 AND state != 'dormant'",
+            [engram_id],
+            |r| r.get(0),
+        )
+        .ok()
+    };
+    let Some(content) = content else { return Ok(0) };
+
+    delete_chunks(db, engram_id)?;
+    let chunks = hierarchical_chunk(&content, engram_id);
+    if chunks.is_empty() {
+        return Ok(0);
+    }
+    let embed_texts: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = embedder::encode_batch(&embed_texts)?;
+    let conn = db.lock();
+    for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+        conn.execute(
+            "INSERT OR REPLACE INTO chunks (id, engram_id, content, granularity, chunk_index)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &chunk.id,
+                &chunk.engram_id,
+                &chunk.content,
+                &chunk.granularity,
+                chunk.chunk_index,
+            ],
+        )?;
+        conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [&chunk.id])?;
+        conn.execute(
+            "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?1, ?2)",
+            params![&chunk.id, &serialize_float32(embedding)],
+        )?;
+    }
+    Ok(chunks.len() as u32)
+}
+
 /// Soft-delete: set `state = 'dormant'` and strip chunks + semantic
 /// links. Matches the effect of `db.soft_delete` + downstream cleanup
 /// in the Python side's delete path.

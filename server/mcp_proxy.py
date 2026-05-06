@@ -1191,6 +1191,61 @@ def temporal_recall(
 
 
 @mcp.tool(annotations={
+    "title": "Re-embed every engram in the brain (model upgrade path)",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # same model + same content → identical vectors
+    "openWorldHint": False,
+})
+def reindex_embeddings(
+    dry_run: bool = False,
+    brain: str | None = None,
+) -> Any:
+    """Walk every active engram, re-chunk, re-embed under the
+    currently-loaded model, and replace the chunks + vec_chunks
+    rows. The path users take when:
+
+    - The embedding model has been upgraded (BGE-small → BGE-large,
+      etc.) and the existing vectors no longer match.
+    - The vec_chunks table got corrupted (manual SQL, schema bug,
+      partial restore from backup) and needs to be rebuilt from
+      engram content.
+    - A chunker tweak shipped that changes how content gets split,
+      and you want every engram to use the new chunking.
+
+    Cost: ≈ same as the original ingest of every engram. On the
+    BGE-small-en-v1.5 path that's ~5-10 ms per chunk; a 500-engram
+    brain with 3 chunks each ≈ 7-15 seconds wall-clock. Pass
+    `dry_run=True` first to size the work without doing it.
+
+    Idempotent under a stable model — encoding the same text twice
+    produces identical vectors. The work is the encode, not the
+    disk IO. Per-engram failures are captured in `failed` and the
+    rest of the engrams keep going.
+
+    AFTER calling: run `optimize_disk()` to reclaim space from the
+    chunk-table churn.
+
+    Returns:
+        brain_id, dry_run
+        engrams_total       — active engrams found
+        engrams_reembedded  — engrams that produced new chunks
+                              (zero in dry_run)
+        chunks_written      — total chunk rows touched
+        failed              — list of "<engram_id>: <error>" lines
+        elapsed_ms
+
+    Args:
+        dry_run: count without re-embedding. Default False.
+        brain: target brain id (defaults to active).
+    """
+    return _http_post(
+        "/api/reindex_embeddings",
+        {"dry_run": dry_run, "brain": brain},
+    )
+
+
+@mcp.tool(annotations={
     "title": "Bulk-import a folder of markdown into the brain",
     "readOnlyHint": False,
     "destructiveHint": False,
