@@ -166,6 +166,13 @@ fn router() -> Router {
         .route("/v1/core_memory/:label", axum::routing::put(handlers::core_memory_set))
         .route("/v1/core_memory/:label/append", post(handlers::core_memory_append))
         .route("/v1/core_memory/:label/replace", post(handlers::core_memory_replace))
+        // Phase 6 — ADMIN endpoints. Highest blast radius — VACUUM
+        // the DB, rebuild every embedding, create or switch brains.
+        // Scope: admin (which implies write + read).
+        .route("/v1/optimize_disk", post(handlers::optimize_disk))
+        .route("/v1/reindex_embeddings", post(handlers::reindex_embeddings))
+        .route("/v1/brains", post(handlers::brains_create))
+        .route("/v1/brains/:brain_id/activate", post(handlers::brains_activate))
         // Auth runs FIRST (outermost), then scope check. Both fire
         // before any handler. Order matters: scope_middleware reads
         // the AuthedKey that auth_middleware just inserted.
@@ -290,6 +297,21 @@ fn required_scope_for(method: &axum::http::Method, path: &str) -> Option<Scope> 
         )
     {
         return Some(Scope::Write);
+    }
+    // Admin scope — irreversible / brain-lifecycle operations.
+    // optimize_disk + reindex_embeddings touch the entire DB;
+    // brains create + activate change the multi-brain shape and
+    // affect every other key's view of state.
+    if is_write_method
+        && matches!(
+            path,
+            "/v1/optimize_disk"
+                | "/v1/reindex_embeddings"
+                | "/v1/brains"
+                | "/v1/brains/:brain_id/activate"
+        )
+    {
+        return Some(Scope::Admin);
     }
     None
 }
