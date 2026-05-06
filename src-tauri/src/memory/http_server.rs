@@ -125,6 +125,10 @@ fn router() -> Router {
         // not manage their own keys).
         .route("/api/api_keys", get(api_keys_list).post(api_keys_create))
         .route("/api/api_keys/:id", axum::routing::delete(api_keys_revoke))
+        .route(
+            "/api/api_gateway_config",
+            get(api_gateway_config_get).put(api_gateway_config_set),
+        )
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))

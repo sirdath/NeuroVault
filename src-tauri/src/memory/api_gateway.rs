@@ -69,26 +69,97 @@ impl GatewayHandle {
 // no surprise network exposure. Caller chooses bind addr + port.
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
+/// Persisted gateway configuration. Lives at
+/// `~/.neurovault/api_gateway.json`. Read at app startup by the
+/// Tauri main / standalone server bin to decide whether (and how)
+/// to spawn the gateway. Mutated only via the Settings UI through
+/// `save_config` — the gateway itself never writes this file.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GatewayConfig {
-    pub bind: std::net::IpAddr,
+    /// Master switch. Default false — the gateway doesn't bind a
+    /// port unless the user explicitly turns it on. No surprise
+    /// network exposure on first launch.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind kind. "loopback" = 127.0.0.1, "lan" = 0.0.0.0,
+    /// "specific" = use `bind_ip`. We expose this as a discriminator
+    /// rather than just an IP so the UI can render meaningful radio
+    /// buttons + warnings without parsing the address back.
+    #[serde(default = "default_bind_kind")]
+    pub bind_kind: String,
+    /// Used only when `bind_kind == "specific"`. Free-form so the
+    /// user can paste an IPv6 literal or a specific LAN IP.
+    #[serde(default)]
+    pub bind_ip: Option<String>,
+    /// TCP port. Default `DEFAULT_GATEWAY_PORT` (8767) — separate
+    /// from the loopback server so the two can coexist.
+    #[serde(default = "default_gateway_port")]
     pub port: u16,
 }
+
+fn default_bind_kind() -> String { "loopback".to_string() }
+fn default_gateway_port() -> u16 { DEFAULT_GATEWAY_PORT }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            // Default bind: loopback only, even when explicitly
-            // started. Flipping to 0.0.0.0 is a deliberate choice
-            // the user makes in Settings (Phase 8) with a warning.
-            bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            enabled: false,
+            bind_kind: default_bind_kind(),
+            bind_ip: None,
             port: DEFAULT_GATEWAY_PORT,
         }
     }
 }
 
+impl GatewayConfig {
+    /// Resolve `bind_kind` (+ `bind_ip` for "specific") into a
+    /// concrete `IpAddr` for `start_gateway`.
+    pub fn resolve_bind(&self) -> Result<std::net::IpAddr, String> {
+        match self.bind_kind.as_str() {
+            "loopback" => Ok(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+            "lan" => Ok(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+            "specific" => self
+                .bind_ip
+                .as_deref()
+                .ok_or_else(|| "bind_kind='specific' requires bind_ip".to_string())
+                .and_then(|s| {
+                    s.parse::<std::net::IpAddr>()
+                        .map_err(|e| format!("invalid bind_ip {:?}: {}", s, e))
+                }),
+            other => Err(format!("unknown bind_kind {:?}", other)),
+        }
+    }
+}
+
+/// Path to the persisted gateway config.
+pub fn config_path() -> std::path::PathBuf {
+    super::paths::nv_home().join("api_gateway.json")
+}
+
+pub fn load_config() -> GatewayConfig {
+    let path = config_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return GatewayConfig::default(),
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+pub fn save_config(cfg: &GatewayConfig) -> Result<(), String> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
+    }
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("encode: {}", e))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| format!("write tmp: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {}", e))?;
+    Ok(())
+}
+
 pub async fn start_gateway(cfg: GatewayConfig) -> Result<GatewayHandle, String> {
-    let addr = SocketAddr::new(cfg.bind, cfg.port);
+    let bind_ip = cfg.resolve_bind()?;
+    let addr = SocketAddr::new(bind_ip, cfg.port);
 
     let app = router();
     let listener = TcpListener::bind(addr)

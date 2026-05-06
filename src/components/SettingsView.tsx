@@ -316,6 +316,7 @@ export function SettingsView() {
         <McpSection />
         <ClaudeCodeMcpSection />
         <MCPTierSection />
+        <APIGatewaySection />
         <APIAccessSection />
 
         {/* Shortcuts */}
@@ -801,6 +802,193 @@ function MCPTierSection() {
           ? <>Saved. Restart Claude Code / Desktop for the new tier to take effect.</>
           : <>The Python MCP proxy reads <span className="font-mono">~/.neurovault/mcp_tier.txt</span> at startup.</>}
       </p>
+    </Section>
+  );
+}
+
+/**
+ *  API Gateway — toggle the external HTTP gateway on/off and
+ *  configure its bind. Per docs/api-gateway-design.md.
+ *
+ *  Default OFF. The gateway only binds a port when this is
+ *  enabled. Loopback binding is the safe default; LAN exposure
+ *  requires deliberate opt-in with a clear warning.
+ *
+ *  Changes apply at next NeuroVault restart — the gateway runtime
+ *  is bound at app startup and we don't hot-restart it. The UI
+ *  surfaces this with a "Restart to apply" hint after a save.
+ */
+type GatewayBindKind = "loopback" | "lan" | "specific";
+type GatewayConfig = {
+  enabled: boolean;
+  bind_kind: GatewayBindKind;
+  bind_ip: string | null;
+  port: number;
+};
+
+function APIGatewaySection() {
+  const [cfg, setCfg] = useState<GatewayConfig | null>(null);
+  const [draft, setDraft] = useState<GatewayConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/api_gateway_config`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as GatewayConfig;
+        if (cancelled) return;
+        setCfg(j);
+        setDraft(j);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const dirty = !!draft && !!cfg && (
+    draft.enabled !== cfg.enabled ||
+    draft.bind_kind !== cfg.bind_kind ||
+    (draft.bind_ip ?? "") !== (cfg.bind_ip ?? "") ||
+    draft.port !== cfg.port
+  );
+
+  const onSave = useCallback(async () => {
+    if (!draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch(`${SERVER_URL}/api/api_gateway_config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error ?? `HTTP ${r.status}`);
+      }
+      const j = (await r.json()) as GatewayConfig;
+      setCfg(j);
+      setDraft(j);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [draft]);
+
+  if (!draft) {
+    return (
+      <Section title="API Gateway">
+        {error ? (
+          <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-negative, #ef4444)" }}>
+            Couldn't load: {error}
+          </p>
+        ) : (
+          <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>Loading…</p>
+        )}
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="API Gateway (External HTTP)">
+      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+        Off by default. When enabled, NeuroVault binds a separate HTTP port for external agents authenticated via API keys. The local Tauri app and MCP proxy keep using the loopback port (8765) regardless of this setting.
+      </p>
+
+      <SettingRow label="Status" description={cfg?.enabled ? "Gateway is enabled (active after next restart)" : "Gateway is OFF — no external port bound"}>
+        <button
+          onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}
+          className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all"
+          style={{
+            background: draft.enabled ? "var(--nv-positive, #10b981)" : "var(--nv-surface)",
+            color: draft.enabled ? "var(--nv-bg)" : "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+        >
+          {draft.enabled ? "Enabled" : "Disabled"}
+        </button>
+      </SettingRow>
+
+      <div>
+        <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Bind</span>
+        <div className="mt-1 space-y-1">
+          {([
+            { v: "loopback" as const, label: "Loopback only (127.0.0.1)", hint: "Safe — only this machine can connect." },
+            { v: "lan"      as const, label: "LAN (0.0.0.0)",            hint: "Anyone on your local network can reach the gateway. Don't enable on untrusted WiFi." },
+            { v: "specific" as const, label: "Specific IP",              hint: "Bind to a single network interface (e.g. WireGuard, Tailscale)." },
+          ]).map((opt) => (
+            <label key={opt.v} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white/5">
+              <input
+                type="radio"
+                name="api-gateway-bind"
+                checked={draft.bind_kind === opt.v}
+                onChange={() => setDraft({ ...draft, bind_kind: opt.v })}
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <div className="text-[13px] font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text)" }}>{opt.label}</div>
+                <div className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>{opt.hint}</div>
+                {opt.v === "specific" && draft.bind_kind === "specific" && (
+                  <input
+                    value={draft.bind_ip ?? ""}
+                    onChange={(e) => setDraft({ ...draft, bind_ip: e.target.value })}
+                    placeholder="192.168.1.42"
+                    className="mt-1 w-full px-2 py-1 rounded text-[12px] font-mono outline-none"
+                    style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+                  />
+                )}
+              </div>
+            </label>
+          ))}
+        </div>
+        {draft.bind_kind === "lan" && draft.enabled && (
+          <p
+            className="text-[11px] font-[Geist,sans-serif] mt-2 p-2 rounded"
+            style={{ background: "rgba(239,68,68,0.1)", color: "var(--nv-negative, #ef4444)", border: "1px solid var(--nv-negative, #ef4444)" }}
+          >
+            ⚠ LAN bind: anyone on your network with a valid API key can read or write your brain. Use API keys with tight scopes + brain allowlists.
+          </p>
+        )}
+      </div>
+
+      <SettingRow label="Port" description="Default 8767 — must not collide with the loopback server (8765).">
+        <input
+          type="number"
+          value={draft.port}
+          onChange={(e) => setDraft({ ...draft, port: parseInt(e.target.value, 10) || 8767 })}
+          min={1024}
+          max={65535}
+          className="w-24 px-2 py-1 rounded text-[12px] font-mono outline-none"
+          style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+        />
+      </SettingRow>
+
+      {error && <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-negative, #ef4444)" }}>{error}</p>}
+
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+          {savedAt
+            ? <>Saved. Restart NeuroVault for the new bind to take effect.</>
+            : dirty
+            ? <>Unsaved changes — review the warning above if any.</>
+            : <>Changes apply at next app restart.</>}
+        </span>
+        <button
+          onClick={onSave}
+          disabled={!dirty || saving}
+          className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all disabled:opacity-30"
+          style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
     </Section>
   );
 }

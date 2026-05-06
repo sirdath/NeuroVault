@@ -2746,6 +2746,33 @@ pub async fn api_keys_revoke(
 }
 
 // ---------------------------------------------------------------------------
+// Gateway config — read/write `~/.neurovault/api_gateway.json`.
+// Loopback-only (the gateway never manages its own config). The
+// Settings UI calls these to flip `enabled`, change the bind, etc.
+// Changes apply at next NeuroVault restart.
+// ---------------------------------------------------------------------------
+
+pub async fn api_gateway_config_get(
+    _s: State<ServerState>,
+) -> Result<Json<super::api_gateway::GatewayConfig>, ApiError> {
+    Ok(Json(super::api_gateway::load_config()))
+}
+
+pub async fn api_gateway_config_set(
+    _s: State<ServerState>,
+    Json(body): Json<super::api_gateway::GatewayConfig>,
+) -> Result<Json<super::api_gateway::GatewayConfig>, ApiError> {
+    // Validate the bind shape BEFORE writing to disk so a typo'd
+    // bind_ip doesn't brick the next restart.
+    if let Err(e) = body.resolve_bind() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, e));
+    }
+    super::api_gateway::save_config(&body)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(body))
+}
+
+// ---------------------------------------------------------------------------
 // Compilations: agent-driven wiki compile flow.
 //
 // Two endpoints, designed for an agent (Claude Code, Cursor) to drive
