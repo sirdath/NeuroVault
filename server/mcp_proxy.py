@@ -1191,6 +1191,66 @@ def temporal_recall(
 
 
 @mcp.tool(annotations={
+    "title": "Bulk-import a folder of markdown into the brain",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # repeat = unchanged via content_hash dedupe
+    "openWorldHint": False,
+})
+def import_folder(
+    path: str,
+    prefix: str | None = None,
+    brain: str | None = None,
+) -> Any:
+    """Cold-start onboarding. Walk a folder of markdown files
+    (Obsidian vault, Notion export, past chat transcripts) and
+    bulk-ingest each .md into the brain. Idempotent: re-running
+    with the same source after no edits reports zero ingests.
+
+    Filenames are namespaced by the source folder name so that two
+    imports with overlapping basenames (two READMEs) don't collide.
+    Pass `prefix` to override the namespace, or `prefix=""` to land
+    files directly under their relative paths (use this only when
+    you've checked filenames don't clash with existing engrams).
+
+    What this is NOT: it does NOT copy or symlink the source files.
+    Content lands in engrams.content; the original markdown stays
+    where it lives. Re-run the import to refresh after the source
+    folder changes.
+
+    Skipped automatically:
+    - dotfile dirs (.git, .obsidian, .DS_Store)
+    - any "trash" subdirectory
+    - non-.md files
+
+    WHEN TO CALL:
+    - User installs NeuroVault and asks "can I import my Obsidian
+      vault?"
+    - User has a folder of past Claude conversations / Notion
+      exports they want searchable
+    - Periodic re-sync from a curated source folder
+
+    Returns:
+        brain_id, source_path, prefix
+        scanned        — total .md files found
+        ingested       — newly written or content-changed engrams
+        unchanged      — files whose content_hash already matched
+        errors         — list of "<path>: <error>" lines
+        elapsed_ms
+
+    Args:
+        path: ABSOLUTE path to the folder to import.
+        prefix: namespace override. Default = source folder
+            basename. "" = no namespace.
+        brain: target brain id (defaults to active).
+    """
+    return _http_post(
+        "/api/import_folder",
+        {"path": path, "prefix": prefix, "brain": brain},
+    )
+
+
+@mcp.tool(annotations={
     "title": "List edit history for a single engram",
     "readOnlyHint": True,
     "idempotentHint": True,
