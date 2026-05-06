@@ -810,6 +810,81 @@ def compile_submit(
 
 
 @mcp.tool(annotations={
+    "title": "Find clutter — surface engrams that look like noise",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def find_clutter(brain: str | None = None, limit: int = 50) -> Any:
+    """Surface engrams that look like noise so you can review and
+    remove. Read-only — returns categorised candidates, no deletes
+    happen here.
+
+    WHEN TO CALL:
+    - User asks "clean up my brain" / "find junk" / "remove old stubs"
+    - You notice a recall returning low-quality results and want to
+      audit what's polluting the corpus
+
+    Returns:
+        brain_id              — which brain was scanned
+        stubs                 — engrams with very short content + low
+                                access count (probably abandoned drafts)
+        test_data             — titles matching test/smoke/verify/debug
+                                with low access (forgotten test entries)
+        forgotten_observations — kind='observation', access_count=0,
+                                older than 7 days (auto-extracted but
+                                never promoted)
+        duplicate_titles      — multiple non-dormant engrams sharing
+                                the same title (likely accidental dupes)
+        total                 — sum of all four categories
+
+    Each entry has {id, title, reason}. Pass the ids you want removed
+    to `delete_engrams()` after confirming with the user.
+
+    Args:
+        brain: target brain id (defaults to active).
+        limit: per-category cap. Default 50, max 500.
+    """
+    return _http_get("/api/clutter", {"brain": brain, "limit": limit})
+
+
+@mcp.tool(annotations={
+    "title": "Delete engrams by id",
+    "readOnlyHint": False,
+    "destructiveHint": True,   # soft-deletes; markdown moves to trash/
+    "idempotentHint": False,
+    "openWorldHint": False,
+})
+def delete_engrams(engram_ids: list[str], brain: str | None = None) -> Any:
+    """Soft-delete a list of engrams. Markdown files move to the
+    brain's `trash/` subdirectory (recoverable); DB rows go dormant.
+
+    WHEN TO CALL:
+    - After `find_clutter()` and the user has confirmed which engrams
+      to remove
+    - When the user explicitly identifies engrams to delete by id
+      (e.g. from a recall result)
+
+    Always confirm with the user before calling — this is destructive
+    even though it's recoverable.
+
+    Returns:
+        brain_id   — which brain was modified
+        deleted    — number successfully soft-deleted
+        not_found  — engram ids that didn't exist
+        failed     — engram ids whose delete raised an error
+
+    Args:
+        engram_ids: list of engram ids to soft-delete.
+        brain: target brain id (defaults to active).
+    """
+    body: dict[str, Any] = {"engram_ids": engram_ids}
+    if brain:
+        body["brain"] = brain
+    return _http_post("/api/engrams/delete", body)
+
+
+@mcp.tool(annotations={
     "title": "Update brain (re-scan vault, refresh index)",
     "readOnlyHint": False,
     # Idempotent in the "calling twice in a row is fine" sense — the

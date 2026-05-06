@@ -119,6 +119,8 @@ fn router() -> Router {
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))
         .route("/api/update", post(update_brain))
+        .route("/api/clutter", get(clutter_report))
+        .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -868,6 +870,245 @@ async fn update_brain(
             unchanged,
             deleted,
             elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Clutter report — surfaces engrams that look like noise so an agent
+// can review and remove. Four categories, one SQL query each:
+//
+//   stubs                  short content + low access count
+//   test_data              title pattern matches test/smoke/verify/debug
+//   forgotten_observations kind='observation' never accessed, >7 days old
+//   duplicate_titles       multiple non-dormant engrams sharing a title
+//
+// Returns categorised lists with reason hints so the caller can decide
+// per-engram. The matching `engrams_delete` endpoint takes an explicit
+// list of ids and soft-deletes them — no automatic deletion based on
+// the heuristics; an agent + human always confirms.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct ClutterQuery {
+    #[serde(default)]
+    brain: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct ClutterEntry {
+    id: String,
+    title: String,
+    reason: String,
+}
+
+#[derive(serde::Serialize)]
+struct ClutterReport {
+    brain_id: String,
+    stubs: Vec<ClutterEntry>,
+    test_data: Vec<ClutterEntry>,
+    forgotten_observations: Vec<ClutterEntry>,
+    duplicate_titles: Vec<ClutterEntry>,
+    total: usize,
+}
+
+async fn clutter_report(
+    Query(q): Query<ClutterQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ClutterReport>, ApiError> {
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<ClutterReport, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        // Stubs: very short, never (or barely) accessed.
+        let stubs: Vec<ClutterEntry> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, length(content) AS len \
+                 FROM engrams \
+                 WHERE state != 'dormant' \
+                   AND length(content) < 100 \
+                   AND access_count <= 1 \
+                 ORDER BY length(content) ASC \
+                 LIMIT ?1",
+            )?;
+            let mapped = stmt.query_map([limit], |r| {
+                let id: String = r.get(0)?;
+                let title: String = r.get(1)?;
+                let len: i64 = r.get(2)?;
+                Ok(ClutterEntry {
+                    id,
+                    title,
+                    reason: format!("stub: {} chars of content", len),
+                })
+            })?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+
+        // Test data: title patterns suggesting throwaway content.
+        let test_data: Vec<ClutterEntry> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, title \
+                 FROM engrams \
+                 WHERE state != 'dormant' \
+                   AND ( lower(title) LIKE '%test%' \
+                      OR lower(title) LIKE '%smoke%' \
+                      OR lower(title) LIKE '%verify%' \
+                      OR lower(title) LIKE '%debug%' ) \
+                   AND access_count <= 1 \
+                 ORDER BY access_count ASC, created_at ASC \
+                 LIMIT ?1",
+            )?;
+            let mapped = stmt.query_map([limit], |r| {
+                let id: String = r.get(0)?;
+                let title: String = r.get(1)?;
+                Ok(ClutterEntry {
+                    id,
+                    title,
+                    reason: "test/verify/debug-titled, barely accessed".to_string(),
+                })
+            })?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+
+        // Forgotten observations: auto-extracted but never promoted.
+        let forgotten_observations: Vec<ClutterEntry> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, created_at \
+                 FROM engrams \
+                 WHERE state != 'dormant' \
+                   AND kind = 'observation' \
+                   AND access_count = 0 \
+                   AND created_at < datetime('now', '-7 days') \
+                 ORDER BY created_at ASC \
+                 LIMIT ?1",
+            )?;
+            let mapped = stmt.query_map([limit], |r| {
+                let id: String = r.get(0)?;
+                let title: String = r.get(1)?;
+                let created: String = r.get(2)?;
+                Ok(ClutterEntry {
+                    id,
+                    title,
+                    reason: format!("observation, never accessed, created {}", created),
+                })
+            })?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+
+        // Duplicate titles: any title that appears more than once.
+        let duplicate_titles: Vec<ClutterEntry> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, title \
+                 FROM engrams \
+                 WHERE state != 'dormant' \
+                   AND lower(title) IN ( \
+                     SELECT lower(title) FROM engrams \
+                     WHERE state != 'dormant' \
+                     GROUP BY lower(title) \
+                     HAVING count(*) > 1 ) \
+                 ORDER BY lower(title), created_at ASC \
+                 LIMIT ?1",
+            )?;
+            let mapped = stmt.query_map([limit], |r| {
+                let id: String = r.get(0)?;
+                let title: String = r.get(1)?;
+                Ok(ClutterEntry {
+                    id,
+                    title,
+                    reason: "duplicate title (one of multiple engrams)".to_string(),
+                })
+            })?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+
+        let total = stubs.len() + test_data.len() + forgotten_observations.len() + duplicate_titles.len();
+        Ok(ClutterReport {
+            brain_id: id,
+            stubs,
+            test_data,
+            forgotten_observations,
+            duplicate_titles,
+            total,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct EngramsDeleteBody {
+    engram_ids: Vec<String>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct EngramsDeleteResult {
+    brain_id: String,
+    deleted: u32,
+    not_found: u32,
+    failed: Vec<String>,
+}
+
+async fn engrams_delete(
+    _s: State<ServerState>,
+    Json(body): Json<EngramsDeleteBody>,
+) -> Result<Json<EngramsDeleteResult>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<EngramsDeleteResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+
+        // Look up filename for each engram id, then call delete_note
+        // which also moves the markdown to trash/. The filename lookup
+        // and the delete are separate transactions; collecting the
+        // filenames first keeps the per-engram delete loop straight.
+        let mut filenames: Vec<(String, Option<String>)> = Vec::new();
+        {
+            let conn = ctx.db.lock();
+            for engram_id in &body.engram_ids {
+                let row: Option<String> = conn
+                    .query_row(
+                        "SELECT filename FROM engrams WHERE id = ?1",
+                        [engram_id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                filenames.push((engram_id.clone(), row));
+            }
+        }
+
+        let mut deleted = 0u32;
+        let mut not_found = 0u32;
+        let mut failed: Vec<String> = Vec::new();
+        for (engram_id, fname_opt) in filenames {
+            match fname_opt {
+                None => not_found += 1,
+                Some(fname) => match super::write_ops::delete_note(&ctx, &fname) {
+                    Ok(_) => deleted += 1,
+                    Err(e) => {
+                        eprintln!("[engrams_delete] {} ({}): {}", engram_id, fname, e);
+                        failed.push(engram_id);
+                    }
+                },
+            }
+        }
+
+        Ok(EngramsDeleteResult {
+            brain_id: id,
+            deleted,
+            not_found,
+            failed,
         })
     })
     .await
