@@ -1051,6 +1051,71 @@ def temporal_recall(
 
 
 @mcp.tool(annotations={
+    "title": "Reclaim disk space (VACUUM + WAL truncate, optional dormant purge)",
+    "readOnlyHint": False,
+    "destructiveHint": True,  # purge_dormant=True is irreversible
+    "idempotentHint": True,   # repeating with same args is a no-op once converged
+    "openWorldHint": False,
+})
+def optimize_disk(
+    vacuum: bool = True,
+    wal_checkpoint: bool = True,
+    purge_dormant: bool = False,
+    brain: str | None = None,
+) -> Any:
+    """Reclaim disk space inside the brain. Three composable steps:
+
+    1. vacuum (default ON): rebuild brain.db dropping free pages.
+       Most expensive (rewrites the whole file) but biggest reclaim
+       on a brain that has churned through deletes.
+
+    2. wal_checkpoint (default ON): flush + truncate the WAL file
+       back to zero. Cheap. Runs AFTER vacuum so VACUUM's own WAL
+       writes get truncated too.
+
+    3. purge_dormant (default OFF, destructive): hard-delete every
+       engram with state='dormant'. Soft-delete already strips
+       chunks + vec rows; this just makes the deletion permanent
+       and lets VACUUM reclaim the engrams-table pages.
+
+    WHEN TO CALL:
+    - User asks "the brain is getting big, can you shrink it?"
+    - After a bulk delete (find_clutter → delete_engrams) — the
+      free pages from those deletes only become disk space after
+      VACUUM runs.
+    - As periodic maintenance — once a month if the brain sees
+      regular write churn.
+
+    Pass purge_dormant=True ONLY when the user has confirmed they
+    don't want soft-deleted engrams recoverable. After purge there
+    is no in-DB trail; the markdown trash/ folder is the last copy.
+
+    Returns:
+        brain_id
+        before / after — { db_bytes, wal_bytes, shm_bytes,
+                           total_bytes, free_pages, page_size }
+        reclaimed_bytes — total_bytes(before) - total_bytes(after)
+        purged_engrams  — rows hard-deleted (0 unless purge_dormant)
+        ran             — { purge_dormant, wal_checkpoint, vacuum }
+
+    Args:
+        vacuum: rebuild the DB file. Default True.
+        wal_checkpoint: truncate WAL after VACUUM. Default True.
+        purge_dormant: hard-delete dormant engrams. Default False.
+        brain: target brain id (defaults to active).
+    """
+    return _http_post(
+        "/api/optimize_disk",
+        {
+            "vacuum": vacuum,
+            "wal_checkpoint": wal_checkpoint,
+            "purge_dormant": purge_dormant,
+            "brain": brain,
+        },
+    )
+
+
+@mcp.tool(annotations={
     "title": "Add a manual link between two engrams",
     "readOnlyHint": False,
     "destructiveHint": False,
