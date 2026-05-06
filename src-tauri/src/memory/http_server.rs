@@ -121,6 +121,8 @@ fn router() -> Router {
         .route("/api/update", post(update_brain))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))
+        .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
+        .route("/api/engrams/bulk_add_tag", post(bulk_add_tag))
         .route("/api/contradictions", get(contradictions_list))
         .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
         .route("/api/links", post(links_add))
@@ -1117,6 +1119,153 @@ async fn engrams_delete(
             not_found,
             failed,
         })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Bulk metadata edits — set `kind` or append a tag across many
+// engrams in one round-trip. The single-row path goes through the
+// markdown ingest (which re-runs frontmatter / chunk / embed), but
+// for kind/tag flips that's wasteful: nothing about the embedding
+// changes, so we update the engrams row directly + invalidate the
+// recall cache so the next query sees fresh metadata.
+//
+// Tags are stored as a JSON array string in `engrams.tags` (matches
+// the Python `dissertation.add_tag` convention). Tag input is
+// normalised: lowercase, trimmed, leading '#' stripped.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct BulkSetKindBody {
+    engram_ids: Vec<String>,
+    kind: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BulkUpdateResult {
+    brain_id: String,
+    updated: u32,
+    unchanged: u32,
+    not_found: Vec<String>,
+}
+
+async fn bulk_set_kind(
+    _s: State<ServerState>,
+    Json(body): Json<BulkSetKindBody>,
+) -> Result<Json<BulkUpdateResult>, ApiError> {
+    // Schema comment lists the canonical values. We don't reject
+    // unknown ones at the SQL level (the column is plain TEXT) but
+    // the API guards against typos.
+    const ALLOWED: &[&str] = &["note", "source", "quote", "draft", "question", "decision", "observation", "insight"];
+    let kind = body.kind.trim().to_lowercase();
+    if !ALLOWED.contains(&kind.as_str()) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("kind must be one of {:?}, got {:?}", ALLOWED, body.kind),
+        ));
+    }
+    if body.engram_ids.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "engram_ids is empty".into()));
+    }
+
+    let result = tokio::task::spawn_blocking(move || -> Result<BulkUpdateResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        let mut updated: u32 = 0;
+        let mut unchanged: u32 = 0;
+        let mut not_found: Vec<String> = Vec::new();
+        for eid in &body.engram_ids {
+            let existing: Option<String> = conn
+                .query_row("SELECT kind FROM engrams WHERE id = ?1", [eid], |r| r.get(0))
+                .ok();
+            match existing {
+                None => not_found.push(eid.clone()),
+                Some(prev) if prev == kind => unchanged += 1,
+                Some(_) => {
+                    let n = conn.execute(
+                        "UPDATE engrams SET kind = ?1, updated_at = datetime('now') WHERE id = ?2",
+                        rusqlite::params![kind, eid],
+                    )?;
+                    if n > 0 { updated += 1; }
+                }
+            }
+        }
+        drop(conn);
+        super::recall_cache::invalidate_brain(&id);
+        Ok(BulkUpdateResult { brain_id: id, updated, unchanged, not_found })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct BulkAddTagBody {
+    engram_ids: Vec<String>,
+    tag: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+async fn bulk_add_tag(
+    _s: State<ServerState>,
+    Json(body): Json<BulkAddTagBody>,
+) -> Result<Json<BulkUpdateResult>, ApiError> {
+    let tag = body.tag.trim().trim_start_matches('#').to_lowercase();
+    if tag.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "tag is empty".into()));
+    }
+    if body.engram_ids.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "engram_ids is empty".into()));
+    }
+
+    let result = tokio::task::spawn_blocking(move || -> Result<BulkUpdateResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        let mut updated: u32 = 0;
+        let mut unchanged: u32 = 0;
+        let mut not_found: Vec<String> = Vec::new();
+        for eid in &body.engram_ids {
+            let existing: Option<Option<String>> = conn
+                .query_row("SELECT tags FROM engrams WHERE id = ?1", [eid], |r| r.get(0))
+                .ok();
+            match existing {
+                None => not_found.push(eid.clone()),
+                Some(tags_json) => {
+                    let mut current: Vec<String> = tags_json
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+                    if current.iter().any(|t| t == &tag) {
+                        unchanged += 1;
+                        continue;
+                    }
+                    current.push(tag.clone());
+                    let new_json = serde_json::to_string(&current)
+                        .map_err(|e| MemoryError::Other(format!("tag serialise: {e}")))?;
+                    conn.execute(
+                        "UPDATE engrams SET tags = ?1, updated_at = datetime('now') WHERE id = ?2",
+                        rusqlite::params![new_json, eid],
+                    )?;
+                    updated += 1;
+                }
+            }
+        }
+        drop(conn);
+        super::recall_cache::invalidate_brain(&id);
+        Ok(BulkUpdateResult { brain_id: id, updated, unchanged, not_found })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
