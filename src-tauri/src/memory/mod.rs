@@ -37,6 +37,7 @@ pub mod core_memory;
 pub mod db;
 pub mod embedder;
 pub mod entities;
+pub mod handlers;
 pub mod http_server;
 pub mod ingest;
 pub mod migrations;
