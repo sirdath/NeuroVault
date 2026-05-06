@@ -113,6 +113,7 @@ fn router() -> Router {
         .route("/api/notes/:engram_id", get(notes_detail))
         .route("/api/graph", get(graph))
         .route("/api/recall", get(recall))
+        .route("/api/recall_across_brains", get(recall_across_brains))
         .route("/api/recall/chunks", get(recall_chunks))
         .route("/api/related/:engram_id", get(related))
         .route("/api/notes", post(remember))
@@ -481,6 +482,169 @@ async fn recall(
         let id = resolve_brain_id(brain_id.as_deref())?;
         let db = open_brain(&id)?;
         hybrid_retrieve_throttled(&db, &query_str, &opts)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Federated recall — run hybrid_retrieve across every brain in the
+// registry (or a caller-provided subset) and merge by score. Useful
+// when the user has multiple brains and doesn't remember which one
+// holds a fact: "search everywhere for X".
+//
+// Cost: linear in the number of brains. Each per-brain retrieval
+// runs through the throttled path (so spamming this from an agent
+// won't melt the box) and is capped at `per_brain` hits before
+// merging. With 6 brains and per_brain=5 you fan out to 30 hits and
+// truncate to top_k.
+//
+// Score merge: RRF scores are unitless and brain-relative — a 0.85
+// in a small brain isn't directly comparable to a 0.85 in a large
+// one. We sort by raw score anyway because (a) building a calibrator
+// would be a research project, (b) the user's intent here is
+// "anywhere this exists" not "rank these globally," and (c) the
+// brain_id annotation lets the caller weight by brain themselves
+// if they care.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct CrossBrainQuery {
+    q: String,
+    /// Total hits returned. Default 10, max 50.
+    #[serde(default)]
+    top_k: Option<usize>,
+    /// Per-brain cap before merge. Default 5, max 20. Lower = faster
+    /// fan-out, higher = better recall on a brain with the right
+    /// answer that gets crowded out by others.
+    #[serde(default)]
+    per_brain: Option<usize>,
+    /// CSV of brain ids to search. Empty / missing = every brain in
+    /// the registry. Used by callers who want to scope to a curated
+    /// subset ("all my work brains, none of the personal ones").
+    #[serde(default)]
+    brains: Option<String>,
+    #[serde(default)]
+    include_observations: Option<bool>,
+    #[serde(default)]
+    rerank: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct CrossBrainHit {
+    brain_id: String,
+    brain_name: String,
+    engram_id: String,
+    title: String,
+    content: String,
+    score: f64,
+    strength: f64,
+    state: String,
+}
+
+#[derive(Serialize)]
+struct CrossBrainResponse {
+    query: String,
+    brains_searched: Vec<String>,
+    total: usize,
+    hits: Vec<CrossBrainHit>,
+}
+
+async fn recall_across_brains(
+    Query(q): Query<CrossBrainQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<CrossBrainResponse>, ApiError> {
+    let top_k = q.top_k.unwrap_or(10).clamp(1, 50);
+    let per_brain = q.per_brain.unwrap_or(5).clamp(1, 20);
+    let scoped: Vec<String> = q
+        .brains
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let opts = RecallOpts {
+        top_k: per_brain,
+        spread_hops: 0,
+        exclude_kinds: if q.include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+        as_of: None,
+        use_reranker: q.rerank.unwrap_or(false),
+        ablate: Vec::new(),
+    };
+    let query_str = q.q.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<CrossBrainResponse, MemoryError> {
+        let summaries = list_brains_with_stats()?;
+        let candidates: Vec<(String, String)> = if scoped.is_empty() {
+            summaries.into_iter().map(|b| (b.id, b.name)).collect()
+        } else {
+            // Filter to the requested subset, but preserve registry order
+            // and use the registry's `name` so the response reads right
+            // even if the caller passed bare ids.
+            let by_id: std::collections::HashMap<String, String> =
+                summaries.into_iter().map(|b| (b.id.clone(), b.name)).collect();
+            scoped
+                .into_iter()
+                .filter_map(|id| by_id.get(&id).map(|n| (id.clone(), n.clone())))
+                .collect()
+        };
+
+        let mut all_hits: Vec<CrossBrainHit> = Vec::new();
+        let mut searched: Vec<String> = Vec::with_capacity(candidates.len());
+        for (id, name) in &candidates {
+            // Skip-on-error per brain: one broken brain shouldn't fail
+            // the whole federated query. Caller sees a shorter
+            // brains_searched list and infers the rest.
+            let db = match open_brain(id) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("[recall_across_brains] open {} failed: {}", id, e);
+                    continue;
+                }
+            };
+            searched.push(id.clone());
+            match hybrid_retrieve_throttled(&db, &query_str, &opts) {
+                Ok(hits) => {
+                    for h in hits {
+                        all_hits.push(CrossBrainHit {
+                            brain_id: id.clone(),
+                            brain_name: name.clone(),
+                            engram_id: h.engram_id,
+                            title: h.title,
+                            content: h.content,
+                            score: h.score,
+                            strength: h.strength,
+                            state: h.state,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[recall_across_brains] retrieve {} failed: {}", id, e);
+                    continue;
+                }
+            }
+        }
+
+        // Sort by score desc; partial_cmp is fine — RRF scores are
+        // never NaN. Unwrap_or keeps things sane in the unlikely
+        // case the future score signal becomes nullable.
+        all_hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all_hits.truncate(top_k);
+        let total = all_hits.len();
+        Ok(CrossBrainResponse {
+            query: query_str,
+            brains_searched: searched,
+            total,
+            hits: all_hits,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
