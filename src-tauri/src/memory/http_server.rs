@@ -122,6 +122,7 @@ fn router() -> Router {
         .route("/api/update", post(update_brain))
         .route("/api/import_folder", post(import_folder))
         .route("/api/reindex_embeddings", post(reindex_embeddings))
+        .route("/api/list_images", get(list_images))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
@@ -1172,6 +1173,154 @@ async fn import_folder(
             unchanged,
             errors,
             elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Image listing for caption-at-ingest workflow.
+//
+// MCP can't do its own multimodal — the model behind the proxy is
+// the user's Claude Code / Desktop session, which IS multimodal.
+// So the captioning division of labour:
+//
+//   • This endpoint  — surface images the agent could caption.
+//   • The agent      — opens each image in its own context, writes
+//                      a caption, calls remember_image() (a thin
+//                      wrapper around remember) to persist it.
+//
+// No CV models, no API calls leaving the box. The agent is the
+// captioning model; the MCP server is the index + transport.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct ListImagesQuery {
+    folder_path: String,
+    #[serde(default = "default_true")]
+    recursive: bool,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct ImageEntry {
+    path: String,
+    basename: String,
+    extension: String,
+    size_bytes: u64,
+    last_modified: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ListImagesResponse {
+    folder_path: String,
+    recursive: bool,
+    total: usize,
+    images: Vec<ImageEntry>,
+}
+
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "tiff"];
+
+fn collect_image_files(
+    root: &std::path::Path,
+    recursive: bool,
+    out: &mut Vec<std::path::PathBuf>,
+    limit: usize,
+) {
+    if out.len() >= limit {
+        return;
+    }
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        if out.len() >= limit {
+            return;
+        }
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            if recursive && name != "trash" {
+                collect_image_files(&path, true, out, limit);
+            }
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase());
+        if let Some(ext) = ext {
+            if IMAGE_EXTS.contains(&ext.as_str()) {
+                out.push(path);
+            }
+        }
+    }
+}
+
+async fn list_images(
+    Query(q): Query<ListImagesQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ListImagesResponse>, ApiError> {
+    let root = std::path::PathBuf::from(&q.folder_path);
+    if !root.is_dir() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("not a directory: {}", q.folder_path),
+        ));
+    }
+    let limit = q.limit.unwrap_or(500).min(5000) as usize;
+    let result = tokio::task::spawn_blocking(move || -> Result<ListImagesResponse, MemoryError> {
+        let mut paths = Vec::new();
+        collect_image_files(&root, q.recursive, &mut paths, limit);
+        let mut images: Vec<ImageEntry> = Vec::with_capacity(paths.len());
+        for p in &paths {
+            let basename = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let extension = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let meta = std::fs::metadata(p);
+            let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let last_modified = meta
+                .as_ref()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| {
+                    // ISO-ish; the agent only needs ordering / coarse age.
+                    let secs = d.as_secs();
+                    format!("{}", secs)
+                });
+            images.push(ImageEntry {
+                path: p.to_string_lossy().to_string(),
+                basename,
+                extension,
+                size_bytes,
+                last_modified,
+            });
+        }
+        let total = images.len();
+        Ok(ListImagesResponse {
+            folder_path: q.folder_path,
+            recursive: q.recursive,
+            total,
+            images,
         })
     })
     .await
