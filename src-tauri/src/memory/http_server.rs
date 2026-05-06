@@ -127,6 +127,7 @@ fn router() -> Router {
         .route("/api/links", axum::routing::delete(links_remove))
         .route("/api/orphan_links", get(orphan_links))
         .route("/api/temporal_recall", get(temporal_recall))
+        .route("/api/optimize_disk", post(optimize_disk))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -1690,6 +1691,175 @@ async fn temporal_recall(
             include_superseded: q.include_superseded,
             total,
             facts,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Disk optimization — reclaim brain.db space. Three composable
+// operations:
+//
+//   1. purge_dormant  — hard-delete every engram with state='dormant'.
+//                       Soft delete already strips chunks + vec rows
+//                       and link rows; cascade FKs handle the rest.
+//                       Off by default (destructive).
+//   2. wal_checkpoint — flush the WAL into the main DB and truncate
+//                       the WAL file to zero. Recovers space the WAL
+//                       was holding for crash safety.
+//   3. vacuum         — rebuild the DB file removing free pages from
+//                       prior deletes. Most expensive op (rewrites
+//                       the whole file) but biggest reclaim on a
+//                       brain that has churned through deletes.
+//
+// On the user's 90 MB brain, ~10-25 MB are typically reclaimable:
+// soft-deleted engrams sit as free pages until VACUUM runs, and the
+// WAL accumulates without a checkpoint trigger if writes are sparse.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct OptimizeDiskBody {
+    #[serde(default)]
+    brain: Option<String>,
+    /// Hard-delete every dormant engram. Default false because this
+    /// is irreversible — the soft-delete trail is gone after this.
+    #[serde(default)]
+    purge_dormant: bool,
+    /// Default true — cheap, almost always wanted.
+    #[serde(default = "default_true")]
+    wal_checkpoint: bool,
+    /// Default true — the actual disk reclaim. Rewrite cost is linear
+    /// in brain size; on a 90 MB brain ≈ 1-3s.
+    #[serde(default = "default_true")]
+    vacuum: bool,
+}
+
+fn default_true() -> bool { true }
+
+#[derive(serde::Serialize)]
+struct DiskMeasurement {
+    db_bytes: u64,
+    wal_bytes: u64,
+    shm_bytes: u64,
+    total_bytes: u64,
+    free_pages: i64,
+    page_size: i64,
+}
+
+#[derive(serde::Serialize)]
+struct OptimizeRan {
+    purge_dormant: bool,
+    wal_checkpoint: bool,
+    vacuum: bool,
+}
+
+#[derive(serde::Serialize)]
+struct OptimizeDiskResponse {
+    brain_id: String,
+    before: DiskMeasurement,
+    after: DiskMeasurement,
+    reclaimed_bytes: i64,
+    purged_engrams: u32,
+    ran: OptimizeRan,
+}
+
+async fn optimize_disk(
+    _s: State<ServerState>,
+    Json(body): Json<OptimizeDiskBody>,
+) -> Result<Json<OptimizeDiskResponse>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<OptimizeDiskResponse, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let dir = super::paths::brain_dir(&id);
+
+        let measure = |conn: &rusqlite::Connection| -> Result<DiskMeasurement, MemoryError> {
+            let db_bytes = std::fs::metadata(dir.join("brain.db")).map(|m| m.len()).unwrap_or(0);
+            let wal_bytes = std::fs::metadata(dir.join("brain.db-wal")).map(|m| m.len()).unwrap_or(0);
+            let shm_bytes = std::fs::metadata(dir.join("brain.db-shm")).map(|m| m.len()).unwrap_or(0);
+            let free_pages: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap_or(0);
+            let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(4096);
+            Ok(DiskMeasurement {
+                db_bytes,
+                wal_bytes,
+                shm_bytes,
+                total_bytes: db_bytes + wal_bytes + shm_bytes,
+                free_pages,
+                page_size,
+            })
+        };
+
+        let db = open_brain(&id)?;
+        let before = {
+            let conn = db.lock();
+            measure(&conn)?
+        };
+
+        // Step 1: hard-delete dormant rows. CASCADE FKs reap chunks /
+        // links / entity_mentions / contradictions / temporal_facts
+        // automatically. vec_chunks were already cleared at soft-
+        // delete time, so no orphan rows remain.
+        let mut purged: u32 = 0;
+        if body.purge_dormant {
+            let conn = db.lock();
+            // Returning rowcount from execute would conflate the
+            // engram delete with cascaded child deletes; query the
+            // count first so the response is meaningful.
+            let dormant: i64 = conn
+                .query_row("SELECT COUNT(*) FROM engrams WHERE state = 'dormant'", [], |r| r.get(0))?;
+            conn.execute("DELETE FROM engrams WHERE state = 'dormant'", [])?;
+            purged = dormant as u32;
+        }
+
+        // Step 2: VACUUM first. Cannot run inside a transaction;
+        // execute_batch doesn't open one. Clearing the statement
+        // cache avoids any prepared-statement contention with the
+        // file rewrite.
+        //
+        // VACUUM has to come BEFORE the checkpoint because VACUUM
+        // itself writes the entire rebuilt DB through the WAL. If
+        // we checkpoint first and VACUUM second, the WAL ends up
+        // bigger than the DB. Inverting the order so checkpoint
+        // truncates VACUUM's WAL output too.
+        if body.vacuum {
+            let conn = db.lock();
+            conn.flush_prepared_statement_cache();
+            conn.execute_batch("VACUUM;")?;
+        }
+
+        // Step 3: WAL truncate. PASSIVE would just flush; TRUNCATE
+        // also shrinks the file back to zero bytes. Safe — we hold
+        // the only writer lock and there are no in-flight readers
+        // because the connection is mutex-guarded.
+        if body.wal_checkpoint {
+            let conn = db.lock();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        }
+
+        let after = {
+            let conn = db.lock();
+            measure(&conn)?
+        };
+
+        // Invalidate the recall cache + bm25 index — purged dormants
+        // were already excluded from those, but a VACUUM reorders
+        // pages and we want fresh handles next call.
+        super::recall_cache::invalidate_brain(&id);
+        let _ = super::bm25::index_for(&id).flush(&db);
+
+        let reclaimed = before.total_bytes as i64 - after.total_bytes as i64;
+        Ok(OptimizeDiskResponse {
+            brain_id: id,
+            before,
+            after,
+            reclaimed_bytes: reclaimed,
+            purged_engrams: purged,
+            ran: OptimizeRan {
+                purge_dormant: body.purge_dormant,
+                wal_checkpoint: body.wal_checkpoint,
+                vacuum: body.vacuum,
+            },
         })
     })
     .await
