@@ -1116,6 +1116,84 @@ def optimize_disk(
 
 
 @mcp.tool(annotations={
+    "title": "Set the kind on multiple engrams in one call",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # repeat with same kind = unchanged
+    "openWorldHint": False,
+})
+def bulk_set_kind(
+    engram_ids: list[str],
+    kind: str,
+    brain: str | None = None,
+) -> Any:
+    """Reclassify many engrams' `kind` field in one round-trip.
+    Single-engram updates would reingest the markdown; this skips
+    the embed/chunk pipeline since `kind` doesn't affect them.
+
+    Allowed kinds: note, source, quote, draft, question, decision,
+    observation, insight. Other values 400.
+
+    WHEN TO CALL:
+    - Bulk-relabelling after an import: "everything I imported from
+      Anki should be kind='source'"
+    - Demoting a chatter cluster: "mark all of these as 'observation'
+      so recall ignores them by default"
+    - Cleaning up after `find_clutter` returns a category that's
+      better expressed as a kind change than a delete
+
+    Returns:
+        brain_id, kind, updated, unchanged, not_found
+
+    Args:
+        engram_ids: list of UUIDs to update.
+        kind: new value (lowercased, validated).
+        brain: target brain id (defaults to active).
+    """
+    return _http_post(
+        "/api/engrams/bulk_set_kind",
+        {"engram_ids": engram_ids, "kind": kind, "brain": brain},
+    )
+
+
+@mcp.tool(annotations={
+    "title": "Append a tag to multiple engrams in one call",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # tag already present → unchanged
+    "openWorldHint": False,
+})
+def bulk_add_tag(
+    engram_ids: list[str],
+    tag: str,
+    brain: str | None = None,
+) -> Any:
+    """Append a tag to many engrams' `tags` JSON array in one
+    round-trip. Tag is normalised: lowercased, trimmed, leading '#'
+    stripped (`#Foo` and `foo` both store as `foo`). Engrams that
+    already carry the tag are reported as `unchanged`.
+
+    WHEN TO CALL:
+    - "Tag everything from this conversation as #project-aegis"
+    - "Mark these 12 retrieval hits as #reviewed"
+    - Curating a corpus: tag a category before calling
+      `recall(q, kind:note tag:reviewed)`
+
+    Returns:
+        brain_id, tag, updated, unchanged, not_found
+
+    Args:
+        engram_ids: list of UUIDs to tag.
+        tag: tag text (case + leading-# normalised).
+        brain: target brain id (defaults to active).
+    """
+    return _http_post(
+        "/api/engrams/bulk_add_tag",
+        {"engram_ids": engram_ids, "tag": tag, "brain": brain},
+    )
+
+
+@mcp.tool(annotations={
     "title": "Add a manual link between two engrams",
     "readOnlyHint": False,
     "destructiveHint": False,
