@@ -315,6 +315,7 @@ export function SettingsView() {
 
         <McpSection />
         <ClaudeCodeMcpSection />
+        <MCPTierSection />
 
         {/* Shortcuts */}
         <Section title="Keyboard Shortcuts">
@@ -684,6 +685,124 @@ function ClaudeCodeMcpSection() {
   );
 }
 
+
+/**
+ *  MCP tier picker. Every MCP tool's name + description + JSON schema
+ *  is loaded into the agent's context at session start; for ~30
+ *  NeuroVault tools that's 5-9 k tokens before the user types
+ *  anything. Lite (~1.5 k) drops everything except the daily-use
+ *  surface; Standard (~3.5 k) trims admin tools the user rarely
+ *  invokes. Full is the default.
+ *
+ *  Persists `~/.neurovault/mcp_tier.txt`; the Python proxy reads it
+ *  at startup, so changes take effect after restarting the MCP host
+ *  (Claude Code / Desktop).
+ */
+type McpTier = "lite" | "standard" | "full";
+const TIER_INFO: { value: McpTier; label: string; tokens: string; description: string }[] = [
+  { value: "lite", label: "Lite", tokens: "~1.5k tok",
+    description: "8 essentials only — recall, remember, related, session_start, status, list/switch_brain, update." },
+  { value: "standard", label: "Standard", tokens: "~3.5k tok",
+    description: "17 tools — Lite + chunks, temporal_recall, dedupe, core_memory, delete, find_clutter." },
+  { value: "full", label: "Full", tokens: "~6-8k tok",
+    description: "All 30 tools — adds link editing, contradictions, orphan links, bulk metadata, optimize_disk, compile, brain creation." },
+];
+
+function MCPTierSection() {
+  const [tier, setTier] = useState<McpTier | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/mcp_tier`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!cancelled && j?.tier) setTier(j.tier as McpTier);
+      } catch {
+        /* sidecar offline — handled by global status pill */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const onPick = useCallback(async (next: McpTier) => {
+    if (next === tier || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch(`${SERVER_URL}/api/mcp_tier`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: next }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error ?? `HTTP ${r.status}`);
+      }
+      const j = await r.json();
+      setTier(j.tier as McpTier);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [tier, saving]);
+
+  return (
+    <Section title="MCP Tool Tier">
+      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+        Each MCP tool the agent can see costs tokens at session start. Pick the smallest tier that covers your workflow.
+      </p>
+      <div className="space-y-2">
+        {TIER_INFO.map((t) => {
+          const selected = tier === t.value;
+          return (
+            <button
+              key={t.value}
+              onClick={() => onPick(t.value)}
+              disabled={saving || tier === null}
+              className="w-full text-left rounded-lg p-3 transition-colors disabled:opacity-50"
+              style={{
+                background: selected ? "var(--nv-surface-2, var(--nv-surface))" : "var(--nv-bg)",
+                border: selected
+                  ? "1px solid var(--nv-accent)"
+                  : "1px solid var(--nv-border)",
+              }}
+              aria-pressed={selected}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[13px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+                  {t.label}
+                </span>
+                <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-1.5 py-0.5 rounded" style={{
+                  background: selected ? "var(--nv-accent)" : "var(--nv-surface)",
+                  color: selected ? "var(--nv-bg)" : "var(--nv-text-dim)",
+                }}>
+                  {t.tokens}
+                </span>
+              </div>
+              <p className="text-[11.5px] leading-snug font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+                {t.description}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+        {error
+          ? <span style={{ color: "var(--nv-negative, #ef4444)" }}>Couldn't save: {error}</span>
+          : savedAt
+          ? <>Saved. Restart Claude Code / Desktop for the new tier to take effect.</>
+          : <>The Python MCP proxy reads <span className="font-mono">~/.neurovault/mcp_tier.txt</span> at startup.</>}
+      </p>
+    </Section>
+  );
+}
 
 /** Per-folder colour override editor. Lists every folder currently in
  *  the active brain's graph (derived from the live node set), with an
