@@ -974,6 +974,83 @@ def find_orphan_links(
 
 
 @mcp.tool(annotations={
+    "title": "Time-travel query against the temporal_facts table",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def temporal_recall(
+    query: str = "",
+    as_of: str | None = None,
+    engram_id: str | None = None,
+    include_superseded: bool = False,
+    limit: int = 50,
+    brain: str | None = None,
+) -> Any:
+    """Query the bitemporal `temporal_facts` table — the layer that
+    tracks WHEN each extracted fact was true. Lets you ask "what did I
+    believe about X" or "what did I believe about X on date Y".
+
+    Two time axes:
+      • valid time: the period the fact described reality
+                    [valid_from, valid_until)
+      • system time: when we knew the fact; `expired_at` is set when
+                     a row was retracted (vs simply ending its valid
+                     interval)
+
+    `as_of` filters on both axes simultaneously: the row's valid
+    interval must contain `as_of` AND the row must not have been
+    retracted before `as_of`. Result = exactly what the system would
+    have asserted at that moment.
+
+    WHEN TO CALL:
+    - "What did I think about X" / "show me the history of X"
+    - User references a past decision: "we were using Postgres back
+      in March, right?" → temporal_recall(query='postgres',
+      as_of='2026-03-15')
+    - Auditing a topic before writing a new claim — see if the brain
+      already has prior versions you'd be silently overriding
+    - Surfacing the changelog for a specific engram with engram_id
+
+    Returns:
+        brain_id, query, as_of, include_superseded, total
+        facts: list of:
+            { id, engram_id, engram_title, fact,
+              valid_from, valid_until, is_current,
+              superseded_by, expired_at }
+        Sorted by valid_from DESC (most recent assertion first).
+
+    Args:
+        query: free-text substring matched against fact content
+            (case-insensitive). Empty = no text filter — returns the
+            most recent facts in the brain.
+        as_of: ISO timestamp ("2026-01-15" or "2026-01-15T12:00:00").
+            Default = now: only currently-valid, unretracted facts.
+        engram_id: scope to facts attached to this engram only.
+        include_superseded: when True, drop the validity filter and
+            return every match — current, ended, and retracted alike.
+            Use this for full audit trails.
+        limit: max rows. Default 50, max 500.
+        brain: target brain id (defaults to active).
+
+    Note: this surfaces the bitemporal table directly. For semantic
+    recall (vector + BM25 + graph) use `recall()` — that pipeline
+    already biases against superseded facts when ranking.
+    """
+    return _http_get(
+        "/api/temporal_recall",
+        {
+            "query": query,
+            "as_of": as_of,
+            "engram_id": engram_id,
+            "include_superseded": "true" if include_superseded else "false",
+            "limit": limit,
+            "brain": brain,
+        },
+    )
+
+
+@mcp.tool(annotations={
     "title": "Add a manual link between two engrams",
     "readOnlyHint": False,
     "destructiveHint": False,
