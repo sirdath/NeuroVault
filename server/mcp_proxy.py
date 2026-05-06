@@ -95,6 +95,25 @@ def _http_put(path: str, body: dict[str, Any] | None = None) -> Any:
         return _sidecar_down_error(e)
 
 
+def _http_send(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    """Send an arbitrary-method request with a JSON body. Used for
+    DELETE-with-body (urllib doesn't expose a native DELETE helper)
+    and any future PATCH-style endpoints."""
+    data = json.dumps(body or {}).encode("utf-8")
+    req = urllib.request.Request(
+        API_BASE + path,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            body_bytes = resp.read().decode("utf-8")
+            return json.loads(body_bytes) if body_bytes else None
+    except urllib.error.URLError as e:
+        return _sidecar_down_error(e)
+
+
 def _sidecar_down_error(e: Exception) -> dict:
     return {
         "error": "NeuroVault sidecar is not running",
@@ -899,6 +918,97 @@ def resolve_contradiction(
         f"/api/contradictions/{contradiction_id}/resolve",
         body,
     )
+
+
+@mcp.tool(annotations={
+    "title": "Add a manual link between two engrams",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # INSERT OR REPLACE — repeat call upserts
+    "openWorldHint": False,
+})
+def add_link(
+    from_engram: str,
+    to_engram: str,
+    link_type: str = "manual",
+    similarity: float = 1.0,
+    bidirectional: bool = True,
+    brain: str | None = None,
+) -> Any:
+    """Wire two engrams together with a manual link. The ingest
+    pipeline auto-creates links from `[[wikilinks]]` in markdown
+    bodies and from shared entities — this tool is for the case
+    where you want to assert a relationship after the fact, without
+    rewriting the source markdown.
+
+    WHEN TO CALL:
+    - User says "this note is related to that one" / "these two
+      should be connected"
+    - You're auditing the brain (after find_orphan_links()) and
+      want to materialise a connection the system inferred
+    - Resolving a contradiction by asserting an explicit relationship
+      ("A supersedes B") with link_type='supersedes'
+
+    Returns:
+        from_engram, to_engram, link_type, similarity,
+        bidirectional, rows_written
+
+    Args:
+        from_engram, to_engram: engram ids (UUIDs).
+        link_type: defaults to "manual" (the wikilink convention).
+            Other useful values: "uses", "extends", "depends_on",
+            "contradicts", "supersedes". Free-form, not validated.
+        similarity: 0.0-1.0, defaults to 1.0 (strong manual link).
+        bidirectional: True by default — adds the reverse edge too,
+            matching wikilink behaviour. Set False for asymmetric
+            relations like "A supersedes B".
+        brain: target brain id (defaults to active).
+    """
+    body: dict[str, Any] = {
+        "from_engram": from_engram,
+        "to_engram": to_engram,
+        "link_type": link_type,
+        "similarity": similarity,
+        "bidirectional": bidirectional,
+    }
+    if brain:
+        body["brain"] = brain
+    return _http_post("/api/links", body)
+
+
+@mcp.tool(annotations={
+    "title": "Remove a link between two engrams",
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def remove_link(
+    from_engram: str,
+    to_engram: str,
+    bidirectional: bool = True,
+    brain: str | None = None,
+) -> Any:
+    """Delete a link between two engrams. Symmetric pair to
+    add_link. Removes both directions by default.
+
+    Args:
+        from_engram, to_engram: engram ids.
+        bidirectional: True by default — also removes the reverse
+            edge if it exists.
+        brain: target brain id (defaults to active).
+
+    Returns:
+        rows_deleted: how many edges were actually removed (0, 1, or 2).
+    """
+    body: dict[str, Any] = {
+        "from_engram": from_engram,
+        "to_engram": to_engram,
+        "bidirectional": bidirectional,
+    }
+    if brain:
+        body["brain"] = brain
+    return _http_send("DELETE", "/api/links", body)
 
 
 @mcp.tool(annotations={

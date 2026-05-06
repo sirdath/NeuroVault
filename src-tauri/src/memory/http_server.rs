@@ -123,6 +123,8 @@ fn router() -> Router {
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/contradictions", get(contradictions_list))
         .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
+        .route("/api/links", post(links_add))
+        .route("/api/links", axum::routing::delete(links_remove))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -1262,6 +1264,169 @@ async fn contradictions_resolve(
             )));
         }
         Ok(ContradictionResolveResult { id, resolved: true })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Manual link management — lets agents wire engrams together AFTER
+// the initial save. The ingest pipeline auto-creates links from
+// embedded [[wikilinks]] and entity co-mentions, but until v0.1.9
+// there was no MCP-accessible way to add a link without rewriting
+// the markdown body. Two endpoints: POST adds (with bidirectional
+// flag, default true), DELETE removes.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct LinkBody {
+    from_engram: String,
+    to_engram: String,
+    /// "manual" by default — matches what wikilinks resolve to.
+    /// Other valid values: "uses", "extends", "depends_on",
+    /// "contradicts", "supersedes", or any string the agent wants
+    /// to use (the `link_type` column is free-form TEXT).
+    #[serde(default)]
+    link_type: Option<String>,
+    /// 1.0 by default for manual edges (matches wikilink convention).
+    /// Lower values (0.7-0.9) make sense for weaker manual links.
+    #[serde(default)]
+    similarity: Option<f64>,
+    /// True by default. When true, also inserts the reverse edge so
+    /// adjacency / hover-focus / `related()` see the connection from
+    /// both sides. Matches what the wikilink pipeline does. Set
+    /// false for asymmetric relationships ("A supersedes B" → not
+    /// "B supersedes A").
+    #[serde(default)]
+    bidirectional: Option<bool>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LinkResult {
+    brain_id: String,
+    from_engram: String,
+    to_engram: String,
+    link_type: String,
+    similarity: f64,
+    bidirectional: bool,
+    /// 1 when only the forward edge was inserted (or replaced),
+    /// 2 when the reverse was inserted as well.
+    rows_written: u32,
+}
+
+async fn links_add(
+    _s: State<ServerState>,
+    Json(body): Json<LinkBody>,
+) -> Result<Json<LinkResult>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<LinkResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let link_type = body.link_type.unwrap_or_else(|| "manual".to_string());
+        let similarity = body.similarity.unwrap_or(1.0).clamp(0.0, 1.0);
+        let bidirectional = body.bidirectional.unwrap_or(true);
+
+        let conn = db.lock();
+
+        // Validate both engrams exist before writing — INSERT OR
+        // REPLACE without a ref check would silently create dangling
+        // edges if the agent typo'd an id.
+        let exists_a: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM engrams WHERE id = ?1",
+                [&body.from_engram],
+                |r| r.get(0),
+            )?;
+        let exists_b: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM engrams WHERE id = ?1",
+                [&body.to_engram],
+                |r| r.get(0),
+            )?;
+        if exists_a == 0 {
+            return Err(MemoryError::EngramNotFound(body.from_engram.clone()));
+        }
+        if exists_b == 0 {
+            return Err(MemoryError::EngramNotFound(body.to_engram.clone()));
+        }
+
+        conn.execute(
+            "INSERT OR REPLACE INTO engram_links \
+             (from_engram, to_engram, similarity, link_type) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![&body.from_engram, &body.to_engram, similarity, &link_type],
+        )?;
+        let mut rows_written = 1u32;
+        if bidirectional && body.from_engram != body.to_engram {
+            conn.execute(
+                "INSERT OR REPLACE INTO engram_links \
+                 (from_engram, to_engram, similarity, link_type) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![&body.to_engram, &body.from_engram, similarity, &link_type],
+            )?;
+            rows_written = 2;
+        }
+
+        Ok(LinkResult {
+            brain_id: id,
+            from_engram: body.from_engram,
+            to_engram: body.to_engram,
+            link_type,
+            similarity,
+            bidirectional,
+            rows_written,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct LinkRemoveBody {
+    from_engram: String,
+    to_engram: String,
+    /// True by default — also removes the reverse edge if present,
+    /// matching the bidirectional add flow.
+    #[serde(default)]
+    bidirectional: Option<bool>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LinkRemoveResult {
+    brain_id: String,
+    rows_deleted: u32,
+}
+
+async fn links_remove(
+    _s: State<ServerState>,
+    Json(body): Json<LinkRemoveBody>,
+) -> Result<Json<LinkRemoveResult>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<LinkRemoveResult, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let bidirectional = body.bidirectional.unwrap_or(true);
+        let conn = db.lock();
+        let mut rows_deleted = conn.execute(
+            "DELETE FROM engram_links WHERE from_engram = ?1 AND to_engram = ?2",
+            rusqlite::params![&body.from_engram, &body.to_engram],
+        )? as u32;
+        if bidirectional && body.from_engram != body.to_engram {
+            rows_deleted += conn.execute(
+                "DELETE FROM engram_links WHERE from_engram = ?1 AND to_engram = ?2",
+                rusqlite::params![&body.to_engram, &body.from_engram],
+            )? as u32;
+        }
+        Ok(LinkRemoveResult {
+            brain_id: id,
+            rows_deleted,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
