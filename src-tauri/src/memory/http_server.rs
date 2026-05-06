@@ -125,6 +125,7 @@ fn router() -> Router {
         .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
         .route("/api/links", post(links_add))
         .route("/api/links", axum::routing::delete(links_remove))
+        .route("/api/orphan_links", get(orphan_links))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -1426,6 +1427,108 @@ async fn links_remove(
         Ok(LinkRemoveResult {
             brain_id: id,
             rows_deleted,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Orphan links — pairs the system knows are semantically related
+// (cosine ≥ threshold from the auto-similarity pass) but the user
+// has never explicitly wikilinked. Surface them so an agent can
+// propose: "these two notes are very similar, want to connect them
+// with `add_link()`?" Reuses the existing engram_links table — no
+// new computation, just a NOT EXISTS subquery.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct OrphanLinksQuery {
+    /// Minimum semantic similarity to consider. Default 0.85 (matches
+    /// the graph view's default min_similarity). Lowering surfaces
+    /// noisier candidates; raising tightens to "almost certainly
+    /// related."
+    #[serde(default)]
+    threshold: Option<f64>,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct OrphanLinkEntry {
+    engram_a_id: String,
+    engram_a_title: String,
+    engram_b_id: String,
+    engram_b_title: String,
+    similarity: f64,
+}
+
+#[derive(serde::Serialize)]
+struct OrphanLinksResponse {
+    brain_id: String,
+    threshold: f64,
+    total: usize,
+    pairs: Vec<OrphanLinkEntry>,
+}
+
+async fn orphan_links(
+    Query(q): Query<OrphanLinksQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<OrphanLinksResponse>, ApiError> {
+    let threshold = q.threshold.unwrap_or(0.85).clamp(0.0, 1.0);
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<OrphanLinksResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        // Each unordered pair appears twice in engram_links
+        // (A→B + B→A from the bidirectional insert). De-dup with
+        // `s.from_engram < s.to_engram` so the response only carries
+        // each pair once.
+        //
+        // The NOT EXISTS subquery rules out pairs that already have
+        // any manually-asserted relationship in EITHER direction:
+        // manual / uses / extends / depends_on / supersedes /
+        // contradicts. Those aren't orphans — they're done.
+        let mut stmt = conn.prepare(
+            "SELECT s.from_engram, ea.title, s.to_engram, eb.title, s.similarity \
+             FROM engram_links s \
+             JOIN engrams ea ON ea.id = s.from_engram \
+             JOIN engrams eb ON eb.id = s.to_engram \
+             WHERE s.link_type = 'semantic' \
+               AND s.similarity >= ?1 \
+               AND s.from_engram < s.to_engram \
+               AND ea.state != 'dormant' AND eb.state != 'dormant' \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM engram_links m \
+                 WHERE ((m.from_engram = s.from_engram AND m.to_engram = s.to_engram) \
+                     OR (m.from_engram = s.to_engram AND m.to_engram = s.from_engram)) \
+                   AND m.link_type IN ('manual','uses','extends','depends_on','supersedes','contradicts') \
+               ) \
+             ORDER BY s.similarity DESC \
+             LIMIT ?2",
+        )?;
+        let mapped = stmt.query_map(rusqlite::params![threshold, limit], |r| {
+            Ok(OrphanLinkEntry {
+                engram_a_id: r.get(0)?,
+                engram_a_title: r.get(1)?,
+                engram_b_id: r.get(2)?,
+                engram_b_title: r.get(3)?,
+                similarity: r.get(4)?,
+            })
+        })?;
+        let pairs: Vec<OrphanLinkEntry> = mapped.filter_map(std::result::Result::ok).collect();
+        let total = pairs.len();
+        Ok(OrphanLinksResponse {
+            brain_id: id,
+            threshold,
+            total,
+            pairs,
         })
     })
     .await

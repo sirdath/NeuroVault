@@ -921,6 +921,59 @@ def resolve_contradiction(
 
 
 @mcp.tool(annotations={
+    "title": "Find orphan links — high-similarity pairs missing a manual edge",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def find_orphan_links(
+    threshold: float = 0.85,
+    limit: int = 50,
+    brain: str | None = None,
+) -> Any:
+    """Surface engram pairs the system thinks are very similar but
+    that have NO manual / typed link asserted between them — the
+    obvious "you should probably wikilink these" candidates.
+
+    Logic: walks the engram_links table for rows with
+    link_type='semantic' (the auto-similarity layer) above the
+    threshold, then excludes any pair that already has a manual,
+    uses, extends, depends_on, supersedes, or contradicts edge in
+    either direction. Cheap — pure SQL, no embedding scan.
+
+    WHEN TO CALL:
+    - User asks "what should I link" / "find missing connections"
+    - You're auditing the brain after a recall surfaced two notes
+      the user clearly thinks of together but never linked
+    - After importing markdown from another tool that didn't carry
+      its links over
+
+    Returns:
+        brain_id    — which brain was queried
+        threshold   — the similarity floor used
+        total       — number of pairs returned
+        pairs       — list of:
+            { engram_a_id, engram_a_title,
+              engram_b_id, engram_b_title,
+              similarity }
+        Sorted by similarity DESC. Each unordered pair appears once.
+
+    Args:
+        threshold: 0.0-1.0, default 0.85. Raise to 0.90+ for "almost
+            certainly related" pairs only.
+        limit: cap on returned pairs. Default 50, max 500.
+        brain: target brain id (defaults to active).
+
+    Suggested follow-up: present the pairs to the user, then call
+    `add_link(from, to, link_type='manual')` for confirmed ones.
+    """
+    return _http_get(
+        "/api/orphan_links",
+        {"threshold": threshold, "limit": limit, "brain": brain},
+    )
+
+
+@mcp.tool(annotations={
     "title": "Add a manual link between two engrams",
     "readOnlyHint": False,
     "destructiveHint": False,
