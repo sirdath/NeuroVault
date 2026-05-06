@@ -121,6 +121,7 @@ fn router() -> Router {
         .route("/api/notes", axum::routing::delete(notes_delete))
         .route("/api/update", post(update_brain))
         .route("/api/import_folder", post(import_folder))
+        .route("/api/reindex_embeddings", post(reindex_embeddings))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
@@ -1170,6 +1171,115 @@ async fn import_folder(
             ingested,
             unchanged,
             errors,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Reindex embeddings — walk every active engram, re-chunk, re-embed
+// under the current model, replace chunks + vec_chunks rows. The
+// embedding upgrade path: when the user (or a future release) swaps
+// the BGE model for something larger, this is what reconciles the
+// vector store with the new model.
+//
+// Cost: roughly the same as the original ingest of every engram —
+// 5-10 ms per chunk on the BGE-small-en-v1.5 path. A 500-engram
+// brain with ~3 chunks each ≈ 7-15 seconds wall-clock.
+//
+// Idempotent under a stable model: encoding the same text twice
+// produces identical vectors, so a no-op re-run still rewrites the
+// same bytes. The work is the encode, not the disk IO.
+//
+// Per-engram failures are captured + counted; one bad engram
+// doesn't abort the rest. Run optimize_disk afterward if you want
+// the freed pages back.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct ReindexBody {
+    #[serde(default)]
+    brain: Option<String>,
+    /// Only count engrams that would be touched; skip the actual
+    /// re-embed work. Useful for sizing the wall-clock cost ahead
+    /// of time.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ReindexResult {
+    brain_id: String,
+    dry_run: bool,
+    engrams_total: u32,
+    engrams_reembedded: u32,
+    chunks_written: u32,
+    failed: Vec<String>,
+    elapsed_ms: u64,
+}
+
+async fn reindex_embeddings(
+    _s: State<ServerState>,
+    body: Option<Json<ReindexBody>>,
+) -> Result<Json<ReindexResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> Result<ReindexResult, MemoryError> {
+        let started = std::time::Instant::now();
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = super::db::open_brain(&id)?;
+
+        let engram_ids: Vec<String> = {
+            let conn = db.lock();
+            let mut stmt =
+                conn.prepare("SELECT id FROM engrams WHERE state != 'dormant' ORDER BY id")?;
+            let mapped = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            mapped.filter_map(std::result::Result::ok).collect()
+        };
+        let total = engram_ids.len() as u32;
+
+        if body.dry_run {
+            return Ok(ReindexResult {
+                brain_id: id,
+                dry_run: true,
+                engrams_total: total,
+                engrams_reembedded: 0,
+                chunks_written: 0,
+                failed: Vec::new(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            });
+        }
+
+        let mut reembedded = 0u32;
+        let mut chunks_written = 0u32;
+        let mut failed: Vec<String> = Vec::new();
+        for eid in &engram_ids {
+            match super::ingest::reembed_engram(&db, eid) {
+                Ok(n) => {
+                    if n > 0 {
+                        reembedded += 1;
+                        chunks_written += n;
+                    }
+                }
+                Err(e) => failed.push(format!("{}: {}", eid, e)),
+            }
+        }
+
+        // Reset recall caches — old vectors are gone, any cached
+        // ranking is stale.
+        super::recall_cache::invalidate_brain(&id);
+        let _ = super::bm25::index_for(&id).flush(&db);
+
+        Ok(ReindexResult {
+            brain_id: id,
+            dry_run: false,
+            engrams_total: total,
+            engrams_reembedded: reembedded,
+            chunks_written,
+            failed,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
     })
