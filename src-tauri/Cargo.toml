@@ -121,6 +121,18 @@ axum = "0.7"
 # backend.
 tower-http = { version = "0.5", features = ["cors"] }
 
+# API gateway (per docs/api-gateway-design.md). blake3 hashes API
+# keys at rest — fast, constant-time-able, plenty of entropy for
+# 144-bit secrets so password-style KDFs (argon2/bcrypt) are
+# overkill here. `subtle` for constant-time comparison so timing
+# can't leak which key matched. `getrandom` for the cryptographic
+# random secret bytes; `base64` for url-safe encoding so keys are
+# copy-pasteable and shell-safe.
+blake3 = "1.5"
+subtle = "2.5"
+getrandom = "0.2"
+base64 = "0.22"
+
 # Timestamp parsing for the retriever's recency-decay prior. SQLite
 # writes ISO-8601-ish strings via `strftime`; we parse them into
 # `OffsetDateTime` to compute age_days. `formatting` + `parsing` +
