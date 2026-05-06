@@ -30,6 +30,7 @@
 //! one-to-one where possible, so future maintainers reading either
 //! side can cross-reference by name.
 
+pub mod api_gateway;
 pub mod api_keys;
 pub mod bm25;
 pub mod chunker;

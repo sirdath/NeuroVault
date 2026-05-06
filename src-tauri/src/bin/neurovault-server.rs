@@ -24,6 +24,8 @@
 use std::env;
 use std::process::ExitCode;
 
+use neurovault_lib::memory::api_gateway::{start_gateway, GatewayConfig, GatewayHandle};
+use neurovault_lib::memory::api_keys::{self, Scope};
 use neurovault_lib::memory::http_server::start_server;
 use tokio::signal;
 
@@ -40,6 +42,11 @@ OPTIONS:
                        VS Code extension can pass it without branching.
     --port <N>         Bind to 127.0.0.1:N. Defaults to 8765 (matching
                        the desktop app and the MCP proxy).
+    --mint-key <LABEL> Generate a new API key with the given label,
+                       print the plaintext (ONCE), and exit. Scope
+                       defaults to admin so the dev can hit any
+                       endpoint while iterating; tighten via the
+                       Settings UI once Phase 7 lands.
     -h, --help         Print this help and exit 0.
 
 ENVIRONMENT:
@@ -50,6 +57,7 @@ ENVIRONMENT:
 async fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut port: Option<u16> = None;
+    let mut mint_label: Option<String> = None;
     let mut iter = args.iter();
 
     while let Some(arg) = iter.next() {
@@ -68,6 +76,13 @@ async fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--mint-key" => match iter.next() {
+                Some(label) => mint_label = Some(label.clone()),
+                None => {
+                    eprintln!("--mint-key requires a label");
+                    return ExitCode::from(2);
+                }
+            },
             "-h" | "--help" => {
                 println!("{}", HELP);
                 return ExitCode::SUCCESS;
@@ -75,6 +90,27 @@ async fn main() -> ExitCode {
             other => {
                 eprintln!("unknown argument: {}\n\n{}", other, HELP);
                 return ExitCode::from(2);
+            }
+        }
+    }
+
+    // --mint-key short-circuits the server lifecycle: mint, print,
+    // exit. Useful for bootstrapping the gateway before the
+    // Settings UI exists.
+    if let Some(label) = mint_label {
+        match api_keys::create_key(&label, Scope::Admin, vec![]) {
+            Ok(minted) => {
+                eprintln!(
+                    "Created API key id={} label={:?} scope=admin (no brain restriction)",
+                    minted.record.id, minted.record.label,
+                );
+                eprintln!("Save this — it will NOT be shown again:");
+                println!("{}", minted.plaintext);
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("[neurovault-server] mint failed: {}", e);
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -96,6 +132,25 @@ async fn main() -> ExitCode {
     // bind. Keep this format stable.
     println!("ready 127.0.0.1:{}", handle.port);
 
+    // Optional API gateway. Default OFF — only starts when the
+    // developer sets NEUROVAULT_API_GATEWAY=1. Phase 8 of the
+    // gateway work moves this knob into Settings; today it lives
+    // in the env so we can smoke-test before any UI lands.
+    let mut gateway_handle: Option<GatewayHandle> = None;
+    if env::var("NEUROVAULT_API_GATEWAY").as_deref() == Ok("1") {
+        let cfg = GatewayConfig::default();
+        match start_gateway(cfg).await {
+            Ok(h) => {
+                eprintln!("[neurovault-server] api gateway up on {}", h.addr);
+                gateway_handle = Some(h);
+            }
+            Err(e) => {
+                eprintln!("[neurovault-server] api gateway failed to start: {}", e);
+                // Don't bail — the loopback server is still running.
+            }
+        }
+    }
+
     if signal::ctrl_c().await.is_err() {
         eprintln!("[neurovault-server] could not install signal handler; running until killed");
         // Fall through and block on the join handle anyway. Without
@@ -105,6 +160,9 @@ async fn main() -> ExitCode {
     }
 
     eprintln!("[neurovault-server] shutting down");
+    if let Some(mut g) = gateway_handle {
+        g.stop().await;
+    }
     handle.stop().await;
     ExitCode::SUCCESS
 }
