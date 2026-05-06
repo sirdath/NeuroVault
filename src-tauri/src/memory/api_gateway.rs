@@ -30,6 +30,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
+use super::api_audit::{self, AuditEntry};
 use super::api_keys::{self, AuthedKey, Scope};
 use super::handlers;
 
@@ -244,12 +245,19 @@ fn router() -> Router {
         .route("/v1/reindex_embeddings", post(handlers::reindex_embeddings))
         .route("/v1/brains", post(handlers::brains_create))
         .route("/v1/brains/:brain_id/activate", post(handlers::brains_activate))
-        // Auth runs FIRST (outermost), then scope check. Both fire
-        // before any handler. Order matters: scope_middleware reads
-        // the AuthedKey that auth_middleware just inserted.
+        // Layer order, innermost → outermost (axum runs them in
+        // reverse-add order, so the last `.layer` is the OUTERMOST):
+        //   handler → scope_check → brain_allowlist → auth → audit
+        //
+        // audit wraps everything so it captures failed auth too
+        // (key_id will be null in those rows). It reads timing
+        // from when the request enters and the final status from
+        // the response — without audit at the outermost, a 401 from
+        // auth_middleware would never get logged.
         .layer(middleware::from_fn(scope_middleware))
         .layer(middleware::from_fn(brain_allowlist_middleware))
         .layer(middleware::from_fn(auth_middleware))
+        .layer(middleware::from_fn(audit_middleware))
         // CORS: permissive — auth is mandatory regardless of origin,
         // so the bearer header is the gate, not the page. Tighten
         // per-key in a future iteration if needed.
@@ -291,8 +299,89 @@ async fn auth_middleware(mut req: Request, next: Next) -> Response {
         return unauthorized("invalid_key", "API key not recognised or revoked");
     };
 
+    // Stash a copy of the key id so the audit middleware can read
+    // it from the final response. The audit layer runs AFTER the
+    // request has been consumed by the handler chain, so the only
+    // way to plumb the id back out is via response extensions.
+    let key_id = key.id.clone();
     req.extensions_mut().insert(key);
-    next.run(req).await
+    let mut response = next.run(req).await;
+    response.extensions_mut().insert(AuditedKeyId(key_id));
+    response
+}
+
+/// Newtype so we can find the key_id specifically in response
+/// extensions (raw `String` would collide with anything else
+/// downstream that inserts a String).
+#[derive(Clone)]
+struct AuditedKeyId(String);
+
+// ---------------------------------------------------------------------------
+// Audit middleware — outermost layer. Captures request entry, runs
+// the chain, writes one ndjson row per request to api_audit.jsonl.
+// Best-effort: a write failure logs to stderr but never affects
+// the response that produced it.
+// ---------------------------------------------------------------------------
+
+async fn audit_middleware(req: Request, next: Next) -> Response {
+    let started = std::time::Instant::now();
+    let method = req.method().to_string();
+
+    // Prefer the matched-path template (e.g. "/v1/notes/:engram_id")
+    // over the concrete path so analytics aren't fragmented by URL
+    // variants. MatchedPath is populated by axum after routing —
+    // for unrouted requests we fall back to the URI path.
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
+
+    // Brain id from ?brain=  for per-brain analytics.
+    let brain = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "brain")
+        .map(|(_, v)| urlencoding_decode(v));
+
+    // Best-effort client IP from ConnectInfo. axum exposes this
+    // when the listener was started with `into_make_service_with_
+    // connect_info` — for the v1 gateway we don't, so this stays
+    // None until Phase 11 (headless server) wires that up.
+    let ip: Option<String> = None;
+
+    let response = next.run(req).await;
+    let status = response.status().as_u16();
+
+    let key_id = response
+        .extensions()
+        .get::<AuditedKeyId>()
+        .map(|k| k.0.clone());
+
+    let entry = AuditEntry {
+        ts: now_iso8601(),
+        key_id,
+        method,
+        path,
+        status,
+        brain,
+        ip,
+        duration_ms: started.elapsed().as_millis() as u64,
+    };
+    api_audit::record(&entry);
+
+    response
+}
+
+fn now_iso8601() -> String {
+    use time::format_description::well_known::Iso8601;
+    use time::OffsetDateTime;
+    OffsetDateTime::now_utc()
+        .format(&Iso8601::DEFAULT)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 // ---------------------------------------------------------------------------
