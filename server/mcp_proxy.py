@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +38,56 @@ from mcp.server.fastmcp import FastMCP
 # Override via NEUROVAULT_API_URL if the sidecar runs on a different port.
 API_BASE = os.environ.get("NEUROVAULT_API_URL", "http://127.0.0.1:8765").rstrip("/")
 HTTP_TIMEOUT = float(os.environ.get("NEUROVAULT_PROXY_TIMEOUT", "30"))
+
+
+# --- Tool tiers ----------------------------------------------------------
+# Every MCP tool's name + description + input schema is loaded into the
+# agent's context at session start — for ~30 NeuroVault tools that's
+# 5-9k tokens of overhead per session before the user types anything.
+# The tier system lets users pay only for the slice they actually use:
+#
+#   lite     — 8 tools, ~1.5k tokens. Read/write/navigate + brain mgmt.
+#   standard — 17 tools, ~3.5k tokens. Lite + chunks/temporal/duplicate
+#              detection + core_memory + delete + clutter.
+#   full     — every tool registered (default), ~6-8k tokens. Includes
+#              the rarely-needed admin surface: link editing,
+#              orphan/contradiction audit, bulk metadata, optimize_disk,
+#              compile flow, brain creation, cluster naming.
+#
+# Read order: NEUROVAULT_MCP_TIER env var, then ~/.neurovault/mcp_tier.txt,
+# default 'full'. Writers (Settings UI, CLI) update the file; the proxy
+# reads it once at startup. Restart the MCP to apply.
+TIER_LITE = {
+    "recall", "remember", "related", "session_start", "status",
+    "list_brains", "switch_brain", "update",
+}
+TIER_STANDARD = TIER_LITE | {
+    "recall_chunks", "temporal_recall", "check_duplicate",
+    "core_memory_read", "core_memory_set",
+    "core_memory_append", "core_memory_replace",
+    "delete_engrams", "find_clutter",
+}
+
+
+def _load_active_tier() -> tuple[str, set[str] | None]:
+    """Resolve the active tier. Returns (name, allowed_set) where
+    allowed_set is None for 'full' (no filtering)."""
+    raw = os.environ.get("NEUROVAULT_MCP_TIER", "").strip().lower()
+    if not raw:
+        try:
+            tier_file = pathlib.Path.home() / ".neurovault" / "mcp_tier.txt"
+            if tier_file.exists():
+                raw = tier_file.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            pass
+    if raw == "lite":
+        return ("lite", TIER_LITE)
+    if raw == "standard":
+        return ("standard", TIER_STANDARD)
+    return ("full", None)
+
+
+_ACTIVE_TIER_NAME, _ALLOWED_TOOLS = _load_active_tier()
 
 
 # --- HTTP helpers --------------------------------------------------------
@@ -126,7 +177,9 @@ def _sidecar_down_error(e: Exception) -> dict:
 # --- MCP server ----------------------------------------------------------
 
 mcp = FastMCP(
-    "NeuroVault",
+    "NeuroVault" + (
+        f" [{_ACTIVE_TIER_NAME}]" if _ACTIVE_TIER_NAME != "full" else ""
+    ),
     instructions=(
         "NeuroVault is a persistent, local-first memory layer for this user. "
         "Treat it as an extension of your own memory — everything the user has "
@@ -164,6 +217,29 @@ mcp = FastMCP(
         "`neurovault://engram/<id>` — emit these in chat so the user can click."
     ),
 )
+
+
+# Tier filter: wrap mcp.tool so existing `@mcp.tool(...)` decorators
+# below skip registration for tools outside the active tier. The
+# original returns a decorator factory; ours returns a no-op decorator
+# (returning the function as-is) when the tool isn't in the allowlist.
+# The function still defines, just isn't reachable via MCP — keeping
+# the call sites unchanged is what makes this a one-line knob.
+_original_mcp_tool = mcp.tool
+
+
+def _filtered_mcp_tool(*args: Any, **kwargs: Any):
+    inner_decorator = _original_mcp_tool(*args, **kwargs)
+
+    def wrapper(fn):
+        if _ALLOWED_TOOLS is not None and fn.__name__ not in _ALLOWED_TOOLS:
+            return fn
+        return inner_decorator(fn)
+
+    return wrapper
+
+
+mcp.tool = _filtered_mcp_tool  # type: ignore[assignment]
 
 
 # ============================================================================

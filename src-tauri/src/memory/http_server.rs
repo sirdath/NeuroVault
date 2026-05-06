@@ -130,6 +130,7 @@ fn router() -> Router {
         .route("/api/orphan_links", get(orphan_links))
         .route("/api/temporal_recall", get(temporal_recall))
         .route("/api/optimize_disk", post(optimize_disk))
+        .route("/api/mcp_tier", get(mcp_tier_get).put(mcp_tier_set))
         .route("/api/compilations/prepare", post(compile_prepare))
         .route("/api/compilations/submit", post(compile_submit))
         .route("/api/compilations", get(compilations_list))
@@ -2015,6 +2016,63 @@ async fn optimize_disk(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
     Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// MCP tier — read/write `~/.neurovault/mcp_tier.txt`. The Python MCP
+// proxy reads this at startup to decide which tools to register, so
+// changing the tier here only takes effect after the proxy restarts
+// (the desktop app surfaces this with a "restart MCP" hint after a
+// PUT). Stored as a plain text file rather than a row in any DB so
+// the proxy can read it before importing anything heavy.
+//
+// Allowed: "lite" | "standard" | "full". Anything else (including
+// missing file) is treated as "full" by the proxy.
+// ---------------------------------------------------------------------------
+
+fn mcp_tier_path() -> std::path::PathBuf {
+    super::paths::nv_home().join("mcp_tier.txt")
+}
+
+#[derive(serde::Serialize)]
+struct McpTierResponse {
+    tier: String,
+}
+
+#[derive(serde::Deserialize)]
+struct McpTierBody {
+    tier: String,
+}
+
+async fn mcp_tier_get(_s: State<ServerState>) -> Result<Json<McpTierResponse>, ApiError> {
+    let raw = std::fs::read_to_string(mcp_tier_path()).unwrap_or_default();
+    let trimmed = raw.trim().to_lowercase();
+    let tier = match trimmed.as_str() {
+        "lite" => "lite",
+        "standard" => "standard",
+        _ => "full",
+    };
+    Ok(Json(McpTierResponse { tier: tier.to_string() }))
+}
+
+async fn mcp_tier_set(
+    _s: State<ServerState>,
+    Json(body): Json<McpTierBody>,
+) -> Result<Json<McpTierResponse>, ApiError> {
+    let trimmed = body.tier.trim().to_lowercase();
+    if !matches!(trimmed.as_str(), "lite" | "standard" | "full") {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("tier must be 'lite' | 'standard' | 'full', got {:?}", body.tier),
+        ));
+    }
+    let path = mcp_tier_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, &trimmed)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("write tier: {e}")))?;
+    Ok(Json(McpTierResponse { tier: trimmed }))
 }
 
 // ---------------------------------------------------------------------------
