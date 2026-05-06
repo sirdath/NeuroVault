@@ -20,17 +20,18 @@
 
 use std::net::SocketAddr;
 
-use axum::extract::{Request, State};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::api_keys::{self, AuthedKey, Scope};
+use super::handlers;
 
 // ---------------------------------------------------------------------------
 // Defaults — separate port from the loopback server (8765) so the
@@ -113,17 +114,46 @@ pub async fn start_gateway(cfg: GatewayConfig) -> Result<GatewayHandle, String> 
 }
 
 // ---------------------------------------------------------------------------
-// Router. Phase 3: just /v1/status. Phases 4-6 grow this.
+// Router. Phase 4 mounts the read endpoints from super::handlers.
+// Per-route scope requirements live in `required_scope_for` below;
+// the scope-check middleware reads the matched path and rejects
+// requests whose AuthedKey doesn't satisfy the requirement.
 // ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct GatewayState;
 
 fn router() -> Router {
     Router::new()
+        // Phase 3 — gateway smoke endpoint, any active key
         .route("/v1/status", get(v1_status))
-        // Auth + audit run as middleware so handler bodies stay
-        // identical to the loopback path.
+        // Phase 4 — READ endpoints. Mirror super::http_server's
+        // mounts but under /v1/ and with auth + scope middleware
+        // applied below.
+        .route("/v1/recall", get(handlers::recall))
+        .route("/v1/recall/chunks", get(handlers::recall_chunks))
+        .route("/v1/recall_across_brains", get(handlers::recall_across_brains))
+        .route("/v1/related/:engram_id", get(handlers::related))
+        .route("/v1/notes", get(handlers::notes_list))
+        .route("/v1/notes/:engram_id", get(handlers::notes_detail))
+        .route("/v1/notes/:engram_id/versions", get(handlers::engram_versions_list))
+        .route("/v1/notes/:engram_id/versions/:version", get(handlers::engram_version_get))
+        .route("/v1/temporal_recall", get(handlers::temporal_recall))
+        .route("/v1/contradictions", get(handlers::contradictions_list))
+        .route("/v1/orphan_links", get(handlers::orphan_links))
+        .route("/v1/clutter", get(handlers::clutter_report))
+        .route("/v1/list_images", get(handlers::list_images))
+        .route("/v1/brains", get(handlers::brains_list))
+        .route("/v1/brains/:brain_id/stats", get(handlers::brains_stats))
+        .route("/v1/session_start", get(handlers::session_start))
+        .route("/v1/changes", get(handlers::changes_feed))
+        .route("/v1/core_memory", get(handlers::core_memory_list))
+        .route("/v1/core_memory/:label", get(handlers::core_memory_read))
+        // POST that's still read-scope: dedupe check is a query, not
+        // a write — body just carries the candidate content.
+        .route("/v1/check_duplicate", post(handlers::check_duplicate))
+        // Auth runs FIRST (outermost), then scope check. Both fire
+        // before any handler. Order matters: scope_middleware reads
+        // the AuthedKey that auth_middleware just inserted.
+        .layer(middleware::from_fn(scope_middleware))
+        .layer(middleware::from_fn(brain_allowlist_middleware))
         .layer(middleware::from_fn(auth_middleware))
         // CORS: permissive — auth is mandatory regardless of origin,
         // so the bearer header is the gate, not the page. Tighten
@@ -134,7 +164,7 @@ fn router() -> Router {
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
-        .with_state(GatewayState)
+        .with_state(handlers::ServerState {})
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +198,169 @@ async fn auth_middleware(mut req: Request, next: Next) -> Response {
 
     req.extensions_mut().insert(key);
     next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// Scope check — runs AFTER auth_middleware, so AuthedKey is
+// guaranteed present. Reads the matched route's RequiredScope from
+// the static table; rejects with 403 if the key's scope is too low.
+//
+// The matched-path lookup is what makes this O(1) per request even
+// as the route table grows. Path-templates (e.g. /v1/notes/:id)
+// resolve to their template string, not the concrete URL.
+// ---------------------------------------------------------------------------
+
+fn required_scope_for(path: &str) -> Option<Scope> {
+    // Read scope — most of the surface
+    if matches!(
+        path,
+        "/v1/status"
+            | "/v1/recall"
+            | "/v1/recall/chunks"
+            | "/v1/recall_across_brains"
+            | "/v1/related/:engram_id"
+            | "/v1/notes"
+            | "/v1/notes/:engram_id"
+            | "/v1/notes/:engram_id/versions"
+            | "/v1/notes/:engram_id/versions/:version"
+            | "/v1/temporal_recall"
+            | "/v1/contradictions"
+            | "/v1/orphan_links"
+            | "/v1/clutter"
+            | "/v1/list_images"
+            | "/v1/brains"
+            | "/v1/brains/:brain_id/stats"
+            | "/v1/session_start"
+            | "/v1/changes"
+            | "/v1/core_memory"
+            | "/v1/core_memory/:label"
+            | "/v1/check_duplicate"
+    ) {
+        return Some(Scope::Read);
+    }
+    None
+}
+
+async fn scope_middleware(req: Request, next: Next) -> Response {
+    // Phase 3's /v1/status was inside the auth gate but had no scope
+    // table entry — it accepted any active key. Now we treat it as
+    // Read scope explicitly so the table is exhaustive.
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string());
+    let Some(path) = path else {
+        // Unmatched route — let axum's 404 handler deal with it
+        // rather than 403. We don't want auth-aware error leakage.
+        return next.run(req).await;
+    };
+    let Some(required) = required_scope_for(&path) else {
+        // Route exists in the router but no scope policy declared.
+        // Fail closed: refuse rather than accidentally exposing.
+        return forbidden(
+            "no_scope_policy",
+            "no scope policy registered for this route",
+        );
+    };
+    let Some(key) = req.extensions().get::<AuthedKey>() else {
+        // auth_middleware should have populated this. Belt-and-
+        // braces fallback so a misordered layer stack can't bypass.
+        return unauthorized(
+            "auth_missing",
+            "auth middleware did not run before scope check",
+        );
+    };
+    if !key.scope.satisfies(required) {
+        return forbidden(
+            "insufficient_scope",
+            &format!(
+                "this key has {:?} scope; {:?} requires {:?}",
+                key.scope, path, required
+            ),
+        );
+    }
+    next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// Brain allowlist — reads ?brain= from the query string and rejects
+// if the AuthedKey's allowlist excludes it. Empty allowlist means
+// all brains permitted; that's the default for new keys.
+//
+// Path-param brains (e.g. /v1/brains/:brain_id/stats) are NOT
+// covered here — those need per-route extraction. For Phase 4 the
+// only path-param brain endpoint is /v1/brains/:brain_id/stats; we
+// guard it with an inline check there as a follow-up if needed.
+// ---------------------------------------------------------------------------
+
+async fn brain_allowlist_middleware(req: Request, next: Next) -> Response {
+    // Only inspect ?brain= when present. No brain param = no
+    // restriction to enforce here (the handler may default to the
+    // active brain, which is a separate concern).
+    let query = req.uri().query().unwrap_or("");
+    let brain_id = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "brain")
+        .map(|(_, v)| urlencoding_decode(v));
+    let Some(brain_id) = brain_id else {
+        return next.run(req).await;
+    };
+    let Some(key) = req.extensions().get::<AuthedKey>() else {
+        return next.run(req).await; // auth_middleware will handle this
+    };
+    if !key.may_use_brain(&brain_id) {
+        return forbidden(
+            "brain_not_allowed",
+            &format!(
+                "this key's allowlist does not include brain {:?}",
+                brain_id,
+            ),
+        );
+    }
+    next.run(req).await
+}
+
+/// Minimal `+`-and-`%XX` decoder. We only need it for the `brain`
+/// query value, which in practice is a UUID-style id with no
+/// percent-escaping. Keeps us from pulling in `urlencoding` or
+/// `serde_urlencoded` as a direct dep.
+fn urlencoding_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'+' {
+            out.push(' ');
+            i += 1;
+        } else if b == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            match (hi, lo) {
+                (Some(h), Some(l)) => {
+                    out.push(((h * 16 + l) as u8) as char);
+                    i += 3;
+                }
+                _ => {
+                    out.push(b as char);
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(b as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn forbidden(error: &'static str, message: &str) -> Response {
+    let body = serde_json::json!({
+        "error": error,
+        "message": message,
+    });
+    (StatusCode::FORBIDDEN, Json(body)).into_response()
 }
 
 fn unauthorized(error: &'static str, message: &str) -> Response {
@@ -205,7 +398,7 @@ struct AuthInfo {
 }
 
 async fn v1_status(
-    _state: State<GatewayState>,
+    _state: State<handlers::ServerState>,
     req: Request,
 ) -> Json<V1StatusResponse> {
     // Auth middleware guarantees this is present.
