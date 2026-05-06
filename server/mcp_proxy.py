@@ -1191,6 +1191,143 @@ def temporal_recall(
 
 
 @mcp.tool(annotations={
+    "title": "List image files in a folder (caption-at-ingest workflow)",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def list_images(
+    folder_path: str,
+    recursive: bool = True,
+    limit: int = 500,
+) -> Any:
+    """Walk a folder for image files (.png, .jpg, .jpeg, .webp, .gif,
+    .bmp, .svg, .heic, .tiff). Returns absolute paths + sizes + last-
+    modified timestamps. Use this as step 1 of the caption-at-ingest
+    workflow:
+
+    1. Call list_images(folder) to enumerate images.
+    2. For each image: open it with Read in your context (Claude
+       Code / Desktop is multimodal), then write a 1-3 sentence
+       caption.
+    3. Call remember_image(image_path, caption) to persist.
+
+    The MCP server itself doesn't do CV — YOU are the captioning
+    model. Nothing leaves the user's machine.
+
+    Skipped: dotfile dirs (.git, .obsidian), trash/, non-image files.
+    Ordering is filesystem-natural (no sort), so caption in the
+    order returned and you'll match the user's mental model.
+
+    Returns:
+        folder_path, recursive, total
+        images: list of:
+            { path, basename, extension, size_bytes, last_modified }
+
+    Args:
+        folder_path: ABSOLUTE path to walk.
+        recursive: default True. Set False for shallow scans.
+        limit: max images returned. Default 500, max 5000.
+    """
+    return _http_get(
+        "/api/list_images",
+        {
+            "folder_path": folder_path,
+            "recursive": "true" if recursive else "false",
+            "limit": limit,
+        },
+    )
+
+
+@mcp.tool(annotations={
+    "title": "Save an image's caption as a searchable engram",
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,  # passes deduplicate=0.92 by default
+    "openWorldHint": False,
+})
+def remember_image(
+    image_path: str,
+    caption: str,
+    title: str = "",
+    brain: str | None = None,
+) -> Any:
+    """Persist a caption you've generated for an image. Call this
+    AFTER viewing the image in your own context (via Read in Claude
+    Code, or paste-into-message in Claude Desktop). The MCP layer
+    is the index + writer; the captioning happens in your turn.
+
+    The stored engram becomes searchable like any other note:
+    `recall(q)` will surface it when the caption matches the query.
+    The image itself stays on disk where it lives — only the
+    caption is indexed.
+
+    Storage shape:
+      filename: images/<basename>.md
+      kind:     'source'
+      content:  "![title](image_path)\\n\\n<caption>"
+                so the engram renders the image inline in the editor.
+
+    WHEN TO CALL:
+    - You've just viewed an image (screenshot, photo, diagram) the
+      user dropped in chat or referenced from disk.
+    - You're processing a batch from list_images() and have
+      generated captions for each.
+
+    WHEN NOT TO CALL:
+    - You haven't actually seen the image — captioning blind
+      defeats the point. Use Read on the image first.
+    - The image is ephemeral (a clipboard paste the user is
+      iterating on); wait until they say "save this".
+
+    Args:
+        image_path: ABSOLUTE path of the image on disk.
+        caption: 1-3 sentences describing what's in the image.
+            Focus on details a search query might hit.
+        title: optional display title. Default = file basename.
+        brain: target brain id (defaults to active).
+    """
+    import os as _os
+    basename = _os.path.basename(image_path)
+    display_title = title.strip() or _os.path.splitext(basename)[0]
+    # Markdown body: image + caption. The image link uses the
+    # absolute path as-is so the editor can resolve it.
+    body = f"![{display_title}]({image_path})\n\n{caption}"
+    # Step 1: write the engram via the standard remember path. This
+    # also runs dedupe — if the same image was captioned before with
+    # similar text we'll get status='merged'.
+    written = _http_post(
+        "/api/notes",
+        {
+            "content": body,
+            "title": display_title,
+            "folder": "images",
+            "deduplicate": 0.92,
+            "brain": brain,
+        },
+    )
+    # Step 2 + 3: stamp kind=source and tag=image. /api/notes doesn't
+    # accept those fields directly, so we compose with the bulk
+    # endpoints. Best-effort — if these fail the caption is still
+    # saved, we just return the partial state.
+    eid = written.get("engram_id") if isinstance(written, dict) else None
+    if eid:
+        _http_post(
+            "/api/engrams/bulk_set_kind",
+            {"engram_ids": [eid], "kind": "source", "brain": brain},
+        )
+        _http_post(
+            "/api/engrams/bulk_add_tag",
+            {"engram_ids": [eid], "tag": "image", "brain": brain},
+        )
+    # Surface the image_path so the caller has everything it needs
+    # for follow-up (e.g., updating their notes index).
+    if isinstance(written, dict):
+        written["image_path"] = image_path
+    return written
+
+
+@mcp.tool(annotations={
     "title": "Re-embed every engram in the brain (model upgrade path)",
     "readOnlyHint": False,
     "destructiveHint": False,
