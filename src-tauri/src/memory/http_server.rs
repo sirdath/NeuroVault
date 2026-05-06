@@ -120,6 +120,7 @@ fn router() -> Router {
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))
         .route("/api/update", post(update_brain))
+        .route("/api/import_folder", post(import_folder))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
@@ -1045,6 +1046,130 @@ async fn update_brain(
             ingested,
             unchanged,
             deleted,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Folder import (cold-start onboarding) — point at any directory of
+// markdown files (Obsidian vault, Notion export, Bear export, past
+// chat transcripts) and bulk-ingest them into the brain. Filenames
+// are namespaced by the source folder name so two imports with
+// overlapping basenames (two READMEs, etc.) don't collide.
+//
+// What this is NOT: it doesn't copy or symlink the source files. The
+// content goes into engrams.content; the original markdown stays
+// where it lives. If the source files later change, this won't
+// notice — re-run the import to refresh.
+//
+// Best-effort per file: a single bad UTF-8 file or permission error
+// is logged + counted, the rest of the import keeps going.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ImportFolderBody {
+    /// Absolute path to the folder to walk.
+    path: String,
+    #[serde(default)]
+    brain: Option<String>,
+    /// Optional namespace prefix override. Default = source folder
+    /// basename. Pass "" to disable namespacing entirely (imports
+    /// land directly under their relative path).
+    #[serde(default)]
+    prefix: Option<String>,
+}
+
+#[derive(serde::Serialize, Default)]
+struct ImportFolderResult {
+    brain_id: String,
+    source_path: String,
+    prefix: String,
+    scanned: u32,
+    ingested: u32,
+    unchanged: u32,
+    errors: Vec<String>,
+    elapsed_ms: u64,
+}
+
+async fn import_folder(
+    _s: State<ServerState>,
+    Json(body): Json<ImportFolderBody>,
+) -> Result<Json<ImportFolderResult>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<ImportFolderResult, MemoryError> {
+        let started = std::time::Instant::now();
+        let root = std::path::PathBuf::from(&body.path);
+        if !root.is_dir() {
+            return Err(MemoryError::Other(format!(
+                "import path is not a directory: {}",
+                body.path
+            )));
+        }
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = super::db::open_brain(&id)?;
+
+        // Default prefix: the source folder's basename. Caller can
+        // pass "" to suppress namespacing if they're confident their
+        // filenames won't collide with existing engrams.
+        let derived_prefix = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("import")
+            .to_string();
+        let prefix = body
+            .prefix
+            .clone()
+            .unwrap_or(derived_prefix)
+            .trim_matches('/')
+            .to_string();
+
+        let mut files = Vec::new();
+        collect_md_files(&root, &mut files);
+        let scanned = files.len() as u32;
+
+        let mut ingested = 0u32;
+        let mut unchanged = 0u32;
+        let mut errors: Vec<String> = Vec::new();
+
+        for path in &files {
+            let rel = match path.strip_prefix(&root) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            };
+            let ingest_filename = if prefix.is_empty() {
+                rel
+            } else {
+                format!("{}/{}", prefix, rel)
+            };
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!("{}: {}", path.display(), e));
+                    continue;
+                }
+            };
+            match super::ingest::ingest_content(&ingest_filename, &content, &db) {
+                Ok(Some(_)) => ingested += 1,
+                Ok(None) => unchanged += 1,
+                Err(e) => errors.push(format!("{}: {}", path.display(), e)),
+            }
+        }
+
+        Ok(ImportFolderResult {
+            brain_id: id,
+            source_path: body.path,
+            prefix,
+            scanned,
+            ingested,
+            unchanged,
+            errors,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
     })
