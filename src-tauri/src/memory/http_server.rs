@@ -124,6 +124,8 @@ fn router() -> Router {
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
         .route("/api/engrams/bulk_add_tag", post(bulk_add_tag))
+        .route("/api/engrams/:engram_id/versions", get(engram_versions_list))
+        .route("/api/engrams/:engram_id/versions/:version", get(engram_version_get))
         .route("/api/contradictions", get(contradictions_list))
         .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
         .route("/api/links", post(links_add))
@@ -1431,6 +1433,152 @@ async fn bulk_add_tag(
         drop(conn);
         super::recall_cache::invalidate_brain(&id);
         Ok(BulkUpdateResult { brain_id: id, updated, unchanged, not_found })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Engram version history — list past content snapshots for an engram
+// and fetch any individual version's content. Snapshots are written
+// by the ingest pipeline whenever `content_hash` changes, so the
+// list is sparse (no entry for no-op re-ingests) and only as deep as
+// the engram has actually been edited.
+//
+// version is a per-engram counter (1, 2, 3...). The CURRENT row
+// lives in `engrams`, not in `engram_versions` — version N here
+// means "N edits ago, this is what the engram said before being
+// replaced." Listing returns most-recent-first.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+struct EngramVersionsQuery {
+    #[serde(default)]
+    brain: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct EngramVersionRow {
+    version: i64,
+    title: String,
+    content_hash: String,
+    /// Content prefix for list view; full content fetched via the
+    /// per-version endpoint. Caps the list payload on a long
+    /// editing history.
+    content_preview: String,
+    content_bytes: i64,
+    created_at: String,
+}
+
+#[derive(serde::Serialize)]
+struct EngramVersionsResponse {
+    brain_id: String,
+    engram_id: String,
+    current_title: String,
+    current_content_hash: String,
+    total: usize,
+    versions: Vec<EngramVersionRow>,
+}
+
+async fn engram_versions_list(
+    Path(engram_id): Path<String>,
+    Query(q): Query<EngramVersionsQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<EngramVersionsResponse>, ApiError> {
+    let limit = q.limit.unwrap_or(50).min(500) as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<EngramVersionsResponse, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+
+        let current: (String, String) = conn
+            .query_row(
+                "SELECT title, content_hash FROM engrams WHERE id = ?1",
+                [&engram_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .map_err(|_| MemoryError::EngramNotFound(engram_id.clone()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT version, title, content, content_hash, created_at \
+             FROM engram_versions \
+             WHERE engram_id = ?1 \
+             ORDER BY version DESC \
+             LIMIT ?2",
+        )?;
+        let mapped = stmt.query_map(rusqlite::params![&engram_id, limit], |r| {
+            let content: String = r.get(2)?;
+            // Preview keeps the response cheap for long edit
+            // histories; callers fetch full content per-version.
+            let preview = content.chars().take(280).collect::<String>();
+            Ok(EngramVersionRow {
+                version: r.get(0)?,
+                title: r.get(1)?,
+                content_hash: r.get(3)?,
+                content_preview: preview,
+                content_bytes: content.len() as i64,
+                created_at: r.get(4)?,
+            })
+        })?;
+        let versions: Vec<EngramVersionRow> = mapped.filter_map(std::result::Result::ok).collect();
+        let total = versions.len();
+        Ok(EngramVersionsResponse {
+            brain_id: id,
+            engram_id,
+            current_title: current.0,
+            current_content_hash: current.1,
+            total,
+            versions,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Serialize)]
+struct EngramVersionDetail {
+    brain_id: String,
+    engram_id: String,
+    version: i64,
+    title: String,
+    content: String,
+    content_hash: String,
+    created_at: String,
+}
+
+async fn engram_version_get(
+    Path((engram_id, version)): Path<(String, i64)>,
+    Query(q): Query<EngramVersionsQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<EngramVersionDetail>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<EngramVersionDetail, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT title, content, content_hash, created_at \
+                 FROM engram_versions \
+                 WHERE engram_id = ?1 AND version = ?2",
+                rusqlite::params![&engram_id, version],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
+            )
+            .map_err(|_| MemoryError::Other(format!("version {} not found for engram {}", version, engram_id)))?;
+        Ok(EngramVersionDetail {
+            brain_id: id,
+            engram_id,
+            version,
+            title: row.0,
+            content: row.1,
+            content_hash: row.2,
+            created_at: row.3,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

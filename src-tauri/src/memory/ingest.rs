@@ -228,6 +228,46 @@ pub fn ingest_content(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    // 0. Snapshot the old version before we overwrite it. Only
+    // fires when an engram with this id already exists (the
+    // hash-equality fast path returned early on no-op re-ingests).
+    // Best-effort: failure to snapshot is logged but doesn't abort
+    // the ingest — version history is a recoverability feature, not
+    // a correctness invariant.
+    if existing_id.is_some() {
+        let conn = db.lock();
+        let prev: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT title, content, content_hash FROM engrams WHERE id = ?1",
+                [&engram_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+            )
+            .ok();
+        if let Some((prev_title, prev_content, prev_hash)) = prev {
+            // Only snapshot if the content actually changed; the hash
+            // check up top normally handles this but the title alone
+            // may have shifted (rename / frontmatter tweak) — in that
+            // case we still capture so the audit trail stays clean.
+            if prev_hash != new_hash {
+                let next_version: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(version), 0) + 1 FROM engram_versions WHERE engram_id = ?1",
+                        [&engram_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(1);
+                let snapshot_id = uuid::Uuid::new_v4().to_string();
+                if let Err(e) = conn.execute(
+                    "INSERT INTO engram_versions (id, engram_id, version, title, content, content_hash) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![&snapshot_id, &engram_id, next_version, &prev_title, &prev_content, &prev_hash],
+                ) {
+                    eprintln!("[ingest] snapshot {} v{} skipped: {}", engram_id, next_version, e);
+                }
+            }
+        }
+    }
+
     // 1. Upsert engram row + set kind. Use millisecond timestamps
     // like Python does — 1-second `datetime('now')` ties break
     // recency sorting when ingest fires in a tight loop.

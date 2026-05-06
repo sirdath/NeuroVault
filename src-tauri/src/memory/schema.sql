@@ -259,6 +259,27 @@ CREATE TABLE IF NOT EXISTS contradictions (
     resolution  TEXT
 );
 
+-- Engram version history: snapshot of the OLD content right before
+-- ingest replaces it. One row per content edit (skipping no-op
+-- re-ingests, which short-circuit on content_hash equality up the
+-- pipeline). Lets the agent answer "what did this note say last
+-- week?" without us keeping a full git-style log.
+--
+-- Cascading delete with the engram itself — purging an engram
+-- discards its history. version is a per-engram counter
+-- (1, 2, 3, ...) so deep links stay stable across renames; the
+-- pre-ingest snapshot rows shift naturally as new versions land.
+CREATE TABLE IF NOT EXISTS engram_versions (
+    id           TEXT PRIMARY KEY,
+    engram_id    TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    version      INTEGER NOT NULL,
+    title        TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at   TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    UNIQUE (engram_id, version)
+);
+
 -- Knowledge compilation: one row per LLM-driven recompile of a wiki page.
 -- Each row stores both old + new content so reject = revert is a single
 -- UPDATE, and the diff can be regenerated server-side without storing it.
@@ -321,3 +342,4 @@ CREATE INDEX IF NOT EXISTS idx_engrams_agent     ON engrams(agent_id);
 CREATE INDEX IF NOT EXISTS idx_compilations_status ON compilations(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_compilations_topic  ON compilations(topic);
 CREATE INDEX IF NOT EXISTS idx_compilations_wiki   ON compilations(wiki_engram_id);
+CREATE INDEX IF NOT EXISTS idx_engram_versions     ON engram_versions(engram_id, version DESC);

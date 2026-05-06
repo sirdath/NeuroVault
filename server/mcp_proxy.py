@@ -65,7 +65,7 @@ TIER_STANDARD = TIER_LITE | {
     "recall_chunks", "temporal_recall", "check_duplicate",
     "core_memory_read", "core_memory_set",
     "core_memory_append", "core_memory_replace",
-    "delete_engrams", "find_clutter",
+    "delete_engrams", "find_clutter", "engram_history",
 }
 
 
@@ -1187,6 +1187,63 @@ def temporal_recall(
             "limit": limit,
             "brain": brain,
         },
+    )
+
+
+@mcp.tool(annotations={
+    "title": "List edit history for a single engram",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def engram_history(
+    engram_id: str,
+    limit: int = 50,
+    version: int | None = None,
+    brain: str | None = None,
+) -> Any:
+    """Surface the edit history of an engram. The ingest pipeline
+    snapshots the OLD content into engram_versions whenever
+    content_hash changes, so this list is sparse — one row per real
+    edit, no entries for no-op re-ingests.
+
+    Two modes:
+    - `version=None` (default): list snapshots, most-recent first.
+      Each row carries title + content_preview (first ~280 chars) +
+      content_bytes + content_hash + created_at, plus the engram's
+      CURRENT title + hash so you can spot whether it has drifted
+      from any of the snapshots.
+    - `version=N`: fetch the full content of that specific snapshot.
+
+    Important: version N means "the content as it was N edits ago."
+    The CURRENT engram lives in `engrams`, not in this table — so
+    `version=1` is the OLDEST snapshot, and the highest version is
+    the most-recent one BEFORE the current state.
+
+    WHEN TO CALL:
+    - User asks "what did this note say last week?"
+    - You need to compare a current claim against an earlier one to
+      detect drift / context-loss
+    - Auditing: was a recent edit destructive?
+
+    Returns the list shape on default, or the detail shape when
+    `version` is set. Both shapes include brain_id + engram_id.
+
+    Args:
+        engram_id: UUID of the engram.
+        limit: max rows in list mode. Default 50, max 500.
+        version: if set, fetch full content of that snapshot
+            instead of listing.
+        brain: target brain id (defaults to active).
+    """
+    if version is not None:
+        return _http_get(
+            f"/api/engrams/{urllib.parse.quote(engram_id)}/versions/{version}",
+            {"brain": brain},
+        )
+    return _http_get(
+        f"/api/engrams/{urllib.parse.quote(engram_id)}/versions",
+        {"limit": limit, "brain": brain},
     )
 
 
