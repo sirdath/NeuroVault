@@ -163,9 +163,26 @@ pub async fn start_gateway(cfg: GatewayConfig) -> Result<GatewayHandle, String> 
     let addr = SocketAddr::new(bind_ip, cfg.port);
 
     let app = router();
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("could not bind {}: {}", addr, e))?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Same self-heal as the loopback server. Stale
+            // neurovault* on this port → kill + retry; anything
+            // else surfaces as a clear bind error.
+            if super::port_recovery::try_clear_stale_neurovault(cfg.port).is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                TcpListener::bind(addr)
+                    .await
+                    .map_err(|e2| format!("could not bind {} after clearing stale: {}", addr, e2))?
+            } else {
+                return Err(format!(
+                    "could not bind {}: {} (port held by a non-neurovault process)",
+                    addr, e,
+                ));
+            }
+        }
+        Err(e) => return Err(format!("could not bind {}: {}", addr, e)),
+    };
 
     let bound = listener.local_addr().unwrap_or(addr);
     let (tx, rx) = oneshot::channel::<()>();

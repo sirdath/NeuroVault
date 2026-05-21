@@ -42,24 +42,29 @@ HTTP_TIMEOUT = float(os.environ.get("NEUROVAULT_PROXY_TIMEOUT", "30"))
 
 # --- Tool tiers ----------------------------------------------------------
 # Every MCP tool's name + description + input schema is loaded into the
-# agent's context at session start — for ~30 NeuroVault tools that's
-# 5-9k tokens of overhead per session before the user types anything.
-# The tier system lets users pay only for the slice they actually use:
+# agent's context at session start. The tier system lets users pay only
+# for the slice they actually use:
 #
+#   minimal  — 3 tools, ~1k tokens. Just recall + related + session_start.
+#              The realistic floor for an agent doing pure memory lookup.
 #   lite     — 8 tools, ~1.5k tokens. Read/write/navigate + brain mgmt.
 #   standard — 17 tools, ~3.5k tokens. Lite + chunks/temporal/duplicate
 #              detection + core_memory + delete + clutter.
 #   full     — every tool registered (default), ~6-8k tokens. Includes
-#              the rarely-needed admin surface: link editing,
-#              orphan/contradiction audit, bulk metadata, optimize_disk,
-#              compile flow, brain creation, cluster naming.
+#              the rarely-needed admin surface.
 #
 # Read order: NEUROVAULT_MCP_TIER env var, then ~/.neurovault/mcp_tier.txt,
 # default 'full'. Writers (Settings UI, CLI) update the file; the proxy
 # reads it once at startup. Restart the MCP to apply.
-TIER_LITE = {
-    "recall", "remember", "related", "session_start", "status",
-    "list_brains", "switch_brain", "update",
+TIER_MINIMAL = {
+    # The 3 tools that cover ~80% of real usage. recall finds anything;
+    # related is 50-100x cheaper than a second recall when you've found
+    # a hit and want to explore; session_start bootstraps the active
+    # brain at the top of a conversation.
+    "recall", "related", "session_start",
+}
+TIER_LITE = TIER_MINIMAL | {
+    "remember", "status", "list_brains", "switch_brain", "update",
 }
 TIER_STANDARD = TIER_LITE | {
     "recall_chunks", "temporal_recall", "check_duplicate",
@@ -71,7 +76,18 @@ TIER_STANDARD = TIER_LITE | {
 
 def _load_active_tier() -> tuple[str, set[str] | None]:
     """Resolve the active tier. Returns (name, allowed_set) where
-    allowed_set is None for 'full' (no filtering)."""
+    allowed_set is None for 'full' (no filtering).
+
+    Default changed 2026-05-16: was 'full' (36 tools), now 'lite'
+    (8 tools — recall, related, remember, status, list_brains,
+    switch_brain, update, session_start). Rationale: very few real
+    workflows use the 28 admin/maintenance/edge-case tools that
+    'full' adds, and shipping all 36 to every agent inflates the
+    system prompt + dilutes the agent's attention on the load-
+    bearing memory tools. Users who want the full surface can opt
+    in via NEUROVAULT_MCP_TIER=full or by writing 'full' into
+    ~/.neurovault/mcp_tier.txt.
+    """
     raw = os.environ.get("NEUROVAULT_MCP_TIER", "").strip().lower()
     if not raw:
         try:
@@ -80,11 +96,16 @@ def _load_active_tier() -> tuple[str, set[str] | None]:
                 raw = tier_file.read_text(encoding="utf-8").strip().lower()
         except OSError:
             pass
-    if raw == "lite":
-        return ("lite", TIER_LITE)
+    if raw == "minimal":
+        return ("minimal", TIER_MINIMAL)
     if raw == "standard":
         return ("standard", TIER_STANDARD)
-    return ("full", None)
+    if raw == "full":
+        return ("full", None)
+    # Empty / unknown / explicit "lite" all fall through to the new
+    # default. We accept "lite" explicitly so the env-var form reads
+    # the same as the tier name.
+    return ("lite", TIER_LITE)
 
 
 _ACTIVE_TIER_NAME, _ALLOWED_TOOLS = _load_active_tier()
@@ -184,37 +205,77 @@ mcp = FastMCP(
         "NeuroVault is a persistent, local-first memory layer for this user. "
         "Treat it as an extension of your own memory — everything the user has "
         "told you across past sessions lives here.\n\n"
-        "CORE WORKFLOW:\n"
-        "1. BEFORE answering any question that could be about the user's life, "
-        "preferences, projects, or prior decisions: call `recall(q, mode='preview')`.\n"
-        "2. WHEN the user shares a durable fact, decision, or preference: call "
-        "`remember(content, deduplicate=0.92)` immediately. The dedupe param "
-        "prevents duplicate captures.\n"
-        "3. AFTER picking a hit: call `related(engram_id)` to explore what's "
-        "connected — 50-100x cheaper than another recall.\n"
-        "4. ONCE per session: call `session_start()` to load active brain + "
-        "recent activity + core memory blocks.\n\n"
-        "TOKEN EFFICIENCY:\n"
-        "- `recall(q, mode='titles')`  → ~20 tokens/hit (quick scan)\n"
-        "- `recall(q, mode='preview')` → ~100 tokens/hit (DEFAULT)\n"
-        "- `recall(q, mode='full')`    → ~400 tokens/hit (deep dives only)\n\n"
-        "QUERY OPERATORS (inside the `q` string):\n"
-        "- `kind:insight`, `kind:note`, `kind:source`, etc.\n"
-        "- `folder:projects`   — only notes under projects/*\n"
-        "- `after:2026-04-01`  — only recent engrams\n"
-        "- `entity:claude`     — only engrams mentioning an entity\n"
-        "- `state:fresh`       — only non-dormant\n"
+
+        "═══════════════════════════════════════════════════════════════════\n"
+        "TOOL HIERARCHY — READ THIS BEFORE PICKING A TOOL\n"
+        "═══════════════════════════════════════════════════════════════════\n\n"
+
+        "TIER 1 — PRIMARY (use these for ~95% of interactions):\n"
+        "  • `recall(q)`         find anything in memory. ALWAYS first.\n"
+        "  • `related(engram_id)` explore connections after a recall hit.\n"
+        "These two are why NeuroVault exists. If you can answer with these, do.\n\n"
+
+        "TIER 2 — WRITE & SPECIFIC SHAPE (use when needed):\n"
+        "  • `remember(content)` save a durable fact the user just shared.\n"
+        "  • `recall_chunks(q)`  passage-level (when recall surfaces a long\n"
+        "                        note and you need the specific paragraph).\n"
+        "  • `temporal_recall(q, as_of=...)`  bitemporal time-travel queries.\n"
+        "  • `session_start()`   call ONCE at the top of a fresh conversation.\n\n"
+
+        "TIER 3 — MAINTENANCE / ADMIN (only on explicit user request):\n"
+        "  Brain hygiene:    find_clutter, find_orphan_links, find_contradictions\n"
+        "  Bulk edits:       bulk_set_kind, bulk_add_tag, delete_engrams\n"
+        "  Disk:             optimize_disk, reindex_embeddings\n"
+        "  Brain mgmt:       list_brains, switch_brain, create_brain, update\n"
+        "  Graph editing:    add_link, remove_link, resolve_contradiction\n"
+        "  Audit / deep:     engram_history, list_unnamed_clusters, set_cluster_names,\n"
+        "                    list_images, remember_image, recall_across_brains,\n"
+        "                    import_folder, check_duplicate, status,\n"
+        "                    core_memory_*, compile_*\n\n"
+
+        "DO NOT call Tier 3 tools for routine user questions. They exist for\n"
+        "explicit asks like 'clean up my brain', 'shrink the database', 'who\n"
+        "owns this contradiction', 'pin this note'. If the user is asking a\n"
+        "factual question about themselves / their world / their decisions,\n"
+        "the answer is recall + related — never an admin tool.\n\n"
+
+        "═══════════════════════════════════════════════════════════════════\n"
+        "CORE WORKFLOW (default for every user message)\n"
+        "═══════════════════════════════════════════════════════════════════\n\n"
+
+        "1. ANY question that could be about user context → `recall(q)` FIRST.\n"
+        "   (rerank=True is now the default; top_k=20)\n"
+        "2. If recall returns weak hits, DO NOT GIVE UP. Retry with:\n"
+        "     a. different phrasing (use proper nouns from the user's question verbatim)\n"
+        "     b. `recall_chunks(q)` for passage-level\n"
+        "     c. `query='entity:<Name>'` to anchor on a known entity\n"
+        "3. After picking a hit, call `related(engram_id)` to expand context.\n"
+        "4. When user shares a durable fact: `remember(content, deduplicate=0.92)`.\n"
+        "5. Once per session: `session_start()` to load active brain + recent activity.\n\n"
+
+        "Most 'I don't have any information' answers are PREMATURE — bench\n"
+        "evidence shows 76% of failed recalls had the right answer in the\n"
+        "top-20, the agent just stopped reading at top-1.\n\n"
+
+        "═══════════════════════════════════════════════════════════════════\n"
+        "QUERY OPERATORS (inside the `q` string)\n"
+        "═══════════════════════════════════════════════════════════════════\n"
+        "  kind:insight | kind:note | kind:source | kind:decision | kind:preference\n"
+        "  folder:projects   — only notes under projects/*\n"
+        "  after:2026-04-01  — only recent engrams\n"
+        "  entity:claude     — only engrams mentioning an entity\n"
+        "  state:fresh       — only non-dormant\n"
         "Combine freely: `kind:insight folder:projects auth migration`.\n\n"
-        "RATE-LIMITED: the backend throttles recall spam (1-3 calls normal, "
-        "4-8 halved, 9+ strongly reduced). If you see a result with "
-        "engram_id='__throttle_hint__', you're querying too aggressively — "
-        "broaden your query or use `related()` instead.\n\n"
-        "PRECISION BOOST: pass `rerank=true` on recall when the top-1 answer "
-        "has to be right (before writing a dependent response, citing a "
-        "specific note, or emitting a deep link). Pushes hit@1 from ~87% → "
-        "~93% at the cost of ~700ms instead of ~25ms. Off by default.\n\n"
-        "Deep links: every engram can be opened via "
-        "`neurovault://engram/<id>` — emit these in chat so the user can click."
+
+        "RECALL MODES (token cost per hit):\n"
+        "  mode='titles'  → ~20 tok/hit  (fast scan)\n"
+        "  mode='preview' → ~100 tok/hit (DEFAULT — best for most queries)\n"
+        "  mode='full'    → ~400 tok/hit (deep dives only)\n\n"
+
+        "RATE LIMIT: backend throttles 4+ recalls in 60s. If you see\n"
+        "engram_id='__throttle_hint__', broaden your query or use related() instead.\n\n"
+
+        "Deep links: emit `neurovault://engram/<id>` so the user can click through."
     ),
 )
 
@@ -259,61 +320,47 @@ mcp.tool = _filtered_mcp_tool  # type: ignore[assignment]
 def recall(
     query: str,
     mode: str = "preview",
-    limit: int = 10,
+    limit: int = 20,
     brain: str | None = None,
     agent_id: str | None = None,
     include_observations: bool = False,
     rerank: bool = False,
     spread_hops: int = 0,
     as_of: str | None = None,
+    additional_queries: list[str] | None = None,
 ) -> Any:
-    """Hybrid search across the user's memory. CALL THIS before answering
-    anything the user might have told you — NeuroVault contains everything
-    they've said across past conversations. This is your primary memory tool.
+    """Hybrid semantic + keyword + graph search over the user's memory.
+    Call before answering anything the user may have told you in a past
+    conversation — preferences, decisions, people, projects, history.
 
-    WHEN TO CALL:
-    - User asks about themselves, their preferences, opinions, projects
-    - User references something from "before" / "last time" / "we discussed"
-    - User asks a factual question where their context could inform the answer
-    - Before generating advice so it's grounded in their actual history
+    Don't stop after one call. If the top hit doesn't fully answer,
+    re-query with different phrasing (reuse the user's proper nouns
+    verbatim), try `recall_chunks(q)` for passages inside long notes,
+    or `query="entity:<Name>"` to anchor on a known entity.
 
-    Modes (token cost per hit):
-        titles  →  ~20 tokens   (fast scan when you only need names)
-        preview →  ~100 tokens  (DEFAULT, best for most queries)
-        full    →  ~400 tokens  (only when you need the entire text)
-
-    Search operators inside `query`:
-        kind:insight            — only insights
-        folder:projects         — only notes under that folder
-        after:2026-04-01        — only recent
-        entity:claude           — only engrams mentioning Claude
-        state:fresh             — only non-dormant
-
-    Combine: `kind:insight folder:work auth migration decisions`.
-
-    `spread_hops=1` adds 1-hop neighbours via engram_links (useful when
-    the query is slightly off-target). `as_of` = ISO timestamp for
-    time-travel queries ("what did I know last Tuesday?").
-
-    Repeat queries inside 60s hit an in-process cache (~2ms vs ~200ms);
-    you pay no extra tokens for re-asking.
-
-    `rerank=True` runs a cross-encoder (BGE-reranker-base) over the
-    top-20 candidates. Measured on the internal eval set: pushes
-    hit@1 from 87% → 93% (right answer in top slot 6 more times
-    out of every 100 queries). Trade-off: latency goes from ~25 ms
-    to ~680 ms. WHEN TO USE:
-      - You need the top-1 result to be RIGHT (before writing a
-        dependent answer, citing a specific note, or following a
-        deep link).
-      - The default recall returned a plausible-but-wrong top-1
-        and you want to rerank.
-      - User explicitly asked for the "best" or "most relevant" hit.
-    WHEN NOT TO USE:
-      - Quick context scans.
-      - You're going to read the top-5 anyway.
-      - Inside a chain of recalls (the latency adds up).
+    Modes (token cost/hit): titles ~20 · preview ~100 (default) · full ~400.
+    Query operators (combine freely): `kind:insight` `folder:work`
+    `after:2026-04-01` `entity:Sarah` `state:fresh`.
+    `additional_queries=[...]` is escalation-only — reruns the pipeline
+    per phrasing and RRF-merges; use only when a plain recall was weak.
     """
+    extras = [q for q in (additional_queries or []) if q and q.strip()]
+    if extras:
+        # Multi-query path — POST to /api/recall/multi with a JSON
+        # body so we don't have to URL-encode N strings into a GET.
+        return _http_post(
+            "/api/recall/multi",
+            {
+                "q": query,
+                "additional_queries": extras[:4],
+                "limit": limit,
+                "brain_id": brain,
+                "include_observations": include_observations,
+                "rerank": rerank,
+                "spread_hops": spread_hops,
+                "as_of": as_of,
+            },
+        )
     return _http_get(
         "/api/recall",
         {
@@ -403,6 +450,64 @@ def recall_chunks(query: str, limit: int = 10, brain: str | None = None) -> Any:
         "/api/recall/chunks",
         {"q": query, "limit": limit, "brain": brain},
     )
+
+
+@mcp.tool(annotations={
+    "title": "Consolidation queue",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def consolidate(limit: int = 10, brain: str | None = None) -> Any:
+    """Return notes that haven't been fact-extracted yet so you can tend the
+    memory. For each note: read it, pull out the durable facts (preferences,
+    ownership, current values, decisions), and call record_fact() for each,
+    citing the note's engram_id as source_engram. This is how NeuroVault
+    builds its structured fact layer — YOU (the connected agent) are the
+    extractor; the app runs no model itself. Call this when the user asks to
+    'consolidate'/'tidy memory', or at a natural lull. Returns [] when clear."""
+    return _http_get("/api/consolidate", {"limit": limit, "brain_id": brain})
+
+
+@mcp.tool(annotations={
+    "title": "Record a structured fact",
+    "readOnlyHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def record_fact(
+    subject: str,
+    value: str,
+    source_engram: str,
+    attribute: str = "",
+    brain: str | None = None,
+) -> Any:
+    """Record a durable fact extracted from a note so future recall surfaces
+    it by EXACT subject match (bypassing fuzzy semantic search, which misses
+    'coffee'->'Yirgacheffe' and buries 'who owns X' under topical noise).
+    Use during consolidate(). `subject` = what the fact is about, in the
+    words a user would query ("grocery budget", "retrieval pipeline", "code
+    search"); `attribute` = optional facet ("owner", "amount", "tool");
+    `value` = the fact ("Sarah", "£550", "ripgrep"); `source_engram` = the
+    note's engram_id. Recording a new value for an existing
+    (subject, attribute) supersedes the old one (current-value tracking)."""
+    return _http_post("/api/facts", {
+        "subject": subject, "attribute": attribute, "value": value,
+        "source_engram": source_engram, "brain_id": brain,
+    })
+
+
+@mcp.tool(annotations={
+    "title": "Look up structured facts",
+    "readOnlyHint": True,
+    "idempotentHint": True,
+    "openWorldHint": False,
+})
+def recall_fact(subject: str, brain: str | None = None) -> Any:
+    """Look up recorded facts about a subject directly — the 'current value
+    of X' primitive, exact not fuzzy. Prefer this over recall() for
+    'what's my current X / who owns Y' once the fact has been consolidated."""
+    return _http_get("/api/facts", {"subject": subject, "brain_id": brain})
 
 
 @mcp.tool(annotations={

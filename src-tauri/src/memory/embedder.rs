@@ -32,6 +32,16 @@ const QUERY_CACHE_MAX: usize = 1000;
 /// silent upstream model swap doesn't corrupt the vec0 table.
 pub const EMBEDDING_DIM: usize = 384;
 
+// NOTE: We tried adding the BGE-en query prefix
+// ("Represent this sentence for searching relevant passages: ") in
+// 2026-05-08, following the BAAI/bge-en-v1.5 model card's guidance
+// on s2p retrieval. Empirically — measured against actual bench
+// query/passage pairs through fastembed-rs's ONNX export — the
+// prefix HURT cosine similarity in 5/5 sampled cases (delta ~-0.03
+// avg) and dropped LongMemEval-Oracle overall from 64.1% to 40.2%.
+// The model card guidance does not match this export's behavior;
+// we leave queries unprefixed, matching the passage-side encoding.
+
 /// Simple bounded LRU keyed on the query string. Keeps an insertion
 /// order queue separate from the HashMap so eviction is O(1) amortised.
 struct QueryCache {
