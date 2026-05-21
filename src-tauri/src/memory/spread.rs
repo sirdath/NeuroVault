@@ -160,7 +160,6 @@ pub fn spread_neighbors(
             rerank_score: rrf,
             recency_factor: 1.0,
             decision_bonus: 0.0,
-            affinity_bonus: 0.0,
             final_score: 0.0,
         });
         already_seen.insert(to_id);

@@ -342,6 +342,66 @@ pub fn ingest_content(
         eprintln!("[ingest] entities skipped for {}: {}", &engram_id[..8], e);
     }
 
+    // 5c. Preference extraction (improvement #1 — see
+    // docs/improvements/01-preference-extraction.md). Pull standing
+    // assertions ("I always use ripgrep…") out of narrative notes and
+    // index them as terse derived `kind='preference'` engrams so a
+    // later "what do I use for X?" recall hits them directly instead
+    // of fighting the surrounding prose.
+    //
+    // Recursion guard: a derived note is `pref-<hash>.md` and its body
+    // ("Preference: I always use ripgrep…") still contains a marker.
+    // Skipping `pref-` filenames is what stops the loop — NOT a
+    // content check (extract_preferences is deliberately content-only).
+    //
+    // Runtime toggle `NEUROVAULT_DISABLE_PREFERENCE_EXTRACTION`:
+    //   - lets the integration test do a clean deterministic
+    //     with-vs-without A/B (same fixture, extraction OFF vs ON) so
+    //     imp#1's net benefit is proven, not inferred from a confounded
+    //     noisy bench;
+    //   - gives real users an opt-out if they ever find the derived
+    //     `kind='preference'` engrams noisy for their workflow.
+    let pref_disabled = std::env::var("NEUROVAULT_DISABLE_PREFERENCE_EXTRACTION")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !pref_disabled && !filename.starts_with("pref-") {
+        if let Err(e) = write_preferences(db, content) {
+            eprintln!(
+                "[ingest] preferences skipped for {}: {}",
+                &engram_id[..8],
+                e
+            );
+        }
+    }
+
+    // 5d. Fact supersession (improvement #4 — see
+    // docs/improvements/04-fact-supersession-layer.md). Pull *revised*
+    // values ("bumped the grocery budget to £550") into a typed `facts`
+    // table; the newest-ingested value for a (subject, attribute)
+    // becomes current and older ones get `superseded_by` set. This is
+    // the "current value of X" primitive that plain similarity recall
+    // structurally lacks.
+    //
+    // No recursion guard needed: facts go to a table, not a derived
+    // engram, so this can't re-enter ingest. We still skip `pref-`
+    // notes (their bodies have no revision marker anyway — cheap skip).
+    //
+    // Toggle `NEUROVAULT_DISABLE_FACT_SUPERSESSION` mirrors the imp#1
+    // toggle: lets the integration test do a clean deterministic
+    // with-vs-without A/B, and gives users an opt-out.
+    let facts_disabled = std::env::var("NEUROVAULT_DISABLE_FACT_SUPERSESSION")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !facts_disabled && !filename.starts_with("pref-") {
+        if let Err(e) = write_facts(db, &engram_id, content) {
+            eprintln!(
+                "[ingest] facts skipped for {}: {}",
+                &engram_id[..8],
+                e
+            );
+        }
+    }
+
     // 6. Semantic links — O(n) cosine against every other doc.
     if let Err(e) = update_semantic_links(db, &engram_id, content) {
         eprintln!(
@@ -424,6 +484,110 @@ fn write_entities(db: &BrainDb, engram_id: &str, content: &str) -> Result<()> {
     }
     let conn = db.lock();
     store_entities(&conn, engram_id, &ents)?;
+    Ok(())
+}
+
+/// Improvement #1 — index extracted preference sentences as terse,
+/// directly-retrievable derived engrams.
+///
+/// For each preference sentence found in `content`, write a
+/// `pref-<sha256(sentence)[:12]>.md` note whose body is
+/// `Preference: <sentence>`, then tag it `kind='preference'`,
+/// `agent_id='derived'`.
+///
+/// Idempotency is free: the filename is a deterministic hash of the
+/// sentence, and `ingest_content`'s fast path returns `Ok(None)`
+/// when filename+content_hash are unchanged — so re-ingesting the
+/// same source note never piles up duplicate preference engrams.
+///
+/// Recursion is prevented by the caller (the `pref-` filename guard
+/// in the slow phase); `ingest_content` on a `pref-*` file skips
+/// step 5c, so this never re-enters itself.
+fn write_preferences(db: &Arc<BrainDb>, content: &str) -> Result<()> {
+    let prefs = super::preference::extract_preferences(content);
+    for sentence in prefs {
+        let mut hasher = Sha256::new();
+        hasher.update(sentence.as_bytes());
+        let h = format!("{:x}", hasher.finalize());
+        let fname = format!("pref-{}.md", &h[..12]);
+        let body = format!("Preference: {sentence}");
+        // Route through the normal ingest path so the derived engram
+        // gets chunked, embedded and BM25-indexed exactly like any
+        // note (that's what makes it retrievable). The `pref-` guard
+        // in the slow phase stops this from recursing.
+        match ingest_content(&fname, &body, db) {
+            Ok(Some(id)) => {
+                let conn = db.lock();
+                // Best-effort tag; the engram is already persisted and
+                // retrievable even if this UPDATE fails.
+                let _ = conn.execute(
+                    "UPDATE engrams SET kind = 'preference', \
+                     agent_id = 'derived' WHERE id = ?1",
+                    params![id],
+                );
+            }
+            // Ok(None) = unchanged (idempotent re-ingest); Err already
+            // logged by the caller's `if let Err`.
+            Ok(None) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Improvement #4 — record revised facts into the `facts` table with
+/// temporal supersession.
+///
+/// For each `(subject, attribute, value)` extracted from this note:
+///   - deterministic id = sha256(subject\0attribute\0value)[:16] →
+///     idempotent: re-ingesting the same note finds the row already
+///     present and does nothing (no re-supersede storm);
+///   - if a *different* value is currently live for the same
+///     (subject, attribute), mark every such live row
+///     `superseded_by = <new id>` (the just-ingested note wins — it is
+///     the most recent statement of the value);
+///   - insert the new row as current (`superseded_by IS NULL`).
+///
+/// Best-effort and non-fatal (same contract as the other slow-phase
+/// steps): the markdown note is already persisted and recallable; a
+/// facts-table hiccup just means the current-value primitive is stale
+/// for this subject until the next ingest touches it.
+fn write_facts(db: &Arc<BrainDb>, engram_id: &str, content: &str) -> Result<()> {
+    let facts = super::facts::extract_facts(content);
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let conn = db.lock();
+    for f in facts {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{}\u{0}{}\u{0}{}", f.subject, f.attribute, f.value).as_bytes());
+        let id = format!("{:x}", hasher.finalize());
+        let id = &id[..16];
+
+        // Idempotent: identical fact already recorded → leave it (and
+        // its current/superseded state) exactly as is.
+        let exists: bool = conn
+            .query_row("SELECT 1 FROM facts WHERE id = ?1", params![id], |_| Ok(()))
+            .is_ok();
+        if exists {
+            continue;
+        }
+
+        // Supersede any live row for the same (subject, attribute) that
+        // holds a DIFFERENT value. UNIQUE(subject,attribute,value) means
+        // a same-value live row can't coexist, so this only ever points
+        // older *different* values at the new one.
+        conn.execute(
+            "UPDATE facts SET superseded_by = ?1 \
+             WHERE subject = ?2 AND attribute = ?3 AND superseded_by IS NULL",
+            params![id, f.subject, f.attribute],
+        )?;
+        conn.execute(
+            "INSERT INTO facts (id, subject, attribute, value, source_engram, superseded_by) \
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            params![id, f.subject, f.attribute, f.value, engram_id],
+        )?;
+    }
     Ok(())
 }
 

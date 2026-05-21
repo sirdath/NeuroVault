@@ -8,10 +8,11 @@
 //!   plan. `use_reranker=False` is the new default; the
 //!   sentence-transformers path was ~80 MB of deps for a feature
 //!   that wasn't on by default anyway.
-//! - **Stage-4 learned affinities**: not ported in Phase 6 (the
-//!   `query_affinity` table stays untouched; `affinity_bonus`
-//!   always 0). Can be added later without changing the retrieval
-//!   shape.
+//! - **Stage-4 learned affinities**: removed 2026-05-17. Was a dead
+//!   `affinity_bonus` field that was always 0 (nothing ever wrote to
+//!   `query_affinity`). If learned affinities are revived, add the
+//!   signal back at the final-score step — the table is still in
+//!   the schema.
 //! - **Temporal-fact supersede fraction**: implemented with the
 //!   same SQL as Python, but the `intelligence` module that populates
 //!   the table doesn't run on the Rust write path yet. On fresh
@@ -73,7 +74,6 @@ pub struct Candidate {
     pub rerank_score: f64,
     pub recency_factor: f64,
     pub decision_bonus: f64,
-    pub affinity_bonus: f64,
     pub final_score: f64,
 }
 
@@ -117,7 +117,6 @@ pub struct RecallOpts {
     ///   "entity_graph"      — skip graph retrieval signal entirely
     ///   "bm25"              — skip BM25 (keyword) signal entirely
     ///   "semantic"          — skip semantic KNN signal entirely
-    ///   "query_expansion"   — skip synonym expansion step
     ///   "insight_boost"     — skip insight kind_bonus
     ///
     /// Ablation is production-safe but off by default; exercised
@@ -147,7 +146,19 @@ impl Default for RecallOpts {
 /// Helper: did the caller ablate `feature`? Case-insensitive match
 /// against the opts list.
 fn is_ablated(opts: &RecallOpts, feature: &str) -> bool {
-    opts.ablate.iter().any(|a| a.eq_ignore_ascii_case(feature))
+    if opts.ablate.iter().any(|a| a.eq_ignore_ascii_case(feature)) {
+        return true;
+    }
+    // Env-var override (`NEUROVAULT_DISABLE_<FEATURE>`) — lets the bench
+    // harness ablate any flag without an API change. Lower-cased flag,
+    // dashes -> underscores. Bench-only; default is no override.
+    let env_name = format!(
+        "NEUROVAULT_DISABLE_{}",
+        feature.to_uppercase().replace('-', "_")
+    );
+    std::env::var(&env_name)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Filter candidates in-memory after their engram row is fetched.
@@ -441,6 +452,23 @@ static BM25_STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 
+/// Crude suffix stripper — just enough to bridge a query word to a fact's
+/// attribute across inflection ("owns" vs "owner" → "own"; "signals" →
+/// "signal"). NOT a real stemmer; used only to score attribute/value
+/// relevance when disambiguating multiple facts that share a subject, a
+/// narrow + low-risk context. Longer suffixes are checked first.
+fn light_stem(t: &str) -> String {
+    for suf in [
+        "ations", "ation", "ings", "ing", "ers", "er", "ors", "or", "ions",
+        "ion", "ed", "es", "s",
+    ] {
+        if t.len() > suf.len() + 2 && t.ends_with(suf) {
+            return t[..t.len() - suf.len()].to_string();
+        }
+    }
+    t.to_string()
+}
+
 fn bm25_tokenize(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let cleaned = MD_PUNCT_RE.replace_all(&lower, " ");
@@ -451,16 +479,132 @@ fn bm25_tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+// ---- Improvement #2: salient query terms (proper nouns / phrases) --------
+//
+// Named entities and exact quoted phrases are the highest-precision
+// retrieval signal a user can give. The keyword-title boost is
+// proper-noun-blind (it weights "sarah" == "meeting"); this extracts
+// the salient terms so a separate, conservative boost can reward exact
+// entity/phrase hits. Detection keys on *linguistic structure*
+// (capitalisation, quotes) only — never on bench question text.
+static QUOTED_DQ_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new("\"([^\"]{2,60})\"").unwrap());
+static QUOTED_SQ_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"'([^']{2,60})'").unwrap());
+// Capitalised word, >=3 chars (Upper + >=2 lower): "Sarah", "Postgres".
+static CAP_WORD_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\p{Lu}\p{Ll}{2,}$").unwrap());
+// Internal-caps token: a lowercase letter immediately followed by an
+// uppercase one ("PostgreSQL", "NeuroVault"). Normal prose words are
+// never camel-cased, so these are proper nouns even sentence-initially.
+static INTERNAL_CAPS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\p{L}*\p{Ll}\p{Lu}\p{L}*$").unwrap());
+// Improvement #3: standalone numeric token (years/counts/quantities).
+// `\b…\b` already excludes digits embedded in alphanumeric ids
+// ("iso9001", "v8"); 1-4 digit runs cover years and realistic counts.
+// Matches the `[a-z0-9]+` content tokenisation, so a query "2023"
+// aligns with a content "2023" as a whole token.
+static NUM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{1,4}\b").unwrap());
+// imp#4: explicit "current value" intent. The supersession boost only
+// fires when the query asks for the CURRENT value — without this gate
+// it would perturb ordinary recall (and a false supersede-demotion of
+// the sole answer is the only real risk; history: false temporal
+// demotions cost −16pp).
+static FACT_CURRENCY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(current|currently|latest|now|nowadays|these days|right now|at the moment|as of now)\b",
+    )
+    .unwrap()
+});
+
+/// Returns (proper-noun tokens, quoted phrases, numeric tokens), all
+/// lowercased. Conservative on purpose: a false boost is worse than a
+/// miss, so sentence-initial capitalised words and stopwords are
+/// dropped, single-quoted captures must contain a space (so a
+/// contraction like `don't ... O'Brien's` can't masquerade as a
+/// phrase), and numerics are bare 1-4 digit runs only.
+fn extract_salient(query: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut phrases: Vec<String> = Vec::new();
+    for cap in QUOTED_DQ_RE.captures_iter(query) {
+        let p = cap[1].trim().to_lowercase();
+        if !p.is_empty() {
+            phrases.push(p);
+        }
+    }
+    for cap in QUOTED_SQ_RE.captures_iter(query) {
+        let p = cap[1].trim().to_lowercase();
+        if p.contains(' ') {
+            phrases.push(p);
+        }
+    }
+    phrases.sort();
+    phrases.dedup();
+
+    let mut nouns: Vec<String> = Vec::new();
+    let mut sentence_start = true;
+    for raw in query.split_whitespace() {
+        let word = raw.trim_matches(|c: char| !c.is_alphanumeric());
+        let ends_sentence =
+            raw.ends_with('.') || raw.ends_with('?') || raw.ends_with('!');
+        if word.is_empty() {
+            if ends_sentence {
+                sentence_start = true;
+            }
+            continue;
+        }
+        let internal = INTERNAL_CAPS_RE.is_match(word);
+        let cap = CAP_WORD_RE.is_match(word);
+        let lc = word.to_lowercase();
+        // Internal-caps tokens count even sentence-initially; a plain
+        // Capitalised word at sentence start is ambiguous → skip it.
+        let candidate = internal || (cap && !sentence_start);
+        if candidate
+            && lc.chars().count() >= 3
+            && !BM25_STOPWORDS.contains(lc.as_str())
+        {
+            nouns.push(lc);
+        }
+        sentence_start = ends_sentence;
+    }
+    nouns.sort();
+    nouns.dedup();
+
+    let mut numerics: Vec<String> =
+        NUM_RE.find_iter(query).map(|m| m.as_str().to_string()).collect();
+    numerics.sort();
+    numerics.dedup();
+
+    (nouns, phrases, numerics)
+}
+
 // ---- DB helpers ----------------------------------------------------------
 
 /// KNN over `vec_chunks` — returns (chunk_id, distance, content,
-/// engram_id, granularity) for the top `limit` rows. Matches the
-/// SQL + ordering in `database.py::knn_search`.
+/// engram_id, granularity) for the top `limit` rows.
+///
+/// Dormant filtering: vec_chunks has no `state` column (it is a vec0
+/// virtual table). Previously, `WHERE v.embedding MATCH ? AND k = ?`
+/// returned the top-K nearest neighbours over the *entire* vector
+/// pool — including chunks whose engrams are now `state='dormant'`.
+/// Those were silently filtered later at candidate materialisation,
+/// after they had already consumed K slots. For brains with a large
+/// dormant tail (notably the bench, which mark-dormants per-question)
+/// the live yield in top-K could drop near zero, starving the agent
+/// of related-context coverage (root cause identified 2026-05-20 from
+/// a question-level v1 vs Rust diff on single-session-preference).
+///
+/// Fix: oversample by `OVERSAMPLE` (request `limit * 8` from vec0),
+/// filter dormant in the join WHERE, then `LIMIT ?` to the requested
+/// `limit` after filtering. Costs nothing on a normal brain (almost
+/// no dormant rows → top-`limit` == top-`limit*8`-filtered); on
+/// bench/heavy-dormant workloads it restores live-K parity.
 fn knn_search(db: &BrainDb, query_emb: &[f32], limit: usize) -> Result<Vec<KnnHit>> {
+    const OVERSAMPLE: usize = 8;
     let mut bytes = Vec::with_capacity(query_emb.len() * 4);
     for f in query_emb {
         bytes.extend_from_slice(&f.to_le_bytes());
     }
+    let oversampled_k = limit.saturating_mul(OVERSAMPLE).max(limit);
     let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT v.chunk_id, v.distance, c.content, c.engram_id, c.granularity
@@ -468,18 +612,23 @@ fn knn_search(db: &BrainDb, query_emb: &[f32], limit: usize) -> Result<Vec<KnnHi
          JOIN chunks c ON c.id = v.chunk_id
          JOIN engrams e ON e.id = c.engram_id
          WHERE v.embedding MATCH ? AND k = ?
-         ORDER BY v.distance ASC",
+           AND e.state != 'dormant'
+         ORDER BY v.distance ASC
+         LIMIT ?",
     )?;
     let rows = stmt
-        .query_map(rusqlite::params![bytes, limit as i64], |r| {
-            Ok(KnnHit {
-                chunk_id: r.get(0)?,
-                distance: r.get(1)?,
-                content: r.get(2)?,
-                engram_id: r.get(3)?,
-                granularity: r.get(4)?,
-            })
-        })?
+        .query_map(
+            rusqlite::params![bytes, oversampled_k as i64, limit as i64],
+            |r| {
+                Ok(KnnHit {
+                    chunk_id: r.get(0)?,
+                    distance: r.get(1)?,
+                    content: r.get(2)?,
+                    engram_id: r.get(3)?,
+                    granularity: r.get(4)?,
+                })
+            },
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -643,9 +792,9 @@ pub fn hybrid_retrieve(
     let w_bm25 = if is_ablated(opts, "bm25") { 0.0 } else { w_bm25_base };
     let w_graph = if is_ablated(opts, "entity_graph") { 0.0 } else { w_graph_base };
 
-    // Query expansion was removed in 2026-04-23 as net-negative in
-    // the eval matrix. The `query_expansion` ablate flag still
-    // parses for backwards-compat but is a no-op now.
+    // Query expansion (synonym injection) was removed 2026-04-23 as
+    // net-negative in the eval matrix. The retrieval query is the
+    // parsed free-text verbatim.
     let expanded = effective_query.to_string();
 
     // --- Signal 1: semantic KNN ---
@@ -693,25 +842,40 @@ pub fn hybrid_retrieve(
     // the borrow checker because the `collect::<Result<_,_>>()?`
     // temporary outlived `conn`/`stmt` at the block's closing brace.
     let mut engrams_meta: Vec<(String, String, String)> = Vec::new();
+    // eid -> (title, content) for the imp#2 proper-noun/phrase boost.
+    // Same single non-dormant scan we already do for title embeddings,
+    // one extra column — no additional query.
+    let mut engram_tc: HashMap<String, (String, String)> = HashMap::new();
     {
         let conn = db.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, title, COALESCE(filename, '') FROM engrams WHERE state != 'dormant'",
+            "SELECT id, title, COALESCE(filename, ''), COALESCE(content, '') \
+             FROM engrams WHERE state != 'dormant'",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
             ))
         })?;
         for row in rows {
-            engrams_meta.push(row?);
+            let (id, title, filename, content) = row?;
+            engram_tc.insert(id.clone(), (title.clone(), content));
+            engrams_meta.push((id, title, filename));
         }
     }
 
     let mut semantic_title_scores: HashMap<String, f64> = HashMap::new();
     let mut keyword_title_scores: HashMap<String, f64> = HashMap::new();
+    // imp#5 (MMR): normalised title embedding per engram, reused as the
+    // redundancy metric for diversification. Captured here so MMR costs
+    // ZERO extra embed calls — `title_embeddings` is already computed
+    // for the semantic-title boost. Near-duplicate notes from the same
+    // session share topic/title, so title-embedding cosine is an
+    // effective (and free) redundancy proxy.
+    let mut title_emb_norm: HashMap<String, Vec<f32>> = HashMap::new();
     let query_token_set: HashSet<String> = bm25_tokenize(effective_query).into_iter().collect();
     let query_token_count = query_token_set.len().max(1) as f64;
 
@@ -723,13 +887,16 @@ pub fn hybrid_retrieve(
 
         for (i, (eid, title, filename)) in engrams_meta.iter().enumerate() {
             // (a) Semantic cosine against title embedding.
-            if q_ok && i < t_embeddings.len() && t_embeddings[i].len() == EMBEDDING_DIM {
+            if i < t_embeddings.len() && t_embeddings[i].len() == EMBEDDING_DIM {
                 let mut t_emb = t_embeddings[i].clone();
                 if normalize_inplace(&mut t_emb) {
-                    let sim = cosine(&q_norm, &t_emb) as f64;
-                    if sim > 0.45 {
-                        semantic_title_scores.insert(eid.clone(), sim);
+                    if q_ok {
+                        let sim = cosine(&q_norm, &t_emb) as f64;
+                        if sim > 0.45 {
+                            semantic_title_scores.insert(eid.clone(), sim);
+                        }
                     }
+                    title_emb_norm.insert(eid.clone(), t_emb);
                 }
             }
 
@@ -773,6 +940,15 @@ pub fn hybrid_retrieve(
         *rrf_scores.entry(eid.clone()).or_insert(0.0) += w_graph * rrf_score(rank + 1);
     }
 
+    // RRF top-rank bonus removed 2026-05-09 after empirical regression:
+    // v5 50-Q sample showed the +0.005/+0.002 nudges promoted wrong-but-
+    // confident hits often enough to net -16pp vs v1's pure RRF baseline.
+    // Theory was that consensus across signals would help; in practice on
+    // small per-question haystacks, the bonus over-amplified single-signal
+    // confidence on lexically-similar but semantically-wrong matches. We
+    // keep the cross-query merge that is itself a form of consensus
+    // reranking via multi-query escalation, which is a cleaner signal.
+
     // Title boost: keyword (uncapped) + semantic-cosine (top-10 capped).
     if !is_ablated(opts, "title_keyword") {
         for (eid, k) in &keyword_title_scores {
@@ -784,6 +960,190 @@ pub fn hybrid_retrieve(
         sem_top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
         for (eid, s) in sem_top.into_iter().take(10) {
             *rrf_scores.entry(eid.clone()).or_insert(0.0) += s * 0.15;
+        }
+    }
+
+    // Improvement #2/#3 — high-precision exact-match boost for the token
+    // classes BGE-small structurally under-represents: proper nouns,
+    // quoted phrases (imp#2), and numerics/quantities (imp#3). An exact
+    // entity/phrase/number match is the strongest precision signal a
+    // user can give, but the keyword-title path weights "sarah" ==
+    // "meeting" == "2023". Sits *alongside* (not above) the k*0.30
+    // keyword-title boost: quoted-phrase hit +0.20, proper-noun coverage
+    // +0.15*(matched/total), numeric coverage +0.15*(matched/total).
+    // Title+content (not title-only): a buried "Sarah"/"2023" in a long
+    // note is exactly the case the generic title path misses. Operates
+    // only on RRF candidates. imp#3 shares imp#2's ablate flag and loop
+    // — it is the same mechanism (one more embedder-weak precision
+    // class), one reviewable diff, one switch.
+    if !is_ablated(opts, "proper_noun_boost") {
+        let (proper_nouns, quoted, numerics) = extract_salient(query);
+        if !proper_nouns.is_empty() || !quoted.is_empty() || !numerics.is_empty() {
+            let total_pn = proper_nouns.len().max(1) as f64;
+            let total_num = numerics.len().max(1) as f64;
+            for (eid, score) in rrf_scores.iter_mut() {
+                let Some((title, content)) = engram_tc.get(eid) else {
+                    continue;
+                };
+                let hay = format!("{title}\n{content}").to_lowercase();
+                if !quoted.is_empty()
+                    && quoted.iter().any(|p| hay.contains(p.as_str()))
+                {
+                    *score += 0.20;
+                }
+                if !proper_nouns.is_empty() || !numerics.is_empty() {
+                    let words: HashSet<&str> = hay
+                        .split(|c: char| !c.is_alphanumeric())
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                    if !proper_nouns.is_empty() {
+                        let matched = proper_nouns
+                            .iter()
+                            .filter(|pn| words.contains(pn.as_str()))
+                            .count() as f64;
+                        if matched > 0.0 {
+                            *score += 0.15 * (matched / total_pn);
+                        }
+                    }
+                    if !numerics.is_empty() {
+                        let matched = numerics
+                            .iter()
+                            .filter(|n| words.contains(n.as_str()))
+                            .count() as f64;
+                        if matched > 0.0 {
+                            *score += 0.15 * (matched / total_num);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Improvement #4 + structured-fact lookup ("what's my X / who owns Y").
+    // GENERALISED 2026-05-21 (Option D / Layer 2): the fact boost now
+    // fires for ANY query whose tokens fully cover a recorded fact's
+    // subject — not only "current/latest" queries. Rationale (diagnosed
+    // from the fast-eval): embedder near-ties (BGE-small) can't separate
+    // a topical distractor from the answer note in vector space; a
+    // structured fact ("retrieval pipeline / owner / Sarah") boosted by
+    // EXACT subject-token match sidesteps the embedder entirely for
+    // fact-shaped questions. The all-subject-tokens-in-query gate keeps
+    // false fires rare. We always BOOST the current fact's source; we
+    // only DEMOTE a superseded value's source when the query also
+    // carries a currency marker (asking for the *latest*) — never bury
+    // the sole answer otherwise (the −16pp demotion failure mode).
+    // Facts are populated by regex (facts.rs) today and, under Option D,
+    // by the connected agent via record_fact. Gated by fact_supersession
+    // ablate flag; verified on the fast-eval.
+    if !is_ablated(opts, "fact_supersession") {
+        let currency_intent = FACT_CURRENCY_RE.is_match(query);
+        let qtokens: HashSet<String> = bm25_tokenize(query).into_iter().collect();
+        if !qtokens.is_empty() {
+            // Pull subject + attribute + value so we can disambiguate
+            // WHICH fact about a subject answers the query — not just
+            // boost every fact that shares the subject (the over-fire that
+            // let a "pipeline / signals" fact win a "who owns pipeline"
+            // query, demonstrated in the agent-loop test 2026-05-21).
+            struct FactRow {
+                subject: String,
+                attribute: String,
+                value: String,
+                src: String,
+                current: bool,
+            }
+            let mut rows: Vec<FactRow> = Vec::new();
+            {
+                let conn = db.lock();
+                let prepared = conn.prepare(
+                    "SELECT subject, attribute, value, source_engram, superseded_by FROM facts",
+                );
+                if let Ok(mut stmt) = prepared {
+                    if let Ok(mapped) = stmt.query_map([], |r| {
+                        Ok(FactRow {
+                            subject: r.get::<_, String>(0)?,
+                            attribute: r.get::<_, String>(1)?,
+                            value: r.get::<_, String>(2)?,
+                            src: r.get::<_, String>(3)?,
+                            current: r.get::<_, Option<String>>(4)?.is_none(),
+                        })
+                    }) {
+                        for row in mapped.flatten() {
+                            rows.push(row);
+                        }
+                    }
+                }
+            }
+            let qstems: HashSet<String> = qtokens.iter().map(|t| light_stem(t)).collect();
+            // (subject, src, attribute/value relevance) for matched current facts.
+            let mut matched: Vec<(String, String, usize)> = Vec::new();
+            let mut have_current_subject: HashSet<String> = HashSet::new();
+            let mut matched_superseded: Vec<(String, String)> = Vec::new();
+            for f in &rows {
+                let stoks = bm25_tokenize(&f.subject);
+                if stoks.is_empty() || !stoks.iter().all(|t| qtokens.contains(t)) {
+                    continue;
+                }
+                if !f.current {
+                    matched_superseded.push((f.subject.clone(), f.src.clone()));
+                    continue;
+                }
+                have_current_subject.insert(f.subject.clone());
+                // Relevance = query stems (excluding the subject's own
+                // stems) that appear in this fact's attribute or value.
+                // This is what makes "who OWNS x" prefer the owner fact
+                // over a co-subject "signals" fact (owns~owner via
+                // light_stem). 0 = subject-only match.
+                let subj_stems: HashSet<String> =
+                    stoks.iter().map(|t| light_stem(t)).collect();
+                let mut av_stems: HashSet<String> = HashSet::new();
+                for tok in bm25_tokenize(&f.attribute)
+                    .into_iter()
+                    .chain(bm25_tokenize(&f.value))
+                {
+                    av_stems.insert(light_stem(&tok));
+                }
+                let relevance = qstems
+                    .iter()
+                    .filter(|s| !subj_stems.contains(*s) && av_stems.contains(*s))
+                    .count();
+                matched.push((f.subject.clone(), f.src.clone(), relevance));
+            }
+            // Per subject, boost the MOST query-relevant fact's source.
+            // Single fact for a subject → boost unconditionally
+            // (unambiguous). Multiple facts → boost only the top-relevance
+            // one(s); if none has any attribute/value relevance the query
+            // can't pick, so boost NONE — a missed boost beats a confident
+            // wrong one.
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            let mut maxrel: HashMap<&str, usize> = HashMap::new();
+            for (subj, _src, rel) in &matched {
+                *counts.entry(subj.as_str()).or_insert(0) += 1;
+                let e = maxrel.entry(subj.as_str()).or_insert(0);
+                if *rel > *e {
+                    *e = *rel;
+                }
+            }
+            for (subj, src, rel) in &matched {
+                let n = counts[subj.as_str()];
+                let mr = maxrel[subj.as_str()];
+                if n == 1 || (mr > 0 && *rel == mr) {
+                    *rrf_scores.entry(src.clone()).or_insert(0.0) += 0.25;
+                }
+            }
+            // Only actively demote a stale value's source when the query
+            // signals it wants the LATEST; otherwise boosting the current
+            // value is enough (don't bury a still-useful note).
+            if currency_intent {
+                for (subject, src) in &matched_superseded {
+                    if have_current_subject.contains(subject) {
+                        if let Some(s) = rrf_scores.get_mut(src) {
+                            *s -= 0.15;
+                        }
+                    }
+                }
+            } else {
+                let _ = &matched_superseded;
+            }
         }
     }
 
@@ -883,7 +1243,6 @@ pub fn hybrid_retrieve(
             rerank_score: rrf,
             recency_factor: 1.0,
             decision_bonus: 0.0,
-            affinity_bonus: 0.0,
             final_score: 0.0,
         });
     }
@@ -987,7 +1346,29 @@ pub fn hybrid_retrieve(
     // coverage. Pure 100% reranker tends to overfit on short
     // titles; 70/30 is the tuned balance per common hybrid-rerank
     // literature.
-    if opts.use_reranker && candidates.len() > 1 {
+    // Conditional reranking (2026-05-21). The cross-encoder helps focused
+    // keyword lookups (picking the best of many lexically-similar
+    // candidates) but HURTS natural-language / conversational recall: it
+    // scores query↔doc *surface* similarity, so on a chat haystack it
+    // promotes the turns that mirror the query's phrasing — typically the
+    // user's OWN past questions — over the answer-bearing turns. Proven on
+    // LongMemEval qid 0a34ad58 (Tokyo): rerank=true pushed the user's
+    // question turns to the top and buried the assistant's tips, costing
+    // −15pp on single-session-preference. v1 never ran the reranker at all
+    // (sentence-transformers wasn't bundled → silent RRF fallback) and
+    // scored higher there.
+    //
+    // So: run the reranker only for `keyword`-shaped queries (short,
+    // no question word — the disambiguation case). Everything else falls
+    // back to RRF, which equals v1's effective behaviour. `use_reranker`
+    // (explicit caller opt-in) still forces it on for any shape.
+    // HEURISTIC pending per-category bench tuning on a bench-capable
+    // machine; fails safe toward no-rerank per adaptive-retrieval
+    // guidance (Adaptive-RAG 2403.14403, DAT 2503.23013).
+    let rerank_by_shape = classify_query(effective_query) == "keyword";
+    let do_rerank = (opts.use_reranker || rerank_by_shape)
+        && !is_ablated(opts, "reranker");
+    if do_rerank && candidates.len() > 1 {
         let limit = candidates.len().min(20);
         let docs: Vec<String> = candidates
             .iter()
@@ -1021,8 +1402,30 @@ pub fn hybrid_retrieve(
         let base = c.rerank_score * 0.75 + c.strength * 0.15;
         let kind_bonus = if !insight_off && c.kind == "insight" { INSIGHT_BOOST } else { 0.0 };
         c.final_score = round4(
-            base * c.recency_factor + c.decision_bonus + c.affinity_bonus + kind_bonus,
+            base * c.recency_factor + c.decision_bonus + kind_bonus,
         );
+    }
+
+    // --- Temporal disambiguation (knowledge-update fix) ---
+    //
+    // Failure mode this fixes: when the user updates a fact over time
+    // ("my best 5K was 27:12" → later → "I improved to 25:50"),
+    // semantic similarity ranks both highly. The OLDER mention
+    // (especially when paired with a celebratory assistant turn) often
+    // outranks the newer one because keyword density is stronger on
+    // the original statement. The agent then takes the highest-ranked
+    // hit as authoritative and reports the OBSOLETE fact.
+    //
+    // Fix: walk the top candidates, find pairs whose titles share
+    // significant token overlap (>= 35% Jaccard), and if one is
+    // materially newer than the other (created_at differs by ≥ 1 day),
+    // penalize the older one's final_score by 0.05. Net effect: in
+    // close races, the newer fact wins. We don't penalize when the
+    // dates are within a day (likely the same conversation thread)
+    // and we cap the penalty so a strong-enough older match still
+    // shows up in top-K.
+    if !is_ablated(opts, "temporal_disambig") {
+        apply_temporal_disambiguation(&mut candidates);
     }
 
     candidates.sort_by(|a, b| {
@@ -1030,6 +1433,16 @@ pub fn hybrid_retrieve(
             .partial_cmp(&a.final_score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // imp#5 — MMR diversification (post-scoring reorder, ablate flag
+    // `mmr`). Greedy relevance-vs-redundancy reorder of the top tier so
+    // a single verbose session can't monopolise top-K (the documented
+    // multi-session weakness, retrieval-state.md §6). λ=0.7 is
+    // relevance-leaning: the best hit stays #1; only the 2..K slots are
+    // diversified. Zero extra embed cost — reuses title embeddings.
+    if !is_ablated(opts, "mmr") {
+        apply_mmr(&mut candidates, &title_emb_norm, opts.top_k);
+    }
 
     let mut results: Vec<RecallHit> = Vec::with_capacity(opts.top_k);
     for c in candidates.into_iter().take(opts.top_k) {
@@ -1044,6 +1457,238 @@ pub fn hybrid_retrieve(
         });
     }
     Ok(results)
+}
+
+/// Temporal disambiguation: penalize older candidates when a newer
+/// near-duplicate exists in the same result set.
+///
+/// "Near-duplicate" = title-token Jaccard >= 0.35. "Materially newer"
+/// = created_at difference >= 1 day. Penalty = 0.05 on final_score
+/// for the older one. Idempotent against itself (penalty applied
+/// once per candidate even if multiple newer near-dupes exist —
+/// we cap at one penalty hit per candidate so we don't bury a
+/// candidate that's near-dupe of three newer engrams into oblivion).
+///
+/// O(n²) over the candidate list; with top-k pools of 30-60, that's
+/// ~1000 token-set comparisons — sub-millisecond.
+/// imp#5 — Maximal Marginal Relevance reorder of the (already
+/// final-score-sorted) candidate list, in place.
+///
+/// Greedy: seed with the top-final-score candidate, then repeatedly
+/// pick `argmax [ λ·rel − (1−λ)·max_{s∈selected} cos(title_emb) ]`
+/// until `keep` are chosen; the unselected tail keeps its
+/// final-score order so positions beyond top_k stay well-defined.
+///
+/// λ=0.7 is relevance-leaning by design: diversity cannot dethrone a
+/// clearly-best answer (the only real risk of MMR, and exactly what
+/// the regression-guard bench checks). `rel` is min-max-normalised
+/// final_score so it is commensurate with cosine ∈ [−1,1]. Redundancy
+/// uses the title embeddings already computed for the semantic-title
+/// boost — no extra embed calls. A candidate without a title embedding
+/// is treated as maximally non-redundant (sim 0): conservative, it can
+/// only avoid a demotion, never cause a wrong one.
+///
+/// O(keep·n) cosine ops over EMBEDDING_DIM; with pools of 30-60 and
+/// keep≤10 that is a few hundred dot products — sub-millisecond.
+fn apply_mmr(
+    candidates: &mut Vec<Candidate>,
+    title_emb: &HashMap<String, Vec<f32>>,
+    keep: usize,
+) {
+    let n = candidates.len();
+    if n <= 1 || keep == 0 {
+        return;
+    }
+    const LAMBDA: f64 = 0.7;
+
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for c in candidates.iter() {
+        lo = lo.min(c.final_score);
+        hi = hi.max(c.final_score);
+    }
+    let span = (hi - lo).max(1e-9);
+    let rel: Vec<f64> = candidates
+        .iter()
+        .map(|c| (c.final_score - lo) / span)
+        .collect();
+    let emb: Vec<Option<&Vec<f32>>> = candidates
+        .iter()
+        .map(|c| title_emb.get(&c.engram_id))
+        .collect();
+
+    let limit = keep.min(n);
+    let mut chosen = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    // List is already sorted by final_score DESC → index 0 is the best
+    // hit; seeding with it guarantees the top result is never demoted.
+    order.push(0);
+    chosen[0] = true;
+    while order.len() < limit {
+        let mut best_i: Option<usize> = None;
+        let mut best_mmr = f64::NEG_INFINITY;
+        for i in 0..n {
+            if chosen[i] {
+                continue;
+            }
+            let mut max_sim = 0.0_f64;
+            if let Some(ei) = emb[i] {
+                for &s in &order {
+                    if let Some(es) = emb[s] {
+                        let sim = cosine(ei, es) as f64;
+                        if sim > max_sim {
+                            max_sim = sim;
+                        }
+                    }
+                }
+            }
+            let score = LAMBDA * rel[i] - (1.0 - LAMBDA) * max_sim;
+            if score > best_mmr {
+                best_mmr = score;
+                best_i = Some(i);
+            }
+        }
+        match best_i {
+            Some(i) => {
+                chosen[i] = true;
+                order.push(i);
+            }
+            None => break,
+        }
+    }
+    // Unselected tail keeps original (final-score) order.
+    for i in 0..n {
+        if !chosen[i] {
+            order.push(i);
+        }
+    }
+
+    // Apply the permutation without requiring Candidate: Clone.
+    let taken = std::mem::take(candidates);
+    let mut slots: Vec<Option<Candidate>> = taken.into_iter().map(Some).collect();
+    candidates.reserve(n);
+    for idx in order {
+        if let Some(c) = slots[idx].take() {
+            candidates.push(c);
+        }
+    }
+}
+
+fn apply_temporal_disambiguation(candidates: &mut [Candidate]) {
+    // Reverted to v1's tuning (0.05 / 0.35) on 2026-05-09. The v4 attempt
+    // at 0.10 / 0.30 produced false-positive demotions on the bench:
+    // unrelated dated entries with modest title overlap (e.g. two
+    // different events that both began with "Workshop on …") triggered
+    // the penalty, pushing the older relevant fact below top-k. Net
+    // result was -16pp vs v1 on a 50-Q sample. Original 0.05 / 0.35
+    // remains the right balance: aggressive enough to break ties on
+    // genuine fact updates, conservative enough to leave independent
+    // dated entries alone.
+    const PENALTY: f64 = 0.05;
+    const JACCARD_THRESHOLD: f64 = 0.35;
+    // Pre-tokenize titles once (lowercase + alphanumeric word split).
+    let token_sets: Vec<std::collections::HashSet<String>> = candidates
+        .iter()
+        .map(|c| title_tokens(&c.title))
+        .collect();
+
+    let n = candidates.len();
+    let mut penalties = vec![0.0_f64; n];
+    for i in 0..n {
+        if token_sets[i].is_empty() {
+            continue;
+        }
+        let i_date = &candidates[i].created_at;
+        if i_date.is_empty() {
+            continue;
+        }
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            if token_sets[j].is_empty() {
+                continue;
+            }
+            let j_date = &candidates[j].created_at;
+            if j_date.is_empty() {
+                continue;
+            }
+            // Only penalize if j is materially newer than i (i is older).
+            if !is_materially_newer(j_date, i_date) {
+                continue;
+            }
+            let jaccard = jaccard_similarity(&token_sets[i], &token_sets[j]);
+            if jaccard >= JACCARD_THRESHOLD {
+                penalties[i] = PENALTY;
+                break; // cap at one penalty per candidate
+            }
+        }
+    }
+    for (i, p) in penalties.iter().enumerate() {
+        if *p > 0.0 {
+            candidates[i].final_score = round4(candidates[i].final_score - p);
+        }
+    }
+}
+
+fn title_tokens(title: &str) -> std::collections::HashSet<String> {
+    let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut buf = String::new();
+    for ch in title.chars() {
+        if ch.is_alphanumeric() {
+            buf.push(ch.to_ascii_lowercase());
+        } else if !buf.is_empty() {
+            // Skip very short / very common stop-tokens.
+            if buf.len() >= 3 && !STOP_TOKENS.contains(&buf.as_str()) {
+                out.insert(buf.clone());
+            }
+            buf.clear();
+        }
+    }
+    if !buf.is_empty() && buf.len() >= 3 && !STOP_TOKENS.contains(&buf.as_str()) {
+        out.insert(buf);
+    }
+    out
+}
+
+const STOP_TOKENS: &[&str] = &[
+    "the", "and", "for", "you", "your", "with", "that", "this", "from",
+    "are", "was", "were", "have", "has", "had", "will", "would", "could",
+    "what", "when", "where", "which", "who", "how", "why", "but", "not",
+    "all", "any", "some", "more", "less", "than", "into", "out", "about",
+    "session", "turn", "user", "assistant",
+];
+
+fn jaccard_similarity(
+    a: &std::collections::HashSet<String>,
+    b: &std::collections::HashSet<String>,
+) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f64;
+    let union = a.union(b).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// Is `b` materially newer than `a`? "Materially" = >= 1 calendar day,
+/// detected by comparing the date prefix of each timestamp string.
+/// We accept any timestamp format whose lexicographic ordering matches
+/// chronological ordering at day-granularity (ISO-8601 like
+/// "2023-05-25...", "2023/05/25 ...", "2026-04-01T00:00:00Z").
+fn is_materially_newer(b: &str, a: &str) -> bool {
+    // Pull the first 10 chars (yyyy-mm-dd or yyyy/mm/dd). String
+    // comparison at that prefix is correct chronological ordering for
+    // both formats.
+    if a.len() < 10 || b.len() < 10 {
+        return false;
+    }
+    let a_day = &a[..10];
+    let b_day = &b[..10];
+    b_day > a_day
 }
 
 /// Throttle-aware wrapper around `hybrid_retrieve`. Adopted from the

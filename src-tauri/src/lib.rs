@@ -1088,168 +1088,18 @@ fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), St
     Ok(())
 }
 
-// --- Phase-8 Python-as-subprocess glue --------------------------------
+// The Python-as-subprocess bridge (`run_python_job` + `python -m
+// neurovault_server <job>`) was removed 2026-05-16 when the Python
+// server package was deleted. The Rust backend now covers every
+// surface the UI calls; "advanced features that stay in Python"
+// (compile / PDF / Zotero / code graph / drafts) were never wired
+// to any UI component, so removing the bridge cost nothing.
 //
-// The hot path lives in Rust (Phases 2-7). Advanced features that
-// stay in Python — compilation, PDF ingest, Zotero sync, code graph,
-// drafts export — run here, on demand, as short-lived subprocesses
-// that finish their job and exit. No more persistent Python daemon.
-//
-// Contract between Rust + Python:
-//   * We spawn `python -m neurovault_server <job_name>`.
-//   * We pipe `args_json` into its stdin as a single JSON blob.
-//   * Python prints the result as one JSON blob to stdout and exits
-//     with code 0. Any non-zero exit is surfaced to the caller with
-//     stderr attached so the user sees the real error, not a generic
-//     "python failed".
-//
-// Python path resolution (in order):
-//   1. `NEUROVAULT_PYTHON` env var — explicit override for dev.
-//   2. `python` on PATH — typical user install.
-// That's it — we don't bundle a Python anymore (Phase 9). If neither
-// is present the user gets a clean error message prompting them to
-// install Python + run `uv sync`.
-
-/// Result of a one-shot Python job invocation. `stdout` holds the
-/// JSON payload the CLI module printed; `stderr` is captured so the
-/// frontend can surface loguru warnings to the user. Shape is stable
-/// — frontend components rely on the `ok` + `data` fields.
-#[derive(serde::Serialize)]
-struct PythonJobResult {
-    ok: bool,
-    exit_code: i32,
-    data: Option<serde_json::Value>,
-    stderr: String,
-}
-
-/// Resolve the python executable. Env override wins, otherwise we
-/// assume `python` is on PATH.
-fn python_executable() -> String {
-    if let Ok(v) = std::env::var("NEUROVAULT_PYTHON") {
-        if !v.trim().is_empty() {
-            return v;
-        }
-    }
-    "python".to_string()
-}
-
-/// Spawn a one-shot Python job and return its parsed JSON result.
-/// See module doc for the protocol. Blocking — runs in
-/// `tauri::async_runtime::spawn_blocking` so it doesn't tie up the
-/// Tauri IPC thread.
-#[tauri::command]
-async fn run_python_job(
-    job_name: String,
-    args_json: Option<serde_json::Value>,
-    timeout_secs: Option<u64>,
-) -> std::result::Result<PythonJobResult, String> {
-    // Reject characters that could smuggle an extra shell argument
-    // or let an attacker target a different module. The dispatcher
-    // is argv-based (not shell-parsed) so quoting is already safe,
-    // but defence-in-depth: jobs are internal names, not user input.
-    if !job_name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(format!("invalid job name: {}", job_name));
-    }
-
-    let payload = serde_json::to_string(&args_json.unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("could not serialise args_json: {e}"))?;
-    let python = python_executable();
-
-    let result = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<(i32, String, String)> {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let mut child = Command::new(&python)
-            .args(["-m", "neurovault_server", &job_name])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        // Write args to stdin + close it so the child's read terminates.
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(payload.as_bytes())?;
-        }
-
-        // Naive timeout: a long-running compile shouldn't run forever.
-        // We wait up to `timeout_secs` then kill. Rust's std Child has
-        // no native timeout wait; poll with a short sleep loop.
-        let deadline = timeout_secs.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
-        loop {
-            match child.try_wait()? {
-                Some(status) => {
-                    let exit = status.code().unwrap_or(-1);
-                    let stdout = child
-                        .stdout
-                        .take()
-                        .map(|mut s| {
-                            use std::io::Read;
-                            let mut buf = String::new();
-                            let _ = s.read_to_string(&mut buf);
-                            buf
-                        })
-                        .unwrap_or_default();
-                    let stderr = child
-                        .stderr
-                        .take()
-                        .map(|mut s| {
-                            use std::io::Read;
-                            let mut buf = String::new();
-                            let _ = s.read_to_string(&mut buf);
-                            buf
-                        })
-                        .unwrap_or_default();
-                    return Ok((exit, stdout, stderr));
-                }
-                None => {
-                    if let Some(d) = deadline {
-                        if std::time::Instant::now() >= d {
-                            let _ = child.kill();
-                            let stderr = child
-                                .stderr
-                                .take()
-                                .map(|mut s| {
-                                    use std::io::Read;
-                                    let mut buf = String::new();
-                                    let _ = s.read_to_string(&mut buf);
-                                    buf
-                                })
-                                .unwrap_or_default();
-                            return Ok((
-                                124,
-                                String::new(),
-                                format!("{stderr}\n[run_python_job] job timed out after {}s", timeout_secs.unwrap_or(0)),
-                            ));
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking join failed: {e}"))?
-    .map_err(|e| format!("python spawn failed: {e}. Is python on PATH? (override with NEUROVAULT_PYTHON env var)"))?;
-
-    let (exit, stdout, stderr) = result;
-    let ok = exit == 0;
-    let data = if stdout.trim().is_empty() {
-        None
-    } else {
-        serde_json::from_str::<serde_json::Value>(stdout.trim())
-            .ok()
-            .or(Some(serde_json::Value::String(stdout)))
-    };
-    Ok(PythonJobResult {
-        ok,
-        exit_code: exit,
-        data,
-        stderr,
-    })
-}
+// If you ever want to invoke an out-of-process tool from the Tauri
+// app again — for a one-shot ML model run, a third-party CLI, etc.
+// — add a focused command for that specific tool rather than a
+// generic "run any python module" surface. See docs/python-server-
+// reference.md for what the bridge used to look like.
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1407,8 +1257,8 @@ pub fn run() {
             });
 
             eprintln!(
-                "[neurovault] desktop app ready. Rust backend in-process; Python sidecar retired. \
-                 Advanced features spawn on demand via run_python_job."
+                "[neurovault] desktop app ready. Rust backend in-process; \
+                 no Python sidecar — the MCP proxy is a thin HTTP forwarder."
             );
 
             Ok(())
@@ -1439,11 +1289,6 @@ pub fn run() {
             // brain activation; the Tauri commands are here for
             // debug/manual control from Settings.
             nv_start_vault_watcher, nv_stop_vault_watcher,
-            // Phase-8 Python-as-subprocess glue. One command spawns
-            // `python -m neurovault_server <job>` for advanced
-            // features (compile, pdf ingest, zotero) that stay in
-            // Python. Replaces the persistent sidecar model.
-            run_python_job,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

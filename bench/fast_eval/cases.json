@@ -1,0 +1,139 @@
+{
+  "_README": "Fast local retrieval eval for NeuroVault. HARDENED: every case's brain is seeded with a shared `distractor_pool` of ~14 realistic, unrelated personal notes PLUS the case's own answer note and topical near-distractors. The query must land its answer within `expect_top` (default 1 = strict top-1). This makes a pass mean genuine ranking quality against a realistic crowd, not 'only note in the brain'. `expect_rank_above` (optional) additionally requires the answer to outrank a named stale/wrong note (current-value cases). Recall-only, no LLM grading => fast + free + laptop-safe. EDIT: replace `cases[].query`/`notes`/`expect_any` with the query shapes YOUR users will actually ask; keep the distractor_pool realistic and non-overlapping with any answer.",
+  "expect_top": 1,
+  "recall_limit": 8,
+  "distractor_pool": [
+    {"file": "pool-dentist.md", "content": "# Dentist\n\nMoved my dental cleaning to Thursday at 3pm; the hygienist said to floss more."},
+    {"file": "pool-pasta.md", "content": "# Food\n\nThe new pasta place on 5th does a great cacio e pepe; go early, it fills up."},
+    {"file": "pool-gym.md", "content": "# Gym\n\nRenewed the gym membership on the annual plan, saves a bit over monthly."},
+    {"file": "pool-mom-bday.md", "content": "# Reminders\n\nMom's birthday is in November, need to plan something with my sister."},
+    {"file": "pool-report.md", "content": "# Work\n\nFinished the quarterly report and sent it to the team for review before Friday."},
+    {"file": "pool-faucet.md", "content": "# Home\n\nThe kitchen faucet is dripping again; need to replace the cartridge this weekend."},
+    {"file": "pool-flights.md", "content": "# Travel\n\nBooked the December holiday flights; aisle seats both legs this time."},
+    {"file": "pool-podcast.md", "content": "# Listening\n\nThe podcast episode on stoicism was surprisingly practical, worth a relisten."},
+    {"file": "pool-phoneplan.md", "content": "# Phone\n\nMoved to the family phone tier; everyone's lines are on one bill now."},
+    {"file": "pool-garden.md", "content": "# Garden\n\nThe herbs need repotting before spring; basil outgrew its pot."},
+    {"file": "pool-spanish.md", "content": "# Learning\n\nKeeping a daily Duolingo streak going for Spanish; on a 40-day run."},
+    {"file": "pool-meeting.md", "content": "# Meetings\n\nThe Monday standup moved to 10am; the design review is now Wednesday afternoon."},
+    {"file": "pool-insurance.md", "content": "# Admin\n\nHome contents insurance renews next month; compare a couple of quotes first."},
+    {"file": "pool-recipe.md", "content": "# Cooking\n\nThe sourdough came out better with a longer cold proof, about 18 hours."}
+  ],
+  "cases": [
+    {
+      "id": "pref-buried-codesearch",
+      "category": "preference",
+      "why": "Durable preference buried in an unrelated narrative note.",
+      "notes": [
+        {"file": "auth-debug.md", "content": "# Auth debugging\n\nSpent the morning chasing a token refresh bug in the OAuth flow. While grepping the middleware I remembered I always use ripgrep instead of grep for code search, it's far faster on the monorepo. Then rotated the signing keys."},
+        {"file": "editor-cfg.md", "content": "# Editor setup\n\nMoved my Neovim config to lua, added telescope and treesitter."}
+      ],
+      "query": "what do I use for code search",
+      "expect_any": ["ripgrep"],
+      "facts": [{"subject": "code search", "attribute": "tool", "value": "ripgrep", "source_file": "auth-debug.md"}]
+    },
+    {
+      "id": "pref-coffee",
+      "category": "preference",
+      "why": "Single-fact preference lookup against a crowd.",
+      "notes": [
+        {"file": "morning.md", "content": "# Morning routine\n\nI grind Ethiopian Yirgacheffe beans and pull a 1:2 espresso every morning, no milk."},
+        {"file": "teastash.md", "content": "# Tea\n\nKeep a tin of genmaicha at the office for the afternoon."}
+      ],
+      "query": "what coffee do I like",
+      "expect_any": ["yirgacheffe", "ethiopian"],
+      "facts": [{"subject": "coffee", "attribute": "preference", "value": "Ethiopian Yirgacheffe espresso", "source_file": "morning.md"}]
+    },
+    {
+      "id": "aversion-shampoo",
+      "category": "preference",
+      "why": "Negative preference / aversion recall.",
+      "notes": [
+        {"file": "haircare.md", "content": "# Hair care\n\nThe lavender shampoo irritated my scalp so I stopped using it. Switched to Trader Joe's tea tree tingle."},
+        {"file": "skincare.md", "content": "# Skin\n\nThe new fragrance-free moisturizer is working well."}
+      ],
+      "query": "which shampoo bothered my scalp",
+      "expect_any": ["lavender"]
+    },
+    {
+      "id": "current-value-budget",
+      "category": "knowledge-update",
+      "why": "Revised value: current must beat stale.",
+      "notes": [
+        {"file": "budget-old.md", "content": "# Finances (January)\n\nMy monthly grocery budget is 400 pounds. I track it in a spreadsheet."},
+        {"file": "budget-new.md", "content": "# Finances update (April)\n\nI bumped the grocery budget to 550 pounds after the move."}
+      ],
+      "query": "what is my current grocery budget",
+      "expect_any": ["550"],
+      "expect_rank_above": "400 pounds"
+    },
+    {
+      "id": "current-value-editor-switch",
+      "category": "knowledge-update",
+      "why": "switched-from-A-to-B; current tool must win.",
+      "notes": [
+        {"file": "old-editor.md", "content": "# Setup (2024)\n\nI use nvim as my main editor for everything."},
+        {"file": "new-editor.md", "content": "# Setup update\n\nI switched from nvim to Zed last month, the speed and collab won me over."}
+      ],
+      "query": "what editor do I use now",
+      "expect_any": ["zed"],
+      "expect_rank_above": "use nvim"
+    },
+    {
+      "id": "entity-owner",
+      "category": "named-entity",
+      "why": "Named-person lookup must beat a same-topic distractor.",
+      "notes": [
+        {"file": "team.md", "content": "# Team\n\nSarah owns the retrieval pipeline and runs the weekly engineering sync on Tuesdays."},
+        {"file": "pipeline.md", "content": "# Pipeline\n\nThe retrieval pipeline fuses semantic, BM25, and graph signals with RRF."}
+      ],
+      "query": "who owns the retrieval pipeline",
+      "expect_any": ["sarah"],
+      "facts": [{"subject": "retrieval pipeline", "attribute": "owner", "value": "Sarah", "source_file": "team.md"}]
+    },
+    {
+      "id": "numeric-pages",
+      "category": "numeric",
+      "why": "Quantity recall; BGE-small weak on numerals.",
+      "notes": [
+        {"file": "reading.md", "content": "# Reading\n\nFinished 'The Nightingale', it was 440 pages and took me two weeks."},
+        {"file": "nextbook.md", "content": "# Next up\n\nStarted 'Project Hail Mary', currently on chapter 3."}
+      ],
+      "query": "how long was the Nightingale book",
+      "expect_any": ["440"]
+    },
+    {
+      "id": "temporal-recent-trip",
+      "category": "temporal",
+      "why": "Most-recent recall across dated notes.",
+      "notes": [
+        {"file": "trip-april.md", "content": "# Travel\n\nThe most recent family trip was to Lisbon in April; we did the tram and the pasteis tour."},
+        {"file": "trip-winter.md", "content": "# Travel\n\nEarlier in the year we went to the Lake District for a long weekend."}
+      ],
+      "query": "where was our most recent family trip",
+      "expect_any": ["lisbon"]
+    },
+    {
+      "id": "multi-fact-project",
+      "category": "multi-session",
+      "why": "The distinct decision must surface over chatter.",
+      "notes": [
+        {"file": "atlas-standup1.md", "content": "# Atlas standup\n\nStatus steady, deploy pipeline green, nothing notable."},
+        {"file": "atlas-standup2.md", "content": "# Atlas standup\n\nAtlas status unchanged this week, CI stable."},
+        {"file": "atlas-decision.md", "content": "# Atlas decision\n\nWe decided to sunset the legacy Atlas API and migrate clients to v2 by Q4."}
+      ],
+      "query": "what did we decide about the Atlas API",
+      "expect_any": ["sunset", "migrate clients", "v2"]
+    },
+    {
+      "id": "single-session-detail",
+      "category": "single-session",
+      "why": "Buried detail must beat same-topic notes lacking it.",
+      "notes": [
+        {"file": "car-service.md", "content": "# Car\n\nFirst service on the new Civic was March 15. A week later the GPS head unit failed and the dealer replaced it under warranty."},
+        {"file": "car-tires.md", "content": "# Tires\n\nRotated the tires and topped up the washer fluid."}
+      ],
+      "query": "what failed on the new car after its first service",
+      "expect_any": ["gps"]
+    }
+  ]
+}

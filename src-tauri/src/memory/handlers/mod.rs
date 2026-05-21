@@ -254,6 +254,875 @@ pub async fn brains_stats(
     Ok(Json(brain_stats(&brain_id)?))
 }
 
+// ---------------------------------------------------------------------------
+// GET /api/audit/recent?limit=N — recent tool-call activity for the
+// active brain. Drives the UI's Activity panel + the audit log view
+// in Settings. Reads the last N entries from `<brain>/audit.jsonl`
+// (newest first). Missing file = empty list.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+pub struct AuditRecentQuery {
+    /// How many entries to return. Defaults to 50 to match the
+    /// frontend's `activityApi.recent(limit = 50)` default.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Brain to read from. Defaults to the active brain when absent —
+    /// matches the rest of the read-side API.
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+pub async fn audit_recent(
+    Query(q): Query<AuditRecentQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<super::tool_audit::AuditEntry>>, ApiError> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let brain_id = resolve_brain_id(q.brain.as_deref())?;
+    let entries = super::tool_audit::recent(&brain_id, limit)?;
+    Ok(Json(entries))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/observations — Claude Code lifecycle-hook capture.
+//
+// Called by `scripts/neurovault_hook.py` (the shim wired into the user's
+// Claude Code settings.json) on every SessionStart, UserPromptSubmit,
+// PostToolUse, and SessionEnd event. Each event becomes an observation
+// engram tagged with the session id so the whole session can later be
+// retrieved as a unit.
+//
+// Body shape: { "event": "PostToolUse", "payload": {...} }
+//   (`hook_event_name` is accepted as an alias for `event` to match
+//   Claude Code's native hook payload shape.)
+//
+// PostToolUse policy via NEUROVAULT_HOOKS_POSTTOOLUSE env var:
+//   "mutations" (default) — only Edit / Write / NotebookEdit / MultiEdit
+//   "all"                 — every tool
+//   "off"                 — skip PostToolUse entirely
+// Mutations-only is the right default — read-only tools (Read, Grep,
+// Bash, Glob) fire dozens per minute during a coding session and drown
+// the vault in noise.
+//
+// Privacy: any text inside `<private>...</private>` tags is stripped
+// before persistence, matching claude-mem's convention for users who
+// migrate from there.
+//
+// Filename convention: `obs-{short_session}-{event_lower}-{short_uuid}.md`
+// inside the vault dir so the markdown round-trips through the normal
+// ingest pipeline. After ingest, the engram is tagged
+// `kind='observation', agent_id='claude-code'` so it stays filterable.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ObservationBody {
+    #[serde(default)]
+    pub event: Option<String>,
+    /// Claude Code's hook envelope uses this field name. We accept both
+    /// so the same handler works whether the caller posts the wrapper
+    /// shape or a raw hook payload.
+    #[serde(default)]
+    pub hook_event_name: Option<String>,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    /// Brain to ingest into. Optional — falls back to the active brain
+    /// from the registry. Hooks normally don't set this.
+    #[serde(default)]
+    pub brain: Option<String>,
+    /// Pass-through fields when the hook posts a flat (un-wrapped)
+    /// payload directly. We catch them via `flatten` so the handler
+    /// can still find session_id, tool_name, prompt, etc.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct ObservationResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engram_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub event: String,
+}
+
+/// Hook events we ingest. `Stop` exists in the Claude Code hook surface
+/// but is a no-op pause — skipping it keeps the observation stream
+/// focused on signal-bearing events.
+const OBSERVATION_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "SessionEnd",
+];
+
+/// Tools considered "mutations" — the default PostToolUse policy
+/// captures only these. Read/Grep/Bash/Glob fire too often to be
+/// useful and would dominate the vault.
+const MUTATION_TOOLS: &[&str] = &["edit", "write", "notebookedit", "multiedit"];
+
+pub async fn observations(
+    _s: State<ServerState>,
+    Json(body): Json<ObservationBody>,
+) -> Result<Json<ObservationResult>, ApiError> {
+    // Normalize the body. Hook callers vary: the Python proxy used to
+    // wrap as {event, payload}; raw Claude Code hooks post flat shape
+    // with hook_event_name + session_id + tool_name at the top level.
+    let event = body
+        .event
+        .clone()
+        .or(body.hook_event_name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // Merge `payload` (when wrapped) with the flat top-level fields
+    // (when raw) so downstream lookups see a single object regardless
+    // of caller shape.
+    let mut payload = serde_json::Map::new();
+    if let Some(serde_json::Value::Object(m)) = body.payload.clone() {
+        payload.extend(m);
+    }
+    for (k, v) in body.extra.iter() {
+        payload.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+
+    // Filter — known events only. Unknowns are tolerated (returns
+    // skipped) rather than rejected so a future Claude Code version
+    // adding new hook types doesn't break us.
+    if !OBSERVATION_EVENTS.iter().any(|e| *e == event) {
+        return Ok(Json(ObservationResult {
+            status: "skipped_unknown_event".to_string(),
+            engram_id: None,
+            filename: None,
+            event,
+        }));
+    }
+
+    // PostToolUse policy. Default "mutations" keeps the vault clean —
+    // override per-environment with NEUROVAULT_HOOKS_POSTTOOLUSE=all
+    // when debugging or with =off to silence entirely.
+    if event == "PostToolUse" {
+        let mode = std::env::var("NEUROVAULT_HOOKS_POSTTOOLUSE")
+            .unwrap_or_else(|_| "mutations".to_string())
+            .to_lowercase();
+        if mode == "off" {
+            return Ok(Json(ObservationResult {
+                status: "skipped_posttooluse_off".to_string(),
+                engram_id: None,
+                filename: None,
+                event,
+            }));
+        }
+        if mode == "mutations" {
+            let tool = payload
+                .get("tool_name")
+                .or_else(|| payload.get("tool"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !MUTATION_TOOLS.iter().any(|m| *m == tool) {
+                return Ok(Json(ObservationResult {
+                    status: "skipped_non_mutation".to_string(),
+                    engram_id: None,
+                    filename: None,
+                    event,
+                }));
+            }
+        }
+    }
+
+    let (title, markdown) = format_observation(&event, &payload);
+
+    // Brain resolution precedence:
+    //   1. Explicit `brain` in the request body (rare — callers normally
+    //      don't set this).
+    //   2. `NEUROVAULT_OBSERVATIONS_BRAIN` env var on the server. Set
+    //      this in production deployments to keep hook-captured noise
+    //      out of whatever brain the user is actively recalling from.
+    //      Critical for bench runs: without it, the bench's active
+    //      brain (e.g. `longmemeval-bench`) ends up polluted with the
+    //      operator's own Claude Code lifecycle events while the bench
+    //      is in flight, contaminating recall results.
+    //   3. The currently active brain (legacy default — fine for
+    //      single-user single-task setups where the active brain IS
+    //      the place to log activity).
+    let brain_override = body.brain.clone().or_else(|| {
+        std::env::var("NEUROVAULT_OBSERVATIONS_BRAIN")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    });
+
+    let result = tokio::task::spawn_blocking(move || -> Result<ObservationResult, MemoryError> {
+        let id = resolve_brain_id(brain_override.as_deref())?;
+        let _ = super::db::open_brain(&id)?;
+
+        // Filename pattern matches the legacy Python convention so
+        // existing vaults stay queryable: obs-{short_session}-{event}-{uuid6}.md
+        let session_id = payload
+            .get("session_id")
+            .or_else(|| payload.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let short_session: String = session_id.chars().take(8).collect();
+        let short_uuid: String = uuid::Uuid::new_v4().simple().to_string().chars().take(6).collect();
+        let filename = format!(
+            "obs-{}-{}-{}.md",
+            short_session,
+            event.to_lowercase(),
+            short_uuid,
+        );
+
+        let body_text = format!("# {}\n\n{}", title, markdown);
+
+        // Write through the normal save_note path so the ingest
+        // pipeline (chunking, embedding, BM25, entities, links) runs
+        // exactly the same way it does for user-authored markdown.
+        // Going through the filesystem also preserves the
+        // markdown-as-source-of-truth invariant.
+        let vault = super::read_ops::resolve_vault_path(&id)?;
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+        let written = super::write_ops::save_note(&ctx, &filename, &body_text)?;
+
+        // Tag as observation so callers can filter for the hook stream
+        // with `kind:observation`. Stamping agent_id='claude-code' lets
+        // multi-agent setups distinguish auto-captured hook events from
+        // user `remember()` calls. Failure here isn't fatal — the
+        // engram is already persisted, just untagged.
+        {
+            let db = super::db::open_brain(&id)?;
+            let conn = db.lock();
+            if let Err(e) = conn.execute(
+                "UPDATE engrams SET kind = 'observation', agent_id = 'claude-code' WHERE id = ?1",
+                [&written.engram_id],
+            ) {
+                eprintln!(
+                    "[observations] tag failed for {}: {}",
+                    written.engram_id, e
+                );
+            }
+        }
+
+        // Audit the observation capture so it shows up in the
+        // Activity panel. Args are kept small (just event + tool)
+        // because the full payload can be large (file diffs, etc.).
+        let mut audit_args = serde_json::Map::new();
+        audit_args.insert("event".to_string(), serde_json::Value::String(event.clone()));
+        if let Some(tool) = payload
+            .get("tool_name")
+            .or_else(|| payload.get("tool"))
+            .and_then(|v| v.as_str())
+        {
+            audit_args.insert("tool".to_string(), serde_json::Value::String(tool.to_string()));
+        }
+        let mut audit_entry = super::tool_audit::AuditEntry::new("observations")
+            .with_args(serde_json::Value::Object(audit_args))
+            .with_modified_ids(vec![written.engram_id.clone()])
+            .with_session_id(session_id.clone())
+            .with_status(200);
+        if let Some(s) = payload
+            .get("session_id")
+            .or_else(|| payload.get("sessionId"))
+            .and_then(|v| v.as_str())
+        {
+            audit_entry = audit_entry.with_session_id(s.to_string());
+        }
+        let _ = super::tool_audit::append(&id, &audit_entry);
+
+        Ok(ObservationResult {
+            status: written.status,
+            engram_id: Some(written.engram_id),
+            filename: Some(filename),
+            event: event.clone(),
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(result))
+}
+
+/// Convert a hook payload to `(title, markdown_body)`. Each event type
+/// gets a tailored shape so observations read cleanly in the UI later.
+/// Mirrors the legacy Python formatter so existing markdown files in
+/// users' vaults stay structurally compatible with newly-written ones.
+fn format_observation(
+    event: &str,
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> (String, String) {
+    let session_id = payload
+        .get("session_id")
+        .or_else(|| payload.get("sessionId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let short_session: String = session_id.chars().take(8).collect();
+    let timestamp = payload
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            // ISO 8601 / RFC 3339 in UTC. Matches the legacy Python
+            // format so observations from old + new servers sort
+            // consistently in a vault that has both.
+            use time::format_description::well_known::Iso8601;
+            use time::OffsetDateTime;
+            OffsetDateTime::now_utc()
+                .format(&Iso8601::DEFAULT)
+                .unwrap_or_else(|_| "unknown".to_string())
+        });
+
+    match event {
+        "SessionStart" => {
+            let cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("?");
+            (
+                format!("Session start · {}", short_session),
+                format!(
+                    "**Event:** SessionStart\n**Session:** `{}`\n**Started:** {}\n**Cwd:** `{}`\n",
+                    session_id, timestamp, cwd
+                ),
+            )
+        }
+        "UserPromptSubmit" => {
+            let prompt_raw = payload
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prompt = strip_private(prompt_raw);
+            let short_prompt = short_summary(&prompt, 60);
+            (
+                format!("User prompt · {}", short_prompt),
+                format!(
+                    "**Event:** UserPromptSubmit\n**Session:** `{}`\n**Time:** {}\n\n## Prompt\n\n{}\n",
+                    session_id, timestamp, prompt
+                ),
+            )
+        }
+        "PostToolUse" => {
+            let tool = payload
+                .get("tool_name")
+                .or_else(|| payload.get("tool"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let tool_input = payload
+                .get("tool_input")
+                .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                .unwrap_or_default();
+            let tool_input = truncate(&tool_input, 1500);
+            let tool_output_raw = payload
+                .get("tool_response")
+                .or_else(|| payload.get("output"))
+                .map(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .unwrap_or_else(|| v.to_string())
+                })
+                .unwrap_or_default();
+            let tool_output = truncate(&strip_private(&tool_output_raw), 2000);
+            (
+                format!("{} · {}", tool, short_session),
+                format!(
+                    "**Event:** PostToolUse\n**Session:** `{}`\n**Tool:** `{}`\n**Time:** {}\n\n\
+                     ## Input\n\n```json\n{}\n```\n\n## Output\n\n```\n{}\n```\n",
+                    session_id, tool, timestamp, tool_input, tool_output
+                ),
+            )
+        }
+        "SessionEnd" => {
+            let summary_raw = payload.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            let summary = strip_private(summary_raw);
+            let mut body = format!(
+                "**Event:** SessionEnd\n**Session:** `{}`\n**Ended:** {}\n",
+                session_id, timestamp
+            );
+            if !summary.is_empty() {
+                body.push_str(&format!("\n## Summary\n\n{}\n", summary));
+            }
+            (format!("Session end · {}", short_session), body)
+        }
+        other => {
+            let dump = serde_json::Value::Object(payload.clone()).to_string();
+            let dump = truncate(&dump, 2000);
+            (
+                format!("{} · {}", other, short_session),
+                format!(
+                    "**Event:** {}\n**Session:** `{}`\n**Time:** {}\n\n```json\n{}\n```\n",
+                    other, session_id, timestamp, dump
+                ),
+            )
+        }
+    }
+}
+
+/// Strip `<private>...</private>` blocks. Matches claude-mem's
+/// convention so migrating users get the same UX. Case-insensitive
+/// and DOTALL so the tag can wrap multi-line content.
+fn strip_private(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    // Simple state-machine replace — avoids pulling in the `regex`
+    // crate just for one pattern. Walks the string once, emits chunks
+    // between/outside `<private>`/`</private>` markers, drops the
+    // wrapped content. Tag matching is case-insensitive.
+    const OPEN: &str = "<private>";
+    const CLOSE: &str = "</private>";
+    let lower = text.to_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while cursor < text.len() {
+        if let Some(start_rel) = lower[cursor..].find(OPEN) {
+            let start = cursor + start_rel;
+            out.push_str(&text[cursor..start]);
+            let after_open = start + OPEN.len();
+            if let Some(end_rel) = lower[after_open..].find(CLOSE) {
+                out.push_str("[private content removed]");
+                cursor = after_open + end_rel + CLOSE.len();
+            } else {
+                // Unclosed tag — keep the original suffix verbatim
+                // rather than swallowing the rest of the message.
+                out.push_str(&text[start..]);
+                break;
+            }
+        } else {
+            out.push_str(&text[cursor..]);
+            break;
+        }
+    }
+    out
+}
+
+/// One-line summary for titles. Replaces newlines with spaces and caps
+/// to `n` chars + an ellipsis. Char-aware so multibyte input doesn't
+/// panic at byte boundaries.
+fn short_summary(text: &str, n: usize) -> String {
+    let collapsed: String = text.trim().chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+    if collapsed.chars().count() <= n {
+        return collapsed;
+    }
+    let truncated: String = collapsed.chars().take(n).collect();
+    format!("{}…", truncated)
+}
+
+/// Char-aware truncate with `... [truncated]` suffix when cut.
+fn truncate(text: &str, n: usize) -> String {
+    if text.chars().count() <= n {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(n).collect();
+    format!("{}\n... [truncated]", truncated)
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/brains/:brain_id/reset — wipe a brain to a clean slate.
+//
+// Use cases:
+//   • Bench harness clearing state between questions (the original
+//     reason this exists — see `bench/longmemeval/smoke_one.py`).
+//   • A user choosing "start over" in the UI without rebuilding their
+//     vault from scratch.
+//   • Recovering from a corrupted brain by truncating + re-creating
+//     the vec0 virtual table.
+//
+// What gets cleared:
+//   • Every row in every engram-derived table (engrams, chunks, links,
+//     entities, themes, episodic_facts, retrieval_feedback, …).
+//   • The `vec_chunks` virtual table is DROPPED and re-created. This
+//     is the load-bearing step: a naive `DELETE FROM vec_chunks_chunks`
+//     from a Python sqlite3 connection (no vec0 extension loaded)
+//     leaves the rowids/info shadow tables out of sync with each
+//     other, and recall starts returning garbage. We do the drop +
+//     recreate from inside the server, where the vec0 extension is
+//     loaded, so the shadow tables are managed correctly.
+//   • Optional: `?vault=true` also deletes every `.md` file under the
+//     brain's vault dir. Off by default — most callers want a DB
+//     reset without nuking the markdown source-of-truth.
+//
+// What is preserved:
+//   • The brain's registry entry (id, name, description, vault_path
+//     override). The brain stays in the brains list; it's just empty.
+//   • `cluster_names.json` and other per-brain config files.
+//   • `vec_chunks_info` schema metadata — recreated to match the
+//     fresh table.
+//
+// Atomicity: the drop + truncate + recreate run inside a single
+// transaction. If any step fails, the brain is rolled back to its
+// pre-reset state. VACUUM runs after commit (SQLite forbids it
+// inside a transaction); a VACUUM failure leaves the file slightly
+// fatter than necessary but is not a correctness issue.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+pub struct ResetQuery {
+    /// When `true`, also delete `*.md` files under the brain's vault
+    /// directory. Default `false` — most callers want a DB reset that
+    /// preserves the markdown source-of-truth.
+    #[serde(default)]
+    vault: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct ResetResponse {
+    pub brain_id: String,
+    /// Number of engram rows that existed before the reset. Useful
+    /// for log lines and for the bench harness to confirm something
+    /// actually got cleared.
+    pub engrams_purged: i64,
+    /// Whether the vault dir's markdown files were deleted too.
+    pub vault_purged: bool,
+}
+
+/// Tables created by either `migrations::run_all` or `SCHEMA_SQL`
+/// that hold engram-derived rows. Listed explicitly (rather than
+/// discovered via `sqlite_master`) so we never accidentally truncate
+/// a future schema table we shouldn't touch. Keep this in sync with
+/// `schema.sql`'s `CREATE TABLE` list.
+///
+/// Order: engram-derived rows first, then `engrams` itself last so
+/// any future FK constraints fire in the right direction. We use
+/// `DELETE FROM` rather than `TRUNCATE` (which SQLite doesn't have)
+/// — `DELETE` without a WHERE clause is the SQLite-idiomatic full
+/// wipe and gets the same fast-path under the hood.
+const RESETTABLE_TABLES: &[&str] = &[
+    "chunks",
+    "engram_links",
+    "entity_mentions",
+    "entities",
+    "episodic_facts",
+    "temporal_facts",
+    "retrieval_feedback",
+    "query_affinity",
+    "edge_activity",
+    "theme_members",
+    "themes",
+    "core_memory_blocks",
+    "contradictions",
+    "engram_versions",
+    "compilations",
+    "drafts",
+    "draft_sections",
+    "function_calls",
+    "variable_references",
+    "variable_renames",
+    "variables",
+    "working_memory",
+    "memory_types",
+    // `engrams` last — any future FK on engram_id cascades cleanly.
+    "engrams",
+];
+
+// ---------------------------------------------------------------------------
+// Structured facts (Option D / Layer 2). The connected agent extracts a
+// fact from a note and records it via POST /api/facts; recall surfaces it
+// by EXACT subject-token match (retriever.rs), sidestepping the embedder
+// for fact-shaped queries ("what's my X / who owns Y"). Facts are a DERIVED
+// index over engrams (source_engram FK) — the markdown note stays the
+// source of truth and is never overwritten. Supersession: recording a new
+// value for an existing (subject, attribute) marks the prior one
+// superseded_by the new id, so "current value" stays unambiguous.
+// ---------------------------------------------------------------------------
+#[derive(Deserialize)]
+pub struct RecordFactBody {
+    pub subject: String,
+    #[serde(default)]
+    pub attribute: String,
+    pub value: String,
+    pub source_engram: String,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+pub async fn record_fact(
+    _s: State<ServerState>,
+    Json(body): Json<RecordFactBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let subject = body.subject.trim().to_lowercase();
+        let attribute = body.attribute.trim().to_lowercase();
+        let value = body.value.trim().to_string();
+        if subject.is_empty() || value.is_empty() {
+            return Ok(serde_json::json!({"ok": false, "error": "subject and value required"}));
+        }
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{subject}\u{0}{attribute}\u{0}{value}").as_bytes());
+        let fid: String = format!("{:x}", hasher.finalize()).chars().take(16).collect();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE facts SET superseded_by = ?1 \
+             WHERE subject = ?2 AND attribute = ?3 AND value != ?4 AND superseded_by IS NULL",
+            rusqlite::params![fid, subject, attribute, value],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO facts (id, subject, attribute, value, source_engram) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![fid, subject, attribute, value, body.source_engram],
+        )?;
+        Ok(serde_json::json!({"ok": true, "id": fid, "subject": subject, "value": value}))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct FactsQuery {
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+    #[serde(default)]
+    pub include_superseded: Option<bool>,
+}
+
+pub async fn facts_list(
+    Query(q): Query<FactsQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let include_sup = q.include_superseded.unwrap_or(false);
+        let subj = q.subject.as_deref().map(|s| s.trim().to_lowercase());
+        let conn = db.lock();
+        let mut sql = String::from(
+            "SELECT subject, attribute, value, source_engram, (superseded_by IS NULL) FROM facts",
+        );
+        let mut clauses: Vec<&str> = Vec::new();
+        if !include_sup {
+            clauses.push("superseded_by IS NULL");
+        }
+        if subj.is_some() {
+            clauses.push("subject = ?1");
+        }
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        let to_json = |r: &rusqlite::Row| -> rusqlite::Result<serde_json::Value> {
+            Ok(serde_json::json!({
+                "subject": r.get::<_, String>(0)?,
+                "attribute": r.get::<_, String>(1)?,
+                "value": r.get::<_, String>(2)?,
+                "source_engram": r.get::<_, String>(3)?,
+                "current": r.get::<_, i64>(4)? == 1,
+            }))
+        };
+        let rows: Vec<serde_json::Value> = match &subj {
+            Some(s) => stmt
+                .query_map(rusqlite::params![s], to_json)?
+                .filter_map(Result::ok)
+                .collect(),
+            None => stmt.query_map([], to_json)?.filter_map(Result::ok).collect(),
+        };
+        Ok(serde_json::json!({"count": rows.len(), "facts": rows}))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+// GET /api/consolidate?limit=N — the write-time consolidation queue
+// (Option D). Returns engrams the agent hasn't fact-extracted yet
+// (derived: not the source_engram of any fact). The connected agent reads
+// these, extracts durable facts, and POSTs each via /api/facts. A note
+// that legitimately has no facts will reappear until a mark step is added
+// (MVP: every processed note gets >=1 fact, so the derive suffices).
+#[derive(Deserialize)]
+pub struct ConsolidateQuery {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+pub async fn consolidate_queue(
+    Query(q): Query<ConsolidateQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let limit = q.limit.unwrap_or(10).min(50) as i64;
+        let conn = db.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, content FROM engrams \
+             WHERE state != 'dormant' \
+               AND COALESCE(kind, 'note') NOT IN ('preference') \
+               AND id NOT IN (SELECT DISTINCT source_engram FROM facts) \
+             ORDER BY COALESCE(created_at, '') DESC LIMIT ?1",
+        )?;
+        let rows: Vec<serde_json::Value> = stmt
+            .query_map(rusqlite::params![limit], |r| {
+                let content: String = r.get::<_, String>(2)?;
+                Ok(serde_json::json!({
+                    "engram_id": r.get::<_, String>(0)?,
+                    "title": r.get::<_, String>(1)?,
+                    "content": content.chars().take(2000).collect::<String>(),
+                }))
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(serde_json::json!({"count": rows.len(), "notes": rows}))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+pub async fn brains_reset(
+    Path(brain_id): Path<String>,
+    Query(q): Query<ResetQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<ResetResponse>, ApiError> {
+    let purge_vault = q.vault.unwrap_or(false);
+    let result = tokio::task::spawn_blocking(move || -> Result<ResetResponse, MemoryError> {
+        let id = resolve_brain_id(Some(&brain_id))?;
+        let db = open_brain(&id)?;
+
+        // Count engrams before the wipe so the response is informative.
+        // Cheap O(1) query (SQLite has the table size in pragma data).
+        let count_before: i64 = {
+            let conn = db.lock();
+            conn.query_row("SELECT COUNT(*) FROM engrams", [], |r| r.get(0))
+                .unwrap_or(0)
+        };
+
+        // Drop+truncate+recreate happens inside one transaction. If
+        // any step fails the whole thing rolls back, leaving the
+        // brain in its pre-reset state. VACUUM has to run after the
+        // commit (SQLite forbids it inside a transaction).
+        {
+            let conn = db.lock();
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+
+            // 1. Drop vec_chunks. With the vec0 extension loaded
+            //    (it is — db::open_new calls sqlite_vec::load), DROP
+            //    TABLE invokes vec0's xDestroy hook, which cleans up
+            //    the shadow tables (vec_chunks_chunks, _rowids,
+            //    _vector_chunks00, _info) atomically.
+            if let Err(e) = conn.execute("DROP TABLE IF EXISTS vec_chunks", []) {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(MemoryError::Other(format!(
+                    "failed to drop vec_chunks: {}",
+                    e
+                )));
+            }
+
+            // 2. Truncate engram-derived rowsets. Missing tables are
+            //    tolerated (older brains may lack tables that newer
+            //    migrations would have added).
+            for table in RESETTABLE_TABLES {
+                if let Err(e) = conn.execute(&format!("DELETE FROM {}", table), []) {
+                    // Table not existing isn't an error — older brains
+                    // may not have every table. Anything else is.
+                    let msg = e.to_string().to_lowercase();
+                    if !msg.contains("no such table") {
+                        let _ = conn.execute_batch("ROLLBACK");
+                        return Err(MemoryError::Other(format!(
+                            "failed to truncate {}: {}",
+                            table, e
+                        )));
+                    }
+                }
+            }
+
+            // 3. Recreate vec_chunks fresh, with the exact same
+            //    schema `db::ensure_vec_chunks` would create for a
+            //    new brain. Hardcoding the embedding dim here (384)
+            //    rather than re-importing `EMBEDDING_DIM` would
+            //    break the day someone bumps the model; pull from
+            //    the constant.
+            let create_stmt = format!(
+                "CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{}])",
+                super::embedder::EMBEDDING_DIM,
+            );
+            if let Err(e) = conn.execute(&create_stmt, []) {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(MemoryError::Other(format!(
+                    "failed to recreate vec_chunks: {}",
+                    e
+                )));
+            }
+
+            conn.execute_batch("COMMIT")?;
+        }
+
+        // VACUUM reclaims pages freed by the truncate so the file
+        // doesn't keep its pre-reset size on disk. Outside the
+        // transaction (SQLite requirement). Failure here isn't
+        // fatal — the brain is correct, just slightly fatter than
+        // necessary; log and continue.
+        {
+            let conn = db.lock();
+            if let Err(e) = conn.execute("VACUUM", []) {
+                eprintln!("[brains_reset] VACUUM failed on {}: {} — continuing", id, e);
+            }
+        }
+
+        // Optional vault wipe — delete every `*.md` under the vault
+        // directory but leave the directory structure intact. We use
+        // the resolved vault path (which may be a user-configured
+        // external dir), not just `brain_dir/vault`.
+        let mut vault_purged = false;
+        if purge_vault {
+            let vault = super::read_ops::resolve_vault_path(&id)?;
+            if vault.exists() {
+                match walk_and_delete_md(&vault) {
+                    Ok(_) => vault_purged = true,
+                    Err(e) => {
+                        eprintln!(
+                            "[brains_reset] vault wipe failed on {}: {} — DB reset still succeeded",
+                            id, e
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(ResetResponse {
+            brain_id: id,
+            engrams_purged: count_before,
+            vault_purged,
+        })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    Ok(Json(result))
+}
+
+/// Recursively delete every `*.md` file under `dir`, leaving the
+/// directory structure intact. Symlinks are not followed so a
+/// misconfigured vault_path can't escape into the user's home.
+fn walk_and_delete_md(dir: &std::path::Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let path = entry.path();
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
+            walk_and_delete_md(&path)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            // Best-effort delete — log and continue if one file is
+            // locked. The reset is still useful even if a couple of
+            // files survive.
+            if let Err(e) = std::fs::remove_file(&path) {
+                eprintln!("[brains_reset] could not delete {}: {}", path.display(), e);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn notes_list(_s: State<ServerState>) -> Result<Json<Vec<NoteListRow>>, ApiError> {
     let id = resolve_brain_id(None)?;
     let db = open_brain(&id)?;
@@ -354,11 +1223,237 @@ pub async fn recall(
         ablate: ablate_list,
     };
     let query_str = q.q.clone();
+    // Copy these out before the closure moves `opts` + `q.q`. Both are
+    // small (a usize and a String) so cloning is free.
+    let top_k_for_audit = opts.top_k;
+    let q_for_audit = q.q.clone();
+
+    // Wrap the work so we can audit duration + result count.
+    let started = std::time::Instant::now();
+    let (id, result) = tokio::task::spawn_blocking(
+        move || -> Result<(String, Vec<RecallHit>), MemoryError> {
+            let id = resolve_brain_id(brain_id.as_deref())?;
+            let db = open_brain(&id)?;
+            let hits = hybrid_retrieve_throttled(&db, &query_str, &opts)?;
+            Ok((id, hits))
+        },
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+
+    // Best-effort audit — never blocks the response. Args carry just
+    // the query string + limit so the activity panel can show a
+    // useful one-liner; the result_ids let the user click through
+    // to engrams from the audit row.
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let ids: Vec<String> = result.iter().map(|h| h.engram_id.clone()).take(5).collect();
+    let entry = super::tool_audit::AuditEntry::new("recall")
+        .with_args(serde_json::json!({ "q": q_for_audit, "limit": top_k_for_audit }))
+        .with_result_ids(ids)
+        .with_duration(duration_ms)
+        .with_status(200);
+    let _ = super::tool_audit::append(&id, &entry);
+
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Multi-query recall (POST /api/recall/multi).
+//
+// HyDE / query-expansion entry point. The agent supplies a primary
+// `q` plus 0-4 `additional_queries` — paraphrases, synonyms, or
+// "imagined answer passage" rewrites (HyDE). Each query is run
+// through the full hybrid pipeline (vec + BM25 + graph + RRF +
+// temporal-disambig + optional rerank). Results are then RRF-merged
+// across queries: an engram that ranks well under multiple phrasings
+// rises above one that only matches a single phrasing strongly.
+//
+// Why this lives in the server, not the agent: paraphrase mismatch
+// is a fundamental retrieval problem (BGE has a 384-dim vec; "tops"
+// and "shirts" can land far apart even though they're semantically
+// equivalent). The agent already pays for the LLM tokens to phrase
+// alternatives; the server provides the "merge multiple retrieval
+// passes" primitive so the agent doesn't have to re-implement RRF.
+//
+// Architecture is local-first: zero network calls. The LLM cost
+// stays in whatever process is calling MCP (Claude Code, Codex,
+// custom agent) — NeuroVault doesn't reach for cloud APIs.
+//
+// Cap: 5 queries total (1 primary + 4 additional). Each adds ~one
+// pipeline pass of latency. With reranker on, that's roughly N×
+// (50-100 ms) plus the per-query vec+BM25+graph cost. Caller opts in
+// via the MCP `additional_queries` parameter — single-query callers
+// see no change.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct RecallMultiBody {
+    /// Primary query — required. Used for BM25, graph signal, and
+    /// also embedded for vec search (so a multi-query call with
+    /// empty additional_queries behaves identically to single-query).
+    pub q: String,
+    /// Up to 4 additional phrasings or HyDE rewrites. Each is run
+    /// through the full pipeline; results are RRF-merged across all
+    /// queries.
+    #[serde(default)]
+    pub additional_queries: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub spread_hops: Option<u8>,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub include_observations: Option<bool>,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+    #[serde(default)]
+    pub rerank: Option<bool>,
+    /// Same ablation surface as single-query recall — applied to
+    /// each per-query pipeline run.
+    #[serde(default)]
+    pub ablate: Option<String>,
+}
+
+pub async fn recall_multi(
+    _s: State<ServerState>,
+    Json(body): Json<RecallMultiBody>,
+) -> Result<Json<Vec<RecallHit>>, ApiError> {
+    // Compose the query list: primary first, then trimmed-and-deduped
+    // additional. Cap at 5 total. Empty/whitespace-only rewrites are
+    // silently dropped (a recall with `additional_queries=[""]` is
+    // still valid; the server treats it as "primary only").
+    let mut queries: Vec<String> = Vec::with_capacity(5);
+    let primary = body.q.trim().to_string();
+    if primary.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "empty primary query".into()));
+    }
+    queries.push(primary.clone());
+    for q in body.additional_queries.into_iter().take(4) {
+        let trimmed = q.trim().to_string();
+        if !trimmed.is_empty() && !queries.iter().any(|p| p.eq_ignore_ascii_case(&trimmed)) {
+            queries.push(trimmed);
+        }
+    }
+
+    let top_k = body.limit.unwrap_or(10).clamp(1, 50);
+    let ablate_list: Vec<String> = body
+        .ablate
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Each per-query call oversamples 2× so RRF merge has signal
+    // beyond the final top_k. Cap per-query top_k at 50 to bound
+    // memory regardless of caller-supplied limit.
+    let per_query_top_k = (top_k * 2).clamp(top_k, 50);
+    // Force reranker off on per-query passes regardless of what the
+    // caller asked for. Reasoning: the per-query pipeline runs the
+    // cross-encoder over top-20 candidates, which is ~50-100 ms. With
+    // 5 queries that's ~500 ms of cross-encoder alone, dwarfing the
+    // ~50 ms vec+BM25+graph cost per pass and making multi-query
+    // ~10× more expensive than necessary. Cross-query RRF merge is
+    // itself a form of reranking — an engram that ranks top in
+    // multiple phrasings is intrinsically more reliable than the
+    // cross-encoder's verdict on a single phrasing. We trade single-
+    // pass cross-encoder precision for consensus-across-phrasings,
+    // which empirically maps better to "the right answer" on
+    // paraphrase-heavy queries (the use case for multi-query in the
+    // first place). Caller's `rerank` flag is preserved for the
+    // single-query fast path below.
+    let opts = RecallOpts {
+        top_k: per_query_top_k,
+        spread_hops: body.spread_hops.unwrap_or(0),
+        exclude_kinds: if body.include_observations.unwrap_or(false) {
+            Vec::new()
+        } else {
+            vec!["observation".to_string()]
+        },
+        as_of: body.as_of.clone(),
+        use_reranker: false,
+        ablate: ablate_list,
+    };
+    let brain_id = body.brain_id.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<RecallHit>, MemoryError> {
         let id = resolve_brain_id(brain_id.as_deref())?;
         let db = open_brain(&id)?;
-        hybrid_retrieve_throttled(&db, &query_str, &opts)
+
+        // One-line audit so the bench harness / debug sessions can see
+        // how often the agent is escalating to multi-query.
+        eprintln!(
+            "[recall_multi] brain={} q_count={} primary={:?}",
+            id, queries.len(),
+            queries.first().map(|s| &s[..s.len().min(60)]).unwrap_or("")
+        );
+
+        // Run each query through the full pipeline. Per-query failures
+        // (e.g. rate-limit hint, disk error mid-batch) are logged and
+        // skipped — a partial fan-out still produces a usable merge.
+        let mut per_query_hits: Vec<Vec<RecallHit>> = Vec::with_capacity(queries.len());
+        for q in &queries {
+            match hybrid_retrieve_throttled(&db, q, &opts) {
+                Ok(hs) => per_query_hits.push(hs),
+                Err(e) => {
+                    eprintln!("[recall_multi] query {:?} failed: {}", q, e);
+                }
+            }
+        }
+        if per_query_hits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path — only the primary survived; return its results
+        // unchanged so the response is byte-for-byte equivalent to
+        // GET /api/recall.
+        if per_query_hits.len() == 1 {
+            return Ok(per_query_hits.into_iter().next().unwrap_or_default());
+        }
+
+        // Cross-query RRF. Standard formula: score += 1 / (k + rank).
+        // k=60 matches the existing rrf::rrf_score() constant so the
+        // magnitudes are comparable to the in-pipeline RRF.
+        const K: f64 = 60.0;
+        let mut rrf: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut keep: std::collections::HashMap<String, RecallHit> = std::collections::HashMap::new();
+        for hits in &per_query_hits {
+            for (rank0, h) in hits.iter().enumerate() {
+                if h.engram_id == super::retriever::THROTTLE_HINT_ID {
+                    // Don't merge throttle hints into the result set —
+                    // they're advisory. If every per-query call got
+                    // throttled, the caller will see an empty result
+                    // and re-issue.
+                    continue;
+                }
+                *rrf.entry(h.engram_id.clone()).or_insert(0.0) += 1.0 / (K + (rank0 + 1) as f64);
+                // Keep the highest-scoring representative (earliest
+                // rank wins by definition since RRF accumulates).
+                keep.entry(h.engram_id.clone()).or_insert_with(|| h.clone());
+            }
+        }
+
+        let mut sorted: Vec<(String, f64)> = rrf.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let merged: Vec<RecallHit> = sorted
+            .into_iter()
+            .take(top_k)
+            .filter_map(|(eid, fused)| {
+                keep.remove(&eid).map(|mut h| {
+                    // Overwrite `score` with the cross-query RRF score
+                    // (rounded for display) so the caller can see
+                    // multi-query consensus, not a single-pass score.
+                    h.score = (fused * 10000.0).round() / 10000.0;
+                    h
+                })
+            })
+            .collect();
+
+        Ok(merged)
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -705,6 +1800,17 @@ pub async fn remember(
         let vault = super::read_ops::resolve_vault_path(&id)?;
         let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
         let write = super::write_ops::save_note(&ctx, &filename, &seed)?;
+
+        // Audit the write. `args` carries title + a short preview of
+        // the content so the activity panel can render a meaningful
+        // one-liner without storing the full body in the audit log.
+        let preview: String = content.chars().take(120).collect();
+        let entry = super::tool_audit::AuditEntry::new("remember")
+            .with_args(serde_json::json!({ "title": title, "preview": preview }))
+            .with_modified_ids(vec![write.engram_id.clone()])
+            .with_status(200);
+        let _ = super::tool_audit::append(&id, &entry);
+
         Ok(RememberResult {
             status: write.status,
             engram_id: write.engram_id,

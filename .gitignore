@@ -48,3 +48,13 @@ eval/*.log
 
 # ONNX model cache — auto-downloaded by fastembed-rs on first run
 .fastembed_cache/
+
+# LongMemEval datasets — large (~280 MB), re-downloadable, not committed
+bench/longmemeval/data/*.json
+
+# Ad-hoc server / bench run logs (cruft; graded_*.jsonl evidence stays tracked)
+server-*.log
+server-*.err
+bench/**/*.log
+bench/**/*.log.err
+bench/**/server_*.log*

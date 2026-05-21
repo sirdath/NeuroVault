@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     content      TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     summary      TEXT,
+    summary_l0   TEXT,                 -- 1-line ultra-terse summary for tiered display (added 2026-05-09; previously only added by migrate_add_summaries on existing brains)
+    summary_l1   TEXT,                 -- 1-paragraph mid-density summary for previews
     tags         TEXT,
     kind         TEXT DEFAULT 'note',  -- note|source|quote|draft|question
     state        TEXT DEFAULT 'fresh',
@@ -301,6 +303,22 @@ CREATE TABLE IF NOT EXISTS compilations (
     review_comment  TEXT                     -- optional annotation left by the reviewer on approve/reject
 );
 
+-- imp#4: typed fact store with temporal supersession ("current value
+-- of X"). A DERIVED index over the markdown (still the source of
+-- truth) — safe to drop & rebuild. The newest-ingested value for a
+-- (subject, attribute) is current; older ones get superseded_by set.
+-- See docs/improvements/04-fact-supersession-layer.md.
+CREATE TABLE IF NOT EXISTS facts (
+    id            TEXT PRIMARY KEY,
+    subject       TEXT NOT NULL,            -- normalised, e.g. "grocery budget"
+    attribute     TEXT NOT NULL DEFAULT '', -- optional facet; '' = value-only
+    value         TEXT NOT NULL,            -- "£550"
+    source_engram TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+    created_at    TEXT DEFAULT (datetime('now')),
+    superseded_by TEXT,                      -- NULL = current
+    UNIQUE(subject, attribute, value)
+);
+
 -- Indices (comprehensive — prevents full-table scans at scale)
 CREATE INDEX IF NOT EXISTS idx_engrams_state    ON engrams(state);
 CREATE INDEX IF NOT EXISTS idx_engrams_strength ON engrams(strength DESC);
@@ -343,3 +361,5 @@ CREATE INDEX IF NOT EXISTS idx_compilations_status ON compilations(status, creat
 CREATE INDEX IF NOT EXISTS idx_compilations_topic  ON compilations(topic);
 CREATE INDEX IF NOT EXISTS idx_compilations_wiki   ON compilations(wiki_engram_id);
 CREATE INDEX IF NOT EXISTS idx_engram_versions     ON engram_versions(engram_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_facts_subject       ON facts(subject, attribute);
+CREATE INDEX IF NOT EXISTS idx_facts_source        ON facts(source_engram);

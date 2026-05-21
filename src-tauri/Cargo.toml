@@ -145,3 +145,14 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 # save burst (atomic rename + multiple fsyncs) collapses into one
 # ingest call per write.
 notify = "6"
+
+# Self-heal on bind-failure: if `127.0.0.1:8765` is held by a stale
+# `neurovault*` process at startup, identify the holder and kill it
+# rather than failing silently. `netstat2` gives us the cross-platform
+# port → PID lookup; `sysinfo` resolves PID → process name so we can
+# verify it's a stale instance of OURS before killing anything. Both
+# are read-only inspection except for the `kill` action, which is
+# gated behind a name-prefix check (only processes whose name starts
+# with "neurovault" get terminated).
+netstat2 = "0.9"
+sysinfo = "0.30"

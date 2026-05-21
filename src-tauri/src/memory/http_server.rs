@@ -61,9 +61,28 @@ pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
 
     let app = router();
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("could not bind {}: {}", addr, e))?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Self-heal: if a stale neurovault* process is still
+            // holding the port, kill it and retry once. Anything
+            // else (a foreign process, kernel-held socket) is left
+            // alone and surfaces as a clear error.
+            if super::port_recovery::try_clear_stale_neurovault(port).is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                TcpListener::bind(addr)
+                    .await
+                    .map_err(|e2| format!("could not bind {} after clearing stale: {}", addr, e2))?
+            } else {
+                return Err(format!(
+                    "could not bind {}: {} (port held by another process — \
+                     check what's listening with `netstat -ano | findstr :{}`)",
+                    addr, e, port,
+                ));
+            }
+        }
+        Err(e) => return Err(format!("could not bind {}: {}", addr, e)),
+    };
 
     let (tx, rx) = oneshot::channel::<()>();
     let join = tokio::spawn(async move {
@@ -92,12 +111,19 @@ fn router() -> Router {
         .route("/api/brains/active", get(brains_active))
         .route("/api/brains/:brain_id/activate", post(brains_activate))
         .route("/api/brains/:brain_id/stats", get(brains_stats))
+        .route("/api/brains/:brain_id/reset", post(brains_reset))
+        .route("/api/observations", post(observations))
+        .route("/api/audit/recent", get(audit_recent))
         .route("/api/notes", get(notes_list))
         .route("/api/notes/:engram_id", get(notes_detail))
         .route("/api/graph", get(graph))
         .route("/api/recall", get(recall))
+        .route("/api/recall/multi", post(recall_multi))
         .route("/api/recall_across_brains", get(recall_across_brains))
         .route("/api/recall/chunks", get(recall_chunks))
+        .route("/api/facts", post(record_fact))
+        .route("/api/facts", get(facts_list))
+        .route("/api/consolidate", get(consolidate_queue))
         .route("/api/related/:engram_id", get(related))
         .route("/api/notes", post(remember))
         .route("/api/notes", axum::routing::put(notes_save))
