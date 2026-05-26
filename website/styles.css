@@ -1135,3 +1135,29 @@ code { font-family: var(--mono); font-size: 0.9em;
   .hero-chip-dot { animation: none; }
   html { scroll-behavior: auto; }
 }
+
+/* ============================================================
+   v0.2.0 polish — bring lower sections up to the hero/features:
+   hover-lift + blue glow on How steps & Screen cards, step
+   numbers as blue tiles, blue arrows.
+   ============================================================ */
+.how-step { transition: transform .2s ease, border-color .2s ease, box-shadow .25s ease; }
+.how-step:hover {
+  transform: translateY(-3px);
+  border-color: rgba(47, 123, 246, 0.4);
+  box-shadow: 0 16px 40px -20px rgba(47, 123, 246, 0.55);
+}
+.how-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 30px; padding: 0 9px;
+  border-radius: 9px;
+  background: linear-gradient(140deg, rgba(47,123,246,.20), rgba(47,123,246,.05));
+  border: 1px solid rgba(47,123,246,.30);
+  color: #86b6ff; font-weight: 700; margin-bottom: 14px;
+}
+.how-arrow { color: #3f7df0; opacity: .8; }
+.screen { transition: transform .2s ease, box-shadow .25s ease; }
+.screen:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 22px 50px -26px rgba(47, 123, 246, 0.5);
+}
