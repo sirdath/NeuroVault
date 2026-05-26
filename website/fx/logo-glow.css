@@ -1,0 +1,181 @@
+/* ============================================
+   LOGO GLOW — Multi-color gradient halo that wraps around any PNG/SVG/logo alpha
+   Inspired by Vercel dark-mode logos, Apple keynote glows, brand reveal moments
+   ============================================
+   Uses stacked drop-shadow() filters — each one follows the image's alpha channel,
+   so the glow contours the logo perfectly without needing a mask. Works with any
+   transparent PNG, inline SVG, or icon.
+
+   Usage:
+     <img src="logo.png" class="logoglow logoglow-aurora">
+     <svg class="logoglow logoglow-cosmic logoglow-strong">…</svg>
+
+   Variants (color combinations):
+     logoglow-aurora, logoglow-sunset, logoglow-cosmic, logoglow-cyber,
+     logoglow-ocean, logoglow-fire, logoglow-mint, logoglow-rose, logoglow-gold,
+     logoglow-violet, logoglow-rainbow, logoglow-instagram, logoglow-discord,
+     logoglow-spotify, logoglow-mono-white, logoglow-mono-cyan, logoglow-mono-pink
+   Intensities:
+     logoglow-soft, logoglow (default), logoglow-strong, logoglow-extreme, logoglow-halo
+   Behaviors:
+     logoglow-pulse     — breathes
+     logoglow-hover     — only on hover
+     logoglow-rotating  — colors rotate via JS (uses --lg-shift CSS var)
+     logoglow-floor     — directional under-glow (Vercel-style floor light)
+   ============================================ */
+
+.logoglow {
+  --lg-c1: #8b5cf6;
+  --lg-c2: #ec4899;
+  --lg-c3: #06b6d4;
+  --lg-blur1: 8px;
+  --lg-blur2: 16px;
+  --lg-blur3: 28px;
+  filter:
+    drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+    drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+    drop-shadow(0 0 var(--lg-blur3) var(--lg-c3));
+}
+
+/* Color presets — each picks 3 hues that read well together as a halo */
+.logoglow-aurora     { --lg-c1: #a855f7; --lg-c2: #ec4899; --lg-c3: #06b6d4; }
+.logoglow-sunset     { --lg-c1: #f97316; --lg-c2: #ec4899; --lg-c3: #f59e0b; }
+.logoglow-cosmic     { --lg-c1: #6d28d9; --lg-c2: #db2777; --lg-c3: #0891b2; }
+.logoglow-cyber      { --lg-c1: #00ffff; --lg-c2: #ff00ff; --lg-c3: #00ff7f; }
+.logoglow-ocean      { --lg-c1: #0ea5e9; --lg-c2: #06b6d4; --lg-c3: #14b8a6; }
+.logoglow-fire       { --lg-c1: #fbbf24; --lg-c2: #f97316; --lg-c3: #ef4444; }
+.logoglow-mint       { --lg-c1: #34d399; --lg-c2: #22d3ee; --lg-c3: #14b8a6; }
+.logoglow-rose       { --lg-c1: #fb7185; --lg-c2: #f43f5e; --lg-c3: #ec4899; }
+.logoglow-gold       { --lg-c1: #fef3c7; --lg-c2: #fbbf24; --lg-c3: #d97706; }
+.logoglow-violet     { --lg-c1: #6366f1; --lg-c2: #8b5cf6; --lg-c3: #a855f7; }
+.logoglow-rainbow {
+  filter:
+    drop-shadow(0 0 var(--lg-blur1) #ff0000)
+    drop-shadow(0 0 var(--lg-blur2) #00ff00)
+    drop-shadow(0 0 var(--lg-blur3) #0000ff);
+}
+.logoglow-instagram {
+  filter:
+    drop-shadow(0 0 var(--lg-blur1) #f58529)
+    drop-shadow(0 0 var(--lg-blur2) #dd2a7b)
+    drop-shadow(0 0 var(--lg-blur3) #8134af);
+}
+.logoglow-discord    { --lg-c1: #5865f2; --lg-c2: #404eed; --lg-c3: #7289da; }
+.logoglow-spotify    { --lg-c1: #1ed760; --lg-c2: #1db954; --lg-c3: #1aa34a; }
+.logoglow-twitter    { --lg-c1: #1da1f2; --lg-c2: #14a1f2; --lg-c3: #0ea5e9; }
+
+/* Monochrome glows */
+.logoglow-mono-white { --lg-c1: #ffffff; --lg-c2: #ffffff; --lg-c3: #ffffff; }
+.logoglow-mono-cyan  { --lg-c1: #00ffff; --lg-c2: #00ffff; --lg-c3: #00ffff; }
+.logoglow-mono-pink  { --lg-c1: #ff0080; --lg-c2: #ff0080; --lg-c3: #ff0080; }
+.logoglow-mono-amber { --lg-c1: #fbbf24; --lg-c2: #fbbf24; --lg-c3: #fbbf24; }
+.logoglow-mono-green { --lg-c1: #22c55e; --lg-c2: #22c55e; --lg-c3: #22c55e; }
+
+/* Intensities */
+.logoglow-soft     { --lg-blur1: 4px; --lg-blur2: 10px; --lg-blur3: 18px; }
+.logoglow-strong   { --lg-blur1: 14px; --lg-blur2: 28px; --lg-blur3: 50px; }
+.logoglow-extreme  { --lg-blur1: 24px; --lg-blur2: 48px; --lg-blur3: 80px; }
+.logoglow-halo     {
+  --lg-blur1: 0px; --lg-blur2: 0px; --lg-blur3: 50px;
+  filter:
+    drop-shadow(0 0 6px var(--lg-c1))
+    drop-shadow(0 0 20px var(--lg-c2))
+    drop-shadow(0 0 50px var(--lg-c3));
+}
+
+/* Pulse breathing */
+.logoglow-pulse { animation: logoglow-pulse 2.4s ease-in-out infinite; }
+@keyframes logoglow-pulse {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+      drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+      drop-shadow(0 0 var(--lg-blur3) var(--lg-c3));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 calc(var(--lg-blur1) * 1.8) var(--lg-c1))
+      drop-shadow(0 0 calc(var(--lg-blur2) * 1.8) var(--lg-c2))
+      drop-shadow(0 0 calc(var(--lg-blur3) * 1.8) var(--lg-c3));
+  }
+}
+
+/* Reveal on hover */
+.logoglow-hover {
+  filter: none;
+  transition: filter 0.4s ease;
+}
+.logoglow-hover:hover {
+  filter:
+    drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+    drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+    drop-shadow(0 0 var(--lg-blur3) var(--lg-c3));
+}
+
+/* Directional under-glow (Vercel-style floor light) */
+.logoglow-floor {
+  filter:
+    drop-shadow(0 12px var(--lg-blur2) var(--lg-c1))
+    drop-shadow(0 24px var(--lg-blur3) var(--lg-c2));
+}
+.logoglow-floor-strong {
+  filter:
+    drop-shadow(0 16px 24px var(--lg-c1))
+    drop-shadow(0 32px 50px var(--lg-c2))
+    drop-shadow(0 48px 80px var(--lg-c3));
+}
+
+/* Rim light — strong tight outline, no blur */
+.logoglow-rim {
+  filter:
+    drop-shadow(0 0 1px var(--lg-c1))
+    drop-shadow(0 0 1px var(--lg-c1))
+    drop-shadow(0 0 2px var(--lg-c2))
+    drop-shadow(0 0 4px var(--lg-c3));
+}
+
+/* Rotating colors (set --lg-shift via JS from 0..360 to rotate hue) */
+.logoglow-rotating {
+  filter:
+    drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+    drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+    drop-shadow(0 0 var(--lg-blur3) var(--lg-c3))
+    hue-rotate(var(--lg-shift, 0deg));
+  transition: filter 0.1s linear;
+}
+.logoglow-rotating.logoglow-auto {
+  animation: logoglow-hue-rotate 4s linear infinite;
+}
+@keyframes logoglow-hue-rotate {
+  0%   { filter:
+    drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+    drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+    drop-shadow(0 0 var(--lg-blur3) var(--lg-c3))
+    hue-rotate(0deg); }
+  100% { filter:
+    drop-shadow(0 0 var(--lg-blur1) var(--lg-c1))
+    drop-shadow(0 0 var(--lg-blur2) var(--lg-c2))
+    drop-shadow(0 0 var(--lg-blur3) var(--lg-c3))
+    hue-rotate(360deg); }
+}
+
+/* "Sticker glow" — fat single-color rim that mimics neon */
+.logoglow-sticker {
+  filter:
+    drop-shadow(0 0 1px var(--lg-c1))
+    drop-shadow(0 0 3px var(--lg-c1))
+    drop-shadow(0 0 8px var(--lg-c1))
+    drop-shadow(0 0 16px var(--lg-c2));
+}
+
+/* Use on inline SVG, PNG <img>, or any masked .imggrad too */
+.imggrad.logoglow,
+img.logoglow,
+svg.logoglow {
+  display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logoglow-pulse,
+  .logoglow-rotating.logoglow-auto { animation: none; }
+}

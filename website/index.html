@@ -14,11 +14,46 @@
 <meta property="og:url" content="https://github.com/sirdath/NeuroVault" />
 <meta property="og:image" content="./assets/screenshots/02-filter-panel.png" />
 
-<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+<link rel="icon" type="image/png" href="./assets/favicon.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./fx/nv-brain-points.js" defer></script>
+<script src="./fx/nv-brain.js" defer></script>
 <link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./fx/aurora-bg.css" />
+<link rel="stylesheet" href="./fx/logo-glow.css" />
+<style id="nv-hero-fx">
+.hero{position:relative;overflow:hidden}
+.hero-net{position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none}
+.hero-inner{position:relative;z-index:2}
+.hero-logo{--lg-c1:#2F7BF6;--lg-c2:#7FB0FF;--lg-c3:#1d4ed8;--lg-blur1:5px;--lg-blur2:12px;--lg-blur3:24px}
+.hero-tagline-accent{background:linear-gradient(90deg,#7FB0FF,#2F7BF6 55%,#60A5FA);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+.nav-logo-word{height:15px;width:auto;display:block}
+.nav-logo-icon{width:52px;height:52px;border-radius:0;box-shadow:none}
+.nav-logo{gap:8px}
+.nav{display:grid!important;grid-template-columns:1fr auto 1fr;align-items:center}
+.nav-logo{position:static!important;transform:none!important;justify-self:start;margin:0}
+.nav-links{justify-self:center}
+.nav-cta{justify-self:end}
+:root{--sans:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.section-title,.hero-tagline,.section-kicker{font-family:"Space Grotesk",var(--sans)}
+.btn-primary{background:var(--peach)!important;background-image:none!important;background-size:auto!important;animation:none!important;color:#fff!important;text-shadow:none}
+.btn-primary::before{display:none!important}
+.nav-cta{background:var(--peach)!important;background-image:none!important;color:#fff!important}
+.hero{display:flex;align-items:center;justify-content:center}
+.hero-tagline{margin:0 auto 14px;max-width:700px}
+.hero-sub{margin:14px auto 0;max-width:600px}
+.hero-brain-bg{position:absolute;inset:0;width:100%;height:100%;z-index:0;display:block;pointer-events:none;opacity:.92}
+.feat-ic{display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:13px;background:linear-gradient(140deg,rgba(47,123,246,.18),rgba(47,123,246,.04));border:1px solid rgba(47,123,246,.28);color:#86b6ff;margin-bottom:15px;box-shadow:0 6px 16px -8px rgba(47,123,246,.5)}
+.feat-ic svg{width:23px;height:23px}
+.nav-cta{display:inline-flex!important;align-items:center;gap:7px;border-radius:999px!important;padding:9px 17px!important;font-weight:600;box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 7px 18px -7px rgba(47,123,246,.65);transition:transform .18s ease,box-shadow .2s ease}
+.nav-cta:hover{transform:translateY(-1px);box-shadow:0 1px 0 rgba(255,255,255,.34) inset,0 11px 26px -7px rgba(47,123,246,.8)}
+.nav-cta-ic{width:15px;height:15px}
+</style>
 
 <!-- Apply stored theme before paint (prevents peach → blue flash on reload) -->
 <script>
@@ -53,30 +88,8 @@
          peach; data-theme="blue" rebinds --peach to cyan and the mark
          follows. Same SVG geometry as the in-app activity icon and
          the favicon, so the brand reads consistently. -->
-    <svg
-      viewBox="0 0 24 24"
-      class="nav-logo-icon"
-      width="32"
-      height="32"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.4"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-      style="color: var(--peach);"
-    >
-      <circle cx="12" cy="12" r="9.5" />
-      <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
-      <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
-      <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
-      <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="12"   cy="12.8" r="1.4" />
-      <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
-    </svg>
-    <span class="nav-logo-text">NeuroVault</span>
+    <img class="nav-logo-icon" src="./assets/mark-dark.png" width="32" height="32" alt="" />
+    <img class="nav-logo-word" src="./assets/wordmark-dark.png" alt="NeuroVault" />
   </a>
   <nav class="nav-links">
     <a href="#features">Features</a>
@@ -84,26 +97,14 @@
     <a href="#privacy">Privacy</a>
     <a href="https://github.com/sirdath/NeuroVault" target="_blank" rel="noopener">GitHub ↗</a>
   </nav>
-  <button
-    id="theme-toggle"
-    class="theme-toggle"
-    type="button"
-    aria-label="Switch color theme"
-    title="Switch color theme"
-  >
-    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-  </button>
-  <a href="#download" class="nav-cta">Download</a>
+  <a href="#download" class="nav-cta"><svg class="nav-cta-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download</a>
 </header>
 
 <!-- Hero -->
 <section id="top" class="hero">
-  <div class="aurora">
-    <span class="aurora-blob aurora-blob-1"></span>
-    <span class="aurora-blob aurora-blob-2"></span>
-    <span class="aurora-blob aurora-blob-3"></span>
-  </div>
+  <canvas id="nv-brain" class="hero-brain-bg" aria-hidden="true"></canvas>
+  
+  
   <div class="grid-overlay" aria-hidden="true"></div>
 
   <div class="hero-inner">
@@ -111,28 +112,6 @@
       <span class="hero-chip-dot"></span>
       <span>v0.1.7 · Smarter graph · MCP /update /status /compile · Windows + macOS live</span>
     </div>
-
-    <svg class="hero-logo" viewBox="0 0 1080 220" preserveAspectRatio="xMidYMid meet" role="img" aria-label="NeuroVault">
-      <defs>
-        <linearGradient id="nv-brand-grad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%"   style="stop-color: var(--peach-soft, #FFAF87)"/>
-          <stop offset="100%" style="stop-color: var(--peach, #DE7356)"/>
-        </linearGradient>
-      </defs>
-      <style>
-        .hero-logo .t   { font-family: "JetBrains Mono","Fira Code","SF Mono","Menlo","Consolas",ui-monospace,monospace; font-size: 20px; font-weight: 700; fill: url(#nv-brand-grad); white-space: pre; }
-        .hero-logo .tag { font-family: "JetBrains Mono","Fira Code","SF Mono","Menlo","Consolas",ui-monospace,monospace; font-size: 14px; fill: var(--peach-soft); letter-spacing: 0.08em; }
-      </style>
-      <g transform="translate(24, 34)">
-        <text class="t" x="0" y="0"   xml:space="preserve">███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗ ██╗   ██╗ █████╗ ██╗   ██╗██╗  ████████╗</text>
-        <text class="t" x="0" y="24"  xml:space="preserve">████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗██║   ██║██╔══██╗██║   ██║██║  ╚══██╔══╝</text>
-        <text class="t" x="0" y="48"  xml:space="preserve">██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║██║   ██║███████║██║   ██║██║     ██║</text>
-        <text class="t" x="0" y="72"  xml:space="preserve">██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║╚██╗ ██╔╝██╔══██║██║   ██║██║     ██║</text>
-        <text class="t" x="0" y="96"  xml:space="preserve">██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝ ╚████╔╝ ██║  ██║╚██████╔╝███████╗██║</text>
-        <text class="t" x="0" y="120" xml:space="preserve">╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝   ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝</text>
-      </g>
-      <text class="tag" x="540" y="192" text-anchor="middle">local-first AI memory  ✻</text>
-    </svg>
 
     <p class="hero-tagline">
       Claude forgets you after every conversation.
@@ -185,7 +164,7 @@
       </div>
       <div class="stat">
         <div class="stat-num">9.8<span class="stat-unit"> MB</span></div>
-        <div class="stat-label">installer<br/>(was 76 MB)</div>
+        <div class="stat-label">installer</div>
       </div>
       <div class="stat">
         <div class="stat-num">1<span class="stat-unit">-click</span></div>
@@ -317,90 +296,55 @@
   <div class="feature-grid">
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="padlock icon"> ╭─╮
- │ │
-╭┴─┴╮
-│ ● │
-╰───╯</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></span>
       <h3>Never leaves your laptop</h3>
       <p>No cloud. No account. No telemetry. Just files.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="network graph icon">●───●
-│╲ ╱│
-│ ● │
-│╱ ╲│
-●───●</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span>
       <h3>See how you think</h3>
       <p>Every note is a node. Force-directed graph, typed links, live.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="magnifying glass icon">╭───╮
-│ ● │
-╰─┬─╯
-  ╲
-   ╲</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></span>
       <h3>Finds anything, fast</h3>
       <p>Semantic + keyword + graph search, fused. Weighted by recency.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="pen icon">╭─╮
-│█│
-│█│
-│█│
- ▼</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
       <h3>Write without friction</h3>
       <p>Live preview, <code>[[wikilinks]]</code>, slash commands, 7 themes.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="diff approval icon">┌─────┐
-│ +   │
-│ -   │
-│ + ✓ │
-└─────┘</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg></span>
       <h3>AI drafts, you approve</h3>
       <p>Claude synthesizes wiki pages from raw notes. Every change is a diff.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="three brains icon">╭─╮╭─╮╭─╮
-│W││R││P│
-╰─╯╰─╯╰─╯
- ●  ○  ○</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.84Z"/><path d="m22 12.5-9.17 4.16a2 2 0 0 1-1.66 0L2 12.5"/><path d="m22 17.5-9.17 4.16a2 2 0 0 1-1.66 0L2 17.5"/></svg></span>
       <h3>A brain per context</h3>
       <p>Work, research, personal — one keystroke. Obsidian-compatible.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="floppy disk save icon">╭────╮
-│┌──┐│
-│└──┘│
-│████│
-╰────╯</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>
       <h3>Claude remembers everything</h3>
       <p>One JSON in your agent config. Persistent memory, every chat.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="sparkle burst icon">╲ │ ╱
- ╲│╱
-──✦──
- ╱│╲
-╱ │ ╲</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg></span>
       <h3>Thinks like you do</h3>
       <p>Recall walks the graph — finds what you meant, not just what you typed.</p>
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="analytics graph icon">  ●
- ╱│╲
-● │ ●
- ╲│╱
-●─●─●</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg></span>
       <h3>See your brain's structure</h3>
       <p>Analytics mode: bigger nodes for what gets referenced most (PageRank),
         soft tints for clusters of linked notes (Louvain). Tip bar explains
@@ -408,11 +352,7 @@
     </article>
 
     <article class="feature reveal">
-      <pre class="feature-ascii" aria-label="agent skill icon">┌──┐
-│⌘ │
-│/ │
-└──┘
- ✦</pre>
+      <span class="feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.2 1.2 0 0 0-1.72 0L2.36 18.64a1.2 1.2 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M7 8H3"/><path d="M21 16h-4"/></svg></span>
       <h3>Your AI session names your clusters</h3>
       <p>No API keys. The <code>/name-clusters</code> skill runs in your
         existing Claude / Cursor session via MCP. Same pattern coming for
@@ -592,5 +532,6 @@
 <div class="grain-overlay" aria-hidden="true"></div>
 
 <script src="./script.js" defer></script>
+<script>window.addEventListener("DOMContentLoaded",function(){if(window.NVBrain)NVBrain.init("#nv-brain");});</script>
 </body>
 </html>

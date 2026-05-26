@@ -480,35 +480,7 @@ export const nvStartRustServer = (port?: number) =>
 export const nvStopRustServer = () =>
   IS_TAURI ? invoke<void>("nv_stop_rust_server") : nvReject("nv_stop_rust_server");
 
-// --- Phase-8 run-python-job --------------------------------------------------
-//
-// Bridge to advanced features that stay in Python (compile, pdf
-// ingest, zotero, code graph, drafts export). Each job spawns a
-// fresh `python -m neurovault_server <name>` subprocess, feeds it
-// `argsJson` on stdin, captures the stdout JSON + stderr log lines,
-// and returns the parsed result. No persistent daemon.
-
-export interface PythonJobResult<T = unknown> {
-  ok: boolean;
-  exit_code: number;
-  /** The JSON payload the CLI module printed to stdout. `null` when
-   *  the job printed nothing (or wasn't expected to). */
-  data: T | null;
-  /** loguru output + any Python tracebacks captured from stderr.
-   *  Surface this to the user on non-OK exits so they see the real
-   *  error instead of a generic "python failed". */
-  stderr: string;
-}
-
-export const runPythonJob = <T = unknown>(
-  jobName: string,
-  argsJson?: unknown,
-  timeoutSecs?: number
-) =>
-  IS_TAURI
-    ? invoke<PythonJobResult<T>>("run_python_job", {
-        jobName,
-        argsJson: argsJson ?? null,
-        timeoutSecs: timeoutSecs ?? null,
-      })
-    : nvReject("run_python_job");
+// `runPythonJob` was removed 2026-05-16 with the Python server. No
+// React component called it. If you need an out-of-process tool
+// again, expose a specific Tauri command rather than the generic
+// "run any python module" surface.
