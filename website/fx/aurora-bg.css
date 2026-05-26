@@ -1,0 +1,128 @@
+/* ============================================
+   AURORA BG — Multi-blob animated aurora background
+   Inspired by Aceternity AuroraBackground, Linear hero gradients
+   ============================================
+   Usage:
+     <div class="aurorabg aurorabg-violet">
+       <!-- your content -->
+     </div>
+
+     Or fixed full-viewport:
+     <div class="aurorabg aurorabg-fixed aurorabg-cosmic"></div>
+
+   Variants:
+     aurorabg-violet, aurorabg-cyan, aurorabg-sunset, aurorabg-ocean,
+     aurorabg-cosmic, aurorabg-dawn, aurorabg-cyber, aurorabg-mint,
+     aurorabg-rose, aurorabg-noir, aurorabg-light
+   Modifiers:
+     aurorabg-fixed       — position:fixed full viewport
+     aurorabg-still       — pause animations
+     aurorabg-fast/slow   — speed override
+     aurorabg-strong      — increase opacity/blur
+     aurorabg-grain       — add grain overlay
+   ============================================ */
+
+.aurorabg {
+  --ab-c1: #6366f1;
+  --ab-c2: #ec4899;
+  --ab-c3: #06b6d4;
+  --ab-c4: #8b5cf6;
+  --ab-bg: #0a0a14;
+  --ab-blur: 80px;
+  --ab-opacity: 0.65;
+  --ab-speed: 22s;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--ab-bg);
+}
+
+.aurorabg::before,
+.aurorabg::after {
+  content: '';
+  position: absolute;
+  inset: -20%;
+  z-index: -1;
+  filter: blur(var(--ab-blur));
+  opacity: var(--ab-opacity);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.aurorabg::before {
+  background:
+    radial-gradient(closest-side at 20% 30%, var(--ab-c1), transparent 70%),
+    radial-gradient(closest-side at 80% 20%, var(--ab-c2), transparent 70%),
+    radial-gradient(closest-side at 70% 80%, var(--ab-c3), transparent 70%),
+    radial-gradient(closest-side at 30% 70%, var(--ab-c4), transparent 70%);
+  animation: ab-drift var(--ab-speed) ease-in-out infinite alternate;
+}
+
+.aurorabg::after {
+  background:
+    radial-gradient(closest-side at 50% 50%, var(--ab-c2), transparent 60%),
+    radial-gradient(closest-side at 10% 90%, var(--ab-c4), transparent 60%),
+    radial-gradient(closest-side at 90% 10%, var(--ab-c1), transparent 60%);
+  mix-blend-mode: screen;
+  animation: ab-drift-rev calc(var(--ab-speed) * 1.3) ease-in-out infinite alternate;
+}
+
+@keyframes ab-drift {
+  0%   { transform: translate3d(0%, 0%, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate3d(2%, -3%, 0) rotate(8deg) scale(1.08); }
+  100% { transform: translate3d(-3%, 4%, 0) rotate(-6deg) scale(1.04); }
+}
+@keyframes ab-drift-rev {
+  0%   { transform: translate3d(0%, 0%, 0) rotate(0deg) scale(1.1); }
+  50%  { transform: translate3d(-4%, 2%, 0) rotate(-10deg) scale(1.02); }
+  100% { transform: translate3d(3%, -2%, 0) rotate(7deg) scale(1.06); }
+}
+
+/* Variants */
+.aurorabg-violet { --ab-c1: #8b5cf6; --ab-c2: #ec4899; --ab-c3: #6366f1; --ab-c4: #d946ef; }
+.aurorabg-cyan   { --ab-c1: #06b6d4; --ab-c2: #3b82f6; --ab-c3: #14b8a6; --ab-c4: #818cf8; }
+.aurorabg-sunset { --ab-c1: #f97316; --ab-c2: #ec4899; --ab-c3: #f59e0b; --ab-c4: #ef4444; --ab-bg: #1a0f0a; }
+.aurorabg-ocean  { --ab-c1: #0ea5e9; --ab-c2: #06b6d4; --ab-c3: #3b82f6; --ab-c4: #6366f1; --ab-bg: #050b1a; }
+.aurorabg-cosmic { --ab-c1: #a855f7; --ab-c2: #ec4899; --ab-c3: #06b6d4; --ab-c4: #f59e0b; --ab-bg: #0a0a14; }
+.aurorabg-dawn   { --ab-c1: #fb923c; --ab-c2: #f472b6; --ab-c3: #fbbf24; --ab-c4: #c084fc; --ab-bg: #1a0f1a; }
+.aurorabg-cyber  { --ab-c1: #00ffff; --ab-c2: #ff00ff; --ab-c3: #00ff7f; --ab-c4: #ffff00; --ab-bg: #000019; --ab-opacity: 0.5; }
+.aurorabg-mint   { --ab-c1: #34d399; --ab-c2: #22d3ee; --ab-c3: #14b8a6; --ab-c4: #6ee7b7; --ab-bg: #021a14; }
+.aurorabg-rose   { --ab-c1: #fb7185; --ab-c2: #f43f5e; --ab-c3: #ec4899; --ab-c4: #f472b6; --ab-bg: #1a0511; }
+.aurorabg-noir   { --ab-c1: #1e293b; --ab-c2: #334155; --ab-c3: #475569; --ab-c4: #0f172a; --ab-bg: #000; --ab-opacity: 0.9; }
+.aurorabg-light  {
+  --ab-c1: #c4b5fd; --ab-c2: #fbcfe8; --ab-c3: #a5f3fc; --ab-c4: #fde68a;
+  --ab-bg: #fafaff; --ab-opacity: 0.55; --ab-blur: 100px;
+}
+
+/* Modifiers */
+.aurorabg-fixed {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+}
+.aurorabg-still::before,
+.aurorabg-still::after { animation: none; }
+.aurorabg-fast { --ab-speed: 10s; }
+.aurorabg-slow { --ab-speed: 40s; }
+.aurorabg-strong { --ab-opacity: 0.85; --ab-blur: 60px; }
+.aurorabg-soft { --ab-opacity: 0.35; --ab-blur: 120px; }
+
+.aurorabg-grain::before { content: ''; }
+.aurorabg-grain > .aurorabg-content { position: relative; z-index: 1; }
+.aurorabg-grain { position: relative; }
+.aurorabg-grain > svg.aurorabg-noise,
+.aurorabg-grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurorabg::before,
+  .aurorabg::after { animation: none; }
+}

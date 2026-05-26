@@ -298,6 +298,14 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
     // which writes a derived `pref-*` engram for the buried clause.
     ingest::ingest_content(PREFERENCE_FIXTURE.0, PREFERENCE_FIXTURE.1, &db)
         .unwrap_or_else(|e| panic!("ingest preference fixture failed: {e}"));
+    // Chunk-window fixture (improvement #6): one long note whose
+    // distinctive detail ("nondiegetic") sits ~char 2400 — past both the
+    // 1200-char head window and the 2000-char document-chunk cap. The only
+    // chunk carrying it is a late sentence window, so surfacing it depends
+    // entirely on appending the matched chunk (the fix under test).
+    let cw_body = chunk_window_fixture_body();
+    ingest::ingest_content("param-reference.md", &cw_body, &db)
+        .unwrap_or_else(|e| panic!("ingest chunk-window fixture failed: {e}"));
 
     // --- recency-ablated opts: deterministic oracle ---
     let opts = RecallOpts {
@@ -631,6 +639,52 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
         ));
     }
 
+    // ----------------------------------------------------------------
+    // Improvement #6 — chunk-window expansion, deterministic A/B.
+    //
+    // The `chunk_window` ablate flag is the A/B switch (same `db`, recency
+    // ablated). The `param-reference` note buries a unique token
+    // ("nondiegetic") past the head/doc-chunk caps; the query targets it.
+    // Load-bearing iff:
+    //   flag ON  → the returned hit's content CONTAINS the buried detail
+    //              (matched late chunk appended);
+    //   flag OFF → it does NOT (head-only return cuts it) — proving the
+    //              probe actually isolates the fix (detail is past the head).
+    // ----------------------------------------------------------------
+    let cw_query = "which output parameter covers nondiegetic sound effects";
+    let cw_on = RecallOpts {
+        top_k: 5,
+        ablate: vec!["recency".to_string()],
+        ..RecallOpts::default()
+    };
+    let cw_off = RecallOpts {
+        top_k: 5,
+        ablate: vec!["recency".to_string(), "chunk_window".to_string()],
+        ..RecallOpts::default()
+    };
+    let returns_buried_detail = |opts: &RecallOpts| -> bool {
+        let hits = retriever::hybrid_retrieve(&db, cw_query, opts)
+            .unwrap_or_else(|e| panic!("chunk_window A/B recall failed: {e}"));
+        hits.iter()
+            .any(|h| h.content.to_lowercase().contains("nondiegetic"))
+    };
+    let cw_on_has = returns_buried_detail(&cw_on);
+    let cw_off_has = returns_buried_detail(&cw_off);
+    if !cw_on_has {
+        failures.push(format!(
+            "imp#6 A/B: chunk_window ON did NOT return the buried \
+             'nondiegetic' detail for '{cw_query}' — matched chunk not \
+             appended"
+        ));
+    }
+    if cw_off_has {
+        failures.push(
+            "imp#6 A/B: chunk_window OFF already returned the buried detail \
+             — the probe doesn't isolate the fix (detail is not actually \
+             past the head window)".to_string(),
+        );
+    }
+
     db::close_all();
     let _ = std::fs::remove_dir_all(&home);
 
@@ -663,4 +717,32 @@ fn expected_keyword(stem: &str) -> &'static str {
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").trim().to_string()
+}
+
+/// Long single-note body for the chunk-window A/B. 50 "Parameter N: …"
+/// sentences (each ~75 chars, capital-`P` start so the sentence splitter
+/// breaks them cleanly into windows). The distinctive token "nondiegetic"
+/// appears ONLY in parameter 40 (~char 2400) — past the 1200 head window
+/// and the 2000 doc-chunk cap, so it lives solely in a late sentence
+/// chunk. A head-only return cannot contain it; appending the matched
+/// chunk can.
+fn chunk_window_fixture_body() -> String {
+    let mut body = String::from(
+        "# Parameter reference\n\nThe assistant supports the following \
+         output parameters you can specify. ",
+    );
+    for n in 1..=50 {
+        if n == 40 {
+            body.push_str(
+                "Parameter 40: Sound effects such as ambient, diegetic, and \
+                 nondiegetic layering for immersive scenes. ",
+            );
+        } else {
+            body.push_str(&format!(
+                "Parameter {n}: Adjustable control number {n} for shaping the \
+                 overall response style and structure. "
+            ));
+        }
+    }
+    body
 }

@@ -58,3 +58,8 @@ server-*.err
 bench/**/*.log
 bench/**/*.log.err
 bench/**/server_*.log*
+
+# build logs + scratch screenshots/scripts
+build_*.txt
+/_*.png
+/_*.mjs

@@ -3,8 +3,8 @@
    Palette + type borrow from the app's brand:
      bg           #0b0b12     deep navy
      surface      #11111b     panel
-     peach        #DE7356     primary accent
-     peach-soft   #FFAF87     secondary accent
+     peach        #2F7BF6     primary accent
+     peach-soft   #7FB0FF     secondary accent
    Type: JetBrains Mono for the logo and code, Inter for prose.
    Techniques pulled from ../frontendmaxxing/: aurora blobs,
    glassmorphic feature cards, scroll-triggered reveal, grain.
@@ -15,15 +15,15 @@
   --bg-deep:      #07070c;
   --surface:      #11111b;
   --surface-2:    #15151f;
-  --border:       rgba(255, 175, 135, 0.12);
-  --border-hot:   rgba(222, 115, 86, 0.45);
-  --text:         #f4ece7;
-  --text-muted:   #d4cac3;
-  --text-dim:     #9c9089;
+  --border:       rgba(47, 123, 246, 0.12);
+  --border-hot:   rgba(47, 123, 246, 0.45);
+  --text:         #eef2f8;
+  --text-muted:   #c4cdda;
+  --text-dim:     #8b96a6;
 
-  --peach:        #DE7356;
-  --peach-soft:   #FFAF87;
-  --peach-glow:   rgba(222, 115, 86, 0.35);
+  --peach:        #2F7BF6;
+  --peach-soft:   #7FB0FF;
+  --peach-glow:   rgba(47, 123, 246, 0.35);
 
   --radius:       14px;
   --radius-lg:    22px;
@@ -75,7 +75,7 @@ body {
 
 a { color: inherit; text-decoration: none; }
 code { font-family: var(--mono); font-size: 0.9em;
-  background: rgba(255, 175, 135, 0.08);
+  background: rgba(47, 123, 246, 0.08);
   padding: 1px 6px;
   border-radius: 4px;
   color: var(--peach-soft);
@@ -206,7 +206,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   border-radius: 8px;
   background: linear-gradient(135deg, var(--peach) 0%, #c3624a 100%);
   color: #1a0b06;
-  border: 1px solid rgba(255, 175, 135, 0.3);
+  border: 1px solid rgba(47, 123, 246, 0.3);
   transition: transform .15s ease, box-shadow .2s ease;
 }
 .nav-cta:hover {
@@ -250,13 +250,13 @@ code { font-family: var(--mono); font-size: 0.9em;
 .aurora-blob-1 {
   top: -10%; left: -5%;
   width: 520px; height: 520px;
-  background: radial-gradient(circle, #DE7356 0%, transparent 60%);
+  background: radial-gradient(circle, #2F7BF6 0%, transparent 60%);
   animation-delay: 0s;
 }
 .aurora-blob-2 {
   top: 15%; right: -8%;
   width: 580px; height: 580px;
-  background: radial-gradient(circle, #FFAF87 0%, transparent 55%);
+  background: radial-gradient(circle, #7FB0FF 0%, transparent 55%);
   animation-delay: -4s;
 }
 .aurora-blob-3 {
@@ -277,8 +277,8 @@ code { font-family: var(--mono); font-size: 0.9em;
   position: absolute; inset: 0; z-index: 1;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 175, 135, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 175, 135, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(47, 123, 246, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 123, 246, 0.035) 1px, transparent 1px);
   background-size: 60px 60px;
   mask-image: radial-gradient(ellipse at 50% 40%, #000 40%, transparent 85%);
   -webkit-mask-image: radial-gradient(ellipse at 50% 40%, #000 40%, transparent 85%);
@@ -290,7 +290,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   gap: 8px;
   padding: 6px 14px;
   border-radius: 100px;
-  background: rgba(255, 175, 135, 0.06);
+  background: rgba(47, 123, 246, 0.06);
   border: 1px solid var(--border);
   font-family: var(--mono);
   font-size: 12px;
@@ -392,7 +392,7 @@ code { font-family: var(--mono); font-size: 0.9em;
     var(--peach) 100%);
   background-size: 220% 220%;
   color: #1a0b06;
-  border-color: rgba(255, 175, 135, 0.42);
+  border-color: rgba(47, 123, 246, 0.42);
   box-shadow:
     0 10px 30px -10px var(--peach-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.20),
@@ -424,7 +424,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   border-color: rgba(255, 215, 190, 0.6);
   box-shadow:
     0 16px 44px -10px var(--peach-glow),
-    0 0 0 1px rgba(255, 175, 135, 0.35),
+    0 0 0 1px rgba(47, 123, 246, 0.35),
     inset 0 1px 0 rgba(255, 255, 255, 0.30),
     inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   animation-duration: 4s, 2.4s;
@@ -449,7 +449,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   50% {
     box-shadow:
       0 12px 36px -10px var(--peach-glow),
-      0 0 0 1px rgba(255, 175, 135, 0.18),
+      0 0 0 1px rgba(47, 123, 246, 0.18),
       inset 0 1px 0 rgba(255, 255, 255, 0.26),
       inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   }
@@ -462,13 +462,13 @@ code { font-family: var(--mono); font-size: 0.9em;
   .btn-primary::before { transition: none; }
 }
 .btn-secondary {
-  background: rgba(255, 175, 135, 0.05);
+  background: rgba(47, 123, 246, 0.05);
   color: var(--text);
   border-color: var(--border);
   backdrop-filter: blur(10px);
 }
 .btn-secondary:hover {
-  background: rgba(255, 175, 135, 0.1);
+  background: rgba(47, 123, 246, 0.1);
   border-color: var(--border-hot);
   transform: translateY(-2px);
 }
@@ -486,13 +486,13 @@ code { font-family: var(--mono); font-size: 0.9em;
     linear-gradient(135deg,
       rgba(255, 255, 255, 0.10) 0%,
       rgba(255, 255, 255, 0.04) 60%,
-      rgba(255, 175, 135, 0.06) 100%);
+      rgba(47, 123, 246, 0.06) 100%);
   border-color: rgba(255, 255, 255, 0.18);
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   box-shadow:
     0 8px 28px rgba(0, 0, 0, 0.28),
-    0 2px 8px rgba(255, 175, 135, 0.10),
+    0 2px 8px rgba(47, 123, 246, 0.10),
     inset 0 1px 0 rgba(255, 255, 255, 0.30),
     inset 0 -1px 0 rgba(0, 0, 0, 0.20);
 }
@@ -650,7 +650,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background:
-    radial-gradient(ellipse at 50% 0%, rgba(222, 115, 86, 0.08), transparent 70%),
+    radial-gradient(ellipse at 50% 0%, rgba(47, 123, 246, 0.08), transparent 70%),
     var(--bg-deep);
 }
 .pitch-inner {
@@ -690,7 +690,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   background:
     linear-gradient(90deg,
       var(--bg) 0%,
-      rgba(222, 115, 86, 0.04) 50%,
+      rgba(47, 123, 246, 0.04) 50%,
       var(--bg) 100%);
   position: relative;
   mask-image: linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%);
@@ -711,7 +711,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   font-size: 13px;
   color: var(--peach);
   letter-spacing: 0.02em;
-  text-shadow: 0 0 8px rgba(222, 115, 86, 0.25);
+  text-shadow: 0 0 8px rgba(47, 123, 246, 0.25);
 }
 .marquee-group > span {
   flex-shrink: 0;
@@ -773,7 +773,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   padding: 20px 20px;
   background: linear-gradient(
     150deg,
-    rgba(255, 175, 135, 0.04) 0%,
+    rgba(47, 123, 246, 0.04) 0%,
     rgba(255, 255, 255, 0.015) 100%
   );
   border: 1px solid var(--border);
@@ -811,9 +811,9 @@ code { font-family: var(--mono); font-size: 0.9em;
   padding: 1px;
   background: linear-gradient(
     135deg,
-    rgba(222, 115, 86, 0) 0%,
-    rgba(222, 115, 86, 0.5) 50%,
-    rgba(222, 115, 86, 0) 100%
+    rgba(47, 123, 246, 0) 0%,
+    rgba(47, 123, 246, 0.5) 50%,
+    rgba(47, 123, 246, 0) 100%
   );
   -webkit-mask:
     linear-gradient(#000, #000) content-box,
@@ -851,7 +851,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   margin: 0 0 12px;
   white-space: pre;
   letter-spacing: 0;
-  text-shadow: 0 0 10px rgba(222, 115, 86, 0.35);
+  text-shadow: 0 0 10px rgba(47, 123, 246, 0.35);
   transition: transform .25s ease, text-shadow .25s ease, color .25s ease;
   user-select: none;
   min-height: 60px;
@@ -859,7 +859,7 @@ code { font-family: var(--mono); font-size: 0.9em;
 .feature:hover .feature-ascii {
   transform: translateY(-1px) scale(1.04);
   color: var(--peach-soft);
-  text-shadow: 0 0 18px rgba(255, 175, 135, 0.55);
+  text-shadow: 0 0 18px rgba(47, 123, 246, 0.55);
 }
 [data-theme="blue"] .feature-ascii {
   text-shadow: 0 0 10px rgba(77, 212, 232, 0.35);
@@ -890,8 +890,8 @@ code { font-family: var(--mono); font-size: 0.9em;
 .screens {
   padding: clamp(70px, 11vh, 120px) clamp(16px, 4vw, 40px);
   background:
-    radial-gradient(ellipse at 20% 20%, rgba(222, 115, 86, 0.05), transparent 60%),
-    radial-gradient(ellipse at 80% 80%, rgba(255, 175, 135, 0.05), transparent 60%),
+    radial-gradient(ellipse at 20% 20%, rgba(47, 123, 246, 0.05), transparent 60%),
+    radial-gradient(ellipse at 80% 80%, rgba(47, 123, 246, 0.05), transparent 60%),
     var(--bg-deep);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -915,8 +915,8 @@ code { font-family: var(--mono); font-size: 0.9em;
   padding: 10px;
   background: linear-gradient(
     135deg,
-    rgba(222, 115, 86, 0.18) 0%,
-    rgba(255, 175, 135, 0.08) 50%,
+    rgba(47, 123, 246, 0.18) 0%,
+    rgba(47, 123, 246, 0.08) 50%,
     transparent 100%
   );
   box-shadow:
@@ -997,7 +997,7 @@ code { font-family: var(--mono); font-size: 0.9em;
 .privacy {
   padding: clamp(70px, 11vh, 120px) clamp(16px, 4vw, 40px);
   background:
-    radial-gradient(ellipse at 50% 100%, rgba(222, 115, 86, 0.1), transparent 70%),
+    radial-gradient(ellipse at 50% 100%, rgba(47, 123, 246, 0.1), transparent 70%),
     var(--bg-deep);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -1055,7 +1055,7 @@ code { font-family: var(--mono); font-size: 0.9em;
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 50% 50%, rgba(222, 115, 86, 0.18), transparent 65%);
+    radial-gradient(ellipse at 50% 50%, rgba(47, 123, 246, 0.18), transparent 65%);
   pointer-events: none;
 }
 .cta-inner {

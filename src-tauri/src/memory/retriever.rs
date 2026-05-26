@@ -833,6 +833,63 @@ pub fn hybrid_retrieve(
         }
     }
 
+    // --- Matched-chunk content map (engram_id -> best-matching chunk text) --
+    // Recall fuses to engram granularity, but the *located* answer span lives
+    // in the specific chunk that matched. We thread that chunk's text through
+    // so candidate assembly can surface it even when it sits past the engram
+    // -content head window — fixing long-turn "remind me detail X" truncation
+    // (the matched chunk, not the head, is what scored). Semantic hits already
+    // carry chunk content; BM25 gives chunk ids we resolve against `chunks`.
+    // Ordered fill (semantic best first, then BM25 in rank order) means each
+    // engram keeps its highest-ranked matching chunk.
+    let mut best_chunk_text: HashMap<String, String> = HashMap::new();
+    for h in &semantic_hits {
+        if !h.content.trim().is_empty() {
+            best_chunk_text
+                .entry(h.engram_id.clone())
+                .or_insert_with(|| h.content.clone());
+        }
+    }
+    {
+        let top_bm: Vec<String> = chunk_ids.iter().take(candidate_pool).cloned().collect();
+        if !top_bm.is_empty() {
+            let placeholders = std::iter::repeat("?")
+                .take(top_bm.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            // Resolve matched-chunk content in a tight scope so the lock /
+            // statement / rows all drop before the fill loop runs.
+            let id_content: HashMap<String, String> = {
+                let conn = db.lock();
+                let map = match conn.prepare(&format!(
+                    "SELECT id, content FROM chunks WHERE id IN ({})",
+                    placeholders
+                )) {
+                    Ok(mut stmt) => match stmt
+                        .query_map(rusqlite::params_from_iter(top_bm.iter()), |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        }) {
+                        Ok(rows) => rows.flatten().collect(),
+                        Err(_) => HashMap::new(),
+                    },
+                    Err(_) => HashMap::new(),
+                };
+                map
+            };
+            for cid in &top_bm {
+                if let (Some(eid), Some(ct)) =
+                    (chunk_to_engram.get(cid), id_content.get(cid))
+                {
+                    if !ct.trim().is_empty() {
+                        best_chunk_text
+                            .entry(eid.clone())
+                            .or_insert_with(|| ct.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // --- Signal 3: graph traverse ---
     let graph_ranked = graph_retrieve(db, query, candidate_pool)?;
 
@@ -1228,7 +1285,26 @@ pub fn hybrid_retrieve(
         {
             continue;
         }
-        let trimmed: String = content.chars().take(1000).collect();
+        // Return content that includes the *matched* region, not just the
+        // engram head. If the best-matching chunk's opening isn't already
+        // within the head window, append it so a detail buried past the head
+        // (e.g. "the 27th parameter", "the third objective") is present.
+        // Bounded so recall payload stays reasonable.
+        let head: String = content.chars().take(1200).collect();
+        let trimmed: String = match best_chunk_text.get(&id) {
+            Some(ch) if !ch.trim().is_empty() && !is_ablated(opts, "chunk_window") => {
+                let probe: String = ch.trim().chars().take(40).collect();
+                if head.contains(&probe) {
+                    head
+                } else {
+                    let mut s = head;
+                    s.push_str("\n…\n");
+                    s.push_str(ch.trim());
+                    s.chars().take(3200).collect()
+                }
+            }
+            _ => head,
+        };
         candidates.push(Candidate {
             engram_id: id,
             title,
