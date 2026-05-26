@@ -268,7 +268,7 @@
         '<h1>Page not found</h1><p>The page <code>' +
         slug +
         "</code> doesn't exist. " +
-        '<a href="#' + DEFAULT_SLUG + '">Back to the overview</a>.</p>";
+        '<a href="#' + DEFAULT_SLUG + '">Back to the overview</a>.</p>';
       setActiveSidebarLink(null);
       return;
     }
