@@ -382,3 +382,14 @@ body.docs-body {
   z-index: 44;
 }
 .sidebar-backdrop.is-visible { display: block; }
+
+/* --- v0.2.0 blue rebrand: nav consistency with landing page --- */
+:root{--sans:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.nav{display:grid;grid-template-columns:1fr auto 1fr;align-items:center}
+.nav-logo{justify-self:start;gap:8px}
+.nav-logo-icon{width:50px;height:50px;border-radius:0;box-shadow:none}
+.nav-logo-word{height:15px;width:auto;display:block}
+.nav-links{justify-self:center}
+.nav-cta{justify-self:end;display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:9px 17px;font-weight:600;background:var(--peach)!important;background-image:none!important;color:#fff!important;box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 7px 18px -7px rgba(47,123,246,.65)}
+.nav-cta:hover{transform:translateY(-1px)}
+.nav-cta-ic{width:15px;height:15px}
