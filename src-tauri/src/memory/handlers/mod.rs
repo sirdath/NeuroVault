@@ -5205,6 +5205,29 @@ pub async fn todos_complete(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
+pub struct DiagnosticQuery {
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+/// GET /api/diagnostic — brain health scorecard. Backs the MCP
+/// `diagnose_brain` tool and the in-app Diagnostic panel.
+pub async fn diagnostic_get(
+    _s: State<ServerState>,
+    Query(q): Query<DiagnosticQuery>,
+) -> Result<Json<super::diagnostic::DiagnosticReport>, ApiError> {
+    let report = tokio::task::spawn_blocking(move || -> Result<_, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        super::diagnostic::diagnose(&db)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(report))
+}
+
+#[derive(Deserialize, Default)]
 pub struct InboxListQuery {
     #[serde(default)]
     brain: Option<String>,

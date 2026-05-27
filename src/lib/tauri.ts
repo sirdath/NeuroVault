@@ -383,6 +383,26 @@ export const nvInboxList = (brainId?: string): Promise<NvInboxFile[]> =>
     ? invoke<NvInboxFile[]>("nv_inbox_list", { brainId: brainId ?? null })
     : Promise.resolve([]);
 
+// --- Brain diagnostic -------------------------------------------------------
+
+export interface NvDiagCategory { key: string; label: string; score: number; detail: string }
+export interface NvDiagIssue { label: string; count: number; severity: string }
+export interface NvDiagnosticReport {
+  grade: string;
+  score: number;
+  total: number;
+  categories: NvDiagCategory[];
+  issues: NvDiagIssue[];
+}
+
+/** Brain health scorecard. DB-backed (sees dormant notes), so it's the
+ *  authoritative report; the UI falls back to a client-side estimate from
+ *  the loaded graph if this fails (e.g. server still booting). */
+export const nvDiagnose = (brainId?: string): Promise<NvDiagnosticReport> =>
+  IS_TAURI
+    ? invoke<NvDiagnosticReport>("nv_diagnose", { brainId: brainId ?? null })
+    : httpJsonGet<NvDiagnosticReport>("/api/diagnostic", { brain: brainId });
+
 // --- Phase-6 recall + Rust HTTP server --------------------------------------
 
 export interface NvRecallHit {

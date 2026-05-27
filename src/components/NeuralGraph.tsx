@@ -2067,6 +2067,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         nodes={nodes}
         edges={rawEdges}
         brainName={brainName}
+        brainId={activeBrainId ?? undefined}
       />
 
       {/* Filters / Display / Layout / Time-lapse panel — slides in
