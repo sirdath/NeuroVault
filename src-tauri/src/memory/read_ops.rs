@@ -318,7 +318,7 @@ pub fn get_graph(
     let e2_kind_filter = kind_filter.replace("kind", "e2.kind");
 
     let nodes_sql = format!(
-        "SELECT id, title, state, strength, access_count
+        "SELECT id, title, state, strength, access_count, created_at
          FROM engrams
          WHERE state != 'dormant'{}",
         kind_filter
@@ -333,6 +333,7 @@ pub fn get_graph(
                 strength: r.get(3)?,
                 access_count: r.get(4)?,
                 folder: None,
+                created_at: r.get::<_, Option<String>>(5).unwrap_or(None),
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

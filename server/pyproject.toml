@@ -1,40 +1,27 @@
 [project]
-name = "neurovault-server"
-version = "0.2.0"
-description = "Local AI memory MCP server for NeuroVault"
+name = "neurovault-mcp-proxy"
+version = "0.3.0"
+description = "Thin MCP-stdio ↔ HTTP forwarder for NeuroVault. The real backend lives in Rust."
 requires-python = ">=3.13"
+
+# server/ used to host a full Python NeuroVault server (~18.6k LOC,
+# fastembed + sqlite-vec + fastapi + sentence-transformers + ...) but
+# that's been deleted in favour of the Rust backend at
+# src-tauri/target/release/neurovault-server.exe.
+#
+# What's left in server/ is two tiny stdio shims:
+#   * mcp_proxy.py            — Claude clients spawn this; it forwards
+#                                MCP JSON-RPC to http://127.0.0.1:8765
+#   * scripts/neurovault_hook.py — Claude Code lifecycle hook events
+#                                  POST to /api/observations
+#
+# Neither shim loads ML models, opens SQLite, or holds long-lived
+# state. The only runtime dep is the `mcp` SDK for the FastMCP stdio
+# transport — everything else is stdlib (urllib, json, os, argparse).
+# Cold start is sub-second; resident RAM is ~30 MB per spawned proxy.
+#
+# See docs/python-server-reference.md for what the deleted package
+# used to contain and the design notes worth keeping.
 dependencies = [
     "mcp[cli]>=1.6.0",
-    "sentence-transformers>=4.0",
-    "sqlite-vec>=0.1.6",
-    "pydantic>=2.10",
-    "anthropic>=0.40.0",
-    "loguru>=0.7",
-    "watchdog>=6.0.0",
-    "rank-bm25>=0.2.2",
-    "fastapi>=0.135.3",
-    "uvicorn>=0.44.0",
-    "pymupdf>=1.27.2.2",
-    # Embedding runtime — ONNX-backed bge-small-en-v1.5, replaces
-    # the torch-heavy default of sentence-transformers at ingest time.
-    "fastembed>=0.3",
-    # Direct consumers in ingest.py, intelligence.py, retriever.py.
-    # Already present transitively via fastembed/sentence-transformers,
-    # but declared explicitly so a future dep swap doesn't break us.
-    "numpy>=1.26",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-]
-ast = [
-    "tree-sitter>=0.23",
-    "tree-sitter-language-pack>=0.7",
-]
-
-[dependency-groups]
-dev = [
-    "pyinstaller>=6.19.0",
 ]

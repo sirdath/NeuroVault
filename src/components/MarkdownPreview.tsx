@@ -19,8 +19,8 @@ import { WikiLink } from "./WikiLink";
 
 interface MarkdownPreviewProps {
   content: string;
-  /** Caller-supplied handler. Omit in read-only contexts (e.g. the
-   *  compilation review panel) where there's nothing to switch to. */
+  /** Caller-supplied handler. Omit in read-only contexts (e.g. a
+   *  preview-only panel) where there's nothing to switch to. */
   onSwitchToEdit?: () => void;
 }
 

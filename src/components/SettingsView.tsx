@@ -3,6 +3,7 @@ import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
+import { useUpdateStore } from "../stores/updateStore";
 
 
 const FONT_SIZES = [
@@ -327,12 +328,13 @@ export function SettingsView() {
             <ShortcutRow keys="Ctrl+P" action="Cycle views" />
             <ShortcutRow keys="Ctrl+S" action="Save note" />
             <ShortcutRow keys="Ctrl+/" action="Focus search" />
-            <ShortcutRow keys="Ctrl+Shift+K" action="Compilations" />
             <ShortcutRow keys="Ctrl+Shift+Space" action="Quick capture" />
             <ShortcutRow keys="Escape" action="Exit edit mode" />
             <ShortcutRow keys="?" action="Show all shortcuts" />
           </div>
         </Section>
+
+        <UpdatesSection />
 
         <Section title="About">
           <div className="flex items-center gap-3">
@@ -358,7 +360,7 @@ export function SettingsView() {
               <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
             </svg>
             <div>
-              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault v0.1.8</p>
+              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
                 Local-first AI memory system. Your data never leaves your machine.
               </p>
@@ -448,6 +450,88 @@ function McpConnectionBadge() {
  * minimal (just `command`) since more keys are optional and would
  * distract from the copy-paste target.
  */
+/** Live app version (from tauri.conf via getVersion). Falls back to a
+ *  dash in browser/dev mode where the Tauri API isn't present. */
+function AppVersion() {
+  const [v, setV] = useState<string>("");
+  useEffect(() => {
+    let alive = true;
+    import("@tauri-apps/api/app")
+      .then((m) => m.getVersion())
+      .then((ver) => { if (alive) setV(ver); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  return <>v{v || "—"}</>;
+}
+
+/** Updates section. Shares the global update store with the top-bar
+ *  Update pill, so a check here lights up the pill (and vice-versa).
+ *  "Update" downloads + installs via the native updater when configured,
+ *  else opens the GitHub release page (current unsigned-installer state). */
+function UpdatesSection() {
+  const info = useUpdateStore((s) => s.info);
+  const checking = useUpdateStore((s) => s.checking);
+  const installing = useUpdateStore((s) => s.installing);
+  const progress = useUpdateStore((s) => s.progress);
+  const restartPending = useUpdateStore((s) => s.restartPending);
+  const check = useUpdateStore((s) => s.check);
+  const install = useUpdateStore((s) => s.install);
+  const restart = useUpdateStore((s) => s.restart);
+
+  const subtitle = restartPending
+    ? "Update installed — restart to apply."
+    : info
+    ? info.updateAvailable
+      ? `Update available: v${info.latest}`
+      : "You're on the latest version."
+    : "Check GitHub for a newer release.";
+
+  const pct = progress != null ? Math.round(progress * 100) : null;
+
+  return (
+    <Section title="Updates">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+            Current version <AppVersion />
+          </p>
+          <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
+            {subtitle}
+          </p>
+        </div>
+        {restartPending ? (
+          <button
+            onClick={() => restart()}
+            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+          >
+            Restart now
+          </button>
+        ) : info?.updateAvailable ? (
+          <button
+            onClick={() => install()}
+            disabled={installing}
+            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors disabled:opacity-70"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+          >
+            {installing ? (pct != null ? `Updating… ${pct}%` : "Updating…") : `Update to v${info.latest}`}
+          </button>
+        ) : (
+          <button
+            onClick={() => check(false)}
+            disabled={checking}
+            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors disabled:opacity-50"
+            style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+          >
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 function McpSection() {
   const [sidecarPath, setSidecarPath] = useState<string>("");
   const [configPath, setConfigPath] = useState<string>("");

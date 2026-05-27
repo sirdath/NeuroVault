@@ -63,3 +63,10 @@ bench/**/server_*.log*
 build_*.txt
 /_*.png
 /_*.mjs
+
+# demo-video: separate Remotion project, not part of the app repo
+# (kept locally, untracked).
+demo-video/
+
+# Local benchmarking scratch — not part of the app.
+bench/

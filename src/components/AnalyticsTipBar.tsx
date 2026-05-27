@@ -28,7 +28,7 @@ import { useCallback, useEffect, useState } from "react";
 const SESSION_DISMISS_KEY = "nv.graph.tipBar.dismissed";
 
 const DEFAULT_IDLE_COPY =
-  "Bigger nodes are more referenced. Background colours group notes that link to each other.";
+  "Node size = how often referenced · ring colour = health · tint = category. The legend (bottom-left) lists every cluster — click one to frame it.";
 
 interface AnalyticsTipBarProps {
   visible: boolean;
@@ -177,14 +177,21 @@ function AnalyticsHelpModal({ onClose }: { onClose: () => void }) {
             brain orbits around.
           </p>
           <p>
-            <strong>Background tints</strong> mark groups of notes that
-            link to each other a lot. Notes that share a tint are usually
-            on the same topic, even if they're in different folders.
+            <strong>The ring</strong> around each node shows its health:
+            teal = active and well-connected, amber = freshly added, dim grey
+            = dormant (rarely accessed). A thicker ring means a stronger memory.
+          </p>
+          <p>
+            <strong>Fill colour and background tints</strong> mark category —
+            notes in the same folder share a colour, and the legend groups
+            notes that heavily link to each other into clusters.
           </p>
           <p style={{ color: "var(--nv-text-muted)" }}>
-            All of this runs locally on your machine. Nothing is sent
-            anywhere. The math (PageRank for sizing, Louvain for groups)
-            recomputes only when your brain changes.
+            The <strong>legend</strong> (bottom-left) lists every cluster
+            NeuroVault found, biggest first — click one to fly the camera to
+            it. All of this runs locally; nothing is sent anywhere. The math
+            (PageRank for sizing, Louvain for clusters) recomputes only when
+            your brain changes.
           </p>
         </div>
         <div className="flex justify-end mt-5">
