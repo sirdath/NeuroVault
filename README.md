@@ -156,6 +156,23 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 **Session wake-up** — `session_start` returns layered context: L0 (~100 tokens, identity), L1 (~300 tokens, top active memories), L2 (on demand via `recall()`).
 
+**Brain diagnostic** — a one-click health scorecard for your vault. Distils the graph into five graded categories + a headline grade and a worst-first list of fixes. "Copy report" emits a plain-text scorecard you can paste to your agent, so it acts on the issues — the maintenance loop the agent is meant to own.
+
+```
+NeuroVault brain diagnostic — work
+Overall: B  (84/100, 412 notes)
+
+Connectivity  ██████████████████████░░  88%
+Interlinking  ███████████████░░░░░░░░░  63%
+Cohesion      ███████████████████████░  94%
+Freshness     ██████████████████░░░░░░  74%
+Organization  ████████████░░░░░░░░░░░░  51%
+
+Top fixes:
+  - 49 orphan notes with no links — connect or merge them
+  - 201 unfiled notes in the root — sort into folders
+```
+
 ---
 
 ## Quick start (developers)

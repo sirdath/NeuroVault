@@ -15,6 +15,7 @@ import {
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
 import { GraphLegend } from "./GraphLegend";
+import { BrainDiagnostic } from "./BrainDiagnostic";
 import { nvSetPagerank, nvSetClusters, nvGetClusterNames, readNote, type NvClusterSummary } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -769,7 +770,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [toggleAnalyticsMode]);
 
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
+  const brains = useBrainStore((s) => s.brains);
   const notesList = useNoteStore((s) => s.notes);
+  const brainName = brains.find((b) => b.id === activeBrainId)?.name ?? "brain";
+  const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   useEffect(() => { loadGraph(); }, [loadGraph, activeBrainId, notesList]);
 
   // Pulse-ring state. `focusPulse` carries the node id + start time
@@ -1972,6 +1976,22 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           Refresh
         </button>
         <button
+          onClick={() => setDiagnosticOpen(true)}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
+          style={{
+            background: "var(--nv-surface)",
+            color: "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-label="Run brain diagnostic"
+          title="Brain diagnostic — a health scorecard for this brain"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+            <path d="M3 12h4l2 5 4-12 2 7h6" />
+          </svg>
+          Diagnostic
+        </button>
+        <button
           onClick={toggleAnalyticsMode}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
           style={{
@@ -2040,6 +2060,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         visible={analyticsMode}
         clusters={legendClusters}
         onFocusCluster={handleFocusCluster}
+      />
+      <BrainDiagnostic
+        open={diagnosticOpen}
+        onClose={() => setDiagnosticOpen(false)}
+        nodes={nodes}
+        edges={rawEdges}
+        brainName={brainName}
       />
 
       {/* Filters / Display / Layout / Time-lapse panel — slides in
