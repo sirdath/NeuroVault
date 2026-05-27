@@ -65,6 +65,15 @@
   <!-- Sidebar: data-driven from docs.js so adding a page = one line.
        The sections / items mirror the markdown files in ./content/. -->
   <aside id="docs-sidebar" class="docs-sidebar" aria-label="Documentation navigation">
+    <!-- Search trigger — opens the Cmd/Ctrl+K palette. -->
+    <button id="docs-search-trigger" class="docs-search-trigger" type="button" aria-label="Search docs">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <span>Search</span>
+      <kbd class="docs-search-trigger-kbd">⌘K</kbd>
+    </button>
     <nav class="docs-nav">
       <!-- docs.js populates this -->
     </nav>

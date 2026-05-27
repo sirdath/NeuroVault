@@ -123,7 +123,7 @@ Everything NeuroVault persists lives under `~/.neurovault/`:
 | `query_affinity` | Stage-4 learned query→engram boosts (schema only; logic not fully ported) |
 | `retrieval_feedback` | Every recall's top-K + was_accessed flag (for self-improving ranking) |
 | `contradictions` | Detected conflicting facts |
-| `compilations` | Wiki-page compile history (approve/reject workflow) |
+| `compilations` | Wiki-page compile history — **dormant** (the in-app Compilations tab was removed in v0.2; the table is retained, unused, for backward compatibility) |
 
 **Embeddings.** Each chunk's `embed_text` is **title-prefixed** (`"{title}: {chunk_content}"`) before encoding. This gives the semantic model topic context — a sentence from a deep note isn't scored in isolation.
 
@@ -377,7 +377,7 @@ Three primary views, togglable via the tab bar or `Ctrl+1/2/3`:
 - `Ctrl+N` — new note
 - `Ctrl+S` — save
 - `Ctrl+P` — cycle views
-- `Ctrl+1/2/3` — editor / graph / compile
+- `Ctrl+1/2` — editor / graph
 - `Ctrl+/` — focus search
 - `?` — shortcut help modal
 - `Esc` — close overlays
@@ -561,13 +561,13 @@ The places a future maintainer will actually be reading/editing:
 - `components/Sidebar.tsx` — virtualised note list.
 - `components/CommandPalette.tsx` — fuzzy search + memory hits.
 - `components/SettingsView.tsx` — theme/density/fontSize/brain management.
-- `stores/*Store.ts` — Zustand state (noteStore, graphStore, brainStore, hoverPreviewStore, settingsStore, densityStore, toastStore, compilationStore).
+- `stores/*Store.ts` — Zustand state (noteStore, graphStore, graphSettingsStore, brainStore, hoverPreviewStore, settingsStore, densityStore, toastStore).
 - `lib/tauri.ts` — Tauri command wrappers with browser fallbacks.
 - `lib/api.ts` — HTTP API client, prefers `nv_*` Tauri commands with graceful fallback.
 
 **MCP proxy (`server/`):**
 - `mcp_proxy.py` — the only file that matters for MCP integration.
-- `neurovault_server/` — Python codebase kept for advanced features (compile, pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
+- `neurovault_server/` — Python codebase kept for optional advanced helpers (pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
 
 **Eval (`eval/`):**
 - `testset.jsonl` — 30 hand-curated queries with expected title matches.

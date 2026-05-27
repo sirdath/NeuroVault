@@ -297,6 +297,25 @@ For after an embedding-model upgrade. Pass `dry_run: true` first to size the wor
 
 ---
 
+### Drop-folder inbox
+
+> [!NOTE]
+> The inbox endpoints are **loopback + MCP only** (`/api/...` on `127.0.0.1:8765`); they are not exposed on the external `/v1` gateway. They back the `list_inbox` / `read_inbox_file` / `mark_inbox_done` MCP tools used by the [drop-folder](#drop-folder) flow.
+
+#### `GET /api/inbox` — list pending dropped files
+
+Returns `[{ name, size, ext, path }]` for files waiting in the active brain's `_inbox/`. Optional `?brain=<id>`.
+
+#### `GET /api/inbox/file?name=<name>` — read one inbox file
+
+Returns `{ name, path, size, text, is_binary, truncated }`. `text` is inlined for UTF-8 files under 256 KB; otherwise it's `null` and `is_binary`/`truncated` tells you to open `path` directly.
+
+#### `POST /api/inbox/done` — mark a file processed
+
+Body `{ "name": "<name>", "brain": "<id>" }`. Moves the raw file into `_inbox/_done/`. Idempotent.
+
+---
+
 ### Session
 
 #### `GET /v1/session_start` — load active brain + recent activity + core memory

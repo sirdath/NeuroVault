@@ -259,7 +259,8 @@ UI-specific, no value to external agents:
 - `/api/graph` (huge payload, UI-only)
 - `/api/clusters`, `/api/clusters/names` (graph view internals)
 - `/api/mcp_tier` (per-machine setting)
-- `/api/compilations/*` (the compile flow has its own approval UI)
+- `/api/compilations/*` (dormant — the in-app Compilations tab was removed in v0.2; endpoints remain for backward compatibility)
+- `/api/inbox`, `/api/inbox/*` (drop-folder staging — loopback + MCP only)
 - `/api/todos/*` (was a one-off feature, low usage)
 
 These stay at `/api/...` on the loopback router and are NEVER exposed externally.
