@@ -177,7 +177,7 @@ Top fixes:
 
 ## Quick start (developers)
 
-**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). [Python](https://www.python.org/) 3.13+ and [uv](https://docs.astral.sh/uv/) only if you want the opt-in advanced helpers (PDF ingest, Zotero sync).
+**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). [Python](https://www.python.org/) 3.13+ and [uv](https://docs.astral.sh/uv/) are only needed to run the MCP proxy (`server/mcp_proxy.py`) from source — the installed app bundles it.
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git
@@ -234,10 +234,9 @@ Exposed to any MCP-speaking agent. Every tool takes an optional `brain` paramete
 +-------------------------------------------------+
 
 External:
-  + Python lives in server/ but is OPT-IN — spawned as a one-shot
-    subprocess for advanced helpers (PDF ingest, Zotero, code-graph).
-    Never runs at app boot.
-  + mcp_proxy.py is a tiny stdio->HTTP bridge for MCP clients.
+  + server/ holds only thin stdio shims (no always-on Python):
+    - mcp_proxy.py        — stdio<->HTTP bridge for MCP clients
+    - scripts/neurovault_hook.py — Claude Code lifecycle hook
 ```
 
 Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your brain. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
