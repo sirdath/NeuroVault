@@ -73,6 +73,26 @@ export const PALETTE_NEUTRAL: Record<GraphPalette, string> = {
   vivid: "#8a8aa0",
 };
 
+/** Deterministic folder → colour mapping, shared by the graph view and
+ *  the notes-tree sidebar so a folder reads the *same* colour in both.
+ *  A user override (set on the canvas) wins; otherwise a stable FNV hash
+ *  picks a tone from the active palette. Empty string = root folder. */
+export function folderColor(
+  folder: string,
+  palette: GraphPalette,
+  overrides?: Record<string, string>,
+): string {
+  if (overrides && overrides[folder]) return overrides[folder]!;
+  if (!folder) return PALETTE_NEUTRAL[palette];
+  let h = 2166136261;
+  for (let i = 0; i < folder.length; i++) {
+    h ^= folder.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  const colors = PALETTES[palette];
+  return colors[h % colors.length]!;
+}
+
 interface GraphSettings {
   palette: GraphPalette;
   nodeShape: GraphNodeShape;
@@ -148,7 +168,19 @@ interface GraphSettings {
   /** Time-lapse playback speed in seconds (full graph reveal time).
    *  Lower = faster. Default 15 s. */
   timelapseSpeedSec: number;
+  /** Single "spread" macro (0..1). Moving it derives + sets
+   *  chargeStrength / linkDistance / centeringStrength together so the
+   *  user gets one knob; the individual sliders remain as fine-tuning. */
+  spread: number;
+  /** Master animation toggle. When false: 3D bloom + link particles are
+   *  disabled and 2D cools down fast — saves GPU/CPU. Default true. */
+  animations: boolean;
+  /** Cluster-background style: "soft" circles (default) or "hull"
+   *  convex-hull polygons (venn-diagram look, one colour per category). */
+  groupingStyle: GraphGroupingStyle;
 }
+
+export type GraphGroupingStyle = "soft" | "hull";
 
 export type GraphLayoutShape = "organic" | "circle";
 
@@ -176,6 +208,9 @@ const DEFAULTS: GraphSettings = {
   linkDistance: 26,
   layoutShape: "organic",
   timelapseSpeedSec: 15,
+  spread: 0.5,
+  animations: true,
+  groupingStyle: "soft",
 };
 
 /** Tight `#rrggbb` validator. We only persist colours that match this
@@ -238,6 +273,9 @@ function load(): GraphSettings {
         linkDistance: num("linkDistance", 26, 5, 120),
         layoutShape,
         timelapseSpeedSec: num("timelapseSpeedSec", 15, 3, 90),
+        spread: num("spread", 0.5, 0, 1),
+        animations: bool("animations", true),
+        groupingStyle: parsed.groupingStyle === "hull" ? "hull" : "soft",
       };
     }
   } catch { /* corrupt / private mode */ }
@@ -273,6 +311,11 @@ interface GraphSettingsStore extends GraphSettings {
   setLinkDistance: (v: number) => void;
   setLayoutShape: (v: GraphLayoutShape) => void;
   setTimelapseSpeedSec: (v: number) => void;
+  /** Spread macro — also derives charge/link/center. */
+  setSpread: (v: number) => void;
+  setAnimations: (v: boolean) => void;
+  toggleAnimations: () => void;
+  setGroupingStyle: (v: GraphGroupingStyle) => void;
 }
 
 function persist(s: GraphSettings) {
@@ -365,4 +408,16 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setLinkDistance: (linkDistance) => { set({ linkDistance }); persist({ ...get(), linkDistance }); },
   setLayoutShape: (layoutShape) => { set({ layoutShape }); persist({ ...get(), layoutShape }); },
   setTimelapseSpeedSec: (timelapseSpeedSec) => { set({ timelapseSpeedSec }); persist({ ...get(), timelapseSpeedSec }); },
+  setSpread: (spread) => {
+    // One knob -> the three force params. spread 0 = tight cluster,
+    // spread 1 = wide sprawl. Mirrors the slider ranges elsewhere.
+    const chargeStrength = Math.round(-10 - spread * 290);   // -10 .. -300
+    const linkDistance = Math.round(5 + spread * 115);       // 5 .. 120
+    const centeringStrength = +(0.3 * (1 - spread)).toFixed(3); // 0.3 .. 0
+    set({ spread, chargeStrength, linkDistance, centeringStrength });
+    persist({ ...get(), spread, chargeStrength, linkDistance, centeringStrength });
+  },
+  setAnimations: (animations) => { set({ animations }); persist({ ...get(), animations }); },
+  toggleAnimations: () => { const next = !get().animations; set({ animations: next }); persist({ ...get(), animations: next }); },
+  setGroupingStyle: (groupingStyle) => { set({ groupingStyle }); persist({ ...get(), groupingStyle }); },
 }));

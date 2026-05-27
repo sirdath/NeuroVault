@@ -1,6 +1,8 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useNoteStore } from "./stores/noteStore";
+import { nvInboxAdd } from "./lib/tauri";
 import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
 import { NeuralGraph } from "./components/NeuralGraph";
@@ -10,17 +12,18 @@ import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Onboarding } from "./components/Onboarding";
-import { CompilationReview } from "./components/CompilationReview";
 import { SettingsView } from "./components/SettingsView";
 import { ActivityBar } from "./components/ActivityBar";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { UpdateButton } from "./components/UpdateButton";
+import { useUpdateStore } from "./stores/updateStore";
 import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
 import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
 import { fetchStatus } from "./lib/api";
 
-type View = "editor" | "graph" | "compile";
+type View = "editor" | "graph";
 
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
@@ -32,7 +35,7 @@ export default function App() {
   const [view, setViewState] = useState<View>(() => {
     try {
       const v = localStorage.getItem("nv.view");
-      if (v === "editor" || v === "graph" || v === "compile") return v;
+      if (v === "editor" || v === "graph") return v;
     } catch { /* quota / disabled storage */ }
     return "editor";
   });
@@ -44,6 +47,9 @@ export default function App() {
     });
   }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // True while files are being dragged over the window — drives the
+  // drop-to-inbox overlay.
+  const [dropActive, setDropActive] = useState(false);
   // Sidebar collapse — when true, the left sidebar hides entirely and
   // the editor / graph / compile view fills the full width. Toggled
   // via the leftmost button in the top bar or Ctrl+B (VS Code's
@@ -152,6 +158,67 @@ export default function App() {
     return () => { un.then((f) => f()).catch(() => {}); };
   }, [setView]);
 
+  // --- Drop-folder file handler ---------------------------------------
+  //
+  // Global webview file-drop. When the user drags files from their OS
+  // file manager onto the NeuroVault window, we copy them into the
+  // active brain's `_inbox/` and surface a toast. The connected Claude
+  // agent then reads them over MCP (`list_inbox` / `read_inbox_file`)
+  // and turns them into clean indexed notes — no converters bundled.
+  //
+  // We track a drag-over state to show a full-window drop overlay, and
+  // ignore the in-app note→folder drags (those carry no OS file paths;
+  // the webview drag-drop event only fires for real external files).
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          setDropActive(true);
+        } else if (p.type === "leave") {
+          setDropActive(false);
+        } else if (p.type === "drop") {
+          setDropActive(false);
+          const paths = (p as { paths?: string[] }).paths ?? [];
+          if (paths.length === 0) return;
+          nvInboxAdd(paths)
+            .then((added) => {
+              if (added.length === 0) {
+                toast.warning("Nothing added — drop files (not folders) onto the window.");
+                return;
+              }
+              const n = added.length;
+              toast.success(
+                `${n} file${n === 1 ? "" : "s"} queued in the inbox — ask your connected agent to "process the inbox".`,
+              );
+            })
+            .catch((e) => toast.error(`Couldn't add to inbox: ${(e as Error).message}`));
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => { /* browser mode — no webview drag-drop */ });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Check for a newer release shortly after launch. Silent (no toast on
+  // failure) and one-shot — the result drives the top-bar Update pill via
+  // the update store. Delayed a few seconds so it never competes with the
+  // server boot / first paint.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      useUpdateStore.getState().check(true);
+    }, 4000);
+    return () => window.clearTimeout(t);
+  }, []);
+
   // Server health monitor — polls faster while booting for snappy feedback
   useEffect(() => {
     const check = () => {
@@ -231,7 +298,7 @@ export default function App() {
   }, [settingsOpen, activityOpen, shortcutHelpOpen]);
 
   const toggleView = useCallback(() => {
-    setView((v) => (v === "editor" ? "graph" : v === "graph" ? "compile" : "editor"));
+    setView((v) => (v === "editor" ? "graph" : "editor"));
   }, []);
 
   // Command palette — the ONLY way to access power features
@@ -273,13 +340,6 @@ export default function App() {
         title: "Switch to Graph",
         category: "View",
         action: () => setView("graph"),
-      },
-      {
-        id: "view-compile",
-        title: "Switch to Compilations",
-        category: "View",
-        shortcut: "Ctrl+Shift+K",
-        action: () => setView("compile"),
       },
       {
         id: "toggle-view",
@@ -366,22 +426,17 @@ export default function App() {
         e.preventDefault();
         toggleView();
       }
-      // Ctrl+1/2/3 — jump straight to Editor / Graph / Compile. The
-      // number-row key doesn't vary by keyboard layout on Windows/Mac so
-      // checking e.key is fine; don't trigger when a modifier chord
-      // collides with a browser shortcut (e.g. Ctrl+Shift+1).
+      // Ctrl+1/2 — jump straight to Editor / Graph. The number-row key
+      // doesn't vary by keyboard layout on Windows/Mac so checking e.key
+      // is fine; don't trigger when a modifier chord collides with a
+      // browser shortcut (e.g. Ctrl+Shift+1).
       if (ctrl && !e.shiftKey && !e.altKey) {
         if (e.key === "1") { e.preventDefault(); setView("editor"); return; }
         if (e.key === "2") { e.preventDefault(); setView("graph"); return; }
-        if (e.key === "3") { e.preventDefault(); setView("compile"); return; }
       }
       if (ctrl && e.key === "/") {
         e.preventDefault();
         setTriggerSearch((n) => n + 1);
-      }
-      if (ctrl && e.shiftKey && (e.key === "K" || e.key === "k")) {
-        e.preventDefault();
-        setView("compile");
       }
       if (
         e.key === "?" &&
@@ -571,24 +626,11 @@ export default function App() {
               </svg>
             }
           />
-          <TabButton
-            active={view === "compile"}
-            onClick={() => setView("compile")}
-            label="Compile"
-            theme={theme}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-                <path d="M4 4h11l5 5v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-                <polyline points="15 4 15 9 20 9" />
-                <path d="M8 14h8" />
-                <path d="M8 17h6" />
-              </svg>
-            }
-          />
           </div>
         </div>
 
         <div className="flex items-center gap-4">
+          <UpdateButton theme={theme} />
           {noteCount > 0 && (
             <span className="text-[11px]" style={{ color: theme.textDim }}>
               {noteCount} {noteCount === 1 ? "note" : "notes"}
@@ -641,7 +683,6 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
           {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
-          {view === "compile" && <CompilationReview />}
         </div>
       </div>
 
@@ -694,6 +735,37 @@ export default function App() {
         onCreateFirstNote={() => setTriggerNewNote((n) => n + 1)}
       />
       <Toasts />
+
+      {/* Drop-to-inbox overlay — shown while external files are dragged
+          over the window. The actual copy happens in the webview
+          onDragDropEvent handler above. */}
+      {dropActive && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center pointer-events-none"
+          style={{ background: "rgba(11,11,18,0.72)", backdropFilter: "blur(2px)" }}
+        >
+          <div
+            className="flex flex-col items-center gap-3 px-10 py-8 rounded-2xl"
+            style={{
+              background: theme.surface,
+              border: `2px dashed ${theme.accent}`,
+              boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke={theme.accent} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-10 h-10">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <p className="text-[15px] font-semibold font-[Geist,sans-serif]" style={{ color: theme.text }}>
+              Drop files to add to your inbox
+            </p>
+            <p className="text-[12px] font-[Geist,sans-serif] text-center max-w-[280px]" style={{ color: theme.textDim }}>
+              Your connected agent turns them into clean, indexed notes.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

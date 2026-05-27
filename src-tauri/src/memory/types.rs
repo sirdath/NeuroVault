@@ -109,6 +109,11 @@ pub struct GraphNode {
     pub access_count: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// Creation timestamp (SQLite TEXT). Carried so the graph view's
+    /// time-lapse can order nodes by true chronology — `updated_at`
+    /// collapses on batch imports, making every node appear at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// Undirected edge in the graph view. `link_type` carries the typed

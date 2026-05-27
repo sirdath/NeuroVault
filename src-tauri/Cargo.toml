@@ -1,6 +1,6 @@
 [package]
 name = "neurovault"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI-native memory system for Claude"
 authors = ["you"]
 edition = "2021"
@@ -60,6 +60,13 @@ tauri-plugin-dialog = "2"
 # the URL to the running instance instead of spawning a duplicate.
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# In-app updater. Registered always; it only does work when a
+# `plugins.updater` block (endpoints + pubkey) is present in
+# tauri.conf.json. Until the signing keypair + CI signing step land, the
+# native `check()` path no-ops and the UI falls back to opening the
+# GitHub release page. See docs/UPDATER-SETUP.md to turn it on.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "v5"] }
@@ -154,5 +161,10 @@ notify = "6"
 # are read-only inspection except for the `kill` action, which is
 # gated behind a name-prefix check (only processes whose name starts
 # with "neurovault" get terminated).
+# Scoped to non-Linux: netstat2 0.9 fails to compile on Linux (libc
+# `tcp_info` mismatch) and these are only used by port_recovery, which
+# degrades to a no-op on Linux (see that module). Keeps Windows + macOS
+# auto-recovery while letting the Linux build/CI go green.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 netstat2 = "0.9"
 sysinfo = "0.30"
