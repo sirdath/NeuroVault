@@ -220,5 +220,5 @@ jobs:
             - **Windows SmartScreen**: click "More info", then "Run anyway".
 
             Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
