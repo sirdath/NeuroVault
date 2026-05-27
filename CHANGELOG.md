@@ -10,6 +10,61 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.3.0] — 2026-05-27
+
+### Added
+- **Brain Diagnostic** — a one-click health scorecard for a vault
+  (graph toolbar → "Diagnostic"): five graded categories (connectivity,
+  interlinking, cohesion, freshness, organization) + an A–F grade and a
+  worst-first list of fixes. DB-backed scorer shared by the panel,
+  `GET /api/diagnostic`, the `nv_diagnose` command, and a read-only
+  **`diagnose_brain`** MCP tool, so a connected agent can run it and act
+  on the fixes. "Copy report" emits a plain-text scorecard to paste.
+- **Drop-folder ingest** — a per-brain `_inbox/`; drag files onto the
+  window and they're copied there for the connected agent to convert into
+  clean notes via the `list_inbox` / `read_inbox_file` / `mark_inbox_done`
+  MCP tools. No bundled converters — the agent is the converter.
+- **In-app updater** — checks for a newer release on launch and surfaces
+  an **Update** button in the top bar + Settings → Updates. Ships the
+  `tauri-plugin-updater` scaffolding (inert until release signing lands;
+  falls back to opening the release page). See `docs/UPDATER-SETUP.md`.
+- **Graph analytics legend** — a visual key (size = importance, ring =
+  health, fill/tint = category) plus a clickable cluster list that flies
+  the camera to a community.
+- **Graph controls** — Spread slider, Animations toggle (skips the 3D
+  bloom + particle flow to save GPU), Venn/hull category grouping, and a
+  Refresh button.
+- **Notes-tree coloring** — folder + note rows tinted with the same
+  category colour the graph uses.
+
+### Changed
+- **Graph node encoding reworked**: fill now encodes **category**
+  (folder), a **ring** encodes **health** (state + strength), and size
+  encodes importance. Fixes the long-standing "color filter doesn't do
+  anything" confusion.
+- Node labels sit on a measured background pill so long titles no longer
+  bleed into neighbouring nodes.
+- README modernized; documentation site moved to its own repo and is
+  served at **neurovault.dathproject.com**.
+
+### Fixed
+- **Time-lapse** now orders nodes by `created_at` (carried on the graph
+  payload), so a batch import whose notes share an `updated_at` animates
+  progressively instead of appearing all at once.
+- **Linux build / CI**: `netstat2` (which fails to compile on Linux) is
+  now a non-Linux-only dependency; `port_recovery` degrades to a no-op on
+  Linux. Windows + macOS keep port auto-recovery.
+
+### Removed
+- **Compilations tab** and its nav/command/shortcut entries (the backend
+  table is left dormant).
+- Dead Python server package (`server/neurovault_server/`), its tests,
+  and the benchmark harness — the `run_python_job` path was removed in
+  0.2. The MCP bridge (`server/mcp_proxy.py`) and the Claude Code hook
+  remain.
+
+---
+
 ## [0.1.8] — 2026-05-01
 
 ### Added
