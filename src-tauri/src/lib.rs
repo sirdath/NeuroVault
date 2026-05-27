@@ -905,6 +905,32 @@ fn nv_delete_note(
     memory::delete_note(&ctx, &filename).map_err(|e| e.to_string())
 }
 
+/// Copy dropped files into the active brain's drop-folder inbox. Called
+/// by the UI's global file-drop handler with the absolute paths the
+/// webview hands us. The connected Claude agent later reads these over
+/// MCP and turns them into clean notes. Returns the names that landed
+/// in the inbox (post collision-resolution) so the UI can report a
+/// count.
+#[tauri::command]
+fn nv_inbox_add(
+    paths: Vec<String>,
+    brain_id: Option<String>,
+) -> std::result::Result<Vec<String>, String> {
+    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::inbox::add_files(&id, &paths).map_err(|e| e.to_string())
+}
+
+/// List files currently waiting in the active brain's inbox. Mirrors
+/// the MCP `list_inbox` tool for any UI that wants to show a pending
+/// count without going through the HTTP server.
+#[tauri::command]
+fn nv_inbox_list(
+    brain_id: Option<String>,
+) -> std::result::Result<Vec<memory::inbox::InboxFile>, String> {
+    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::inbox::list_inbox(&id).map_err(|e| e.to_string())
+}
+
 // --- Phase-6 recall + HTTP server -------------------------------------
 
 /// Hybrid recall — the main retrieval entry point. Replaces
@@ -1143,6 +1169,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // In-app updater + process (relaunch after install). Inert until a
+        // `plugins.updater` block is configured in tauri.conf.json; see
+        // docs/UPDATER-SETUP.md.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -1289,6 +1320,9 @@ pub fn run() {
             // brain activation; the Tauri commands are here for
             // debug/manual control from Settings.
             nv_start_vault_watcher, nv_stop_vault_watcher,
+            // Drop-folder inbox: UI file-drop copies raw files into the
+            // brain inbox for the connected agent to turn into notes.
+            nv_inbox_add, nv_inbox_list,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

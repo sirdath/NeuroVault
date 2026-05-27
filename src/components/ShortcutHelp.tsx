@@ -31,7 +31,6 @@ const SHORTCUTS: Array<{
     items: [
       { keys: "Ctrl+1", description: "Switch to Editor" },
       { keys: "Ctrl+2", description: "Switch to Graph" },
-      { keys: "Ctrl+3", description: "Switch to Compilations" },
       { keys: "Ctrl+P", description: "Cycle views" },
     ],
   },
