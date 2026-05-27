@@ -380,6 +380,53 @@ export function GraphFilterPanel({
             checked={s.showClusterLabels}
             onChange={s.setShowClusterLabels}
           />
+          <Toggle
+            label="Animations"
+            checked={s.animations}
+            onChange={s.setAnimations}
+            hint="Off freezes the 3D particle flow and skips the bloom glow pass — saves GPU, especially in the 3D view."
+          />
+          <div className="space-y-2">
+            <div
+              className="text-[11px] font-[Geist,sans-serif]"
+              style={{ color: "var(--nv-text-muted)" }}
+            >
+              Category grouping
+            </div>
+            <div
+              className="flex gap-0.5 rounded-lg p-0.5"
+              style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+            >
+              {([
+                { value: "soft", label: "Off", hint: "No category backdrop" },
+                { value: "hull", label: "Venn", hint: "Transparent hull outline per category" },
+              ] as const).map((g) => (
+                <button
+                  key={g.value}
+                  onClick={() => s.setGroupingStyle(g.value)}
+                  title={g.hint}
+                  className="flex-1 px-2 py-1 text-[11px] font-medium font-[Geist,sans-serif] rounded transition-all"
+                  style={
+                    s.groupingStyle === g.value
+                      ? {
+                          background: "var(--nv-bg)",
+                          color: "var(--nv-text)",
+                          border: "1px solid var(--nv-border)",
+                        }
+                      : { color: "var(--nv-text-muted)" }
+                  }
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+            <p
+              className="text-[10px] italic font-[Geist,sans-serif] leading-snug"
+              style={{ color: "var(--nv-text-dim)" }}
+            >
+              Venn draws a soft outlined region around each folder/category — visible at a zoomed-out overview.
+            </p>
+          </div>
         </Section>
 
         {/* Appearance — palette / shape / colour overrides */}
@@ -483,6 +530,22 @@ export function GraphFilterPanel({
           open={openSections.forces}
           setOpen={() => toggleSection("forces")}
         >
+          <Slider
+            label="Spread"
+            value={s.spread}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={s.setSpread}
+            formatter={(v) => `${Math.round(v * 100)}%`}
+          />
+          <p
+            className="text-[10px] italic font-[Geist,sans-serif] leading-snug"
+            style={{ color: "var(--nv-text-dim)" }}
+          >
+            One knob for how far apart nodes sit — drives the three force sliders
+            below. Drag right to fan the graph out, left to pull it tight.
+          </p>
           <div className="space-y-2">
             <div
               className="text-[11px] font-[Geist,sans-serif]"

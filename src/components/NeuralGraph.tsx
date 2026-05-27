@@ -7,14 +7,14 @@ import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
 import { useBrainStore } from "../stores/brainStore";
 import {
-  PALETTES,
   PALETTE_NEUTRAL,
+  folderColor,
   useGraphSettingsStore,
-  type GraphPalette,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
+import { GraphLegend } from "./GraphLegend";
 import { nvSetPagerank, nvSetClusters, nvGetClusterNames, readNote, type NvClusterSummary } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
 
@@ -106,36 +106,6 @@ function effectiveNodeRadius(
   const pr = prMap.get(node.id) ?? 1;
   const prBoost = Math.min(2.5, Math.sqrt(Math.max(0, pr - 1)) * 1.4);
   return Math.min(11, r + prBoost);
-}
-
-/** Deterministic palette — a folder always maps to the same color
- *  within a session and across reloads, regardless of which palette
- *  the user picks. The hash → index step is stable; only the array
- *  it indexes into changes when the user switches palettes (warm /
- *  cool / mono / vivid via Settings).
- *
- *  Philosophy: when the graph is "the hero view people screenshot
- *  to show off their brain", colour harmony matters more than
- *  colour variety. Eight cohesive tones per palette group folders
- *  without making the canvas feel like a toy chest. */
-function folderColor(
-  folder: string,
-  palette: GraphPalette,
-  overrides?: Record<string, string>,
-): string {
-  // User-set per-folder colour wins over the palette hash. Empty
-  // string is the root folder; we look it up the same way.
-  if (overrides && overrides[folder]) return overrides[folder]!;
-  if (!folder) return PALETTE_NEUTRAL[palette];
-  // Simple FNV-ish hash so the mapping is stable across sessions without
-  // pulling in a real hashing lib.
-  let h = 2166136261;
-  for (let i = 0; i < folder.length; i++) {
-    h ^= folder.charCodeAt(i);
-    h = (h * 16777619) >>> 0;
-  }
-  const colors = PALETTES[palette];
-  return colors[h % colors.length]!;
 }
 
 /** Trace a node-shape path on the given canvas context. Caller is
@@ -260,6 +230,31 @@ function withAlpha(c: string, alpha: number): string {
  *  Runs per simulation tick; centroids are recomputed every call so
  *  dragging one cluster away moves the pull point with it.
  */
+/** Convex hull via the monotone-chain (Andrew's) algorithm. O(n log n).
+ *  Returns the hull vertices in CCW order. Used to outline a category's
+ *  members as a "venn"-style polygon in hull grouping mode. Degenerate
+ *  inputs (<3 pts, or all collinear) return the input as-is. */
+function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  if (points.length < 3) return points.slice();
+  const pts = points.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: typeof pts = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: typeof pts = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i]!;
+    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
 function createClusterForce(strength: number = 0.08) {
   type F = {
     (alpha: number): void;
@@ -324,6 +319,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const fg2dRef = useRef<unknown>(undefined);
   const bloomAttachedRef = useRef(false);
   const clusterAttachedRef = useRef(false);
+  // Declared early (before the bloom effect below references it) to avoid
+  // a temporal-dead-zone error in the effect's dependency array.
+  const animations = useGraphSettingsStore((s) => s.animations);
   // Live snapshot the d3-force collide+link callbacks read on every
   // tick. Keeping it in a ref avoids re-attaching the forces (which
   // would restart the simulation) every time analytics state flips.
@@ -338,6 +336,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // Three.js addons) only ship in the already-lazy 3D chunk.
   useEffect(() => {
     if (mode !== "3d") return;
+    // Animations off → skip the bloom pass entirely. Bloom is the single
+    // biggest GPU cost in the 3D view; honouring the toggle here is the
+    // main "save compute" win the user asked for.
+    if (!animations) return;
     let cancelled = false;
     const tryAttach = async () => {
       const fg = fg3dRef.current as ForceGraph3DComposerAccess | undefined;
@@ -371,7 +373,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [mode, size.w, size.h]);
+  }, [mode, size.w, size.h, animations]);
 
   // Clearing the flag on mode-switch so bloom re-attaches if the user
   // toggles 3D → 2D → 3D (the composer is a fresh instance each time).
@@ -535,9 +537,26 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const linkDistanceCfg = useGraphSettingsStore((s) => s.linkDistance);
   const layoutShape = useGraphSettingsStore((s) => s.layoutShape);
   const timelapseSpeedSec = useGraphSettingsStore((s) => s.timelapseSpeedSec);
+  const groupingStyle = useGraphSettingsStore((s) => s.groupingStyle);
 
   // Filter panel open/close state — local, not persisted.
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+
+  // Refresh: re-pull the graph from the backend (uncached GET /api/graph)
+  // so newly-indexed notes / fresh edges show up without restarting. The
+  // brief spinner gives the click feedback even when the reload is fast.
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await loadGraph();
+    } finally {
+      // Keep the spinner up a beat so a sub-100ms reload still reads as
+      // an action rather than a flicker.
+      setTimeout(() => setRefreshing(false), 400);
+    }
+  }, [refreshing, loadGraph]);
 
   // Time-lapse: when active, nodes appear progressively in
   // chronological order. tlStartMs is the wall-clock start of the
@@ -668,10 +687,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // stable across the lifetime of a node so the simulation forces
   // do not need to be re-attached.
   const tlFractions = useMemo<Map<string, number>>(() => {
+    // Sort key: prefer created_at (true chronology), fall back to
+    // updated_at, then to id. The old code keyed on updated_at ONLY —
+    // when a batch import gives every note the same updated_at, every
+    // node shares fraction 0 and they all pop in at once (the "time-lapse
+    // doesn't work" bug). created_at is distinct per note so playback
+    // now reveals nodes progressively; id is a final stable tiebreak.
+    const tlKey = (n: SimNode) => {
+      const o = n as { created_at?: string; updated_at?: string };
+      return o.created_at || o.updated_at || n.id;
+    };
     const sorted = [...nodes].sort((a, b) => {
-      const ax = (a as { updated_at?: string }).updated_at ?? "";
-      const bx = (b as { updated_at?: string }).updated_at ?? "";
-      return ax.localeCompare(bx);
+      const cmp = tlKey(a).localeCompare(tlKey(b));
+      return cmp !== 0 ? cmp : a.id.localeCompare(b.id);
     });
     const m = new Map<string, number>();
     if (sorted.length === 0) return m;
@@ -836,6 +864,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const fg = fg3dRef.current as Cam3 | undefined;
       fg?.zoomToFit?.(400, 80);
     }
+  }, [mode]);
+
+  // Fly the camera to fit a single community's nodes. `zoomToFit` takes
+  // an optional node-filter as its 3rd arg, so we reuse it rather than
+  // computing a centroid by hand. Lives behind the analytics legend's
+  // cluster rows — clicking a cluster frames it.
+  const focusClusterRef = useRef<Map<string, number> | null>(null);
+  const handleFocusCluster = useCallback((comId: number) => {
+    const com = focusClusterRef.current;
+    const inCluster = (n: unknown) => com?.get((n as SimNode).id) === comId;
+    type CamApi = { zoomToFit: (ms?: number, padding?: number, filter?: (n: unknown) => boolean) => unknown };
+    const fg = (mode === "2d" ? fg2dRef.current : fg3dRef.current) as CamApi | undefined;
+    fg?.zoomToFit?.(500, 120, inCluster);
   }, [mode]);
 
   // During the pulse window, kick a per-frame repaint so the ring
@@ -1016,6 +1057,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyticsMode, analyticsKey]);
 
+  // Mirror the community map into a ref so the legend's cluster-focus
+  // handler (declared earlier, near the camera controls) can read the
+  // latest mapping without taking analyticsData as a dependency.
+  useEffect(() => {
+    focusClusterRef.current = analyticsData?.com ?? null;
+  }, [analyticsData]);
+
   // Keep the d3-force radius/distance ref in sync with the live
   // analytics state. Re-heating the simulation when this flips lets
   // the existing collide+link forces relax with the new sizes — no
@@ -1147,6 +1195,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // reading-friendly subgraph on the fly.
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
 
+  // Cluster readout for the analytics legend — the same Louvain
+  // communities we push to the backend, kept in React state so the
+  // on-canvas legend can list them (name, size, colour, anchor note)
+  // and let the user click one to fly the camera to it.
+  type LegendCluster = { id: number; size: number; color: string; name: string; topTitle: string };
+  const [legendClusters, setLegendClusters] = useState<LegendCluster[]>([]);
+
   // Clear stale focus when the graph reloads (brain switch, ingest).
   // Otherwise a previously-hovered node id can outlive its node and
   // silently dim the whole new graph because the adjacency lookup
@@ -1197,22 +1252,24 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   useEffect(() => {
     if (!analyticsMode || !analyticsData) {
       nvSetClusters([], activeBrainId ?? undefined);
+      setLegendClusters([]);
       return;
     }
     // Build a top-N-titles + sample-links payload per community.
     // Top-titles by PageRank within the community (best signal for
     // theming); sample_links from edge endpoints already inside
     // graphData. Capped to keep MCP payload ergonomic.
-    const byCommunity = new Map<number, { id: string; pr: number; title: string }[]>();
+    const byCommunity = new Map<number, { id: string; pr: number; title: string; folder?: string }[]>();
     for (const n of nodes) {
       const c = analyticsData.com.get(n.id);
       if (c == null) continue;
       const pr = analyticsData.pr.get(n.id) ?? 0;
       let arr = byCommunity.get(c);
       if (!arr) { arr = []; byCommunity.set(c, arr); }
-      arr.push({ id: n.id, pr, title: n.title });
+      arr.push({ id: n.id, pr, title: n.title, folder: (n as { folder?: string }).folder });
     }
     const summaries: NvClusterSummary[] = [];
+    const legend: LegendCluster[] = [];
     for (const [cid, members] of byCommunity) {
       members.sort((a, b) => b.pr - a.pr);
       const topMembers = members.slice(0, 5);
@@ -1233,9 +1290,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         top_titles,
         sample_links,
       });
+      // Legend entry: colour matches the tint (cluster-name override →
+      // anchor note's folder colour). Name = user-given cluster name, else
+      // the top note's title as a stand-in.
+      const cname = clusterNames[String(cid)];
+      const color = (cname && clusterColors[cname])
+        ? clusterColors[cname]!
+        : folderColor(members[0]?.folder ?? `__comm_${cid}`, palette, folderColors);
+      legend.push({
+        id: cid,
+        size: members.length,
+        color,
+        name: cname || (members[0]?.title ?? `Cluster ${cid}`),
+        topTitle: members[0]?.title ?? "",
+      });
     }
+    legend.sort((a, b) => b.size - a.size);
     nvSetClusters(summaries, activeBrainId ?? undefined);
-  }, [analyticsMode, analyticsData, activeBrainId, nodes, edges]);
+    setLegendClusters(legend);
+  }, [analyticsMode, analyticsData, activeBrainId, nodes, edges, clusterNames, clusterColors, palette, folderColors]);
 
   // Hover-driven tip bar copy. Active only in Analytics mode; falls
   // through to the idle copy when nothing meaningful is hovered.
@@ -1311,13 +1384,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // → keep the saturated folder colour. Alpha is still used for
     // strength fade, but no longer carries the dormant signal alone.
     const folderHue = folderColor(node.folder ?? "", palette, folderColors);
-    const baseColor = isDormant ? desaturateHex(folderHue, 0.6) : folderHue;
-
-    // Strength alpha — independent of state now. Dormant gets a small
-    // additional alpha drop on top of the desaturation so the two
-    // signals reinforce each other.
-    const stateScale = isDormant ? 0.78 : 1.0;
-    const strengthAlpha = (0.55 + 0.45 * Math.min(1, Math.max(0, node.strength))) * stateScale;
+    // CATEGORY drives the FILL — saturated and strength-independent so a
+    // node's category reads at a glance. Health/strength + state now live
+    // in the ring (drawn below), not in the fill's alpha. Dormant gets a
+    // light desaturate so it still reads as "fading".
+    const baseColor = isDormant ? desaturateHex(folderHue, 0.35) : folderHue;
 
     // Hover-focus dimming unchanged — still the right UX.
     let focusAlpha = 1;
@@ -1328,7 +1399,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       focusAlpha = (isSelf || isNeighbour) ? 1 : 0.08;
     }
 
-    const alpha = strengthAlpha * focusAlpha * orphanAlphaMult * searchAlphaMult;
+    const alpha = 0.94 * focusAlpha * orphanAlphaMult * searchAlphaMult;
 
     // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
     // shadow follows the orb shape, not just the path.
@@ -1373,17 +1444,35 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.restore();
     }
 
-    // Fresh-state amber halo — drawn after fill, before the dark rim,
-    // so it sits as a glow at the boundary rather than competing with
-    // the orb body. Using the brand amber (#f0a500) keeps "fresh" tied
-    // to the same colour the status pill uses elsewhere.
-    if (isFresh && focusAlpha > 0.5) {
+    // HEALTH RING — drawn after fill, before the dark rim. This is the
+    // node's health/strength signal, decoupled from the fill (which now
+    // carries category). Ring COLOUR encodes state; ring WIDTH + OPACITY
+    // scale with node.strength so a strong, well-connected memory gets a
+    // bold halo and a weak one barely a hairline. Colours match the
+    // status pills used elsewhere: dormant=dim grey, fresh=brand amber,
+    // active/connected=teal, default=muted lilac.
+    if (focusAlpha > 0.4) {
+      const strength = Math.max(0, Math.min(1, node.strength ?? 0.5));
+      const ringColor = isDormant
+        ? "#6a6880"
+        : isFresh
+        ? "#f0a500"
+        : node.state === "active" || node.state === "connected"
+        ? "#00c9b1"
+        : "#8a88a0";
+      // Width 0.6 → 2.2 px (zoom-independent) and opacity 0.25 → 0.85.
+      const ringWidth = (0.6 + strength * 1.6) / globalScale;
+      const ringAlpha = (0.25 + strength * 0.6) * focusAlpha;
+      const ringGap = (1.2 + strength * 1.4) / globalScale;
       ctx.save();
-      drawNodeShape(ctx, node.x, node.y, r + 1.6 / globalScale, nodeShape);
-      ctx.lineWidth = 1.4 / globalScale;
-      ctx.strokeStyle = `rgba(240, 165, 0, ${0.42 * focusAlpha})`;
-      ctx.shadowColor = "rgba(240, 165, 0, 0.55)";
-      ctx.shadowBlur = 4;
+      drawNodeShape(ctx, node.x, node.y, r + ringGap, nodeShape);
+      ctx.lineWidth = ringWidth;
+      ctx.strokeStyle = withAlpha(ringColor, ringAlpha);
+      // Fresh nodes additionally get a soft glow to "pop" as just-added.
+      if (isFresh) {
+        ctx.shadowColor = "rgba(240, 165, 0, 0.55)";
+        ctx.shadowBlur = 4;
+      }
       ctx.stroke();
       ctx.restore();
     }
@@ -1409,11 +1498,34 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (globalScale >= labelZoomThreshold || focusLabelBoost) {
       const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
-      ctx.fillStyle = withAlpha("#a8a6c0", Math.max(0.35, focusAlpha));
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
-      ctx.fillText(truncated, node.x, node.y + r + 2);
+      // Measure + draw a semi-transparent rounded pill behind the label so
+      // text never bleeds into a neighbouring node or its own orb. Padding
+      // and corner radius scale with zoom so the pill stays proportional.
+      const labelAlpha = Math.max(0.35, focusAlpha);
+      const textW = ctx.measureText(truncated).width;
+      const padX = 3 / globalScale;
+      const padY = 1.5 / globalScale;
+      const labelY = node.y + r + 6 / globalScale;
+      const boxX = node.x - textW / 2 - padX;
+      const boxY = labelY - padY;
+      const boxW = textW + padX * 2;
+      const boxH = fontSize + padY * 2;
+      const radius = 2 / globalScale;
+      ctx.save();
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(boxX, boxY, boxW, boxH, radius);
+      } else {
+        ctx.rect(boxX, boxY, boxW, boxH);
+      }
+      ctx.fillStyle = withAlpha("#0b0b12", 0.62 * labelAlpha);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = withAlpha("#c7c5dc", labelAlpha);
+      ctx.fillText(truncated, node.x, labelY);
     }
   }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors]);
 
@@ -1587,63 +1699,101 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
    *  trigonometry overhead.
    */
   const paintBackgroundTints = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
-    if (!analyticsMode || !analyticsGroupByCommunity || !analyticsData) return;
+    // Two ways to show grouping:
+    //  (1) Analytics mode + "group by community" → tint by Louvain
+    //      community (the existing behaviour).
+    //  (2) groupingStyle === "hull" → group by FOLDER (category),
+    //      available outside Analytics too. Renders a convex-hull
+    //      "venn" outline per category with a transparent fill.
+    const communityMode = analyticsMode && analyticsGroupByCommunity && !!analyticsData;
+    const hullMode = groupingStyle === "hull";
+    if (!communityMode && !hullMode) return;
     if (globalScale > 1.6) return; // Hide once user is reading nodes.
 
-    // Bucket node positions by community.
-    const buckets = new Map<number, Array<{ x: number; y: number }>>();
-    for (const raw of nodes as Array<SimNode & { x?: number; y?: number }>) {
+    // Bucket node positions by group key. In community mode the key is
+    // the Louvain community id; in folder/hull mode it's the folder
+    // string. We keep both the points (for geometry) and a representative
+    // colour key per bucket.
+    type Bucket = { pts: Array<{ x: number; y: number }>; folder?: string; degree: number; comId?: number };
+    const buckets = new Map<string, Bucket>();
+    for (const raw of nodes as Array<SimNode & { x?: number; y?: number; folder?: string; degree?: number }>) {
       if (raw.x == null || raw.y == null) continue;
-      const c = analyticsData.com.get(raw.id);
-      if (c == null) continue;
-      let arr = buckets.get(c);
-      if (!arr) { arr = []; buckets.set(c, arr); }
-      arr.push({ x: raw.x, y: raw.y });
+      let key: string;
+      let comId: number | undefined;
+      if (communityMode) {
+        const c = analyticsData!.com.get(raw.id);
+        if (c == null) continue;
+        comId = c;
+        key = `c${c}`;
+      } else {
+        key = `f${raw.folder ?? ""}`;
+      }
+      let b = buckets.get(key);
+      if (!b) { b = { pts: [], folder: raw.folder, degree: -1, comId }; buckets.set(key, b); }
+      b.pts.push({ x: raw.x, y: raw.y });
+      // Track the dominant (highest-degree) folder for the tint colour.
+      const d = raw.degree ?? 0;
+      if (d > b.degree) { b.degree = d; b.folder = raw.folder; }
     }
 
-    // For each community with ≥3 members: centroid + max radius blob.
-    for (const [comId, pts] of buckets) {
+    for (const [, b] of buckets) {
+      const pts = b.pts;
       if (pts.length < 3) continue;
-      let sx = 0, sy = 0;
-      for (const p of pts) { sx += p.x; sy += p.y; }
-      const cx = sx / pts.length;
-      const cy = sy / pts.length;
-      let maxR = 0;
-      for (const p of pts) {
-        const d = Math.hypot(p.x - cx, p.y - cy);
-        if (d > maxR) maxR = d;
-      }
-      const padding = 14;
-      const blobR = maxR + padding;
 
-      // Tint hue: derive from the top-degree node in this community
-      // so it visually matches the dominant folder colour. Fallback
-      // to community-id-based hash so two communities of the same
-      // folder still get different tints.
-      let dominantFolder: string | undefined;
-      let bestDegree = -1;
-      for (const raw of nodes as Array<SimNode & { folder?: string; degree?: number }>) {
-        if (analyticsData.com.get(raw.id) !== comId) continue;
-        const d = raw.degree ?? 0;
-        if (d > bestDegree) { bestDegree = d; dominantFolder = raw.folder; }
+      // Tint: cluster-name override (community mode) → folder colour.
+      let tint: string;
+      const clusterName = b.comId != null ? clusterNames[String(b.comId)] : undefined;
+      if (clusterName && clusterColors[clusterName]) {
+        tint = clusterColors[clusterName]!;
+      } else {
+        const colourKey = b.folder ?? (b.comId != null ? `__comm_${b.comId}` : "");
+        tint = folderColor(colourKey, palette, folderColors);
       }
-      // Cluster-name override wins (only present once the user has
-      // named this cluster via /name-clusters or by hand). Otherwise
-      // tint from the dominant folder, with the same per-folder
-      // override path used elsewhere.
-      const clusterName = clusterNames[String(comId)];
-      const tint = (clusterName && clusterColors[clusterName])
-        ? clusterColors[clusterName]!
-        : folderColor(dominantFolder ?? `__comm_${comId}`, palette, folderColors);
 
-      ctx.save();
-      ctx.fillStyle = withAlpha(tint, 0.10);
-      ctx.beginPath();
-      ctx.arc(cx, cy, blobR, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      if (hullMode) {
+        // Convex hull (monotone chain) + a small outward inflation so the
+        // outline sits clear of the nodes rather than slicing through them.
+        const hull = convexHull(pts);
+        if (hull.length < 3) continue;
+        let sx = 0, sy = 0;
+        for (const p of hull) { sx += p.x; sy += p.y; }
+        const cx = sx / hull.length, cy = sy / hull.length;
+        const inflate = 16;
+        const inflated = hull.map((p) => {
+          const dx = p.x - cx, dy = p.y - cy;
+          const len = Math.hypot(dx, dy) || 1;
+          return { x: p.x + (dx / len) * inflate, y: p.y + (dy / len) * inflate };
+        });
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(inflated[0]!.x, inflated[0]!.y);
+        for (let i = 1; i < inflated.length; i++) ctx.lineTo(inflated[i]!.x, inflated[i]!.y);
+        ctx.closePath();
+        ctx.fillStyle = withAlpha(tint, 0.09);
+        ctx.fill();
+        ctx.lineWidth = 1.5 / globalScale;
+        ctx.strokeStyle = withAlpha(tint, 0.6);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        // Soft circle blob (community mode default).
+        let sx = 0, sy = 0;
+        for (const p of pts) { sx += p.x; sy += p.y; }
+        const cx = sx / pts.length, cy = sy / pts.length;
+        let maxR = 0;
+        for (const p of pts) {
+          const d = Math.hypot(p.x - cx, p.y - cy);
+          if (d > maxR) maxR = d;
+        }
+        ctx.save();
+        ctx.fillStyle = withAlpha(tint, 0.10);
+        ctx.beginPath();
+        ctx.arc(cx, cy, maxR + 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
-  }, [analyticsMode, analyticsGroupByCommunity, analyticsData, nodes, palette, folderColors, clusterColors, clusterNames]);
+  }, [analyticsMode, analyticsGroupByCommunity, analyticsData, groupingStyle, nodes, palette, folderColors, clusterColors, clusterNames]);
 
   // Color accessors shared by 2D + 3D. 3D uses folder color too — so
   // orbiting the scene, you see folders as clearly-colored clouds of
@@ -1799,6 +1949,29 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           >+</button>
         </div>
         <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
+          style={{
+            background: "var(--nv-surface)",
+            color: "var(--nv-text-muted)",
+            border: "1px solid var(--nv-border)",
+          }}
+          aria-label="Refresh graph"
+          title="Re-pull the graph from the vault (picks up newly-indexed notes)"
+        >
+          <svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+            strokeLinecap="round" strokeLinejoin="round"
+            className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`}
+          >
+            <path d="M23 4v6h-6" />
+            <path d="M1 20v-6h6" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+          Refresh
+        </button>
+        <button
           onClick={toggleAnalyticsMode}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
           style={{
@@ -1863,6 +2036,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {/* Analytics tip bar — appears below the toolbar when analytics
           mode is on. Idle copy + per-hover swap + dismiss-for-session. */}
       <AnalyticsTipBar visible={analyticsMode} hoverText={tipBarHoverText} />
+      <GraphLegend
+        visible={analyticsMode}
+        clusters={legendClusters}
+        onFocusCluster={handleFocusCluster}
+      />
 
       {/* Filters / Display / Layout / Time-lapse panel — slides in
           from the right when the toolbar's Filters pill is on.
@@ -1937,7 +2115,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkWidth={linkWidth}
             linkCurvature={linkCurvature}
             linkOpacity={0.55}
-            linkDirectionalParticles={1}
+            linkDirectionalParticles={animations ? 1 : 0}
             linkDirectionalParticleSpeed={0.006}
             linkDirectionalParticleWidth={1.6}
             onNodeHover={handleNodeHover}

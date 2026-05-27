@@ -359,6 +359,30 @@ export const nvDeleteNote = (filename: string, brainId?: string) =>
         brain: brainId,
       });
 
+// --- Drop-folder inbox ------------------------------------------------------
+
+export interface NvInboxFile {
+  name: string;
+  size: number;
+  ext: string;
+  path: string;
+}
+
+/** Copy dropped files (absolute paths from the webview file-drop event)
+ *  into the active brain's inbox for the connected agent to process.
+ *  Tauri-only — the browser fallback has no path-based file access, so
+ *  it resolves to an empty list. Returns the names that landed. */
+export const nvInboxAdd = (paths: string[], brainId?: string): Promise<string[]> =>
+  IS_TAURI
+    ? invoke<string[]>("nv_inbox_add", { paths, brainId: brainId ?? null })
+    : Promise.resolve([]);
+
+/** List files currently waiting in the active brain's inbox. */
+export const nvInboxList = (brainId?: string): Promise<NvInboxFile[]> =>
+  IS_TAURI
+    ? invoke<NvInboxFile[]>("nv_inbox_list", { brainId: brainId ?? null })
+    : Promise.resolve([]);
+
 // --- Phase-6 recall + Rust HTTP server --------------------------------------
 
 export interface NvRecallHit {

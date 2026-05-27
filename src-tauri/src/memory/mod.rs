@@ -43,6 +43,7 @@ pub mod entities;
 pub mod handlers;
 pub mod facts;
 pub mod http_server;
+pub mod inbox;
 pub mod ingest;
 pub mod migrations;
 pub mod pagerank_state;

@@ -5195,3 +5195,58 @@ pub async fn todos_complete(
     .map_err(ApiError::from)?;
     Ok(Json(result))
 }
+
+// ---------------------------------------------------------------------------
+// Drop-folder inbox. Backs the MCP `list_inbox` / `read_inbox_file` /
+// `mark_inbox_done` tools. The inbox is a staging area for raw dropped
+// files; the agent reads them here, writes a clean note into the vault
+// (via the normal remember/save path), then marks the raw file done.
+// See super::inbox for the on-disk semantics.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+pub struct InboxListQuery {
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+pub async fn inbox_list(
+    _s: State<ServerState>,
+    Query(q): Query<InboxListQuery>,
+) -> Result<Json<Vec<super::inbox::InboxFile>>, ApiError> {
+    let brain_id = resolve_brain_id(q.brain.as_deref())?;
+    let files = super::inbox::list_inbox(&brain_id)?;
+    Ok(Json(files))
+}
+
+#[derive(Deserialize)]
+pub struct InboxReadQuery {
+    name: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+pub async fn inbox_read(
+    _s: State<ServerState>,
+    Query(q): Query<InboxReadQuery>,
+) -> Result<Json<super::inbox::InboxFileContent>, ApiError> {
+    let brain_id = resolve_brain_id(q.brain.as_deref())?;
+    let content = super::inbox::read_inbox_file(&brain_id, &q.name)?;
+    Ok(Json(content))
+}
+
+#[derive(Deserialize)]
+pub struct InboxDoneBody {
+    name: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+pub async fn inbox_done(
+    _s: State<ServerState>,
+    Json(body): Json<InboxDoneBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let brain_id = resolve_brain_id(body.brain.as_deref())?;
+    super::inbox::mark_done(&brain_id, &body.name)?;
+    Ok(Json(serde_json::json!({ "status": "ok", "name": body.name })))
+}

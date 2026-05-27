@@ -672,6 +672,70 @@ def core_memory_read(label: str | None = None, brain: str | None = None) -> Any:
 
 
 @mcp.tool(annotations={
+    "title": "List drop-folder inbox",
+    "readOnlyHint": True,
+    "openWorldHint": False,
+})
+def list_inbox(brain: str | None = None) -> Any:
+    """List files the user dropped into the brain's inbox, waiting to be
+    turned into notes.
+
+    The inbox is a drop-folder: the user drags arbitrary files (PDFs,
+    text dumps, exports, screenshots) into NeuroVault and they land here
+    untouched. Nothing is indexed automatically — YOU are the converter.
+
+    TYPICAL FLOW:
+    1. `list_inbox()` to see what's waiting.
+    2. `read_inbox_file(name)` to read each one (text inline; for binaries
+       you get an absolute `path` to open with your own file tools).
+    3. Clean it up and `remember(content=..., title=..., folder=...)`
+       to write a proper note into the vault (it gets indexed normally).
+    4. `mark_inbox_done(name)` to move the raw file out of the inbox.
+
+    Returns a list of `{name, size, ext, path}`. Empty list = nothing
+    waiting.
+    """
+    return _http_get("/api/inbox", {"brain": brain})
+
+
+@mcp.tool(annotations={
+    "title": "Read an inbox file",
+    "readOnlyHint": True,
+    "openWorldHint": False,
+})
+def read_inbox_file(name: str, brain: str | None = None) -> Any:
+    """Read one file from the drop-folder inbox by name (as returned by
+    `list_inbox`).
+
+    Returns `{name, path, size, text, is_binary, truncated}`:
+    - `text` holds the file's contents when it's UTF-8 text under 256 KB.
+    - `is_binary=True` (e.g. a PDF/image) or `truncated=True` (too large)
+      means `text` is null — open the absolute `path` with your own file
+      tools instead.
+
+    After you've written the cleaned note via `remember`, call
+    `mark_inbox_done(name)` so it stops showing up as pending.
+    """
+    return _http_get("/api/inbox/file", {"name": name, "brain": brain})
+
+
+@mcp.tool(annotations={
+    "title": "Mark inbox file done",
+    "readOnlyHint": False,
+    "destructiveHint": False,  # moves the raw file aside, doesn't delete it
+    "idempotentHint": True,     # re-marking an already-done file is a no-op
+    "openWorldHint": False,
+})
+def mark_inbox_done(name: str, brain: str | None = None) -> Any:
+    """Move a processed inbox file into `_inbox/_done/` so it no longer
+    appears in `list_inbox`. Call this once you've turned the file into a
+    note with `remember`. The original file is preserved (moved, not
+    deleted). Idempotent — safe to call if it's already been moved.
+    """
+    return _http_post("/api/inbox/done", {"name": name, "brain": brain})
+
+
+@mcp.tool(annotations={
     "title": "Remember a fact (write)",
     "readOnlyHint": False,
     "destructiveHint": False,  # creates new rows, doesn't modify existing

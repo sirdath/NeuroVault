@@ -6,7 +6,16 @@ import { readNote } from "../lib/tauri";
 import { BrainSelector } from "./BrainSelector";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
+import { useGraphSettingsStore, folderColor } from "../stores/graphSettingsStore";
 import type { NoteMeta } from "../lib/tauri";
+
+/** Top-level folder of a note (first path segment before "/"), or ""
+ *  for a root-level note. Mirrors the graph's folder derivation so a
+ *  note shows the same category colour in both the tree and the graph. */
+function noteFolder(filename: string): string {
+  const slash = filename.indexOf("/");
+  return slash > 0 ? filename.slice(0, slash) : "";
+}
 
 
 // Virtualized row estimate. Rows with previews run ~72px, without ~48px.
@@ -652,6 +661,15 @@ function NoteList({
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Category colour source — shared with the graph view so a folder
+  // reads the same hue in the tree and on the canvas.
+  const palette = useGraphSettingsStore((s) => s.palette);
+  const folderColors = useGraphSettingsStore((s) => s.folderColors);
+  const catColor = useCallback(
+    (folder: string) => folderColor(folder, palette, folderColors),
+    [palette, folderColors],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -741,7 +759,9 @@ function NoteList({
                   <svg
                     className="w-[13px] h-[13px] flex-shrink-0"
                     fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
-                    style={{ opacity: 0.7 }}
+                    // Tint the folder icon with the category colour so the
+                    // tree and the graph agree on what each folder "is".
+                    style={{ color: catColor(row.name), opacity: 0.95 }}
                   >
                     {row.expanded ? (
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
@@ -824,10 +844,17 @@ function NoteList({
                   <>
                     <div className="flex items-start justify-between gap-2">
                       <h3
-                        className="text-[13.5px] font-semibold truncate font-[Geist,sans-serif] leading-snug tracking-[-0.005em]"
+                        className="text-[13.5px] font-semibold truncate font-[Geist,sans-serif] leading-snug tracking-[-0.005em] flex items-center gap-1.5 min-w-0"
                         style={{ color: "var(--nv-text)" }}
                       >
-                        {note.title}
+                        {/* Category dot — same hue the note's folder gets in
+                            the graph, so the tree and canvas stay in sync. */}
+                        <span
+                          className="inline-block w-[7px] h-[7px] rounded-full flex-shrink-0"
+                          style={{ background: catColor(noteFolder(note.filename)) }}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{note.title}</span>
                       </h3>
                       <span className="text-[10px] font-[Geist,sans-serif] whitespace-nowrap mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
                         {relativeTime(note.modified)}
