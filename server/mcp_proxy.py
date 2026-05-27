@@ -672,6 +672,37 @@ def core_memory_read(label: str | None = None, brain: str | None = None) -> Any:
 
 
 @mcp.tool(annotations={
+    "title": "Diagnose brain health",
+    "readOnlyHint": True,
+    "openWorldHint": False,
+})
+def diagnose_brain(brain: str | None = None) -> Any:
+    """Run a health scorecard on the brain and get back a graded report
+    plus a worst-first list of concrete fixes.
+
+    Returns `{grade, score, total, categories[], issues[]}`:
+    - `grade` is A–F; `score` is 0–100 over `total` notes.
+    - `categories` each have `{key, label, score (0..1), detail}` —
+      connectivity, interlinking, cohesion, freshness, organization.
+    - `issues` each have `{label, count, severity}`, severity high→low.
+
+    USE THIS to drive maintenance. A typical loop:
+    1. `diagnose_brain()` to see what's weak.
+    2. For "orphan notes" / "outside the main cluster" → find the notes
+       (`recall`/`list` by folder) and add `[[wikilinks]]` between
+       related ones, or merge duplicates.
+    3. For "unfiled notes" → rename them into folders (e.g. `research/x`).
+    4. For "dormant notes" → revisit the still-relevant ones; let the
+       rest decay.
+    5. Re-run `diagnose_brain()` to confirm the grade improved.
+
+    It's read-only — it never changes the vault. You make the fixes with
+    the normal write tools (`remember`, save/rename).
+    """
+    return _http_get("/api/diagnostic", {"brain": brain})
+
+
+@mcp.tool(annotations={
     "title": "List drop-folder inbox",
     "readOnlyHint": True,
     "openWorldHint": False,

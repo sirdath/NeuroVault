@@ -38,6 +38,7 @@ pub mod chunker;
 pub mod cluster_state;
 pub mod core_memory;
 pub mod db;
+pub mod diagnostic;
 pub mod embedder;
 pub mod entities;
 pub mod handlers;

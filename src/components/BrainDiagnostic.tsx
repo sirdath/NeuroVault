@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   computeDiagnostic,
   diagnosticToAscii,
+  type Diagnostic,
   type DiagNode,
   type DiagEdge,
 } from "../lib/diagnostic";
+import { nvDiagnose } from "../lib/tauri";
 
 /**
  * Brain Diagnostic modal — a one-glance health scorecard for the active
@@ -23,6 +25,7 @@ interface BrainDiagnosticProps {
   nodes: DiagNode[];
   edges: DiagEdge[];
   brainName?: string;
+  brainId?: string;
 }
 
 function gradeColor(grade: string): string {
@@ -40,11 +43,45 @@ function barColor(score: number): string {
   return "#ff5d5d";
 }
 
-export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brain" }: BrainDiagnosticProps) {
-  const diag = useMemo(() => computeDiagnostic(nodes, edges), [nodes, edges]);
+export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brain", brainId }: BrainDiagnosticProps) {
+  const [diag, setDiag] = useState<Diagnostic | null>(null);
+  const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // On open, fetch the authoritative DB-backed report (it sees dormant
+  // notes the loaded graph hides). Fall back to a client-side estimate
+  // from the graph if the backend is unreachable.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    nvDiagnose(brainId)
+      .then((r) => { if (!cancelled) setDiag(r as Diagnostic); })
+      .catch(() => { if (!cancelled) setDiag(computeDiagnostic(nodes, edges)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // Recompute each time the modal is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, brainId]);
+
   if (!open) return null;
+
+  if (loading || !diag) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background: "rgba(4,8,18,0.6)", backdropFilter: "blur(3px)" }}
+        onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <div
+          className="px-8 py-7 rounded-2xl text-[13px] font-[Geist,sans-serif]"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+        >
+          Analyzing your brain…
+        </div>
+      </div>
+    );
+  }
 
   const copy = async () => {
     try {

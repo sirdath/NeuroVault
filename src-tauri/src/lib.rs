@@ -931,6 +931,18 @@ fn nv_inbox_list(
     memory::inbox::list_inbox(&id).map_err(|e| e.to_string())
 }
 
+/// Brain health scorecard for the active (or named) brain. In-process
+/// path for the Diagnostic panel; the HTTP `/api/diagnostic` endpoint +
+/// MCP `diagnose_brain` tool compute the same report.
+#[tauri::command]
+fn nv_diagnose(
+    brain_id: Option<String>,
+) -> std::result::Result<memory::diagnostic::DiagnosticReport, String> {
+    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let db = memory::open_brain(&id).map_err(|e| e.to_string())?;
+    memory::diagnostic::diagnose(&db).map_err(|e| e.to_string())
+}
+
 // --- Phase-6 recall + HTTP server -------------------------------------
 
 /// Hybrid recall — the main retrieval entry point. Replaces
@@ -1323,6 +1335,8 @@ pub fn run() {
             // Drop-folder inbox: UI file-drop copies raw files into the
             // brain inbox for the connected agent to turn into notes.
             nv_inbox_add, nv_inbox_list,
+            // Brain health scorecard (also on HTTP + MCP).
+            nv_diagnose,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
