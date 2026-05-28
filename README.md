@@ -265,14 +265,15 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Recall (with reranker) | ~133 ms median |
 | Full vault ingest (25 notes) | ~4 s cold start |
 
-**Retrieval quality** (25 hand-crafted notes, 25 queries):
+**Retrieval quality** — measured on a **30-query hand-curated set**, reproducible via [`eval/run_eval.py`](eval/run_eval.py) against a running instance (`eval/baselines/2026-04-23-tier1-real.json`):
 
-| Mode | Top-1 | Top-3 | Top-5 | MRR | Median latency |
-|------|-------|-------|-------|-----|----------------|
-| Hybrid (default) | **92%** | **96%** | 96% | 0.94 | 73 ms |
-| Hybrid + cross-encoder rerank | **92%** | **100%** | 100% | 0.96 | 133 ms |
+| hit@1 | hit@3 | hit@5 | MRR | median latency |
+|-------|-------|-------|-----|----------------|
+| **83%** | **90%** | **90%** | **0.86** | ~22 ms |
 
-**Cost** — roughly **$0.55/yr** for 1000 notes (local embeddings, your own machine), vs. hosted memory services at $300–3000/yr. 100% local and open source.
+> This is a small internal retrieval set, not a standard benchmark — it's how we catch ranking regressions, not a leaderboard claim. We don't currently publish a long-memory-benchmark (e.g. LongMemEval) number.
+
+**Cost** — running locally, embeddings and retrieval cost effectively nothing (your own machine, no per-call API), versus hosted memory services that bill monthly. 100% local and open source.
 
 ## Keyboard shortcuts
 
