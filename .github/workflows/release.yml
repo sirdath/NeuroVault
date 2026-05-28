@@ -128,15 +128,13 @@ jobs:
           set -euo pipefail
           mkdir -p src-tauri/resources
 
-          # Resolve latest sqlite-vec release tag without jq (Windows
-          # runners don't have it preinstalled).
-          VERSION=$(curl -sSL --retry 5 --retry-delay 5 --retry-all-errors \
-            https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
-            | grep '"tag_name"' | head -n1 | cut -d'"' -f4)
-          if [ -z "$VERSION" ]; then
-            echo "::error::failed to resolve sqlite-vec latest version"
-            exit 1
-          fi
+          # Pinned, NOT resolved from the API. Resolving "latest" via the
+          # unauthenticated GitHub API rate-limits on shared macOS-runner
+          # IPs (60 req/hr/IP); the rate-limit body has no `tag_name`, so
+          # the pipeline failed instantly and broke the mac build (v0.3.0
+          # + v0.3.1). Pinning also makes builds reproducible. Bump this
+          # deliberately when adopting a new sqlite-vec.
+          VERSION="v0.1.9"
           echo "Using sqlite-vec ${VERSION}"
 
           # Asset name pattern: sqlite-vec-{ver}-loadable-{os}-{arch}.{ext}
