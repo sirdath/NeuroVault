@@ -73,6 +73,9 @@ jobs:
             vec_arch: x86_64
             vec_archive_ext: tar.gz
     runs-on: ${{ matrix.os }}
+    # Bound a stuck job (e.g. a flaky/slow macOS runner) so it can't hang
+    # the run for hours. A cold lto=fat build is ~6 min; 60 is generous.
+    timeout-minutes: 60
     permissions:
       contents: write   # creates / updates GitHub Releases
     steps:
@@ -127,7 +130,8 @@ jobs:
 
           # Resolve latest sqlite-vec release tag without jq (Windows
           # runners don't have it preinstalled).
-          VERSION=$(curl -sSL https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
+          VERSION=$(curl -sSL --retry 5 --retry-delay 5 --retry-all-errors \
+            https://api.github.com/repos/asg017/sqlite-vec/releases/latest \
             | grep '"tag_name"' | head -n1 | cut -d'"' -f4)
           if [ -z "$VERSION" ]; then
             echo "::error::failed to resolve sqlite-vec latest version"
@@ -141,7 +145,7 @@ jobs:
           ASSET="sqlite-vec-${STRIPPED}-loadable-${{ matrix.vec_os }}-${{ matrix.vec_arch }}.${{ matrix.vec_archive_ext }}"
           URL="https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
           echo "Fetching ${URL}"
-          curl -fL -o /tmp/vec0-archive "${URL}"
+          curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/vec0-archive "${URL}"
 
           # Extract just the vec0 binary into src-tauri/resources/.
           # Both .tar.gz and .zip ship the file at the archive root.

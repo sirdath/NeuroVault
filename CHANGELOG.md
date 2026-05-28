@@ -10,6 +10,35 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.3.1] — 2026-05-27
+
+### Added
+- **Contradiction resolution** — new information can now beat stale
+  information, agent-driven and reversible:
+  - `remember` flags `potential_conflicts` when a new note sits in the
+    mid-similarity band (~0.82–0.92) of an existing one, and accepts
+    `supersedes: [ids]` to retire the old note in the same call.
+  - `supersede_note(old, new)` MCP tool + `POST /api/notes/supersede`
+    mark a note superseded; recall hides it but it stays on disk
+    (reversible). Nothing is auto-superseded on similarity alone.
+  - `find_conflicts` MCP tool + `GET /api/conflicts` sweep the brain for
+    likely contradictions; the Brain Diagnostic gains a "potential
+    contradictions" line.
+- **`raw/` drop-folder** — the per-brain drop-folder is now a visible
+  `raw/` folder (was `_inbox/`) seeded with a `README.md` guide, created
+  on brain activation. Paste documents in; the agent turns them into
+  notes; originals are kept in `raw/_done/`.
+
+### Changed
+- Recall now hides superseded notes across every candidate path.
+
+### Fixed
+- Release workflow: retry the sqlite-vec download (transient mac-runner
+  failures) and add a per-job timeout so a stuck runner can't hang the
+  build.
+
+---
+
 ## [0.3.0] — 2026-05-27
 
 ### Added
