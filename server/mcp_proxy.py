@@ -780,6 +780,7 @@ def remember(
     agent_id: str | None = None,
     folder: str | None = None,
     deduplicate: float | None = None,
+    supersedes: list[str] | None = None,
 ) -> Any:
     """Save a memory permanently. This is how information persists across
     conversations — if you don't call this, the fact is gone when the
@@ -809,6 +810,12 @@ def remember(
     places the note under that subdirectory. `content` supports
     markdown + `[[wikilinks]]` to other notes.
 
+    `supersedes` — pass the engram ids of older notes this one REPLACES
+    (info that's now wrong/outdated). They're marked superseded so recall
+    stops serving the stale version; the new note wins. The old notes
+    aren't deleted (reversible). Use this when the new fact contradicts an
+    old one, not for unrelated notes.
+
     Hard ceiling: 32 KB. Split longer content into multiple engrams.
     """
     body: dict[str, Any] = {"content": content}
@@ -817,7 +824,39 @@ def remember(
     if agent_id: body["agent_id"] = agent_id
     if folder: body["folder"] = folder
     if deduplicate is not None: body["deduplicate"] = float(deduplicate)
+    if supersedes: body["supersedes"] = list(supersedes)
     return _http_post("/api/notes", body)
+
+
+@mcp.tool(annotations={
+    "title": "Supersede a note (retire stale info)",
+    "readOnlyHint": False,
+    "destructiveHint": False,  # reversible metadata; the note stays on disk + in the DB
+    "idempotentHint": True,     # re-superseding the same pair is a no-op
+    "openWorldHint": False,
+})
+def supersede_note(
+    old_id: str,
+    new_id: str,
+    reason: str | None = None,
+    brain: str | None = None,
+) -> Any:
+    """Mark `old_id` as superseded by `new_id` so recall stops serving the
+    stale note. Use when new information contradicts/replaces an older
+    note and the new one should be the truth going forward.
+
+    The old note is NOT deleted — it stays on disk and in the DB, just
+    hidden from default recall (reversible). This is how you keep the
+    brain current: when you learn the real value changed, write the new
+    note (`remember`) and point the old one's `supersede` at it — or pass
+    `supersedes=[old_id]` directly to `remember` to do both at once.
+
+    Never supersede on a hunch; only when the new note genuinely replaces
+    the old one's claim. Returns `{ok, old_id, new_id, status}`.
+    """
+    return _http_post("/api/notes/supersede", {
+        "old_id": old_id, "new_id": new_id, "reason": reason, "brain": brain,
+    })
 
 
 @mcp.tool(annotations={

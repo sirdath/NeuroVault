@@ -128,6 +128,7 @@ fn router() -> Router {
         .route("/api/notes", post(remember))
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))
+        .route("/api/notes/supersede", post(notes_supersede))
         .route("/api/update", post(update_brain))
         .route("/api/diagnostic", get(diagnostic_get))
         .route("/api/inbox", get(inbox_list))

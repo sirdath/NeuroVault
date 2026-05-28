@@ -85,4 +85,4 @@ pub use related::{get_related, get_related_checked, RelatedHit, RelatedOpts};
 pub use retriever::{hybrid_retrieve, hybrid_retrieve_throttled, RecallHit, RecallOpts, THROTTLE_HINT_ID};
 pub use summaries::{generate_summaries, generate_summaries_default};
 pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result};
-pub use write_ops::{create_note, delete_note, save_note, BrainContext, WriteResult};
+pub use write_ops::{create_note, delete_note, save_note, supersede_note, BrainContext, WriteResult};

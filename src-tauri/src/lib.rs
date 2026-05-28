@@ -943,6 +943,21 @@ fn nv_diagnose(
     memory::diagnostic::diagnose(&db).map_err(|e| e.to_string())
 }
 
+/// Mark `old_id` superseded by `new_id` so recall stops serving the stale
+/// note (reversible metadata). Mirrors POST /api/notes/supersede + the
+/// `supersede_note` MCP tool. Returns true if the old note existed.
+#[tauri::command]
+fn nv_supersede_note(
+    old_id: String,
+    new_id: String,
+    reason: Option<String>,
+    brain_id: Option<String>,
+) -> std::result::Result<bool, String> {
+    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let db = memory::open_brain(&id).map_err(|e| e.to_string())?;
+    memory::supersede_note(&db, &old_id, &new_id, reason.as_deref()).map_err(|e| e.to_string())
+}
+
 // --- Phase-6 recall + HTTP server -------------------------------------
 
 /// Hybrid recall — the main retrieval entry point. Replaces
@@ -1337,6 +1352,8 @@ pub fn run() {
             nv_inbox_add, nv_inbox_list,
             // Brain health scorecard (also on HTTP + MCP).
             nv_diagnose,
+            // Engram-level supersession (new note retires a stale one).
+            nv_supersede_note,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
