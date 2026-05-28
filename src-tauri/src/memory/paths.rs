@@ -84,19 +84,20 @@ pub fn audit_path(brain_id: &str) -> PathBuf {
     brain_dir(brain_id).join("audit.jsonl")
 }
 
-/// Drop-folder inbox for a brain: `~/.neurovault/brains/{id}/_inbox`.
-/// Users drop arbitrary files here (via the UI or by hand); the
-/// connected Claude agent reads them over MCP, writes a cleaned `.md`
-/// note into `vault/`, then marks the raw file done. The inbox itself
-/// is NOT watched/ingested — only the vault is — so binaries can sit
-/// here safely until the agent processes them.
+/// Raw drop-folder for a brain: `~/.neurovault/brains/{id}/raw`.
+/// Karpathy-style raw layer — paste arbitrary documents here (PDFs,
+/// exports, transcripts) and the connected Claude agent reads them over
+/// MCP, writes cleaned `.md` notes into `vault/`, then marks each raw
+/// file done. The folder is NOT watched/ingested — only the vault is —
+/// so binaries sit here safely until the agent processes them. A seeded
+/// `README.md` guide explains the workflow (see `inbox::ensure_raw_dir`).
 pub fn inbox_dir(brain_id: &str) -> PathBuf {
-    brain_dir(brain_id).join("_inbox")
+    brain_dir(brain_id).join("raw")
 }
 
-/// Where processed inbox files are moved once the agent has turned them
-/// into a note. Keeps the inbox listing clean without deleting the
-/// user's original file. `~/.neurovault/brains/{id}/_inbox/_done`.
+/// Where processed raw files are moved once the agent has turned them
+/// into a note. Keeps the raw listing clean without deleting the user's
+/// original file. `~/.neurovault/brains/{id}/raw/_done`.
 pub fn inbox_done_dir(brain_id: &str) -> PathBuf {
     inbox_dir(brain_id).join("_done")
 }

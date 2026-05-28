@@ -30,6 +30,39 @@ use super::types::{MemoryError, Result};
 /// we just don't shove a megabyte of text through the MCP boundary.
 const MAX_INLINE_TEXT_BYTES: u64 = 256 * 1024;
 
+/// The seeded guide file. Excluded from the pending listing so the agent
+/// never tries to "process" the instructions.
+const GUIDE_NAME: &str = "README.md";
+
+const GUIDE_BODY: &str = "# raw/ — drop documents here for your agent to file\n\
+\n\
+This folder is your **raw inbox**. Paste or drop any source documents in\n\
+here — PDFs, text dumps, exports, meeting transcripts, web clips — and\n\
+your connected AI agent (Claude Code, Claude Desktop, Cursor, …) turns\n\
+them into clean, indexed notes in your vault.\n\
+\n\
+## How to use it\n\
+\n\
+1. Drop files into this `raw/` folder (or drag them onto the NeuroVault\n\
+   window).\n\
+2. Tell your agent: **\"process my raw folder\"** (or \"process the inbox\").\n\
+3. The agent reads each file (`list_inbox` / `read_inbox_file`), writes a\n\
+   tidy markdown note into your vault (`remember`), then marks the raw\n\
+   file done (`mark_inbox_done`) — it moves into `_done/` so it stops\n\
+   showing as pending.\n\
+\n\
+## Good to know\n\
+\n\
+- Nothing here is auto-indexed. Only your **vault** is searched; these raw\n\
+  files wait untouched until the agent processes them. So binaries (PDFs,\n\
+  images) are safe to leave here.\n\
+- Your originals are **kept** — processing moves them to `raw/_done/`,\n\
+  never deletes them. This doubles as a permanent record of your sources.\n\
+- For a dissertation or research project: dump every source here, then\n\
+  let the agent distill each into a note and link them together.\n\
+\n\
+*This guide (`README.md`) is ignored by the agent — it's just for you.*\n";
+
 /// One pending file in the inbox listing.
 #[derive(Debug, Clone, Serialize)]
 pub struct InboxFile {
@@ -84,10 +117,26 @@ fn ext_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// List pending files in a brain's inbox. Skips the `_done` subdir and
-/// any dotfiles. Returns an empty vec (not an error) when the inbox
-/// doesn't exist yet.
+/// Ensure the raw drop-folder exists and carries its `README.md` guide.
+/// Idempotent: creates the dir if missing and writes the guide only when
+/// absent (so a user who edits it isn't overwritten). Called lazily on
+/// list/add and proactively on brain activation so the empty folder +
+/// guide are there to paste into.
+pub fn ensure_raw_dir(brain_id: &str) -> Result<()> {
+    let dir = inbox_dir(brain_id);
+    fs::create_dir_all(&dir)?;
+    let guide = dir.join(GUIDE_NAME);
+    if !guide.exists() {
+        fs::write(&guide, GUIDE_BODY)?;
+    }
+    Ok(())
+}
+
+/// List pending files in a brain's raw folder. Skips the `_done` subdir,
+/// dotfiles, and the seeded `README.md` guide. Ensures the folder + guide
+/// exist first, so an empty raw/ is ready to paste into.
 pub fn list_inbox(brain_id: &str) -> Result<Vec<InboxFile>> {
+    ensure_raw_dir(brain_id)?;
     let dir = inbox_dir(brain_id);
     if !dir.exists() {
         return Ok(Vec::new());
@@ -104,7 +153,7 @@ pub fn list_inbox(brain_id: &str) -> Result<Vec<InboxFile>> {
             Some(n) => n.to_string(),
             None => continue,
         };
-        if name.starts_with('.') {
+        if name.starts_with('.') || name.eq_ignore_ascii_case(GUIDE_NAME) {
             continue;
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
@@ -189,8 +238,8 @@ pub fn mark_done(brain_id: &str, name: &str) -> Result<()> {
 /// the final names landed in the inbox (post collision-resolution).
 /// Skips silently-missing sources but errors on a genuine copy failure.
 pub fn add_files(brain_id: &str, src_paths: &[String]) -> Result<Vec<String>> {
+    ensure_raw_dir(brain_id)?;
     let dir = inbox_dir(brain_id);
-    fs::create_dir_all(&dir)?;
     let mut added = Vec::new();
     for src in src_paths {
         let src_path = PathBuf::from(src);

@@ -283,6 +283,10 @@ fn cache() -> &'static RwLock<HashMap<String, WatcherHandle>> {
 /// serving on — a stub string for now; the caller displays it in
 /// the UI's "watcher: on" indicator.
 pub fn start_for_brain(brain_id: &str, vault_path: PathBuf) -> Result<()> {
+    // Make sure the brain's raw/ drop-folder + its README guide exist so
+    // the user always has an empty folder to paste documents into.
+    // Best-effort — never block the watcher on it.
+    let _ = super::inbox::ensure_raw_dir(brain_id);
     {
         let guard = cache().read();
         if guard.contains_key(brain_id) {
