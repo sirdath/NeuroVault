@@ -708,12 +708,14 @@ def diagnose_brain(brain: str | None = None) -> Any:
     "openWorldHint": False,
 })
 def list_inbox(brain: str | None = None) -> Any:
-    """List files the user dropped into the brain's inbox, waiting to be
-    turned into notes.
+    """List files the user dropped into the brain's `raw/` folder, waiting
+    to be turned into notes.
 
-    The inbox is a drop-folder: the user drags arbitrary files (PDFs,
-    text dumps, exports, screenshots) into NeuroVault and they land here
-    untouched. Nothing is indexed automatically — YOU are the converter.
+    `raw/` is the drop-folder (`~/.neurovault/brains/<id>/raw/`): the user
+    pastes/drags arbitrary files (PDFs, text dumps, exports, screenshots)
+    there and they land untouched. Nothing is indexed automatically — YOU
+    are the converter. (The `README.md` guide in that folder is for the
+    user and is never listed here.)
 
     TYPICAL FLOW:
     1. `list_inbox()` to see what's waiting.
@@ -758,7 +760,7 @@ def read_inbox_file(name: str, brain: str | None = None) -> Any:
     "openWorldHint": False,
 })
 def mark_inbox_done(name: str, brain: str | None = None) -> Any:
-    """Move a processed inbox file into `_inbox/_done/` so it no longer
+    """Move a processed raw file into `raw/_done/` so it no longer
     appears in `list_inbox`. Call this once you've turned the file into a
     note with `remember`. The original file is preserved (moved, not
     deleted). Idempotent — safe to call if it's already been moved.

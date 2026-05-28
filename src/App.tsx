@@ -162,8 +162,8 @@ export default function App() {
   //
   // Global webview file-drop. When the user drags files from their OS
   // file manager onto the NeuroVault window, we copy them into the
-  // active brain's `_inbox/` and surface a toast. The connected Claude
-  // agent then reads them over MCP (`list_inbox` / `read_inbox_file`)
+  // active brain's `raw/` folder and surface a toast. The connected
+  // Claude agent then reads them over MCP (`list_inbox` / `read_inbox_file`)
   // and turns them into clean indexed notes — no converters bundled.
   //
   // We track a drag-over state to show a full-window drop overlay, and
@@ -191,10 +191,10 @@ export default function App() {
               }
               const n = added.length;
               toast.success(
-                `${n} file${n === 1 ? "" : "s"} queued in the inbox — ask your connected agent to "process the inbox".`,
+                `${n} file${n === 1 ? "" : "s"} added to raw/ — ask your connected agent to "process the raw folder".`,
               );
             })
-            .catch((e) => toast.error(`Couldn't add to inbox: ${(e as Error).message}`));
+            .catch((e) => toast.error(`Couldn't add to raw/: ${(e as Error).message}`));
         }
       })
       .then((fn) => {
@@ -758,7 +758,7 @@ export default function App() {
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
             <p className="text-[15px] font-semibold font-[Geist,sans-serif]" style={{ color: theme.text }}>
-              Drop files to add to your inbox
+              Drop files into your raw folder
             </p>
             <p className="text-[12px] font-[Geist,sans-serif] text-center max-w-[280px]" style={{ color: theme.textDim }}>
               Your connected agent turns them into clean, indexed notes.

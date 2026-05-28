@@ -150,7 +150,7 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 **Graph view** — force-directed visualization. Fill encodes category, a ring encodes health/strength, size encodes importance (Analytics mode). Click a node to open, drag to pin, click a cluster in the legend to frame it.
 
-**Drop-folder ingest** — a per-brain `_inbox/`; dropped files wait there for the connected agent to convert into clean notes (no bundled converters — the agent is the converter).
+**Drop-folder ingest** — a per-brain **`raw/`** folder (with a `README.md` guide inside); paste documents there and the connected agent converts them into clean notes (no bundled converters — the agent is the converter). Originals are kept in `raw/_done/`.
 
 **Silent fact capture** — a UserPromptSubmit hook pipes prompts through a regex extractor recognising 8 patterns (preferences, decisions, stacks, deadlines, identity, anti-preferences, deploy targets, explicit "remember that…"). Microseconds, no LLM call, bounded to 3 extractions/message, `<private>` blocks stripped.
 
@@ -230,7 +230,7 @@ Exposed to any MCP-speaking agent. Every tool takes an optional `brain` paramete
                         | SQL + vec0
 +-----------------------v-------------------------+
 |  SQLite + sqlite-vec  (~/.neurovault/...)       |
-|  brain.db, vault/*.md, _inbox/, assets/, cache/ |
+|  brain.db, vault/*.md, raw/, assets/, cache/    |
 +-------------------------------------------------+
 
 External:
