@@ -1717,6 +1717,13 @@ pub struct RememberBody {
 }
 
 #[derive(Serialize)]
+pub struct ConflictCandidate {
+    pub id: String,
+    pub title: String,
+    pub similarity: f64,
+}
+
+#[derive(Serialize)]
 pub struct RememberResult {
     status: String, // "created" | "updated" | "unchanged" | "merged"
     engram_id: String,
@@ -1725,7 +1732,19 @@ pub struct RememberResult {
     /// with a higher threshold if they wanted the note created anyway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     similarity: Option<f64>,
+    /// Existing notes in the mid-similarity band (same topic, likely a
+    /// different claim) that the new note MAY contradict. Detection only
+    /// — nothing is auto-superseded. The agent decides whether to call
+    /// `supersede_note` (or pass `supersedes`) to retire the stale one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    potential_conflicts: Vec<ConflictCandidate>,
 }
+
+/// Write-time conflict band. Below the floor = unrelated; at/above the
+/// ceiling = near-duplicate (handled by dedupe, not a contradiction).
+/// In between = "same topic, probably a different claim" → worth a heads-up.
+const CONFLICT_FLOOR: f64 = 0.82;
+const CONFLICT_CEIL: f64 = 0.92;
 
 /// Hard ceiling on `remember` content size. Agents occasionally send
 /// an entire wiki page or multi-KB transcript; running the full
@@ -1779,16 +1798,22 @@ pub async fn remember(
             });
         let seed = format!("# {}\n\n{}", title, content);
 
-        // Dedupe short-circuit: compare the fully-formed note (what
-        // would be written) against existing engrams. If a close
-        // match exists, skip the write and return the match.
+        // One similarity scan powers both decisions below: the dedupe
+        // merge AND the write-time conflict heads-up.
+        let nearest = ingest::nearest_doc_match(&db, &seed, None)?;
+
+        // Dedupe short-circuit: a near-identical existing note means we
+        // skip the write and return the match as "merged".
         if let Some(threshold) = dedupe {
-            if let Some((matched_id, sim)) = ingest::dedupe_check(&db, &seed, threshold, None)? {
-                return Ok(RememberResult {
-                    status: "merged".to_string(),
-                    engram_id: matched_id,
-                    similarity: Some(sim),
-                });
+            if let Some((matched_id, sim)) = &nearest {
+                if *sim >= threshold {
+                    return Ok(RememberResult {
+                        status: "merged".to_string(),
+                        engram_id: matched_id.clone(),
+                        similarity: Some(*sim),
+                        potential_conflicts: vec![],
+                    });
+                }
             }
         }
 
@@ -1835,10 +1860,41 @@ pub async fn remember(
             );
         }
 
+        // Write-time conflict heads-up: if the nearest existing note sits
+        // in the mid-similarity band, it's likely the same topic with a
+        // different claim. Surface it (detection only — the agent decides
+        // whether to supersede). Skip anything already superseded here.
+        let mut potential_conflicts = Vec::new();
+        if let Some((mid, sim)) = &nearest {
+            if *sim >= CONFLICT_FLOOR
+                && *sim < CONFLICT_CEIL
+                && mid != &write.engram_id
+                && !supersedes.iter().any(|s| s == mid)
+            {
+                let title: String = {
+                    let conn = db.lock();
+                    conn.query_row(
+                        "SELECT title FROM engrams WHERE id = ?1 AND superseded_by IS NULL",
+                        [mid],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .unwrap_or_default()
+                };
+                if !title.is_empty() {
+                    potential_conflicts.push(ConflictCandidate {
+                        id: mid.clone(),
+                        title,
+                        similarity: (*sim * 1000.0).round() / 1000.0,
+                    });
+                }
+            }
+        }
+
         Ok(RememberResult {
             status: write.status,
             engram_id: write.engram_id,
             similarity: None,
+            potential_conflicts,
         })
     })
     .await
@@ -5268,6 +5324,32 @@ pub async fn todos_complete(
 // (via the normal remember/save path), then marks the raw file done.
 // See super::inbox for the on-disk semantics.
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+pub struct ConflictsQuery2 {
+    #[serde(default)]
+    brain: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// GET /api/conflicts — on-demand sweep for potential contradictions
+/// (mid-similarity note pairs). Backs the `find_conflicts` MCP tool.
+pub async fn conflicts_find(
+    _s: State<ServerState>,
+    Query(q): Query<ConflictsQuery2>,
+) -> Result<Json<Vec<super::ingest::ConflictPair>>, ApiError> {
+    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let pairs = tokio::task::spawn_blocking(move || -> Result<_, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        super::ingest::find_conflicts(&db, limit)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(pairs))
+}
 
 #[derive(Deserialize, Default)]
 pub struct DiagnosticQuery {
