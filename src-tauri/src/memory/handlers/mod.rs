@@ -1707,6 +1707,13 @@ pub struct RememberBody {
     /// note under that subdirectory. Defaults to the vault root.
     #[serde(default)]
     folder: Option<String>,
+    /// Optional engram ids this new note replaces. Each is marked
+    /// superseded by the new note so recall stops serving the stale
+    /// ones. Lets an agent write the new truth and retire the old in a
+    /// single call. Ignored on a dedupe "merged" result (nothing new
+    /// was written to supersede with).
+    #[serde(default)]
+    supersedes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1750,6 +1757,7 @@ pub async fn remember(
     let content = body.content.clone();
     let dedupe = body.deduplicate;
     let folder = body.folder.clone();
+    let supersedes = body.supersedes.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<RememberResult, MemoryError> {
         let id = resolve_brain_id(brain_id.as_deref())?;
@@ -1810,6 +1818,22 @@ pub async fn remember(
             .with_modified_ids(vec![write.engram_id.clone()])
             .with_status(200);
         let _ = super::tool_audit::append(&id, &entry);
+
+        // Retire any notes this one explicitly replaces. Best-effort:
+        // a missing/typo'd old id is skipped (supersede_note returns
+        // false), and we never let a supersede failure undo the write
+        // that already succeeded.
+        for old_id in &supersedes {
+            if old_id == &write.engram_id {
+                continue;
+            }
+            let _ = super::write_ops::supersede_note(
+                &db,
+                old_id,
+                &write.engram_id,
+                Some("replaced by a newer note (remember supersedes)"),
+            );
+        }
 
         Ok(RememberResult {
             status: write.status,
@@ -1886,6 +1910,47 @@ pub async fn notes_save(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct SupersedeBody {
+    /// The stale note being retired.
+    pub old_id: String,
+    /// The note that replaces it (the new truth).
+    pub new_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// POST /api/notes/supersede — mark `old_id` superseded by `new_id` so
+/// recall stops serving the stale note. Backs the `supersede_note` MCP
+/// tool. Caller-driven; reversible (note stays on disk + in the DB).
+pub async fn notes_supersede(
+    _s: State<ServerState>,
+    Json(body): Json<SupersedeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let updated = super::write_ops::supersede_note(
+            &db,
+            &body.old_id,
+            &body.new_id,
+            body.reason.as_deref(),
+        )?;
+        Ok(serde_json::json!({
+            "ok": updated,
+            "old_id": body.old_id,
+            "new_id": body.new_id,
+            "status": if updated { "superseded" } else { "old_id not found" },
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
 }
 
 pub async fn notes_delete(

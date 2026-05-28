@@ -613,6 +613,7 @@ fn knn_search(db: &BrainDb, query_emb: &[f32], limit: usize) -> Result<Vec<KnnHi
          JOIN engrams e ON e.id = c.engram_id
          WHERE v.embedding MATCH ? AND k = ?
            AND e.state != 'dormant'
+           AND e.superseded_by IS NULL
          ORDER BY v.distance ASC
          LIMIT ?",
     )?;
@@ -719,7 +720,8 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
         let mut stmt = conn.prepare(
             "SELECT em.engram_id FROM entity_mentions em
              JOIN engrams e ON e.id = em.engram_id
-             WHERE em.entity_id = ?1 AND e.state != 'dormant'",
+             WHERE em.entity_id = ?1 AND e.state != 'dormant'
+               AND e.superseded_by IS NULL",
         )?;
         let rows: Vec<String> = stmt
             .query_map([eid], |r| r.get::<_, String>(0))?
@@ -736,6 +738,7 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
             "SELECT l.to_engram FROM engram_links l
              JOIN engrams e ON e.id = l.to_engram
              WHERE l.from_engram = ?1 AND e.state != 'dormant'
+               AND e.superseded_by IS NULL
                AND l.similarity > 0.5 LIMIT 5",
         )?;
         let rows: Vec<String> = stmt
@@ -907,7 +910,7 @@ pub fn hybrid_retrieve(
         let conn = db.lock();
         let mut stmt = conn.prepare(
             "SELECT id, title, COALESCE(filename, ''), COALESCE(content, '') \
-             FROM engrams WHERE state != 'dormant'",
+             FROM engrams WHERE state != 'dormant' AND superseded_by IS NULL",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((

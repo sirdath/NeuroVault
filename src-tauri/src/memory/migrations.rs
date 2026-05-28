@@ -36,6 +36,7 @@ pub fn run_all(conn: &Connection) -> Result<()> {
     migrate_add_agent_id(conn)?;
     migrate_add_summaries(conn)?;
     migrate_add_expired_at(conn)?;
+    migrate_add_supersession(conn)?;
     Ok(())
 }
 
@@ -141,6 +142,25 @@ pub fn migrate_add_review_comment(conn: &Connection) -> Result<()> {
         "ALTER TABLE compilations ADD COLUMN review_comment TEXT",
         [],
     )?;
+    Ok(())
+}
+
+/// Add engram-level supersession (`superseded_by`, `superseded_reason`).
+/// When a new note replaces an older one whose info is now stale, the old
+/// note's `superseded_by` points at the new engram id and recall hides it
+/// by default. The note stays on disk + in the DB (reversible) — this is
+/// metadata, not a delete. Resolution is always agent/user-driven; nothing
+/// auto-supersedes on similarity alone.
+pub fn migrate_add_supersession(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "engrams")? {
+        return Ok(());
+    }
+    if !column_exists(conn, "engrams", "superseded_by")? {
+        conn.execute("ALTER TABLE engrams ADD COLUMN superseded_by TEXT", [])?;
+    }
+    if !column_exists(conn, "engrams", "superseded_reason")? {
+        conn.execute("ALTER TABLE engrams ADD COLUMN superseded_reason TEXT", [])?;
+    }
     Ok(())
 }
 

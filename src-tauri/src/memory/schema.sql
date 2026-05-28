@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     strength     REAL DEFAULT 1.0,
     access_count INTEGER DEFAULT 0,
     agent_id     TEXT,                 -- which agent wrote this (claude-code, cursor, claude-desktop, user, etc.)
+    superseded_by     TEXT,            -- engram id that replaced this one; non-null = stale, hidden from default recall (reversible metadata, note stays on disk)
+    superseded_reason TEXT,            -- short why, set when an agent/user retires this note
     created_at   TEXT DEFAULT (datetime('now')),
     updated_at   TEXT DEFAULT (datetime('now')),
     accessed_at  TEXT DEFAULT (datetime('now'))

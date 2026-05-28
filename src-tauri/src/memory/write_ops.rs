@@ -156,3 +156,47 @@ pub fn delete_note(ctx: &BrainContext, filename: &str) -> Result<WriteResult> {
         status: "deleted".to_string(),
     })
 }
+
+/// Mark `old_id` as superseded by `new_id` at the engram level.
+///
+/// Sets `superseded_by` (+ optional `superseded_reason`) so recall hides
+/// the old note by default — the note stays on disk and in the DB, so
+/// this is reversible metadata, not a delete. Always caller-driven (an
+/// agent or the user decided the new note replaces the old); nothing in
+/// here decides supersession on its own.
+///
+/// Returns `true` if the old engram existed and was updated. Errors if
+/// `new_id` doesn't exist (can't point at a missing replacement) or if
+/// the two ids are equal.
+pub fn supersede_note(
+    db: &BrainDb,
+    old_id: &str,
+    new_id: &str,
+    reason: Option<&str>,
+) -> Result<bool> {
+    if old_id == new_id {
+        return Err(MemoryError::Other(
+            "a note can't supersede itself".to_string(),
+        ));
+    }
+    let conn = db.lock();
+    let count = |id: &str| -> Result<i64> {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM engrams WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )?)
+    };
+    if count(new_id)? == 0 {
+        return Err(MemoryError::EngramNotFound(new_id.to_string()));
+    }
+    if count(old_id)? == 0 {
+        return Ok(false);
+    }
+    let n = conn.execute(
+        "UPDATE engrams SET superseded_by = ?1, superseded_reason = ?2, \
+         updated_at = datetime('now') WHERE id = ?3",
+        rusqlite::params![new_id, reason, old_id],
+    )?;
+    Ok(n > 0)
+}
