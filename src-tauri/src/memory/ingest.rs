@@ -871,6 +871,23 @@ pub fn dedupe_check(
     threshold: f64,
     ignore_engram_id: Option<&str>,
 ) -> Result<Option<(String, f64)>> {
+    // Thin wrapper over `nearest_doc_match`: the top match only counts
+    // as a dedupe hit if it clears the threshold.
+    Ok(nearest_doc_match(db, content, ignore_engram_id)?
+        .filter(|(_, sim)| *sim >= threshold))
+}
+
+/// Find the single most-similar existing document to `content` and return
+/// `(engram_id, cosine)` — regardless of any threshold. `dedupe_check`
+/// builds on this for merge decisions; write-time conflict detection uses
+/// the raw similarity to spot "same topic, likely different claim" notes
+/// in a mid-similarity band. Returns `None` only when there are no
+/// candidates at all.
+pub fn nearest_doc_match(
+    db: &BrainDb,
+    content: &str,
+    ignore_engram_id: Option<&str>,
+) -> Result<Option<(String, f64)>> {
     if content.trim().is_empty() {
         return Ok(None);
     }
@@ -958,10 +975,90 @@ pub fn dedupe_check(
         }
     }
 
-    match best {
-        Some((eid, sim)) if sim >= threshold => Ok(Some((eid, sim))),
-        _ => Ok(None),
+    Ok(best)
+}
+
+/// One "same topic, likely different claim" candidate pair.
+#[derive(serde::Serialize)]
+pub struct ConflictPair {
+    pub a_id: String,
+    pub a_title: String,
+    pub b_id: String,
+    pub b_title: String,
+    pub similarity: f64,
+}
+
+/// On-demand sweep for potential contradictions: document-embedding pairs
+/// whose cosine sits in the mid band [0.82, 0.92) — close enough to be the
+/// same topic, far enough to likely be a *different* claim. Strongest
+/// pairs first, capped at `limit`. Excludes dormant + already-superseded
+/// notes. This is the proactive companion to write-time conflict detection
+/// (the `remember` heads-up): run it to find stale/contradictory notes to
+/// reconcile via `supersede_note`. O(n^2) cosine, bounded by `MAX_SCAN`.
+pub fn find_conflicts(db: &BrainDb, limit: usize) -> Result<Vec<ConflictPair>> {
+    const FLOOR: f64 = 0.82;
+    const CEIL: f64 = 0.92;
+    const MAX_SCAN: usize = 2000;
+
+    let conn = db.lock();
+    let mut stmt = conn.prepare(
+        "SELECT c.engram_id, e.title, v.embedding
+         FROM vec_chunks v
+         JOIN chunks c ON c.id = v.chunk_id
+         JOIN engrams e ON e.id = c.engram_id
+         WHERE c.granularity = 'document'
+           AND e.state != 'dormant'
+           AND e.superseded_by IS NULL",
+    )?;
+    let raw: Vec<(String, String, Vec<u8>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    drop(conn);
+
+    // Normalise each note's document embedding once; drop degenerate ones.
+    let mut notes: Vec<(String, String, Vec<f32>)> = Vec::new();
+    for (id, title, blob) in raw.into_iter().take(MAX_SCAN) {
+        let v = deserialize_float32(&blob);
+        let n = l2_norm(&v);
+        if n == 0.0 || v.is_empty() {
+            continue;
+        }
+        let normd: Vec<f32> = v.iter().map(|x| x / n).collect();
+        notes.push((id, title, normd));
     }
+
+    let mut pairs: Vec<ConflictPair> = Vec::new();
+    for i in 0..notes.len() {
+        for j in (i + 1)..notes.len() {
+            if notes[i].2.len() != notes[j].2.len() {
+                continue;
+            }
+            let cos: f64 = notes[i]
+                .2
+                .iter()
+                .zip(notes[j].2.iter())
+                .map(|(a, b)| (*a as f64) * (*b as f64))
+                .sum::<f64>()
+                .clamp(-1.0, 1.0);
+            if cos >= FLOOR && cos < CEIL {
+                pairs.push(ConflictPair {
+                    a_id: notes[i].0.clone(),
+                    a_title: notes[i].1.clone(),
+                    b_id: notes[j].0.clone(),
+                    b_title: notes[j].1.clone(),
+                    similarity: (cos * 1000.0).round() / 1000.0,
+                });
+            }
+        }
+    }
+    pairs.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    pairs.truncate(limit);
+    Ok(pairs)
 }
 
 fn l2_norm(v: &[f32]) -> f32 {

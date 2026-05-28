@@ -301,6 +301,22 @@ pub fn diagnose(db: &BrainDb) -> Result<DiagnosticReport> {
             severity: "low".into(),
         });
     }
+    // Potential contradictions — a bounded read-only sweep over stored
+    // doc embeddings (no embedder call). Surfaced as an actionable issue,
+    // not a graded category, so it never moves the health score.
+    if let Ok(conflicts) = super::ingest::find_conflicts(db, 200) {
+        let n = conflicts.len() as i64;
+        if n > 0 {
+            issues.push(DiagIssue {
+                label: format!(
+                    "{n} potential contradiction{} — run find_conflicts, then supersede the stale note",
+                    if n == 1 { "" } else { "s" }
+                ),
+                count: n,
+                severity: if n as f64 / total as f64 > 0.1 { "medium" } else { "low" }.into(),
+            });
+        }
+    }
     let sev_rank = |s: &str| match s {
         "high" => 0,
         "medium" => 1,

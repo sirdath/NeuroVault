@@ -829,6 +829,30 @@ def remember(
 
 
 @mcp.tool(annotations={
+    "title": "Find potential contradictions",
+    "readOnlyHint": True,
+    "openWorldHint": False,
+})
+def find_conflicts(limit: int = 20, brain: str | None = None) -> Any:
+    """Sweep the brain for note pairs that are likely the SAME topic with a
+    DIFFERENT claim — potential contradictions to reconcile.
+
+    Returns up to `limit` pairs `{a_id, a_title, b_id, b_title, similarity}`,
+    strongest first, where the two notes sit in the mid-similarity band
+    (~0.82–0.92): close enough to be about the same thing, far enough to
+    probably disagree. Near-duplicates (>0.92) and unrelated notes are
+    excluded, as are already-superseded notes.
+
+    USE THIS for brain maintenance: for each pair, read both notes, decide
+    which is current, and `supersede_note(old, new)` the stale one (or
+    merge them). It's read-only — it never changes anything itself. Pairs
+    are candidates, not confirmed conflicts; always check the content
+    before retiring a note.
+    """
+    return _http_get("/api/conflicts", {"limit": limit, "brain": brain})
+
+
+@mcp.tool(annotations={
     "title": "Supersede a note (retire stale info)",
     "readOnlyHint": False,
     "destructiveHint": False,  # reversible metadata; the note stays on disk + in the DB
