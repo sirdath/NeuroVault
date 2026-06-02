@@ -10,6 +10,43 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.4.0] — 2026-06-02
+
+### Added
+- **Native Rust MCP server** — `neurovault-server --mcp-only` is now a
+  first-class stdio MCP server (built on the official `rmcp` SDK), so
+  Claude Desktop / Claude Code connect with no Python dependency. It is a
+  thin shim: it loads no model and opens no database, forwarding every
+  tool call over HTTP to the running app on `127.0.0.1:8765`, so the
+  handshake is instant and it never competes with the app for the port or
+  the brain.db lock. All 45 tools are ported 1:1 from the previous Python
+  proxy (data-driven registry), including the tier system (minimal / lite
+  / standard / full; default **lite**) and the server instructions block.
+
+### Changed
+- The MCP setup snippets in Settings now pass `--mcp-only`, matching the
+  native server (Claude Desktop config gains the `args` field).
+
+### Fixed
+- **macOS build** now launches and works:
+  - Resolved a startup crash (`SIGABRT`) — the updater plugin requires a
+    `plugins.updater` config block at startup; added an inert one so the
+    app stays dormant-until-signed instead of aborting.
+  - Resolved "sqlite-vec extension not found" on macOS — the loader now
+    also looks in the `.app`'s `Contents/Resources/resources/` location,
+    not just next to the executable (the Windows layout).
+- Top-bar server indicator no longer shows "offline" on a fresh install —
+  it now polls the brain-independent `/api/health` for liveness instead of
+  `/api/status` (which requires an active brain).
+- `retrieval_integration` test resolves the platform-correct sqlite-vec
+  filename (`.dylib`/`.so`/`.dll`) instead of hardcoding `vec0.dll`.
+
+### Deprecated
+- `server/mcp_proxy.py` (the Python MCP proxy) is superseded by the native
+  Rust server and will be removed in a future release.
+
+---
+
 ## [0.3.1] — 2026-05-27
 
 ### Added

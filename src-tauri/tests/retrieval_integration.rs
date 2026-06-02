@@ -270,16 +270,26 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
     std::fs::create_dir_all(&home).expect("mk temp home");
     std::env::set_var("NEUROVAULT_HOME", &home);
 
-    // The sqlite-vec extension ships at src-tauri/resources/vec0.dll.
-    // When this test runs from target/<profile>/deps/ none of the
+    // The sqlite-vec extension ships at src-tauri/resources/vec0.<ext>,
+    // with a per-platform suffix (dll on Windows, dylib on macOS, so on
+    // Linux). When this test runs from target/<profile>/deps/ none of the
     // server's default candidate paths resolve, so point it explicitly.
     // CARGO_MANIFEST_DIR is the src-tauri crate root at test time.
+    let vec0_file = if cfg!(target_os = "windows") {
+        "vec0.dll"
+    } else if cfg!(target_os = "macos") {
+        "vec0.dylib"
+    } else {
+        "vec0.so"
+    };
     let vec0 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
-        .join("vec0.dll");
+        .join(vec0_file);
     assert!(
         vec0.exists(),
-        "vec0.dll missing at {vec0:?} — build resources are incomplete"
+        "{vec0_file} missing at {vec0:?} — build resources are incomplete \
+         (the macOS/Linux builds download it in CI; for a local run, fetch \
+         the matching sqlite-vec loadable into src-tauri/resources/)"
     );
     std::env::set_var("NEUROVAULT_VEC_EXTENSION", &vec0);
 

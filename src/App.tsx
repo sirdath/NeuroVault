@@ -21,7 +21,7 @@ import { useSettingsStore, type Theme } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
 import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
-import { fetchStatus } from "./lib/api";
+import { fetchStatus, fetchHealth } from "./lib/api";
 
 type View = "editor" | "graph";
 
@@ -222,14 +222,24 @@ export default function App() {
   // Server health monitor — polls faster while booting for snappy feedback
   useEffect(() => {
     const check = () => {
-      fetchStatus()
-        .then((s) => {
+      // Liveness must NOT depend on an active brain. /api/status opens the
+      // active brain's DB and 500s on a fresh install (no brain yet), which
+      // made the top-bar dot read "offline" while Settings (which probes
+      // /api/brains/active) read "online". Probe the brain-independent
+      // /api/health for liveness; fetch /api/status only for the note count
+      // and tolerate its failure.
+      fetchHealth()
+        .then(() => {
           failCountRef.current = 0;
           setServerDown(false);
           setServerUp(true);
           setStarting(false); // server is up, clear starting state
-          setNoteCount(s.memories);
           everConnectedRef.current = true;
+          // Best-effort stats — absent an active brain this 500s, but the
+          // server is still up, so don't let it flip the connected dot.
+          fetchStatus()
+            .then((s) => setNoteCount(s.memories))
+            .catch(() => {});
         })
         .catch(() => {
           failCountRef.current += 1;

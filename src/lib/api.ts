@@ -146,6 +146,11 @@ export const fetchGraph = () =>
     () => get<GraphData>("/api/graph")
   );
 export const fetchStatus = () => get<ServerStatus>("/api/status");
+/** Brain-independent liveness probe. Unlike `/api/status` (which opens the
+ *  active brain's DB and 500s on a fresh install with no brain yet), this
+ *  returns 200 whenever the server is up — so it's the correct signal for
+ *  the "connected / offline" indicator. */
+export const fetchHealth = () => get<{ service: string; status: string }>("/api/health");
 export const fetchSessionContext = () => get<SessionContext>("/api/session-context");
 export const fetchNote = (id: string) =>
   preferNv<NoteDetail>(
