@@ -10,6 +10,21 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.4.1] — 2026-06-02
+
+### Fixed
+- **macOS: embedding model failed to load when the app was launched
+  normally** (`fastembed init failed: Failed to retrieve onnx/model.onnx`),
+  which broke `remember` / `recall`. fastembed defaults to a
+  *working-directory-relative* `.fastembed_cache`; an app launched from
+  Finder has working directory `/`, where it can't create the cache, so
+  the model download failed. The embedder now pins an absolute, app-owned
+  cache dir (`<data-root>/.fastembed_cache`, e.g.
+  `~/.neurovault/.fastembed_cache`) regardless of launch directory; an
+  explicit `FASTEMBED_CACHE_DIR` still takes precedence.
+
+---
+
 ## [0.4.0] — 2026-06-02
 
 ### Added
