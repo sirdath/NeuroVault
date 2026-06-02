@@ -66,8 +66,20 @@ fn candidate_paths() -> Vec<PathBuf> {
             out.push(dir.join("sqlite_vec").join(&filename));
             // Tauri's `bundle.resources` array drops files into a
             // `resources/` subdirectory next to the exe — that's
-            // where the installed build ships `vec0.dll` from.
+            // where the Windows/Linux installed build ships `vec0.*`
+            // from (exe and resources/ share a directory).
             out.push(dir.join("resources").join(&filename));
+            // macOS .app layout is different: the exe lives in
+            // `Contents/MacOS/` while `bundle.resources` land in
+            // `Contents/Resources/`. The `resources/vec0.*` glob
+            // therefore resolves to `Contents/Resources/resources/
+            // vec0.dylib` — up one dir from the exe, then into
+            // `Resources/`. Without this candidate the bundled mac app
+            // can't find vec0 and every brain-DB open fails. (These
+            // paths simply don't exist on Windows/Linux, so they're a
+            // harmless no-op there.)
+            out.push(dir.join("..").join("Resources").join("resources").join(&filename));
+            out.push(dir.join("..").join("Resources").join(&filename));
             // For `cargo run` + `tauri dev` the exe lives in
             // target/debug or target/release; the repo's bundled
             // copy sits at `src-tauri/resources/vec0.dll` which

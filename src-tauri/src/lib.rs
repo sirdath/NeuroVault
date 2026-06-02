@@ -1196,9 +1196,14 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        // In-app updater + process (relaunch after install). Inert until a
-        // `plugins.updater` block is configured in tauri.conf.json; see
-        // docs/UPDATER-SETUP.md.
+        // In-app updater + process (relaunch after install). The plugin
+        // deserializes `plugins.updater` from tauri.conf.json *at startup*
+        // and the whole app aborts (panic = "abort") if that block is
+        // missing — so the block must exist even while updates are off. It
+        // ships inert today: `pubkey: ""` + `endpoints: []` makes the
+        // native `check()` return ReleaseNotFound, which the frontend
+        // catches and turns into "open the GitHub release page". Flip on
+        // real signed updates per docs/UPDATER-SETUP.md.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
