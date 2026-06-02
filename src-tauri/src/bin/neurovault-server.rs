@@ -9,6 +9,8 @@
  * Usage:
  *   neurovault-server                        bind 127.0.0.1:8765
  *   neurovault-server --http-only            same; flag is informational
+ *   neurovault-server --mcp-only             run as a stdio MCP server that
+ *                                            forwards to the app on :8765
  *   neurovault-server --port 8770            bind a different port
  *   neurovault-server --help                 print this and exit
  *
@@ -33,13 +35,19 @@ const HELP: &str = "\
 neurovault-server: standalone HTTP server for the NeuroVault memory layer.
 
 USAGE:
-    neurovault-server [--http-only] [--port N]
+    neurovault-server [--http-only | --mcp-only] [--port N]
 
 OPTIONS:
     --http-only        Informational. The standalone binary is always
                        HTTP-only; this flag is accepted for parity with
                        the way the desktop app spawns the server so the
                        VS Code extension can pass it without branching.
+    --mcp-only         Run as a stdio MCP server (Model Context Protocol)
+                       instead of binding HTTP. Every tool call is
+                       forwarded over HTTP to the already-running desktop
+                       app on 127.0.0.1:8765, so this mode loads no model,
+                       opens no database, and never binds port 8765. This
+                       is what Claude Desktop / Claude Code spawn.
     --port <N>         Bind to 127.0.0.1:N. Defaults to 8765 (matching
                        the desktop app and the MCP proxy).
     --mint-key <LABEL> Generate a new API key with the given label,
@@ -58,11 +66,13 @@ async fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut port: Option<u16> = None;
     let mut mint_label: Option<String> = None;
+    let mut mcp_only = false;
     let mut iter = args.iter();
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--http-only" => {}
+            "--mcp-only" => mcp_only = true,
             "--port" => match iter.next() {
                 Some(p) => match p.parse::<u16>() {
                     Ok(v) => port = Some(v),
@@ -92,6 +102,15 @@ async fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
+    }
+
+    // --mcp-only: run the native stdio MCP server and nothing else. It
+    // forwards every tool call over HTTP to the already-running desktop
+    // app on 127.0.0.1:8765, so it loads no model and opens no DB. Must
+    // branch BEFORE start_server — we never bind 8765 in this mode, and
+    // stdout is reserved for the MCP JSON-RPC channel (no "ready" line).
+    if mcp_only {
+        return neurovault_lib::memory::mcp::run_stdio().await;
     }
 
     // --mint-key short-circuits the server lifecycle: mint, print,

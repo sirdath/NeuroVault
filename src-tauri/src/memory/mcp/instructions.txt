@@ -1,0 +1,72 @@
+NeuroVault is a persistent, local-first memory layer for this user. Treat it as an extension of your own memory — everything the user has told you across past sessions lives here.
+
+═══════════════════════════════════════════════════════════════════
+TOOL HIERARCHY — READ THIS BEFORE PICKING A TOOL
+═══════════════════════════════════════════════════════════════════
+
+TIER 1 — PRIMARY (use these for ~95% of interactions):
+  • `recall(q)`         find anything in memory. ALWAYS first.
+  • `related(engram_id)` explore connections after a recall hit.
+These two are why NeuroVault exists. If you can answer with these, do.
+
+TIER 2 — WRITE & SPECIFIC SHAPE (use when needed):
+  • `remember(content)` save a durable fact the user just shared.
+  • `recall_chunks(q)`  passage-level (when recall surfaces a long
+                        note and you need the specific paragraph).
+  • `temporal_recall(q, as_of=...)`  bitemporal time-travel queries.
+  • `session_start()`   call ONCE at the top of a fresh conversation.
+
+TIER 3 — MAINTENANCE / ADMIN (only on explicit user request):
+  Brain hygiene:    find_clutter, find_orphan_links, find_contradictions
+  Bulk edits:       bulk_set_kind, bulk_add_tag, delete_engrams
+  Disk:             optimize_disk, reindex_embeddings
+  Brain mgmt:       list_brains, switch_brain, create_brain, update
+  Graph editing:    add_link, remove_link, resolve_contradiction
+  Audit / deep:     engram_history, list_unnamed_clusters, set_cluster_names,
+                    list_images, remember_image, recall_across_brains,
+                    import_folder, check_duplicate, status,
+                    core_memory_*, compile_*
+
+DO NOT call Tier 3 tools for routine user questions. They exist for
+explicit asks like 'clean up my brain', 'shrink the database', 'who
+owns this contradiction', 'pin this note'. If the user is asking a
+factual question about themselves / their world / their decisions,
+the answer is recall + related — never an admin tool.
+
+═══════════════════════════════════════════════════════════════════
+CORE WORKFLOW (default for every user message)
+═══════════════════════════════════════════════════════════════════
+
+1. ANY question that could be about user context → `recall(q)` FIRST.
+   (rerank=True is now the default; top_k=20)
+2. If recall returns weak hits, DO NOT GIVE UP. Retry with:
+     a. different phrasing (use proper nouns from the user's question verbatim)
+     b. `recall_chunks(q)` for passage-level
+     c. `query='entity:<Name>'` to anchor on a known entity
+3. After picking a hit, call `related(engram_id)` to expand context.
+4. When user shares a durable fact: `remember(content, deduplicate=0.92)`.
+5. Once per session: `session_start()` to load active brain + recent activity.
+
+Most 'I don't have any information' answers are PREMATURE — bench
+evidence shows 76% of failed recalls had the right answer in the
+top-20, the agent just stopped reading at top-1.
+
+═══════════════════════════════════════════════════════════════════
+QUERY OPERATORS (inside the `q` string)
+═══════════════════════════════════════════════════════════════════
+  kind:insight | kind:note | kind:source | kind:decision | kind:preference
+  folder:projects   — only notes under projects/*
+  after:2026-04-01  — only recent engrams
+  entity:claude     — only engrams mentioning an entity
+  state:fresh       — only non-dormant
+Combine freely: `kind:insight folder:projects auth migration`.
+
+RECALL MODES (token cost per hit):
+  mode='titles'  → ~20 tok/hit  (fast scan)
+  mode='preview' → ~100 tok/hit (DEFAULT — best for most queries)
+  mode='full'    → ~400 tok/hit (deep dives only)
+
+RATE LIMIT: backend throttles 4+ recalls in 60s. If you see
+engram_id='__throttle_hint__', broaden your query or use related() instead.
+
+Deep links: emit `neurovault://engram/<id>` so the user can click through.

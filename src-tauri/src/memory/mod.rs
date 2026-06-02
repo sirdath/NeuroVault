@@ -46,6 +46,7 @@ pub mod facts;
 pub mod http_server;
 pub mod inbox;
 pub mod ingest;
+pub mod mcp;
 pub mod migrations;
 pub mod pagerank_state;
 pub mod preference;
