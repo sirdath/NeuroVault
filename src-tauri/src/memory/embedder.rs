@@ -21,6 +21,7 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
+use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
 /// Max entries in the encode_query LRU. Matches `_QUERY_CACHE_MAX` in
@@ -114,10 +115,21 @@ fn instance() -> Result<&'static Embedder> {
     static INSTANCE: OnceCell<Embedder> = OnceCell::new();
     INSTANCE.get_or_try_init(|| {
         // `InitOptions::new` + explicit model id matches what the
-        // Python side passes: "BAAI/bge-small-en-v1.5". fastembed-rs
-        // downloads to the same cache dir Python uses, so existing
-        // installs skip the download entirely.
-        let model = TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
+        // Python side passes: "BAAI/bge-small-en-v1.5".
+        //
+        // Cache dir: fastembed-rs defaults to a CWD-RELATIVE
+        // `.fastembed_cache`. That silently breaks a GUI app launched
+        // from Finder/`open`, whose working directory is `/` — it can't
+        // create/write there, so the first embed fails with "Failed to
+        // retrieve onnx/model.onnx". Pin an absolute, app-owned, writable
+        // dir under the data root so the model resolves no matter where
+        // the app was launched from. An explicit FASTEMBED_CACHE_DIR env
+        // still wins (fastembed reads it when we don't override).
+        let mut opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
+        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+            opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
+        }
+        let model = TextEmbedding::try_new(opts)
             .map_err(|e| MemoryError::Other(format!("fastembed init failed: {}", e)))?;
         Ok::<Embedder, MemoryError>(Embedder {
             model: Mutex::new(model),
