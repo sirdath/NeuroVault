@@ -75,20 +75,22 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 
 **Installed app:** open **Settings → Connect Claude Code** (or **Connect Claude Desktop**). It generates the exact snippet for your machine — copy it, restart the agent, done. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
-**From source**, point your MCP client at the stdio↔HTTP bridge:
+**Manually**, point your MCP client at the bundled native MCP server — `neurovault-server --mcp-only`, a Rust stdio↔HTTP bridge built on the official [rmcp](https://github.com/modelcontextprotocol/rust-sdk) SDK (no Python):
 
 ```json
 {
   "mcpServers": {
     "neurovault": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/NeuroVault/server", "run", "python", "mcp_proxy.py"]
+      "command": "/Applications/NeuroVault.app/Contents/MacOS/neurovault-server",
+      "args": ["--mcp-only"]
     }
   }
 }
 ```
 
-The proxy bridges to the Rust HTTP server bundled in the app on `127.0.0.1:8765` — open NeuroVault first, then start your agent session. Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
+(macOS path shown; on Windows/Linux it's the `neurovault-server` binary that ships next to the app. The Settings dialog fills in the exact path for you.)
+
+It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765` — open NeuroVault first, then start your agent session. Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
 
 ## Screenshots
 
@@ -177,7 +179,7 @@ Top fixes:
 
 ## Quick start (developers)
 
-**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). [Python](https://www.python.org/) 3.13+ and [uv](https://docs.astral.sh/uv/) are only needed to run the MCP proxy (`server/mcp_proxy.py`) from source — the installed app bundles it.
+**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. ([Python](https://www.python.org/) + [uv](https://docs.astral.sh/uv/) are optional, only for the out-of-band advanced ingest helpers in `server/` — PDF/Zotero — not for MCP.)
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git
@@ -194,7 +196,7 @@ npx tauri build
 
 ## MCP tools
 
-Exposed to any MCP-speaking agent. Every tool takes an optional `brain` parameter to target a specific brain.
+Exposed to any MCP-speaking agent via the native Rust MCP server — **~45 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (45). Set it with `NEUROVAULT_MCP_TIER` or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
 
 | Tool | What it does |
 |------|-------------|
@@ -208,7 +210,8 @@ Exposed to any MCP-speaking agent. Every tool takes an optional `brain` paramete
 | `list_brains` / `switch_brain` / `create_brain` | Multi-brain navigation. |
 | `check_duplicate(content, threshold)` | Pure cosine pre-check before `remember()`. |
 | `list_unnamed_clusters` / `set_cluster_names` | Agent-driven cluster naming for the graph's Analytics mode. |
-| `add_todo` / `claim_todo` / `complete_todo` / `list_todos` | Multi-agent coordination via append-only `todos.jsonl`. |
+| `find_contradictions` / `supersede_note` / `resolve_contradiction` | Surface conflicting memories and reconcile them — the newer fact wins, reversibly. |
+| `temporal_recall` / `engram_history` / `diagnose_brain` / `find_clutter` | Time-travel queries, per-note edit history, and brain-health/maintenance tools. |
 
 ---
 
@@ -222,7 +225,7 @@ Exposed to any MCP-speaking agent. Every tool takes an optional `brain` paramete
                         | Tauri commands  +  HTTP :8765
 +-----------------------v-------------------------+
 |  In-process Rust backend                        |
-|  - axum HTTP server (the MCP proxy talks here)  |
+|  - axum HTTP server (the MCP server talks here) |
 |  - hybrid retriever (semantic + BM25 + graph)   |
 |  - fastembed-rs (BGE-small ONNX, local)         |
 |  - notify file watcher                          |
@@ -234,9 +237,11 @@ Exposed to any MCP-speaking agent. Every tool takes an optional `brain` paramete
 +-------------------------------------------------+
 
 External:
-  + server/ holds only thin stdio shims (no always-on Python):
-    - mcp_proxy.py        — stdio<->HTTP bridge for MCP clients
-    - scripts/neurovault_hook.py — Claude Code lifecycle hook
+  + neurovault-server --mcp-only — native Rust stdio<->HTTP MCP server
+    (rmcp; bundled binary). Your agent spawns it per session; no Python.
+  + server/ — optional out-of-band Python helpers (PDF / Zotero ingest)
+    + scripts/neurovault_hook.py (Claude Code lifecycle hook).
+    mcp_proxy.py is the deprecated former (Python) MCP bridge.
 ```
 
 Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your brain. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
@@ -254,7 +259,7 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Embeddings | BAAI/bge-small-en-v1.5 (384 dims, local, free) |
 | Keywords | BM25 (Rust port of Okapi) |
 | Graph metrics | Vanilla TS PageRank + Louvain |
-| MCP bridge | `server/mcp_proxy.py` — FastMCP, forwards stdio to HTTP |
+| MCP server | `neurovault-server --mcp-only` — native Rust ([rmcp](https://github.com/modelcontextprotocol/rust-sdk)), forwards stdio↔HTTP to `:8765` (replaces the old Python proxy) |
 
 ## Performance
 
