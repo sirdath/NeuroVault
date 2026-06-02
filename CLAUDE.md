@@ -9,71 +9,86 @@ A **local-first, open source, AI-native memory system** for Claude and other LLM
 
 **One sentence:** Claude forgets you after every conversation. NeuroVault doesn't.
 
-Three components:
-1. **Tauri 2.0 desktop app** (React + TypeScript) — markdown note editor + neural graph view
-2. **Python MCP server** (FastMCP) — 6 tools, hybrid retrieval, ingestion pipeline, write-back
-3. **SQLite database** (~/.neurovault/brain.db) — sqlite-vec for vectors, knowledge graph
+Components:
+1. **Tauri 2.0 desktop app** (React + TypeScript) — markdown note editor + neural graph view.
+2. **In-process Rust backend** — the memory engine runs *inside* the Tauri process (no Python sidecar): an `axum` HTTP server on `127.0.0.1:8765`, hybrid retrieval, the ingestion pipeline, write-back, `fastembed-rs` (BGE-small-en-v1.5 ONNX embeddings + cross-encoder reranker), `rusqlite` + `sqlite-vec`, and a `notify` file watcher.
+3. **Native Rust MCP server** — `neurovault-server --mcp-only` (built on the official [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) SDK). A tiny stdio MCP server agents spawn per session; it loads no model and opens no DB, forwarding every tool call over loopback HTTP to the running app on `:8765`. Built from the same Rust crate and bundled next to the app binary. (The legacy Python `server/mcp_proxy.py` it replaced is deprecated.)
+4. **SQLite + sqlite-vec** (`~/.neurovault/brains/<id>/brain.db`) — vectors + the knowledge graph; a rebuildable index over the markdown vault.
 
 ## Architecture
 
 ```
-Tauri App (React) --file I/O--> ~/.neurovault/vault/*.md <--watchdog-- Python Server
-Tauri App --HTTP :8765--> Python Server (status, graph, strength)
-Claude Desktop --stdio/MCP--> Python Server (6 tools + 1 resource)
+Tauri app (React + TS)
+  ├─ React UI: editor · neural graph · settings
+  └─ in-process Rust backend
+       ├─ axum HTTP server on 127.0.0.1:8765  (recall, remember, status, graph, …)
+       ├─ hybrid retriever (sqlite-vec + BM25 + entity graph → RRF → rerank)
+       ├─ fastembed-rs (BGE-small ONNX)  +  notify file watcher
+       └─ SQLite + sqlite-vec  →  ~/.neurovault/brains/<id>/brain.db
+
+Agent (Claude Code / Desktop / Cursor / Codex)
+  └─ spawns  neurovault-server --mcp-only   (native Rust, rmcp; stdio JSON-RPC)
+       └─ forwards tool calls over loopback HTTP to the app on :8765
 ```
 
-## MCP Tools
+Markdown in `~/.neurovault/brains/<id>/vault/*.md` is **canonical**; `brain.db` is a **rebuildable** index. (The SQL table for a memory unit is named `engrams` — the biologically-correct noun — intentionally.)
 
-1. `remember(title, content)` — save memory, triggers full ingestion
-2. `recall(query, limit)` — hybrid search: semantic + BM25 + graph + cross-encoder rerank
-3. `forget(engram_id)` — mark dormant (the `engrams` SQL table name is intentionally preserved — biologically-correct type noun for a memory unit, see the engram→neurovault rename plan for details)
-4. `list_memories(tag)` — list with connections
-5. `get_related(title, limit)` — knowledge graph traversal
-6. `save_conversation_insights(user_message, assistant_response)` — write-back
+## MCP tools
 
-Resource: `neurovault://session-context` — L0/L1 wake-up context
+The MCP server exposes **~45 tools** via a data-driven registry, gated by a **tier** system so an agent only loads the slice it needs:
+
+- **`minimal`** (3): `recall`, `related`, `session_start`
+- **`lite`** (8, the default): minimal + `remember`, `status`, `list_brains`, `switch_brain`, `update`
+- **`standard`** (18): lite + `recall_chunks`, `temporal_recall`, `check_duplicate`, `core_memory_read/set/append/replace`, `delete_engrams`, `find_clutter`, `engram_history`
+- **`full`** (45): the whole surface — maintenance (`diagnose_brain`, `optimize_disk`, `reindex_embeddings`, `bulk_set_kind`/`bulk_add_tag`), graph editing (`add_link`/`remove_link`, `find_orphan_links`), contradictions (`find_contradictions`, `supersede_note`, `resolve_contradiction`), images (`list_images`, `remember_image`), compilation (`compile_prepare`/`compile_submit`), the drop-folder inbox, and more.
+
+Set the tier via the `NEUROVAULT_MCP_TIER` env var or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter to target a specific brain.
 
 ## Development
 
 ```bash
-# Install
+# Install — Node + Rust only (no Python needed for the app or MCP)
 npm install
-cd server && uv sync --extra dev
 
-# Dev (two terminals)
-cd server && uv run python -m neurovault_server   # Terminal 1: Python server
-cargo tauri dev                                    # Terminal 2: Tauri app
+# Dev — the Tauri shell hosts the React UI AND the in-process Rust
+# backend (HTTP server on 127.0.0.1:8765). Nothing else to start.
+npm run tauri dev          # or: cargo tauri dev
 
-# Test
-cd server && uv run pytest tests/ -v
+# Test — Rust unit + integration tests
+cd src-tauri && cargo test --no-default-features
 
+# Build — installers under src-tauri/target/release/bundle/
+npm run tauri build        # or: make build
 
-# Build
-make build
+# MCP server: the `neurovault-server` binary, built from the same crate
+# and bundled next to the app. Run it standalone for an MCP client:
+#   neurovault-server --mcp-only
 ```
+
+> Optional: `server/` retains out-of-band Python helpers (PDF / Zotero ingest) spawned on demand — **not** needed for normal dev and **not** part of the MCP path.
 
 ## Rules
 
 1. One phase at a time. Complete before moving on.
 2. Tests are part of every deliverable.
 3. TypeScript strict mode, no `any`.
-4. Markdown files are source of truth, DB is an index.
+4. Markdown files are source of truth; the DB is a rebuildable index.
 5. Small commits: `feat(mcp): add recall tool with hybrid search`
 
 ## NeuroVault usage (for Claude)
 
 You have NeuroVault itself available as an MCP server — use it. The
 active brain for this project is `NeuroVaultBrain1` (the meta-brain
-that documents NeuroVault's own architecture). **Default behavior:**
+that documents NeuroVault's own architecture). The MCP defaults to the
+`lite` tier (8 tools); set `full` in `~/.neurovault/mcp_tier.txt` for
+the whole surface. **Default behavior:**
 
-- **Before answering a project question** → call `session_start(agent_id="claude-code", since=<last-seen>)` once per session, then `recall(query)` for specifics. Do not answer from pre-training alone when the brain has context.
-- **When the user asks "what do we know about X?" or "how does Y work here?"** → call `recall("X")` or `recall_and_read("X")` first.
-- **For long wiki pages** → prefer `recall_chunks(query)` over `recall` — returns the matching passages at 200-400 tokens each instead of the whole engram.
-- **When the user shares a decision, preference, or learning** → call `remember(content=..., agent_id="claude-code")` immediately. Title is auto-derived; batch multiple facts via `remember_batch`.
-- **Before saving a new fact** → if it looks like it might already be in the vault, call `check_duplicate(content)` and update the existing engram instead of creating a near-duplicate.
+- **Before answering a project question** → call `session_start(agent_id="claude-code")` once per session, then `recall(query)` for specifics. Do not answer from pre-training alone when the brain has context.
+- **When the user asks "what do we know about X?" or "how does Y work here?"** → call `recall("X")` first.
+- **For long wiki pages** → prefer `recall_chunks(query)` over `recall` — returns the matching passages at 200-400 tokens each instead of the whole engram. (Standard tier.)
+- **When the user shares a decision, preference, or learning** → call `remember(content=...)` immediately. Title is auto-derived; pass `deduplicate=0.92` to merge near-duplicates instead of creating clutter.
+- **Before saving a fact that might already exist** → call `check_duplicate(content)` (standard tier) and update the existing engram instead of creating a near-duplicate.
 - **When the user says "save this" / "remember this" / "write this down"** → always use `remember`, never a raw file write.
-- **Multi-agent coordination** → if another agent (claude-desktop, cursor) might pick up work, use `add_todo(task, to_agent=..., context=...)` instead of putting the handoff in a note.
-- **For multi-step operations across several tools** → consider `execute_js(code)` so intermediate results stay in the JS runtime instead of flowing through context twice.
+- **To explore around a hit** → `related(engram_id)` is ~50-100× cheaper than a second `recall`. Use it after a recall hit instead of re-querying.
 
-The full core-tier tool list: `session_start`, `remember`, `remember_batch`, `check_duplicate`, `recall`, `recall_chunks`, `recall_and_read`, `add_todo`, `claim_todo`, `complete_todo`, `list_brains`, `switch_brain`, `create_brain`, `tool_menu`, `execute_js`. Call `tool_menu()` if you need power/code/research tier tools.
-
+The default (`lite`) tools: `session_start`, `recall`, `related`, `remember`, `status`, `list_brains`, `switch_brain`, `update`. The `standard` and `full` tiers add chunk/temporal recall, duplicate detection, core-memory blocks, brain maintenance, graph editing, and the rest of the surface — switch tiers via Settings → MCP or `~/.neurovault/mcp_tier.txt`.
