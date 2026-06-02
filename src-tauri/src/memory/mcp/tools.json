@@ -1,0 +1,2688 @@
+[
+  {
+    "name": "recall",
+    "title": "Recall from memory",
+    "description": "Hybrid semantic + keyword + graph search over the user's memory.\nCall before answering anything the user may have told you in a past\nconversation — preferences, decisions, people, projects, history.\n\nDon't stop after one call. If the top hit doesn't fully answer,\nre-query with different phrasing (reuse the user's proper nouns\nverbatim), try `recall_chunks(q)` for passages inside long notes,\nor `query=\"entity:<Name>\"` to anchor on a known entity.\n\nModes (token cost/hit): titles ~20 · preview ~100 (default) · full ~400.\nQuery operators (combine freely): `kind:insight` `folder:work`\n`after:2026-04-01` `entity:Sarah` `state:fresh`.\n`additional_queries=[...]` is escalation-only — reruns the pipeline\nper phrasing and RRF-merges; use only when a plain recall was weak.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query. Supports operators: kind:insight, folder:work, after:2026-04-01, entity:Sarah, state:fresh."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Token cost/hit per mode: titles ~20, preview ~100 (default), full ~400.",
+          "default": "preview"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the search."
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "include_observations": {
+          "type": "boolean",
+          "default": false
+        },
+        "rerank": {
+          "type": "boolean",
+          "default": false
+        },
+        "spread_hops": {
+          "type": "integer",
+          "default": 0
+        },
+        "as_of": {
+          "type": "string"
+        },
+        "additional_queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Escalation-only — reruns the pipeline per phrasing and RRF-merges. Use only when a plain recall was weak."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/recall",
+      "path_params": [],
+      "query": [
+        {
+          "param": "q",
+          "from": "query",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "mode",
+          "from": "mode",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "if_none"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "agent_id",
+          "from": "agent_id",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "include_observations",
+          "from": "include_observations",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "rerank",
+          "from": "rerank",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "spread_hops",
+          "from": "spread_hops",
+          "transform": "int",
+          "omit": "if_none"
+        },
+        {
+          "param": "as_of",
+          "from": "as_of",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": "recall",
+      "special_note": "Branches on additional_queries. After filtering (drop empty/whitespace-only entries via `q and q.strip()`), if any extras remain: POST to /api/recall/multi with a JSON body { q: query, additional_queries: extras[:4] (capped at 4), limit, brain_id: brain, include_observations (raw bool), rerank (raw bool), spread_hops, as_of }. Note the POST path renames brain->brain_id, sends include_observations/rerank as raw JSON booleans (NOT stringified), and OMITS mode and agent_id entirely; body keys are always present (None values kept since it's a JSON POST body, not the GET filter). Otherwise (no valid extras): GET /api/recall as described in query[] — booleans stringified via str(x).lower(), and brain/agent_id/as_of dropped when None by _http_get."
+    }
+  },
+  {
+    "name": "related",
+    "title": "Get related engrams",
+    "description": "Fetch engrams directly linked to a given engram. Use this INSTEAD\nof a fresh `recall` when you already have an engram and want to\nexplore its neighbourhood — it's ~50-100x cheaper (single SQL query\nvs full hybrid retrieval).\n\nWHEN TO CALL:\n- User picked a specific memory and you want to show \"what else\n  relates to this\"\n- You fetched engram X via recall and want to follow its edges\n- You're building a summary / compilation and need structural context\n  around a known anchor\n\nArgs:\n    hops=1        — direct neighbours only (default, fastest)\n    hops=2        — includes 2-hop neighbours (still cheap, slightly noisier)\n    link_types    — comma-separated allow-list: \"semantic,entity,manual,\n                    uses,extends,depends_on,contradicts,supersedes,...\"\n                    Leave null for all types.\n    min_similarity=0.55 — default matches the spread-activation threshold.\n\nReturns a list sorted by (hop_distance ASC, similarity DESC) so\ndirect strong neighbours come first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "engram_id": {
+          "type": "string",
+          "description": "The anchor engram whose neighbours to fetch (url-quoted into the path)."
+        },
+        "hops": {
+          "type": "integer",
+          "description": "1 = direct neighbours only (default, fastest); 2 = includes 2-hop neighbours.",
+          "default": 1
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20
+        },
+        "min_similarity": {
+          "type": "number",
+          "description": "Default 0.55 matches the spread-activation threshold.",
+          "default": 0.55
+        },
+        "link_types": {
+          "type": "string",
+          "description": "Comma-separated allow-list (semantic,entity,manual,uses,extends,depends_on,contradicts,supersedes,...). Null = all types."
+        },
+        "include_observations": {
+          "type": "boolean",
+          "default": false
+        },
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "engram_id"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/related/{engram_id}",
+      "path_params": [
+        "engram_id"
+      ],
+      "query": [
+        {
+          "param": "hops",
+          "from": "hops",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "min_similarity",
+          "from": "min_similarity",
+          "transform": "float",
+          "omit": "never"
+        },
+        {
+          "param": "include_observations",
+          "from": "include_observations",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "link_types",
+          "from": "link_types",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "engram_id is url-quoted (urllib.parse.quote) into the path. link_types added to params only `if link_types` (truthy); brain added as brain_id only `if brain` (truthy) — both are if_falsy omits, not if_none. include_observations is stringified via str(x).lower(). hops/limit/min_similarity are always present."
+    }
+  },
+  {
+    "name": "recall_chunks",
+    "title": "Chunk-level recall",
+    "description": "Passage-level semantic search — returns the specific paragraphs\ninside notes that match, not the whole notes. Use this when `recall`\nis returning huge wiki pages where only one paragraph is relevant.\n\nWHEN TO CALL:\n- The query is narrow but the matching engram is a long document\n- User asks \"what did I write about X in Y\" (X is specific, Y is long)\n- You need to quote a specific passage rather than summarise a whole\n  note\n\nEach returned chunk is 200-400 tokens. Deduped to one chunk per engram\n(the top-ranked one wins) so a single long note can't flood results.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 10
+        },
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/recall/chunks",
+      "path_params": [],
+      "query": [
+        {
+          "param": "q",
+          "from": "query",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "brain passed as-is (key 'brain', no rename); dropped by _http_get when None."
+    }
+  },
+  {
+    "name": "consolidate",
+    "title": "Consolidation queue",
+    "description": "Return notes that haven't been fact-extracted yet so you can tend the\nmemory. For each note: read it, pull out the durable facts (preferences,\nownership, current values, decisions), and call record_fact() for each,\nciting the note's engram_id as source_engram. This is how NeuroVault\nbuilds its structured fact layer — YOU (the connected agent) are the\nextractor; the app runs no model itself. Call this when the user asks to\n'consolidate'/'tidy memory', or at a natural lull. Returns [] when clear.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "default": 10
+        },
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/consolidate",
+      "path_params": [],
+      "query": [
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "brain renamed to brain_id; dropped by _http_get when None."
+    }
+  },
+  {
+    "name": "record_fact",
+    "title": "Record a structured fact",
+    "description": "Record a durable fact extracted from a note so future recall surfaces\nit by EXACT subject match (bypassing fuzzy semantic search, which misses\n'coffee'->'Yirgacheffe' and buries 'who owns X' under topical noise).\nUse during consolidate(). `subject` = what the fact is about, in the\nwords a user would query (\"grocery budget\", \"retrieval pipeline\", \"code\nsearch\"); `attribute` = optional facet (\"owner\", \"amount\", \"tool\");\n`value` = the fact (\"Sarah\", \"£550\", \"ripgrep\"); `source_engram` = the\nnote's engram_id. Recording a new value for an existing\n(subject, attribute) supersedes the old one (current-value tracking).",
+    "annotations": {
+      "read_only": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "What the fact is about, in the words a user would query (e.g. \"grocery budget\")."
+        },
+        "value": {
+          "type": "string",
+          "description": "The fact (e.g. \"Sarah\", \"£550\", \"ripgrep\")."
+        },
+        "source_engram": {
+          "type": "string",
+          "description": "The note's engram_id this fact was extracted from."
+        },
+        "attribute": {
+          "type": "string",
+          "description": "Optional facet (e.g. \"owner\", \"amount\", \"tool\").",
+          "default": ""
+        },
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "value",
+        "source_engram"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/facts",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "subject",
+          "from": "subject",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "attribute",
+          "from": "attribute",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "value",
+          "from": "value",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "source_engram",
+          "from": "source_engram",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null,
+      "special_note": "All body fields are unconditionally included in the JSON POST body (no conditional inclusion). brain renamed to brain_id and sent as null when None (JSON body keeps the key)."
+    }
+  },
+  {
+    "name": "recall_fact",
+    "title": "Look up structured facts",
+    "description": "Look up recorded facts about a subject directly — the 'current value\nof X' primitive, exact not fuzzy. Prefer this over recall() for\n'what's my current X / who owns Y' once the fact has been consolidated.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/facts",
+      "path_params": [],
+      "query": [
+        {
+          "param": "subject",
+          "from": "subject",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "brain renamed to brain_id; dropped by _http_get when None."
+    }
+  },
+  {
+    "name": "recall_across_brains",
+    "title": "Recall across every brain (federated search)",
+    "description": "Run hybrid retrieval against EVERY brain in the registry (or a\ncaller-supplied subset) and merge by score. Each hit comes back\nannotated with `brain_id` + `brain_name` so the agent can answer\n\"where does this live?\" alongside the content.\n\nWHEN TO CALL:\n- User asks something but you don't know which brain holds it.\n- User says \"search everywhere for X\" / \"across all my notes\".\n- You ran `recall` against the active brain and got nothing\n  relevant — try federated before giving up.\n\nCaveats:\n- RRF scores are unitless and brain-relative; comparing across\n  brains is approximate. Use this as \"anywhere this exists\",\n  not \"globally ranked best answer.\"\n- Cost is linear in brain count. Each per-brain search runs\n  through the throttled hybrid path; with 6 brains and the\n  defaults you fan out to 30 hits.\n\nArgs:\n    query: search query (same operators as `recall`).\n    top_k: total hits returned after merge. Default 10, max 50.\n    per_brain: cap per-brain hits before merge. Default 5,\n        max 20. Lower = faster, higher = better recall when one\n        brain dominates the right answer.\n    brains: comma-separated brain ids to scope the search.\n        Empty/missing = every brain in the registry. Unknown\n        ids are silently dropped.\n    include_observations: include kind='observation' engrams\n        (auto-extracted, noisier). Default False.\n    rerank: cross-encoder rerank pass. Default False.\n\nReturns:\n    query, brains_searched, total\n    hits: [{ brain_id, brain_name, engram_id, title, content,\n             score, strength, state }]  sorted by score desc.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query (same operators as recall)."
+        },
+        "top_k": {
+          "type": "integer",
+          "description": "Total hits returned after merge. Default 10, max 50.",
+          "default": 10
+        },
+        "per_brain": {
+          "type": "integer",
+          "description": "Cap per-brain hits before merge. Default 5, max 20.",
+          "default": 5
+        },
+        "brains": {
+          "type": "string",
+          "description": "Comma-separated brain ids to scope the search. Empty/missing = every brain; unknown ids silently dropped."
+        },
+        "include_observations": {
+          "type": "boolean",
+          "description": "Include kind='observation' engrams (auto-extracted, noisier).",
+          "default": false
+        },
+        "rerank": {
+          "type": "boolean",
+          "description": "Cross-encoder rerank pass.",
+          "default": false
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/recall_across_brains",
+      "path_params": [],
+      "query": [
+        {
+          "param": "q",
+          "from": "query",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "top_k",
+          "from": "top_k",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "per_brain",
+          "from": "per_brain",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "brains",
+          "from": "brains",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "include_observations",
+          "from": "include_observations",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "rerank",
+          "from": "rerank",
+          "transform": "lower_bool",
+          "omit": "never"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "Booleans stringified inline via `\"true\" if x else \"false\"` (equivalent to lower_bool). brains dropped by _http_get when None."
+    }
+  },
+  {
+    "name": "session_start",
+    "title": "Session bootstrap",
+    "description": "Load the user's session context: active brain, recent activity feed,\ncore memory blocks (persona / project / preferences). Call this ONCE\nat the start of a conversation to know which brain you're in + what's\nbeen happening.\n\nWHEN TO CALL:\n- First tool call of a new conversation (unless the user's first\n  message is trivial and obviously doesn't need memory)\n- After a `switch_brain` to rebootstrap on the new context\n\nCheap (~10ms). Safe to call once per session without gating.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/session_start",
+      "path_params": [],
+      "query": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "Params dict is `{\"brain\": brain} if brain else None` — when brain is falsy (None or empty string), _http_get is called with params=None so NO query string at all. This is an if_falsy omit (not just if_none)."
+    }
+  },
+  {
+    "name": "list_brains",
+    "title": "List all brains",
+    "description": "List every memory brain (vault) with its active flag + note count.\nBrains are isolated memory spaces — \"work\", \"personal\", \"research\"\netc. The active brain receives all recall/remember calls by default.\n\nWHEN TO CALL:\n- User asks \"what vaults / brains do I have?\"\n- Before a `switch_brain` to look up the target brain's id\n- Rarely; brains don't change often",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/brains",
+      "path_params": [],
+      "query": [],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "check_duplicate",
+    "title": "Check if content is a duplicate",
+    "description": "Check whether `content` near-duplicates an existing engram BEFORE\nwriting it. Returns the matched engram id + similarity if found,\nelse null.\n\nPREFER `remember(content, deduplicate=0.92)` when you're going to\nwrite anyway — it runs the same check inline + skips the write on\nmatch, saving one round-trip. Use `check_duplicate` only when you\nwant to INSPECT duplicates without committing to a write.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The content to check for near-duplicates against existing engrams."
+        },
+        "threshold": {
+          "type": "number",
+          "description": "Cosine-similarity threshold for considering content a duplicate.",
+          "default": 0.85
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the duplicate check; defaults to active brain."
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/check_duplicate",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "content",
+          "from": "content",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "threshold",
+          "from": "threshold",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "core_memory_read",
+    "title": "Read core memory block",
+    "description": "Read an agent-editable memory block (Letta/MemGPT pattern) —\nshort, persistent, structured context the agent maintains about\nthe user's identity, preferences, active project. Always loaded\ninto your context via `session_start`; this tool is for deliberate\nre-reads when you need the fresh value.\n\nWHEN TO CALL:\n- After a `core_memory_append/replace/set` when you need the\n  updated state\n- User asks \"what do you remember about me\" and you want the\n  structured block, not fuzzy recall\n\nOmit `label` to list all blocks.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "The core memory block label to read. Omit to list all blocks."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the read; defaults to active brain."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/core_memory",
+      "path_params": [],
+      "query": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": "core_memory_read",
+      "special_note": "If `label` is truthy, GET f\"/api/core_memory/{urllib.parse.quote(label)}\" with query {\"brain\": brain} only when brain is truthy (else None/no query). If `label` is falsy, GET \"/api/core_memory\" with query {\"brain\": brain} only when brain is truthy (else None/no query). The `label` is a url-quoted path segment, NOT a query param. The `brain` query key is omitted when falsy in both branches."
+    }
+  },
+  {
+    "name": "diagnose_brain",
+    "title": "Diagnose brain health",
+    "description": "Run a health scorecard on the brain and get back a graded report\nplus a worst-first list of concrete fixes.\n\nReturns `{grade, score, total, categories[], issues[]}`:\n- `grade` is A–F; `score` is 0–100 over `total` notes.\n- `categories` each have `{key, label, score (0..1), detail}` —\n  connectivity, interlinking, cohesion, freshness, organization.\n- `issues` each have `{label, count, severity}`, severity high→low.\n\nUSE THIS to drive maintenance. A typical loop:\n1. `diagnose_brain()` to see what's weak.\n2. For \"orphan notes\" / \"outside the main cluster\" → find the notes\n   (`recall`/`list` by folder) and add `[[wikilinks]]` between\n   related ones, or merge duplicates.\n3. For \"unfiled notes\" → rename them into folders (e.g. `research/x`).\n4. For \"dormant notes\" → revisit the still-relevant ones; let the\n   rest decay.\n5. Re-run `diagnose_brain()` to confirm the grade improved.\n\nIt's read-only — it never changes the vault. You make the fixes with\nthe normal write tools (`remember`, save/rename).",
+    "annotations": {
+      "read_only": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to diagnose; defaults to active brain."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/diagnostic",
+      "path_params": [],
+      "query": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "list_inbox",
+    "title": "List drop-folder inbox",
+    "description": "List files the user dropped into the brain's `raw/` folder, waiting\nto be turned into notes.\n\n`raw/` is the drop-folder (`~/.neurovault/brains/<id>/raw/`): the user\npastes/drags arbitrary files (PDFs, text dumps, exports, screenshots)\nthere and they land untouched. Nothing is indexed automatically — YOU\nare the converter. (The `README.md` guide in that folder is for the\nuser and is never listed here.)\n\nTYPICAL FLOW:\n1. `list_inbox()` to see what's waiting.\n2. `read_inbox_file(name)` to read each one (text inline; for binaries\n   you get an absolute `path` to open with your own file tools).\n3. Clean it up and `remember(content=..., title=..., folder=...)`\n   to write a proper note into the vault (it gets indexed normally).\n4. `mark_inbox_done(name)` to move the raw file out of the inbox.\n\nReturns a list of `{name, size, ext, path}`. Empty list = nothing\nwaiting.",
+    "annotations": {
+      "read_only": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id whose inbox to list; defaults to active brain."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/inbox",
+      "path_params": [],
+      "query": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "read_inbox_file",
+    "title": "Read an inbox file",
+    "description": "Read one file from the drop-folder inbox by name (as returned by\n`list_inbox`).\n\nReturns `{name, path, size, text, is_binary, truncated}`:\n- `text` holds the file's contents when it's UTF-8 text under 256 KB.\n- `is_binary=True` (e.g. a PDF/image) or `truncated=True` (too large)\n  means `text` is null — open the absolute `path` with your own file\n  tools instead.\n\nAfter you've written the cleaned note via `remember`, call\n`mark_inbox_done(name)` so it stops showing up as pending.",
+    "annotations": {
+      "read_only": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The inbox file name to read, as returned by `list_inbox`."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id whose inbox to read from; defaults to active brain."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/inbox/file",
+      "path_params": [],
+      "query": [
+        {
+          "param": "name",
+          "from": "name",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "mark_inbox_done",
+    "title": "Mark inbox file done",
+    "description": "Move a processed raw file into `raw/_done/` so it no longer\nappears in `list_inbox`. Call this once you've turned the file into a\nnote with `remember`. The original file is preserved (moved, not\ndeleted). Idempotent — safe to call if it's already been moved.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The inbox file name to mark done, as returned by `list_inbox`."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id whose inbox file to mark done; defaults to active brain."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/inbox/done",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "name",
+          "from": "name",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "remember",
+    "title": "Remember a fact (write)",
+    "description": "Save a memory permanently. This is how information persists across\nconversations — if you don't call this, the fact is gone when the\nsession ends.\n\nWHEN TO CALL:\n- User shares a durable fact: \"I prefer Rust over Go\"\n- User makes a decision: \"we're moving to Postgres\"\n- User reveals an identity / preference / constraint you should\n  remember for future conversations\n- You reach a conclusion worth preserving: \"the auth migration\n  decision was to use JWT because...\"\n\nWHEN NOT TO CALL:\n- Ephemeral requests (\"summarize this for me right now\")\n- Content the user is typing that will obviously be in the next\n  message\n- You're unsure it matters — better to ask the user or skip\n\nALMOST ALWAYS pass `deduplicate=0.92`. It runs a cosine-similarity\ncheck against existing engrams; on near-match the existing engram\nid comes back with `status=\"merged\"` and no new note is created.\nSaves the \"same insight captured five times\" clutter — and is\n10x faster than a fresh ingest when a duplicate exists.\n\n`title` is auto-derived from the first line if omitted. `folder`\nplaces the note under that subdirectory. `content` supports\nmarkdown + `[[wikilinks]]` to other notes.\n\n`supersedes` — pass the engram ids of older notes this one REPLACES\n(info that's now wrong/outdated). They're marked superseded so recall\nstops serving the stale version; the new note wins. The old notes\naren't deleted (reversible). Use this when the new fact contradicts an\nold one, not for unrelated notes.\n\nHard ceiling: 32 KB. Split longer content into multiple engrams.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The memory content to save. Supports markdown + [[wikilinks]]. Hard ceiling 32 KB."
+        },
+        "title": {
+          "type": "string",
+          "description": "Note title; auto-derived from the first line if omitted.",
+          "default": ""
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to write into; defaults to active brain."
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Optional id of the agent saving this memory."
+        },
+        "folder": {
+          "type": "string",
+          "description": "Optional subdirectory to place the note under."
+        },
+        "deduplicate": {
+          "type": "number",
+          "description": "Cosine-similarity threshold; on near-match the existing engram id is returned with status=\"merged\" and no new note is created. Almost always pass 0.92."
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Engram ids of older notes this one REPLACES; they're marked superseded (reversible, not deleted)."
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/notes",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "content",
+          "from": "content",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "title",
+          "from": "title",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "agent_id",
+          "from": "agent_id",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "folder",
+          "from": "folder",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "deduplicate",
+          "from": "deduplicate",
+          "transform": "float",
+          "omit": "if_none"
+        },
+        {
+          "param": "supersedes",
+          "from": "supersedes",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "find_conflicts",
+    "title": "Find potential contradictions",
+    "description": "Sweep the brain for note pairs that are likely the SAME topic with a\nDIFFERENT claim — potential contradictions to reconcile.\n\nReturns up to `limit` pairs `{a_id, a_title, b_id, b_title, similarity}`,\nstrongest first, where the two notes sit in the mid-similarity band\n(~0.82–0.92): close enough to be about the same thing, far enough to\nprobably disagree. Near-duplicates (>0.92) and unrelated notes are\nexcluded, as are already-superseded notes.\n\nUSE THIS for brain maintenance: for each pair, read both notes, decide\nwhich is current, and `supersede_note(old, new)` the stale one (or\nmerge them). It's read-only — it never changes anything itself. Pairs\nare candidates, not confirmed conflicts; always check the content\nbefore retiring a note.",
+    "annotations": {
+      "read_only": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of candidate pairs to return, strongest first.",
+          "default": 20
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/conflicts",
+      "path_params": [],
+      "query": [
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "supersede_note",
+    "title": "Supersede a note (retire stale info)",
+    "description": "Mark `old_id` as superseded by `new_id` so recall stops serving the\nstale note. Use when new information contradicts/replaces an older\nnote and the new one should be the truth going forward.\n\nThe old note is NOT deleted — it stays on disk and in the DB, just\nhidden from default recall (reversible). This is how you keep the\nbrain current: when you learn the real value changed, write the new\nnote (`remember`) and point the old one's `supersede` at it — or pass\n`supersedes=[old_id]` directly to `remember` to do both at once.\n\nNever supersede on a hunch; only when the new note genuinely replaces\nthe old one's claim. Returns `{ok, old_id, new_id, status}`.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "old_id": {
+          "type": "string",
+          "description": "Engram id of the stale note to mark superseded."
+        },
+        "new_id": {
+          "type": "string",
+          "description": "Engram id of the new note that replaces it."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional reason for the supersede."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "old_id",
+        "new_id"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/notes/supersede",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "old_id",
+          "from": "old_id",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "new_id",
+          "from": "new_id",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "reason",
+          "from": "reason",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "switch_brain",
+    "title": "Switch active brain",
+    "description": "Change which brain (vault) subsequent `recall`/`remember` calls\ntarget. Also triggers a watcher + cache rotation on the Rust side.\n\nWHEN TO CALL:\n- User explicitly asks to switch context (\"switch to work brain\")\n- You detect you're in the wrong brain for a topic (e.g. user\n  asks about a personal project while the \"work\" brain is active)\n\nWHEN NOT TO CALL:\n- Speculatively / between queries — brain switches are visible\n  to the user and confusing if done without reason.\n\nCall `list_brains()` first if you don't have the target brain_id.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain_id": {
+          "type": "string",
+          "description": "Id of the brain to activate."
+        }
+      },
+      "required": [
+        "brain_id"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/brains/{brain_id}/activate",
+      "path_params": [
+        "brain_id"
+      ],
+      "query": [],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "create_brain",
+    "title": "Create new brain",
+    "description": "Create a new brain (isolated memory vault). RARELY called by an\nagent — usually the user creates brains manually in the UI. Only\ninvoke if the user explicitly asks for a new brain.\n\n`vault_path` points NeuroVault at an existing folder of markdown\nfiles (Obsidian-style) instead of creating a fresh vault.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name for the new brain."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional description of the brain.",
+          "default": ""
+        },
+        "vault_path": {
+          "type": "string",
+          "description": "Existing folder of markdown files to point NeuroVault at instead of creating a fresh vault."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/brains",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "name",
+          "from": "name",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "description",
+          "from": "description",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "vault_path",
+          "from": "vault_path",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "core_memory_set",
+    "title": "Overwrite core memory block",
+    "description": "OVERWRITE a core memory block's entire value. Destructive —\nwhatever was there before is gone. Prefer `core_memory_append` or\n`core_memory_replace` for incremental updates.\n\nWHEN TO CALL:\n- User explicitly replaces their persona / project / preferences\n  wholesale: \"actually, forget what I said, my project is now X\"\n- Initial population of a new block\n\nchar_limit is enforced via whole-word truncation.",
+    "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Core memory block label to overwrite."
+        },
+        "value": {
+          "type": "string",
+          "description": "New entire value for the block."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ]
+    },
+    "call": {
+      "method": "PUT",
+      "path": "/api/core_memory/{label}",
+      "path_params": [
+        "label"
+      ],
+      "query": [],
+      "body": [
+        {
+          "param": "value",
+          "from": "value",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "core_memory_append",
+    "title": "Append to core memory block",
+    "description": "Append a line to a core memory block. Non-destructive — keeps\nthe existing content and adds on. Drops OLDEST content (FIFO) if\nthe block would overflow its char_limit.\n\nWHEN TO CALL:\n- User reveals a new preference / constraint that should accumulate:\n  \"and I prefer TypeScript over JavaScript\"\n- Building up an active-project log during a working session",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Core memory block label to append to."
+        },
+        "text": {
+          "type": "string",
+          "description": "Line of text to append to the block."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "label",
+        "text"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/core_memory/{label}/append",
+      "path_params": [
+        "label"
+      ],
+      "query": [],
+      "body": [
+        {
+          "param": "text",
+          "from": "text",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "core_memory_replace",
+    "title": "Find-and-replace in core memory",
+    "description": "Find-and-replace inside a core memory block. Precise edit — use\nwhen the user corrects a specific fact (\"actually my role is\nEngineering Manager, not Engineer\") without disturbing the rest\nof the block. Returns null if `old` wasn't found; non-destructive\nin that case.\n\nWHEN TO CALL:\n- User corrects a specific fact in a known block\n- You need to surgically update one line of a long persona\n\nPREFER this over `core_memory_set` for partial updates.",
+    "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Core memory block label to edit."
+        },
+        "old": {
+          "type": "string",
+          "description": "Existing substring to find."
+        },
+        "new": {
+          "type": "string",
+          "description": "Replacement substring."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "label",
+        "old",
+        "new"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/core_memory/{label}/replace",
+      "path_params": [
+        "label"
+      ],
+      "query": [],
+      "body": [
+        {
+          "param": "old",
+          "from": "old",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "new",
+          "from": "new",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "list_unnamed_clusters",
+    "title": "List unnamed graph clusters",
+    "description": "List Louvain communities in the user's brain that don't have\nnames yet, with sample notes for each so you can propose a name.\n\nREQUIRES: the user has Analytics mode enabled in the graph view\n(the app pushes cluster data when Analytics runs Louvain). If\n`needs_analytics` is true in the response, tell the user to\nopen NeuroVault and click the Analytics toggle in the graph\nview, then try again.\n\nEach cluster has:\n  id           — integer to use in `set_cluster_names`\n  size         — total notes in this cluster\n  top_titles   — first 5 most-referenced note titles (the\n                 primary signal you'll use to name the cluster)\n  sample_links — wikilinks observed across cluster members\n  name         — already-saved name (only present when\n                 only_unnamed=False)\n\nFor each cluster propose a 2-4 word theme name based on the\ntop_titles + sample_links. Skip clusters with size < 5 — they're\nnoise. Then call `set_cluster_names` with the dict.\n\nArgs:\n    only_unnamed: when True (default), skip clusters that already\n        have names — repeated runs of /name-clusters won't\n        re-propose names for ones the user has hand-edited.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "only_unnamed": {
+          "type": "boolean",
+          "description": "When True (default), skip clusters that already have names so repeated runs won't re-propose names for ones the user has hand-edited.",
+          "default": true
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/clusters",
+      "path_params": [],
+      "query": [
+        {
+          "param": "only_unnamed",
+          "from": "only_unnamed",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "set_cluster_names",
+    "title": "Save names for graph clusters",
+    "description": "Persist names for one or more Louvain communities. Merges into\nthe existing name registry — clusters not in `names` keep their\ncurrent name (or stay unnamed). Empty string for a value clears\nthat cluster's name.\n\nArgs:\n    names: map from cluster id (as string) → 2-4 word theme name.\n        Example: {\"0\": \"API design\", \"1\": \"Rust migration\"}.\n    brain: target brain id (defaults to active).\n\nReturns:\n    saved        — count of names submitted in this call\n    total_named  — total clusters that now have a name in the\n                   registry (after the merge)\n\nThe user's hand-edits in cluster_names.json are preserved unless\nyou pass an empty string for that id; agents shouldn't overwrite\na name they didn't propose.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "object",
+          "description": "Map from cluster id (as string) to 2-4 word theme name. Empty string clears that cluster's name.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "brain": {
+          "type": "string",
+          "description": "Target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "names"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/clusters/names",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "names",
+          "from": "names",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "status",
+    "title": "Brain health status",
+    "description": "Quick brain-health snapshot. Use this to answer \"is the user's\nbrain in good shape?\" in one call without scraping multiple\nendpoints.\n\nWHEN TO CALL:\n- User asks \"how's my brain doing\" / \"is everything working\" /\n  \"what's the status\"\n- You want to confirm the sidecar is up + the active brain has\n  data before doing other work\n- Before suggesting a recall-heavy task, sanity-check there are\n  enough notes to recall from\n\nReturns:\n    brain        — active brain id\n    memories     — non-dormant engram count\n    chunks       — total chunk rows (each engram has 1-N chunks)\n    entities     — distinct entities extracted across the vault\n    connections  — total engram_link rows (graph edges)\n    freshness    — { fresh, active, dormant, total } counts.\n                   \"fresh\" is recently touched, \"active\" is\n                   stable, \"dormant\" has decayed past the recall\n                   threshold. A healthy brain typically has\n                   fresh + active >> dormant.\n    links        — { manual, entity, semantic, other, total }\n                   counts. \"manual\" is wikilinks the user typed,\n                   \"entity\" is auto-extracted shared mentions,\n                   \"semantic\" is cosine-similarity edges. Lots\n                   of semantic and few manual is normal; lots of\n                   manual signals a heavily curated brain.\n\nCheap (~5-10 ms) so calling on every conversation start is fine.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/status",
+      "path_params": [],
+      "query": [],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "compile_prepare",
+    "title": "Prepare a wiki compile pack",
+    "description": "Build a source pack for compiling a wiki page on `topic`. Step\n1 of the agent-driven compile flow.\n\nWHEN TO CALL:\n- User asks you to \"write a wiki page on X\" / \"summarise everything\n  I've said about X\" / \"compile what we know about X\"\n- You want to author a canonical reference page that the user can\n  then review and approve\n\nReturns:\n    topic        — the requested topic, trimmed\n    brain_id     — which brain the pack is from\n    sources      — top-N most relevant engrams, each with\n                   {id, short_id, title, kind, content}\n    existing_wiki — if a wiki page on this topic already exists,\n                    its current content (so you can update vs\n                    rewrite). Omitted on the first compile.\n    schema       — CLAUDE.md or schema.md from the vault root, if\n                   present. Use this to match house style.\n\nNext step: write the wiki markdown yourself from this pack, then\ncall `compile_submit` to persist it as `pending` for the user to\nreview in the Compile tab of the desktop app.\n\nArgs:\n    topic: short title for the page, e.g. \"Auth migration\".\n    brain: target brain id (defaults to active).\n    limit: source pack size. Default 12.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "short title for the page, e.g. \"Auth migration\"."
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        },
+        "limit": {
+          "type": "integer",
+          "description": "source pack size. Default 12.",
+          "default": 12
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/compilations/prepare",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "topic",
+          "from": "topic",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "compile_submit",
+    "title": "Submit a compiled wiki for review",
+    "description": "Submit your compiled wiki page for the user to review (or\nauto-approve it). Step 2 of the agent-driven compile flow, after\n`compile_prepare`.\n\nWrites the wiki markdown to vault/wiki/<slug>.md, marks the\nengram as kind='wiki', and inserts a row in the compilations\ntable. By default status='pending' so the desktop app's Compile\ntab can show the diff for human review. Pass auto_approve=True\nto skip the review queue and mark it approved on the spot.\n\nReturns:\n    compilation_id   — the row's id\n    wiki_engram_id   — the engram id of the written wiki page\n    wiki_filename    — relative path inside the vault\n    brain_id         — which brain it landed in\n    status           — \"pending\" or \"approved\" depending on flag\n\nArgs:\n    topic: same topic you passed to `compile_prepare`.\n    wiki_markdown: the full wiki body you authored. No code fences,\n        no preamble — just the markdown.\n    source_engram_ids: list of source engram ids (from the prepare\n        pack) you actually used. Persisted for provenance.\n    brain: target brain id (defaults to active).\n    auto_approve: when True, skip the review queue and mark the\n        compilation approved immediately. Use only when the user\n        has explicitly opted into auto-approve (the desktop app's\n        Compile tab has a toggle for this) or has explicitly\n        instructed you to auto-approve in this conversation.",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "same topic you passed to `compile_prepare`."
+        },
+        "wiki_markdown": {
+          "type": "string",
+          "description": "the full wiki body you authored. No code fences, no preamble — just the markdown."
+        },
+        "source_engram_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "list of source engram ids (from the prepare pack) you actually used. Persisted for provenance.",
+          "default": null
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        },
+        "auto_approve": {
+          "type": "boolean",
+          "description": "when True, skip the review queue and mark the compilation approved immediately. Use only when the user has explicitly opted into auto-approve (the desktop app's Compile tab has a toggle for this) or has explicitly instructed you to auto-approve in this conversation.",
+          "default": false
+        }
+      },
+      "required": [
+        "topic",
+        "wiki_markdown"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/compilations/submit",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "topic",
+          "from": "topic",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "wiki_markdown",
+          "from": "wiki_markdown",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "source_engram_ids",
+          "from": "source_engram_ids",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "auto_approve",
+          "from": "auto_approve",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": "compile-submit",
+      "special_note": "source_engram_ids body field is sent as `source_engram_ids or []` — i.e. None or an empty list both serialize to []; it is always present in the body, never omitted. auto_approve is sent as a raw JSON boolean in the POST body (not stringified). brain is included only when truthy."
+    }
+  },
+  {
+    "name": "find_contradictions",
+    "title": "Find contradictions — facts that conflict with each other",
+    "description": "Surface auto-detected fact-level conflicts in the brain. The\ningest pipeline flags contradictions whenever two engrams assert\nincompatible things (e.g. \"user prefers Rust\" then later \"user\nprefers Go\"). They sit in the contradictions table waiting for\nreview.\n\nWHEN TO CALL:\n- User asks \"what conflicts in my brain\" / \"what changed my mind\"\n- You're about to make a confident assertion in a recall response\n  and want to check if it's been superseded\n- Auditing the brain after a long session of writes\n\nReturns:\n    brain_id        — which brain was queried\n    total           — number of contradictions in the response\n    contradictions  — list of:\n        { id, fact_a, fact_b,\n          engram_a_id, engram_a_title,\n          engram_b_id, engram_b_title,\n          detected_at, resolved, resolution }\n    Each row includes both engram titles so you can quote them\n    when proposing a resolution.\n\nArgs:\n    resolved: filter by state. False (default) shows only\n        unresolved — the actionable list. True shows the audit\n        trail of past resolutions. None shows everything.\n    brain: target brain id (defaults to active).\n    limit: cap. Default 50, max 500.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "resolved": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "filter by state. False (default) shows only unresolved — the actionable list. True shows the audit trail of past resolutions. None shows everything.",
+          "default": false
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        },
+        "limit": {
+          "type": "integer",
+          "description": "cap. Default 50, max 500.",
+          "default": 50
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/contradictions",
+      "path_params": [],
+      "query": [
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "resolved",
+          "from": "resolved",
+          "transform": "lower_bool",
+          "omit": "if_none"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "resolve_contradiction",
+    "title": "Resolve a contradiction — mark it reviewed",
+    "description": "Mark a contradiction as resolved with an optional human-\nreadable note explaining the call. Does NOT delete or rewrite\nthe underlying engrams — resolution is annotation, not action.\n\nWHEN TO CALL:\n- After find_contradictions() and the user has decided how to\n  reconcile a specific conflict\n- When you've written a new engram that supersedes one of the\n  facts and want the conflict closed\n\nTo actually fix the underlying data, the user should edit the\nout-of-date engram (or use `delete_engrams` if it should be\nremoved entirely). This tool just clears the entry from the\n\"needs review\" list.\n\nArgs:\n    contradiction_id: id from find_contradictions()\n    resolution: optional note explaining the resolution\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "contradiction_id": {
+          "type": "string",
+          "description": "id from find_contradictions()"
+        },
+        "resolution": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "optional note explaining the resolution",
+          "default": null
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        }
+      },
+      "required": [
+        "contradiction_id"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/contradictions/{contradiction_id}/resolve",
+      "path_params": [
+        "contradiction_id"
+      ],
+      "query": [],
+      "body": [
+        {
+          "param": "resolution",
+          "from": "resolution",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "find_orphan_links",
+    "title": "Find orphan links — high-similarity pairs missing a manual edge",
+    "description": "Surface engram pairs the system thinks are very similar but\nthat have NO manual / typed link asserted between them — the\nobvious \"you should probably wikilink these\" candidates.\n\nLogic: walks the engram_links table for rows with\nlink_type='semantic' (the auto-similarity layer) above the\nthreshold, then excludes any pair that already has a manual,\nuses, extends, depends_on, supersedes, or contradicts edge in\neither direction. Cheap — pure SQL, no embedding scan.\n\nWHEN TO CALL:\n- User asks \"what should I link\" / \"find missing connections\"\n- You're auditing the brain after a recall surfaced two notes\n  the user clearly thinks of together but never linked\n- After importing markdown from another tool that didn't carry\n  its links over\n\nReturns:\n    brain_id    — which brain was queried\n    threshold   — the similarity floor used\n    total       — number of pairs returned\n    pairs       — list of:\n        { engram_a_id, engram_a_title,\n          engram_b_id, engram_b_title,\n          similarity }\n    Sorted by similarity DESC. Each unordered pair appears once.\n\nArgs:\n    threshold: 0.0-1.0, default 0.85. Raise to 0.90+ for \"almost\n        certainly related\" pairs only.\n    limit: cap on returned pairs. Default 50, max 500.\n    brain: target brain id (defaults to active).\n\nSuggested follow-up: present the pairs to the user, then call\n`add_link(from, to, link_type='manual')` for confirmed ones.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "type": "number",
+          "description": "0.0-1.0, default 0.85. Raise to 0.90+ for \"almost certainly related\" pairs only.",
+          "default": 0.85
+        },
+        "limit": {
+          "type": "integer",
+          "description": "cap on returned pairs. Default 50, max 500.",
+          "default": 50
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/orphan_links",
+      "path_params": [],
+      "query": [
+        {
+          "param": "threshold",
+          "from": "threshold",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "temporal_recall",
+    "title": "Time-travel query against the temporal_facts table",
+    "description": "Query the bitemporal `temporal_facts` table — the layer that\ntracks WHEN each extracted fact was true. Lets you ask \"what did I\nbelieve about X\" or \"what did I believe about X on date Y\".\n\nTwo time axes:\n  • valid time: the period the fact described reality\n                [valid_from, valid_until)\n  • system time: when we knew the fact; `expired_at` is set when\n                 a row was retracted (vs simply ending its valid\n                 interval)\n\n`as_of` filters on both axes simultaneously: the row's valid\ninterval must contain `as_of` AND the row must not have been\nretracted before `as_of`. Result = exactly what the system would\nhave asserted at that moment.\n\nWHEN TO CALL:\n- \"What did I think about X\" / \"show me the history of X\"\n- User references a past decision: \"we were using Postgres back\n  in March, right?\" → temporal_recall(query='postgres',\n  as_of='2026-03-15')\n- Auditing a topic before writing a new claim — see if the brain\n  already has prior versions you'd be silently overriding\n- Surfacing the changelog for a specific engram with engram_id\n\nReturns:\n    brain_id, query, as_of, include_superseded, total\n    facts: list of:\n        { id, engram_id, engram_title, fact,\n          valid_from, valid_until, is_current,\n          superseded_by, expired_at }\n    Sorted by valid_from DESC (most recent assertion first).\n\nArgs:\n    query: free-text substring matched against fact content\n        (case-insensitive). Empty = no text filter — returns the\n        most recent facts in the brain.\n    as_of: ISO timestamp (\"2026-01-15\" or \"2026-01-15T12:00:00\").\n        Default = now: only currently-valid, unretracted facts.\n    engram_id: scope to facts attached to this engram only.\n    include_superseded: when True, drop the validity filter and\n        return every match — current, ended, and retracted alike.\n        Use this for full audit trails.\n    limit: max rows. Default 50, max 500.\n    brain: target brain id (defaults to active).\n\nNote: this surfaces the bitemporal table directly. For semantic\nrecall (vector + BM25 + graph) use `recall()` — that pipeline\nalready biases against superseded facts when ranking.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "free-text substring matched against fact content (case-insensitive). Empty = no text filter — returns the most recent facts in the brain.",
+          "default": ""
+        },
+        "as_of": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO timestamp (\"2026-01-15\" or \"2026-01-15T12:00:00\"). Default = now: only currently-valid, unretracted facts.",
+          "default": null
+        },
+        "engram_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "scope to facts attached to this engram only.",
+          "default": null
+        },
+        "include_superseded": {
+          "type": "boolean",
+          "description": "when True, drop the validity filter and return every match — current, ended, and retracted alike. Use this for full audit trails.",
+          "default": false
+        },
+        "limit": {
+          "type": "integer",
+          "description": "max rows. Default 50, max 500.",
+          "default": 50
+        },
+        "brain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "target brain id (defaults to active).",
+          "default": null
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/temporal_recall",
+      "path_params": [],
+      "query": [
+        {
+          "param": "query",
+          "from": "query",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "as_of",
+          "from": "as_of",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "engram_id",
+          "from": "engram_id",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "include_superseded",
+          "from": "include_superseded",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "include_superseded is pre-stringified in Python as ('true' if include_superseded else 'false') before being placed in the GET params dict; equivalent to lower_bool. query defaults to empty string and is always sent (never omitted). as_of, engram_id, and brain are None by default and dropped by _http_get's None-skipping (omit if_none)."
+    }
+  },
+  {
+    "name": "list_images",
+    "title": "List image files in a folder (caption-at-ingest workflow)",
+    "description": "Walk a folder for image files (.png, .jpg, .jpeg, .webp, .gif,\n.bmp, .svg, .heic, .tiff). Returns absolute paths + sizes + last-\nmodified timestamps. Use this as step 1 of the caption-at-ingest\nworkflow:\n\n1. Call list_images(folder) to enumerate images.\n2. For each image: open it with Read in your context (Claude\n   Code / Desktop is multimodal), then write a 1-3 sentence\n   caption.\n3. Call remember_image(image_path, caption) to persist.\n\nThe MCP server itself doesn't do CV — YOU are the captioning\nmodel. Nothing leaves the user's machine.\n\nSkipped: dotfile dirs (.git, .obsidian), trash/, non-image files.\nOrdering is filesystem-natural (no sort), so caption in the\norder returned and you'll match the user's mental model.\n\nReturns:\n    folder_path, recursive, total\n    images: list of:\n        { path, basename, extension, size_bytes, last_modified }\n\nArgs:\n    folder_path: ABSOLUTE path to walk.\n    recursive: default True. Set False for shallow scans.\n    limit: max images returned. Default 500, max 5000.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "folder_path": {
+          "type": "string",
+          "description": "ABSOLUTE path to walk."
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "default True. Set False for shallow scans.",
+          "default": true
+        },
+        "limit": {
+          "type": "integer",
+          "description": "max images returned. Default 500, max 5000.",
+          "default": 500
+        }
+      },
+      "required": [
+        "folder_path"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/list_images",
+      "path_params": [],
+      "query": [
+        {
+          "param": "folder_path",
+          "from": "folder_path",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "recursive",
+          "from": "recursive",
+          "transform": "lower_bool",
+          "omit": "never"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "body": [],
+      "special": null,
+      "special_note": "recursive is pre-stringified in Python as ('true' if recursive else 'false') before being placed in the GET params dict; equivalent to lower_bool. All three params are always present (no None-droppable args)."
+    }
+  },
+  {
+    "name": "remember_image",
+    "title": "Persist a caption for an image you have viewed",
+    "description": "Persist a caption you've generated for an image. Call this\nAFTER viewing the image in your own context (via Read in Claude\nCode, or paste-into-message in Claude Desktop). The MCP layer\nis the index + writer; the captioning happens in your turn.\n\nThe stored engram becomes searchable like any other note:\n`recall(q)` will surface it when the caption matches the query.\nThe image itself stays on disk where it lives — only the\ncaption is indexed.\n\nStorage shape:\n  filename: images/<basename>.md\n  kind:     'source'\n  content:  \"![title](image_path)\\n\\n<caption>\"\n            so the engram renders the image inline in the editor.\n\nWHEN TO CALL:\n- You've just viewed an image (screenshot, photo, diagram) the\n  user dropped in chat or referenced from disk.\n- You're processing a batch from list_images() and have\n  generated captions for each.\n\nWHEN NOT TO CALL:\n- You haven't actually seen the image — captioning blind\n  defeats the point. Use Read on the image first.\n- The image is ephemeral (a clipboard paste the user is\n  iterating on); wait until they say \"save this\".\n\nArgs:\n    image_path: ABSOLUTE path of the image on disk.\n    caption: 1-3 sentences describing what's in the image.\n        Focus on details a search query might hit.\n    title: optional display title. Default = file basename.\n    brain: target brain id (defaults to active).",
+    "annotations": {},
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "image_path": {
+          "type": "string",
+          "description": "ABSOLUTE path of the image on disk."
+        },
+        "caption": {
+          "type": "string",
+          "description": "1-3 sentences describing what's in the image. Focus on details a search query might hit."
+        },
+        "title": {
+          "type": "string",
+          "description": "optional display title. Default = file basename.",
+          "default": ""
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "image_path",
+        "caption"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/notes",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "content",
+          "from": "<computed>",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "title",
+          "from": "<computed>",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "folder",
+          "from": "<constant:images>",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "deduplicate",
+          "from": "<constant:0.92>",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": "remember_image",
+      "special_note": "Multi-step composite. Step 1: POST /api/notes with body {content, title, folder, deduplicate, brain}. content is computed as f\"![{display_title}]({image_path})\\n\\n{caption}\" where display_title = title.strip() or os.path.splitext(os.path.basename(image_path))[0]; title field in body is the same display_title; folder is the literal string \"images\"; deduplicate is the literal number 0.92; brain is passed as-is (may be None — JSON body so it is NOT dropped, sent as null). Step 2 (only if step-1 result is a dict and has truthy 'engram_id' eid): POST /api/engrams/bulk_set_kind with body {engram_ids:[eid], kind:\"source\", brain}. Step 3 (same condition): POST /api/engrams/bulk_add_tag with body {engram_ids:[eid], tag:\"image\", brain}. Finally, if step-1 result is a dict, set result['image_path']=image_path and return the (possibly mutated) step-1 result. Steps 2/3 are best-effort; their return values are ignored."
+    }
+  },
+  {
+    "name": "reindex_embeddings",
+    "title": "Re-embed every engram in the brain (model upgrade path)",
+    "description": "Walk every active engram, re-chunk, re-embed under the\ncurrently-loaded model, and replace the chunks + vec_chunks\nrows. The path users take when:\n\n- The embedding model has been upgraded (BGE-small → BGE-large,\n  etc.) and the existing vectors no longer match.\n- The vec_chunks table got corrupted (manual SQL, schema bug,\n  partial restore from backup) and needs to be rebuilt from\n  engram content.\n- A chunker tweak shipped that changes how content gets split,\n  and you want every engram to use the new chunking.\n\nCost: ≈ same as the original ingest of every engram. On the\nBGE-small-en-v1.5 path that's ~5-10 ms per chunk; a 500-engram\nbrain with 3 chunks each ≈ 7-15 seconds wall-clock. Pass\n`dry_run=True` first to size the work without doing it.\n\nIdempotent under a stable model — encoding the same text twice\nproduces identical vectors. The work is the encode, not the\ndisk IO. Per-engram failures are captured in `failed` and the\nrest of the engrams keep going.\n\nAFTER calling: run `optimize_disk()` to reclaim space from the\nchunk-table churn.\n\nReturns:\n    brain_id, dry_run\n    engrams_total       — active engrams found\n    engrams_reembedded  — engrams that produced new chunks\n                          (zero in dry_run)\n    chunks_written      — total chunk rows touched\n    failed              — list of \"<engram_id>: <error>\" lines\n    elapsed_ms\n\nArgs:\n    dry_run: count without re-embedding. Default False.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean",
+          "description": "count without re-embedding. Default False.",
+          "default": false
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/reindex_embeddings",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "dry_run",
+          "from": "dry_run",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "import_folder",
+    "title": "Bulk-import a folder of markdown into the brain",
+    "description": "Cold-start onboarding. Walk a folder of markdown files\n(Obsidian vault, Notion export, past chat transcripts) and\nbulk-ingest each .md into the brain. Idempotent: re-running\nwith the same source after no edits reports zero ingests.\n\nFilenames are namespaced by the source folder name so that two\nimports with overlapping basenames (two READMEs) don't collide.\nPass `prefix` to override the namespace, or `prefix=\"\"` to land\nfiles directly under their relative paths (use this only when\nyou've checked filenames don't clash with existing engrams).\n\nWhat this is NOT: it does NOT copy or symlink the source files.\nContent lands in engrams.content; the original markdown stays\nwhere it lives. Re-run the import to refresh after the source\nfolder changes.\n\nSkipped automatically:\n- dotfile dirs (.git, .obsidian, .DS_Store)\n- any \"trash\" subdirectory\n- non-.md files\n\nWHEN TO CALL:\n- User installs NeuroVault and asks \"can I import my Obsidian\n  vault?\"\n- User has a folder of past Claude conversations / Notion\n  exports they want searchable\n- Periodic re-sync from a curated source folder\n\nReturns:\n    brain_id, source_path, prefix\n    scanned        — total .md files found\n    ingested       — newly written or content-changed engrams\n    unchanged      — files whose content_hash already matched\n    errors         — list of \"<path>: <error>\" lines\n    elapsed_ms\n\nArgs:\n    path: ABSOLUTE path to the folder to import.\n    prefix: namespace override. Default = source folder\n        basename. \"\" = no namespace.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "ABSOLUTE path to the folder to import."
+        },
+        "prefix": {
+          "type": "string",
+          "description": "namespace override. Default = source folder basename. \"\" = no namespace."
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/import_folder",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "path",
+          "from": "path",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "prefix",
+          "from": "prefix",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "engram_history",
+    "title": "List edit history for a single engram",
+    "description": "Surface the edit history of an engram. The ingest pipeline\nsnapshots the OLD content into engram_versions whenever\ncontent_hash changes, so this list is sparse — one row per real\nedit, no entries for no-op re-ingests.\n\nTwo modes:\n- `version=None` (default): list snapshots, most-recent first.\n  Each row carries title + content_preview (first ~280 chars) +\n  content_bytes + content_hash + created_at, plus the engram's\n  CURRENT title + hash so you can spot whether it has drifted\n  from any of the snapshots.\n- `version=N`: fetch the full content of that specific snapshot.\n\nImportant: version N means \"the content as it was N edits ago.\"\nThe CURRENT engram lives in `engrams`, not in this table — so\n`version=1` is the OLDEST snapshot, and the highest version is\nthe most-recent one BEFORE the current state.\n\nWHEN TO CALL:\n- User asks \"what did this note say last week?\"\n- You need to compare a current claim against an earlier one to\n  detect drift / context-loss\n- Auditing: was a recent edit destructive?\n\nReturns the list shape on default, or the detail shape when\n`version` is set. Both shapes include brain_id + engram_id.\n\nArgs:\n    engram_id: UUID of the engram.\n    limit: max rows in list mode. Default 50, max 500.\n    version: if set, fetch full content of that snapshot\n        instead of listing.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "engram_id": {
+          "type": "string",
+          "description": "UUID of the engram."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "max rows in list mode. Default 50, max 500.",
+          "default": 50
+        },
+        "version": {
+          "type": "integer",
+          "description": "if set, fetch full content of that snapshot instead of listing."
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "engram_id"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/engrams/{engram_id}/versions",
+      "path_params": [
+        "engram_id"
+      ],
+      "query": [
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "body": [],
+      "special": "engram_history",
+      "special_note": "Branches on `version`. If version is not None: GET f\"/api/engrams/{urllib.parse.quote(engram_id)}/versions/{version}\" with query params {\"brain\": brain} (brain dropped if None). The `version` int is interpolated directly into the PATH (NOT url-quoted, raw f-string), so path becomes /api/engrams/{engram_id}/versions/{version}. If version is None (default): GET f\"/api/engrams/{urllib.parse.quote(engram_id)}/versions\" with query params {\"limit\": limit, \"brain\": brain} (brain dropped if None; limit always sent as int). engram_id is url-quoted in the path in BOTH branches."
+    }
+  },
+  {
+    "name": "optimize_disk",
+    "title": "Reclaim disk space (VACUUM + WAL truncate, optional dormant purge)",
+    "description": "Reclaim disk space inside the brain. Three composable steps:\n\n1. vacuum (default ON): rebuild brain.db dropping free pages.\n   Most expensive (rewrites the whole file) but biggest reclaim\n   on a brain that has churned through deletes.\n\n2. wal_checkpoint (default ON): flush + truncate the WAL file\n   back to zero. Cheap. Runs AFTER vacuum so VACUUM's own WAL\n   writes get truncated too.\n\n3. purge_dormant (default OFF, destructive): hard-delete every\n   engram with state='dormant'. Soft-delete already strips\n   chunks + vec rows; this just makes the deletion permanent\n   and lets VACUUM reclaim the engrams-table pages.\n\nWHEN TO CALL:\n- User asks \"the brain is getting big, can you shrink it?\"\n- After a bulk delete (find_clutter → delete_engrams) — the\n  free pages from those deletes only become disk space after\n  VACUUM runs.\n- As periodic maintenance — once a month if the brain sees\n  regular write churn.\n\nPass purge_dormant=True ONLY when the user has confirmed they\ndon't want soft-deleted engrams recoverable. After purge there\nis no in-DB trail; the markdown trash/ folder is the last copy.\n\nReturns:\n    brain_id\n    before / after — { db_bytes, wal_bytes, shm_bytes,\n                       total_bytes, free_pages, page_size }\n    reclaimed_bytes — total_bytes(before) - total_bytes(after)\n    purged_engrams  — rows hard-deleted (0 unless purge_dormant)\n    ran             — { purge_dormant, wal_checkpoint, vacuum }\n\nArgs:\n    vacuum: rebuild the DB file. Default True.\n    wal_checkpoint: truncate WAL after VACUUM. Default True.\n    purge_dormant: hard-delete dormant engrams. Default False.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "vacuum": {
+          "type": "boolean",
+          "description": "rebuild the DB file. Default True.",
+          "default": true
+        },
+        "wal_checkpoint": {
+          "type": "boolean",
+          "description": "truncate WAL after VACUUM. Default True.",
+          "default": true
+        },
+        "purge_dormant": {
+          "type": "boolean",
+          "description": "hard-delete dormant engrams. Default False.",
+          "default": false
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/optimize_disk",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "vacuum",
+          "from": "vacuum",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "wal_checkpoint",
+          "from": "wal_checkpoint",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "purge_dormant",
+          "from": "purge_dormant",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "bulk_set_kind",
+    "title": "Set the kind on multiple engrams in one call",
+    "description": "Reclassify many engrams' `kind` field in one round-trip.\nSingle-engram updates would reingest the markdown; this skips\nthe embed/chunk pipeline since `kind` doesn't affect them.\n\nAllowed kinds: note, source, quote, draft, question, decision,\nobservation, insight. Other values 400.\n\nWHEN TO CALL:\n- Bulk-relabelling after an import: \"everything I imported from\n  Anki should be kind='source'\"\n- Demoting a chatter cluster: \"mark all of these as 'observation'\n  so recall ignores them by default\"\n- Cleaning up after `find_clutter` returns a category that's\n  better expressed as a kind change than a delete\n\nReturns:\n    brain_id, kind, updated, unchanged, not_found\n\nArgs:\n    engram_ids: list of UUIDs to update.\n    kind: new value (lowercased, validated).\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "engram_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "list of UUIDs to update."
+        },
+        "kind": {
+          "type": "string",
+          "description": "new value (lowercased, validated)."
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "engram_ids",
+        "kind"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/engrams/bulk_set_kind",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "engram_ids",
+          "from": "engram_ids",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "kind",
+          "from": "kind",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "bulk_add_tag",
+    "title": "Append a tag to multiple engrams in one call",
+    "description": "Append a tag to many engrams' `tags` JSON array in one\nround-trip. Tag is normalised: lowercased, trimmed, leading '#'\nstripped (`#Foo` and `foo` both store as `foo`). Engrams that\nalready carry the tag are reported as `unchanged`.\n\nWHEN TO CALL:\n- \"Tag everything from this conversation as #project-aegis\"\n- \"Mark these 12 retrieval hits as #reviewed\"\n- Curating a corpus: tag a category before calling\n  `recall(q, kind:note tag:reviewed)`\n\nReturns:\n    brain_id, tag, updated, unchanged, not_found\n\nArgs:\n    engram_ids: list of UUIDs to tag.\n    tag: tag text (case + leading-# normalised).\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "engram_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "list of UUIDs to tag."
+        },
+        "tag": {
+          "type": "string",
+          "description": "tag text (case + leading-# normalised)."
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "engram_ids",
+        "tag"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/engrams/bulk_add_tag",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "engram_ids",
+          "from": "engram_ids",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "tag",
+          "from": "tag",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "add_link",
+    "title": "Add a manual link between two engrams",
+    "description": "Wire two engrams together with a manual link. The ingest\npipeline auto-creates links from `[[wikilinks]]` in markdown\nbodies and from shared entities — this tool is for the case\nwhere you want to assert a relationship after the fact, without\nrewriting the source markdown.\n\nWHEN TO CALL:\n- User says \"this note is related to that one\" / \"these two\n  should be connected\"\n- You're auditing the brain (after find_orphan_links()) and\n  want to materialise a connection the system inferred\n- Resolving a contradiction by asserting an explicit relationship\n  (\"A supersedes B\") with link_type='supersedes'\n\nReturns:\n    from_engram, to_engram, link_type, similarity,\n    bidirectional, rows_written\n\nArgs:\n    from_engram, to_engram: engram ids (UUIDs).\n    link_type: defaults to \"manual\" (the wikilink convention).\n        Other useful values: \"uses\", \"extends\", \"depends_on\",\n        \"contradicts\", \"supersedes\". Free-form, not validated.\n    similarity: 0.0-1.0, defaults to 1.0 (strong manual link).\n    bidirectional: True by default — adds the reverse edge too,\n        matching wikilink behaviour. Set False for asymmetric\n        relations like \"A supersedes B\".\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "from_engram": {
+          "type": "string",
+          "description": "engram id (UUID)."
+        },
+        "to_engram": {
+          "type": "string",
+          "description": "engram id (UUID)."
+        },
+        "link_type": {
+          "type": "string",
+          "description": "defaults to \"manual\" (the wikilink convention). Other useful values: \"uses\", \"extends\", \"depends_on\", \"contradicts\", \"supersedes\". Free-form, not validated.",
+          "default": "manual"
+        },
+        "similarity": {
+          "type": "number",
+          "description": "0.0-1.0, defaults to 1.0 (strong manual link).",
+          "default": 1.0
+        },
+        "bidirectional": {
+          "type": "boolean",
+          "description": "True by default — adds the reverse edge too, matching wikilink behaviour. Set False for asymmetric relations like \"A supersedes B\".",
+          "default": true
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "from_engram",
+        "to_engram"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/links",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "from_engram",
+          "from": "from_engram",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "to_engram",
+          "from": "to_engram",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "link_type",
+          "from": "link_type",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "similarity",
+          "from": "similarity",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "bidirectional",
+          "from": "bidirectional",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "remove_link",
+    "title": "Remove a link between two engrams",
+    "description": "Delete a link between two engrams. Symmetric pair to\nadd_link. Removes both directions by default.\n\nArgs:\n    from_engram, to_engram: engram ids.\n    bidirectional: True by default — also removes the reverse\n        edge if it exists.\n    brain: target brain id (defaults to active).\n\nReturns:\n    rows_deleted: how many edges were actually removed (0, 1, or 2).",
+    "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "from_engram": {
+          "type": "string",
+          "description": "engram id."
+        },
+        "to_engram": {
+          "type": "string",
+          "description": "engram id."
+        },
+        "bidirectional": {
+          "type": "boolean",
+          "description": "True by default — also removes the reverse edge if it exists.",
+          "default": true
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "from_engram",
+        "to_engram"
+      ]
+    },
+    "call": {
+      "method": "DELETE",
+      "path": "/api/links",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "from_engram",
+          "from": "from_engram",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "to_engram",
+          "from": "to_engram",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "bidirectional",
+          "from": "bidirectional",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "find_clutter",
+    "title": "Find clutter — surface engrams that look like noise",
+    "description": "Surface engrams that look like noise so you can review and\nremove. Read-only — returns categorised candidates, no deletes\nhappen here.\n\nWHEN TO CALL:\n- User asks \"clean up my brain\" / \"find junk\" / \"remove old stubs\"\n- You notice a recall returning low-quality results and want to\n  audit what's polluting the corpus\n\nReturns:\n    brain_id              — which brain was scanned\n    stubs                 — engrams with very short content + low\n                            access count (probably abandoned drafts)\n    test_data             — titles matching test/smoke/verify/debug\n                            with low access (forgotten test entries)\n    forgotten_observations — kind='observation', access_count=0,\n                            older than 7 days (auto-extracted but\n                            never promoted)\n    duplicate_titles      — multiple non-dormant engrams sharing\n                            the same title (likely accidental dupes)\n    total                 — sum of all four categories\n\nEach entry has {id, title, reason}. Pass the ids you want removed\nto `delete_engrams()` after confirming with the user.\n\nArgs:\n    brain: target brain id (defaults to active).\n    limit: per-category cap. Default 50, max 500.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "per-category cap. Default 50, max 500.",
+          "default": 50
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/clutter",
+      "path_params": [],
+      "query": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        },
+        {
+          "param": "limit",
+          "from": "limit",
+          "transform": "int",
+          "omit": "never"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "delete_engrams",
+    "title": "Delete engrams by id",
+    "description": "Soft-delete a list of engrams. Markdown files move to the\nbrain's `trash/` subdirectory (recoverable); DB rows go dormant.\n\nWHEN TO CALL:\n- After `find_clutter()` and the user has confirmed which engrams\n  to remove\n- When the user explicitly identifies engrams to delete by id\n  (e.g. from a recall result)\n\nAlways confirm with the user before calling — this is destructive\neven though it's recoverable.\n\nReturns:\n    brain_id   — which brain was modified\n    deleted    — number successfully soft-deleted\n    not_found  — engram ids that didn't exist\n    failed     — engram ids whose delete raised an error\n\nArgs:\n    engram_ids: list of engram ids to soft-delete.\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "engram_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "list of engram ids to soft-delete."
+        },
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": [
+        "engram_ids"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/engrams/delete",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "engram_ids",
+          "from": "engram_ids",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "update",
+    "title": "Update brain (re-scan vault, refresh index)",
+    "description": "Re-scan the active brain's vault, re-ingest changed files, and\nsoft-delete rows whose file has disappeared on disk. Idempotent and\ncheap when nothing changed — each file is read once and the\ncontent_hash short-circuit skips DB work.\n\nWHEN TO CALL:\n- User edited markdown files outside the desktop app (Obsidian,\n  vim, Drive sync) and wants the index to catch up immediately\n  without restarting the app.\n- User deleted files in the file manager and wants the\n  corresponding engrams + connections cleaned up.\n- You want to sanity-check that what's in the index matches what's\n  on disk before a recall-heavy task.\n\nReturns:\n    scanned      — total .md files found under the vault\n    ingested     — files re-ingested (new or content_hash changed)\n    unchanged    — files where content_hash matched (no DB work)\n    deleted      — engrams whose file is gone from disk\n                   (soft-deleted, markdown files untouched)\n    elapsed_ms   — wall-clock runtime\n    brain_id     — which brain was updated\n\nArgs:\n    brain: target brain id (defaults to active).\n\nNote: when the desktop app is running, the vault watcher already\nre-ingests files as they are saved. This tool is the manual\nfallback for batch / out-of-band edits.",
+    "annotations": {
+      "read_only": false,
+      "idempotent": true,
+      "destructive": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/update",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  }
+]

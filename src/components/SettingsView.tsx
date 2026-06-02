@@ -555,7 +555,7 @@ function McpSection() {
 
   const configJson = sidecarPath
     ? JSON.stringify(
-        { mcpServers: { neurovault: { command: sidecarPath } } },
+        { mcpServers: { neurovault: { command: sidecarPath, args: ["--mcp-only"] } } },
         null, 2,
       )
     : "";
@@ -780,9 +780,9 @@ function ClaudeCodeMcpSection() {
  *  surface; Standard (~3.5 k) trims admin tools the user rarely
  *  invokes. Full is the default.
  *
- *  Persists `~/.neurovault/mcp_tier.txt`; the Python proxy reads it
- *  at startup, so changes take effect after restarting the MCP host
- *  (Claude Code / Desktop).
+ *  Persists `~/.neurovault/mcp_tier.txt`; the native MCP server
+ *  (`neurovault-server --mcp-only`) reads it at startup, so changes
+ *  take effect after restarting the MCP host (Claude Code / Desktop).
  */
 type McpTier = "lite" | "standard" | "full";
 const TIER_INFO: { value: McpTier; label: string; tokens: string; description: string }[] = [
@@ -884,7 +884,7 @@ function MCPTierSection() {
           ? <span style={{ color: "var(--nv-negative, #ef4444)" }}>Couldn't save: {error}</span>
           : savedAt
           ? <>Saved. Restart Claude Code / Desktop for the new tier to take effect.</>
-          : <>The Python MCP proxy reads <span className="font-mono">~/.neurovault/mcp_tier.txt</span> at startup.</>}
+          : <>The MCP server reads <span className="font-mono">~/.neurovault/mcp_tier.txt</span> at startup.</>}
       </p>
     </Section>
   );
