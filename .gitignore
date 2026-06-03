@@ -20,8 +20,9 @@ src-tauri/target/
 .DS_Store
 Thumbs.db
 
-# Sidecar binaries (built by PyInstaller, not committed)
-src-tauri/binaries/*.exe
+# Sidecar binaries — staged at build time by scripts/stage-sidecar.mjs
+# (per-target neurovault-server[.exe]); never committed.
+src-tauri/binaries/
 
 # Python server
 server/__pycache__/

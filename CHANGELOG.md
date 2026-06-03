@@ -10,6 +10,21 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.4.2] — 2026-06-03
+
+### Fixed
+- **Windows/Linux: the MCP server binary wasn't bundled** — `neurovault-server`
+  is only present in the macOS app today, so `--mcp-only` (and therefore the
+  whole MCP integration) silently didn't work on Windows or Linux: the
+  installer shipped `neurovault.exe` but no `neurovault-server.exe`, so the
+  Settings dialog reported "sidecar binary not found." It was never wired as a
+  Tauri sidecar — macOS just happened to pick it up. Declared
+  `neurovault-server` as a proper `externalBin` (staged per-target by
+  `scripts/stage-sidecar.mjs` at bundle time), so it now ships next to the app
+  binary on **every** platform — exactly where `mcp_sidecar_path()` looks.
+
+---
+
 ## [0.4.1] — 2026-06-02
 
 ### Fixed

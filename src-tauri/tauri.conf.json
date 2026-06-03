@@ -1,13 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklascodes/tauri-docs/refs/heads/main/src/content/docs/_schema/config.schema.json",
   "productName": "NeuroVault",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "identifier": "com.neurovault.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "node scripts/stage-sidecar.mjs",
     "removeUnusedCommands": true
   },
   "app": {
@@ -43,6 +44,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/neurovault-server"
+    ],
     "resources": [
       "resources/vec0.*"
     ],
