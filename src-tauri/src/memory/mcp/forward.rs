@@ -45,6 +45,15 @@ impl Forwarder {
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs_f64(timeout))
+            // Disable idle-connection pooling. We forward to a loopback
+            // server where opening a connection is essentially free, and a
+            // pooled keep-alive connection that the server has since closed
+            // can make the *next* forwarded request hang until the timeout
+            // fires — an intermittent multi-second stall observed on the
+            // multi-query recall path (visible only through this client, never
+            // via a fresh-connection-per-call tool like curl). A new
+            // connection per request removes that failure mode entirely.
+            .pool_max_idle_per_host(0)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
