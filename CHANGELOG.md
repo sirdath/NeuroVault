@@ -13,6 +13,14 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 ## [0.4.3] — 2026-06-03
 
 ### Fixed
+- **The MCP server binary now actually ships in the installer on every
+  platform.** The v0.4.2 approach (bundling `neurovault-server` as a Tauri
+  `externalBin` sidecar) never built in CI: `externalBin` is validated at
+  compile time by `build.rs`, but the staging ran at bundle time — and since
+  the sidecar is a binary in the same crate, the check is circular. It's now
+  staged in `beforeBuildCommand` (before compile) and built with the
+  `externalBin` check disabled (via `TAURI_CONFIG`) to break the cycle. So
+  Windows/Linux MCP — which silently never worked — now does.
 - **macOS: minimising the window trapped the app.** Clicking the Dock icon to
   bring a minimised (or hidden) window back fires a `Reopen` event that the
   run-loop ignored, so there was no way to restore the window. Now handled —

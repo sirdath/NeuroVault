@@ -1,23 +1,27 @@
 // Stage the `neurovault-server` MCP binary as a Tauri sidecar (externalBin)
 // so it ships next to the app on EVERY platform.
 //
-// Why this exists: `neurovault-server` is a second binary in the same Rust
-// crate as the app. Without an explicit `externalBin` entry, Tauri's
-// bundler picked it up only by accident (it landed in the macOS .app but
-// NOT the Windows installer — which silently broke `--mcp-only` on Windows,
-// since `mcp_sidecar_path()` couldn't find `neurovault-server.exe`).
+// Why this is fiddly: `neurovault-server` is a second binary in the *same*
+// crate as the app, and that crate's build.rs (tauri_build) validates that
+// the `externalBin` files exist — on EVERY compile of the crate, including
+// the compile of `neurovault-server` itself. So a normal build is circular:
+// you can't build the sidecar without the sidecar already existing. (It also
+// can't be split into its own crate — the sidecar depends on `neurovault_lib`,
+// whose build.rs runs the same check.)
 //
-// Tauri's `externalBin` looks for `src-tauri/binaries/<name>-<target-triple>[.exe]`
-// at bundle time and copies it next to the main executable (Contents/MacOS
-// on macOS, the install dir on Windows/Linux) — exactly where
-// `mcp_sidecar_path()` looks. This script produces that file.
+// The escape hatch: build `neurovault-server` with `TAURI_CONFIG` overriding
+// `externalBin` to `[]` (tauri_build json-merge-patches TAURI_CONFIG over the
+// file config), so the sidecar compiles with the check disabled. We then stage
+// the binary into `src-tauri/binaries/neurovault-server-<triple>[.exe]` — the
+// path Tauri's `externalBin` expects — so the *later* app build (which uses the
+// real config) validates successfully and bundles it next to the app binary,
+// exactly where `mcp_sidecar_path()` looks.
 //
-// `cargo build` (run by `tauri build`) already builds `neurovault-server`
-// into the target dir, so we just locate and copy it — no recompile in the
-// common case. All our release builds are native (target == host), so the
-// host triple from `rustc` is the triple Tauri bundles for.
+// This MUST run in `build.beforeBuildCommand` (before the app's compile), not
+// `beforeBundleCommand` (after), or the app's build.rs check fails first.
 //
-// Run automatically via `build.beforeBundleCommand` in tauri.conf.json.
+// All our release builds are native (target == host), so the host triple from
+// `rustc` is the triple Tauri bundles for.
 
 import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -36,27 +40,19 @@ const triple = hostLine.slice('host:'.length).trim();
 const exe = triple.includes('windows') ? '.exe' : '';
 const bin = `neurovault-server${exe}`;
 
-console.log(`[stage-sidecar] target triple: ${triple}`);
+console.log(`[stage-sidecar] building sidecar for ${triple} (externalBin check disabled for this build)`);
 
-// `tauri build --target <triple>` (CI) emits to target/<triple>/release/;
-// a plain local `tauri build` emits to target/release/. Check both.
-const candidates = [
-  join(srcTauri, 'target', triple, 'release', bin),
-  join(srcTauri, 'target', 'release', bin),
-];
+// Build the sidecar with externalBin removed from the effective config so its
+// build.rs doesn't require the very binary we're producing.
+execSync(`cargo build --release --bin neurovault-server --target ${triple}`, {
+  cwd: srcTauri,
+  stdio: 'inherit',
+  env: { ...process.env, TAURI_CONFIG: '{"bundle":{"externalBin":[]}}' },
+});
 
-let built = candidates.find(existsSync);
-if (!built) {
-  // The app build should already have produced it, but build defensively.
-  console.log('[stage-sidecar] sidecar not found yet — building it');
-  execSync(`cargo build --release --bin neurovault-server --target ${triple}`, {
-    cwd: srcTauri,
-    stdio: 'inherit',
-  });
-  built = candidates.find(existsSync);
-}
-if (!built) {
-  throw new Error(`[stage-sidecar] neurovault-server binary not found in: ${candidates.join(', ')}`);
+const built = join(srcTauri, 'target', triple, 'release', bin);
+if (!existsSync(built)) {
+  throw new Error(`[stage-sidecar] built sidecar not found at ${built}`);
 }
 
 const outDir = join(srcTauri, 'binaries');
