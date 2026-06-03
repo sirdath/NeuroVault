@@ -1363,24 +1363,41 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Kill the sidecar when the app exits so the Python server doesn't
-            // linger as an orphan process holding port 8765. Without this the
-            // user sees "already running" errors on next launch.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(state) = app.try_state::<ServerState>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        if let Some(child) = guard.take() {
-                            let _ = child.kill();
-                            eprintln!("[neurovault] killed sidecar on app exit");
+            match &event {
+                // Kill the sidecar when the app exits so it doesn't linger as
+                // an orphan process holding port 8765. Without this the user
+                // sees "already running" errors on next launch.
+                tauri::RunEvent::ExitRequested { .. } => {
+                    if let Some(state) = app.try_state::<ServerState>() {
+                        if let Ok(mut guard) = state.0.lock() {
+                            if let Some(child) = guard.take() {
+                                let _ = child.kill();
+                                eprintln!("[neurovault] killed sidecar on app exit");
+                            }
                         }
                     }
+                    // Stop every per-brain vault watcher so worker threads +
+                    // OS-level watches exit cleanly. Without this, notify's
+                    // background listener on Windows can keep the process
+                    // alive for a few seconds after the main window closes.
+                    memory::watcher::stop_all();
                 }
-                // Stop every per-brain vault watcher so worker
-                // threads + OS-level watches exit cleanly. Without
-                // this, notify's background listener on Windows can
-                // keep the process alive for a few seconds after
-                // the main window closes.
-                memory::watcher::stop_all();
+                // macOS only: clicking the Dock icon while no window is on
+                // screen — after a native minimise, or after
+                // hide_to_background — fires Reopen. Without handling it, the
+                // window can't be brought back from the Dock, so minimising
+                // "traps" the app on macOS. (Windows restores from the taskbar
+                // natively, which is why this only bit macOS.) Bring the main
+                // window back: unminimise + show + focus.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                _ => {}
             }
         });
 }
