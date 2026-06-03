@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Build NeuroVault's app icon: an inverted split-colour squircle.
+"""Build NeuroVault's app icon: an inverted split-colour FULL OPAQUE SQUARE.
 
 Left half  = BLACK plate + BLUE brain.
 Right half = BLUE plate  + BLACK vault.
 The background split is aligned to the logo's own brain/vault seam, and logo
 pixels are coloured by which side of that seam they fall on — so each half is
 a true colour-inversion of the other and nothing ever lands same-colour-on-
-same-colour. Baking the plate in means macOS never shows its gray surface
-through the icon (a transparent icon can't control its background).
+same-colour.
+
+IMPORTANT (macOS 26 "Tahoe"): the icon is a FULL, OPAQUE, edge-to-edge square
+with NO baked rounded corners and NO transparent pixels. Tahoe applies its OWN
+squircle mask to every app icon; if we bake our own rounded/transparent corners,
+Tahoe judges the icon "non-conforming," shrinks it ~20%, and drops it on a light
+system tile — the white "frame" / "squircle prison". A full opaque square lets
+the OS mask it cleanly (and pre-Tahoe macOS rounds the same square identically).
+See docs/branding/apple-icon-research.md for the full writeup + sources.
 
 Run:  uv run --with pillow python scripts/make-app-icon.py
 Then: (cd src-tauri/icons && iconutil -c icns -o icon.icns icon.iconset && rm -rf icon.iconset)
@@ -15,7 +22,7 @@ Then: (cd src-tauri/icons && iconutil -c icns -o icon.icns icon.iconset && rm -r
 from __future__ import annotations
 
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 SRC_MARK = REPO / "assets" / "brand" / "neurovault-mark-1024.png"
@@ -24,9 +31,10 @@ MASTER_OUT = REPO / "assets" / "brand" / "neurovault-icon-master.png"
 
 SIZE = 1024
 SS = 2                      # supersample for crisp squircle + seam, then downscale
-MARGIN_PCT = 0.0            # full-bleed: the rounded plate fills the whole canvas
-LOGO_FRAC = 1.08            # logo OVERFILLS the tile (clipped to the squircle) — max size
-CORNER_PCT = 0.16           # plate corner radius (squarer = more room for logo)
+MARGIN_PCT = 0.0            # full-bleed: opaque plate fills the whole square, edge-to-edge
+LOGO_FRAC = 0.86            # mark stays in the safe area — macOS crops the rounded corners
+# No corner radius on purpose: macOS 26 Tahoe rounds icons itself. Baking our own
+# rounded/transparent corners triggers Tahoe's light system tile (the white frame).
 
 # Plate background: a cool vertical gradient per half (black side / blue side).
 BLACK_TOP = (6, 6, 11)
@@ -76,7 +84,6 @@ def build_master() -> Image.Image:
     T = SIZE * SS
     margin = int(T * MARGIN_PCT)
     body = T - 2 * margin
-    radius = int(body * CORNER_PCT)
 
     logo_w = int(body * LOGO_FRAC)
     scale = logo_w / max(w, h)
@@ -86,7 +93,8 @@ def build_master() -> Image.Image:
     seam_s = int(seam * scale)
     plate_seam = ox + seam_s        # background split aligned to the logo seam
 
-    # Plate: BLACK left of the seam, BLUE right, clipped to a squircle.
+    # Plate: BLACK left of the seam, BLUE right — a FULL OPAQUE SQUARE (no rounding,
+    # no transparency). macOS rounds the corners itself; see the module docstring.
     plate = Image.new("RGBA", (body, body))
     pg = plate.load()
     for y in range(body):
@@ -95,9 +103,6 @@ def build_master() -> Image.Image:
         right_col = _lerp(BLUE_TOP, BLUE_BOT, t)
         for x in range(body):
             pg[x, y] = (*(left_col if (x + margin) < plate_seam else right_col), 255)
-    mask = Image.new("L", (body, body), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, body - 1, body - 1], radius=radius, fill=255)
-    plate.putalpha(mask)
 
     canvas = Image.new("RGBA", (T, T), (0, 0, 0, 0))
     canvas.paste(plate, (margin, margin), plate)
@@ -111,14 +116,10 @@ def build_master() -> Image.Image:
                 lp[x, y] = (*(LOGO_BLUE if x < seam_s else LOGO_BLACK), a)
     canvas.paste(logo, (ox, oy), logo)
 
-    # Clip the whole composite to the squircle so the large logo can't poke
-    # past the rounded corners.
-    clip = Image.new("L", (T, T), 0)
-    ImageDraw.Draw(clip).rounded_rectangle(
-        [margin, margin, T - margin - 1, T - margin - 1], radius=radius, fill=255
-    )
-    canvas = Image.composite(canvas, Image.new("RGBA", (T, T), (0, 0, 0, 0)), clip)
-
+    # Force fully opaque: the logo's anti-aliased edges blend correctly into the
+    # plate's RGB, but leave sub-255 alpha. Tahoe wants ZERO transparent pixels,
+    # so flatten alpha to 255 (RGB already holds the blended result).
+    canvas.putalpha(255)
     return canvas.resize((SIZE, SIZE), Image.LANCZOS)
 
 
