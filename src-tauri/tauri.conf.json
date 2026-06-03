@@ -7,8 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "beforeBundleCommand": "node scripts/stage-sidecar.mjs",
+    "beforeBuildCommand": "npm run build && node scripts/stage-sidecar.mjs",
     "removeUnusedCommands": true
   },
   "app": {
