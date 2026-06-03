@@ -10,6 +10,25 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.4.3] — 2026-06-03
+
+### Fixed
+- **macOS: minimising the window trapped the app.** Clicking the Dock icon to
+  bring a minimised (or hidden) window back fires a `Reopen` event that the
+  run-loop ignored, so there was no way to restore the window. Now handled —
+  Dock-click unminimises + shows + focuses the main window. (Windows restores
+  from the taskbar natively, so this only affected macOS.)
+- **MCP: intermittent multi-second stall on multi-query recall.** The forwarder
+  reused a pooled keep-alive connection the loopback server had since closed,
+  hanging the next request until the timeout. Disabled idle-connection pooling
+  in the forwarder — a fresh connection per call is free on loopback.
+
+### Changed
+- **App icon** redrawn as a fully opaque square so macOS 26 (Tahoe) masks it
+  into a clean squircle without a light "frame" around the edge.
+
+---
+
 ## [0.4.2] — 2026-06-03
 
 ### Fixed
