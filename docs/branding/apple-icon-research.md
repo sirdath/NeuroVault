@@ -144,10 +144,11 @@ wrong direction here.
   way to make one legacy `.icns` show *custom* corners on Tahoe AND older macOS — accept OS corners.
 - **Safe-area % is approximate** (Apple only publishes the keyline via Icon Composer's grid). 0.86 is
   a starting point — tune visually.
-- **Cross-platform:** a full opaque square is right for macOS but Windows/Linux **tray** icons usually
-  want transparent corners. If that look matters, branch the `.ico`/`SquareNNNLogo.png` emission to a
-  separately-rounded raster and keep the opaque square only for `.icns` + macOS PNGs. (Functionally,
-  shipping the square everywhere is fine.)
+- **Cross-platform: IMPLEMENTED.** `make-app-icon.py` now branches by platform via `round_corners()`:
+  `icon.icns` = opaque square (macOS Tahoe rounds it); `icon.ico` + `Square*Logo.png` + `StoreLogo.png`
+  + the `32/64/128/128@2x` PNGs = **pre-rounded** (transparent corners, ~0.2237 radius) because
+  Windows/Linux don't round icons themselves. Result: the same logo shows the same rounded squircle on
+  every OS. Verified: `.ico`/tiles corner alpha `0`, `.icns` corner alpha `255`.
 
 ## Sources
 

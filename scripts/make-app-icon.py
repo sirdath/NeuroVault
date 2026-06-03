@@ -22,7 +22,7 @@ Then: (cd src-tauri/icons && iconutil -c icns -o icon.icns icon.iconset && rm -r
 from __future__ import annotations
 
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw
 
 REPO = Path(__file__).resolve().parent.parent
 SRC_MARK = REPO / "assets" / "brand" / "neurovault-mark-1024.png"
@@ -123,6 +123,21 @@ def build_master() -> Image.Image:
     return canvas.resize((SIZE, SIZE), Image.LANCZOS)
 
 
+def round_corners(square: Image.Image, radius_pct: float = 0.2237) -> Image.Image:
+    """Bake a squircle (transparent corners) into the icon for platforms that DON'T
+    round it themselves — Windows (.ico, Store tiles) and Linux. macOS gets the
+    opaque square instead and rounds it via the OS (see the module docstring), so
+    both platforms end up showing the same rounded shape."""
+    n = square.width
+    big = square.convert("RGBA").resize((n * 4, n * 4), Image.LANCZOS)
+    mask = Image.new("L", big.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, big.width - 1, big.height - 1], radius=int(big.width * radius_pct), fill=255
+    )
+    big.putalpha(mask)
+    return big.resize((n, n), Image.LANCZOS)
+
+
 def preview(master, bg, path):
     tile = Image.new("RGBA", (360, 360), (*bg, 255))
     icon = master.resize((300, 300), Image.LANCZOS)
@@ -132,16 +147,20 @@ def preview(master, bg, path):
 
 def main() -> int:
     print(f"source mark : {SRC_MARK.relative_to(REPO)}  (inverted split plate)")
-    master = build_master()
+    # macOS: full OPAQUE SQUARE — Tahoe applies its own squircle mask.
+    square = build_master()
     MASTER_OUT.parent.mkdir(parents=True, exist_ok=True)
-    master.save(MASTER_OUT)
-    print(f"master      : {MASTER_OUT.relative_to(REPO)} (1024x1024)")
+    square.save(MASTER_OUT)
+    print(f"master      : {MASTER_OUT.relative_to(REPO)} (1024x1024, opaque square)")
+    # Windows / Linux / Store tiles: pre-rounded (those OSes don't round icons),
+    # so the SAME logo shows the SAME rounded shape macOS gets from its own mask.
+    win = round_corners(square)
 
-    def emit(name, size):
-        master.resize((size, size), Image.LANCZOS).save(ICONS / name)
+    def emit(src, name, size):
+        src.resize((size, size), Image.LANCZOS).save(ICONS / name)
         print(f"  {name:<22} {size}x{size}")
 
-    print("\n[src-tauri/icons]")
+    print("\n[src-tauri/icons]  (Windows/Linux/tiles = pre-rounded)")
     for name, size in [
         ("32x32.png", 32), ("64x64.png", 64), ("128x128.png", 128),
         ("128x128@2x.png", 256), ("icon.png", 512),
@@ -151,24 +170,25 @@ def main() -> int:
         ("Square150x150Logo.png", 150), ("Square284x284Logo.png", 284),
         ("Square310x310Logo.png", 310), ("StoreLogo.png", 50),
     ]:
-        emit(name, size)
+        emit(win, name, size)
 
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
-    master.resize((256, 256), Image.LANCZOS).save(
+    win.resize((256, 256), Image.LANCZOS).save(
         ICONS / "icon.ico", format="ICO", sizes=[(s, s) for s in ico_sizes]
     )
-    print(f"  {'icon.ico':<22} multi {ico_sizes}")
+    print(f"  {'icon.ico':<22} multi {ico_sizes}  (rounded — Windows app icon)")
 
+    # macOS .icns iconset is built from the OPAQUE SQUARE (the OS rounds it).
     iconset = ICONS / "icon.iconset"
     iconset.mkdir(exist_ok=True)
     for base in (16, 32, 128, 256, 512):
-        master.resize((base, base), Image.LANCZOS).save(iconset / f"icon_{base}x{base}.png")
-        master.resize((base * 2, base * 2), Image.LANCZOS).save(iconset / f"icon_{base}x{base}@2x.png")
-    print(f"  {'icon.iconset/':<22} (run iconutil next)")
+        square.resize((base, base), Image.LANCZOS).save(iconset / f"icon_{base}x{base}.png")
+        square.resize((base * 2, base * 2), Image.LANCZOS).save(iconset / f"icon_{base}x{base}@2x.png")
+    print(f"  {'icon.iconset/':<22} (square — run iconutil next for icon.icns)")
 
-    preview(master, (205, 205, 208), "/tmp/icon_on_gray.png")
-    preview(master, (28, 28, 30), "/tmp/icon_on_dark.png")
-    print("\npreviews: /tmp/icon_on_gray.png  /tmp/icon_on_dark.png")
+    preview(win, (205, 205, 208), "/tmp/icon_on_gray.png")     # how Windows/Linux render it
+    preview(square, (28, 28, 30), "/tmp/icon_on_dark.png")     # macOS square (OS rounds)
+    print("\npreviews: /tmp/icon_on_gray.png (rounded)  /tmp/icon_on_dark.png (square)")
     return 0
 
 
