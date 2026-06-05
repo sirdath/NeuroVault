@@ -12,8 +12,10 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "macOSPrivateApi": true,
     "windows": [
       {
+        "label": "main",
         "title": "NeuroVault",
         "width": 1200,
         "height": 800,
@@ -23,6 +25,20 @@
         "fullscreen": false,
         "decorations": true,
         "theme": "Dark"
+      },
+      {
+        "label": "minitab",
+        "url": "index.html?view=minitab",
+        "title": "NeuroVault",
+        "width": 248,
+        "height": 132,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {

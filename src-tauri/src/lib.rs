@@ -688,6 +688,104 @@ fn mcp_config_path() -> String {
     p.display().to_string()
 }
 
+/// Path to Claude Code's user-scope config: `~/.claude.json` — a file at the
+/// home-directory ROOT. This is deliberately NOT `~/.claude/.mcp.json`: that
+/// path is only read by Claude Code for project-level approval
+/// (`enabledMcpjsonServers`), never as a source of servers to spawn. Claude
+/// Code loads user-scope MCP servers from `~/.claude.json` → `mcpServers`.
+#[tauri::command]
+fn claude_code_config_path() -> String {
+    match dirs::home_dir() {
+        Some(h) => h.join(".claude.json").display().to_string(),
+        None => String::new(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct McpRegisterResult {
+    /// Absolute path written.
+    path: String,
+    /// The file did not exist and was created fresh.
+    created: bool,
+    /// An existing `neurovault` entry was replaced (vs. added for the first time).
+    updated: bool,
+}
+
+/// One-click "Connect Claude Code": register (or refresh) the NeuroVault MCP
+/// server in `~/.claude.json` under `mcpServers.neurovault`.
+///
+/// This MERGES into the existing file and never blindly overwrites it —
+/// `~/.claude.json` also holds the user's Claude Code auth tokens and other
+/// state, so clobbering it would log them out. Rules:
+///   - missing file        → create `{ "mcpServers": { "neurovault": … } }`
+///   - present + valid JSON → splice our entry into `mcpServers`, keep the rest
+///   - present + INVALID    → abort with an error (we will NOT destroy a file
+///                            we can't safely round-trip)
+/// The write is atomic (temp file in the same dir + rename) so a crash
+/// mid-write can never leave `~/.claude.json` truncated.
+#[tauri::command]
+fn register_claude_code_mcp() -> Result<McpRegisterResult, String> {
+    let sidecar = mcp_sidecar_path();
+    if sidecar.is_empty() {
+        return Err(
+            "neurovault-server sidecar not found next to the app — reinstall NeuroVault".into(),
+        );
+    }
+    let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    let path = home.join(".claude.json");
+
+    // Load existing config. Crucially, a parse failure must NOT fall through
+    // to an empty object — that would overwrite a real (just malformed) file
+    // and wipe the user's login. Only a genuinely missing file starts empty.
+    let (mut root, created) = match fs::read_to_string(&path) {
+        Ok(text) => {
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                format!(
+                    "~/.claude.json exists but isn't valid JSON ({e}). Refusing to overwrite it \
+                     (it holds your Claude Code login). Fix the file, or register manually."
+                )
+            })?;
+            (v, false)
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => (serde_json::json!({}), true),
+        Err(e) => return Err(format!("read ~/.claude.json: {e}")),
+    };
+
+    let obj = root
+        .as_object_mut()
+        .ok_or("~/.claude.json is not a JSON object; refusing to modify it")?;
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("\"mcpServers\" in ~/.claude.json is not an object; refusing to modify it")?;
+
+    let updated = servers.contains_key("neurovault");
+    servers.insert(
+        "neurovault".to_string(),
+        serde_json::json!({
+            "type": "stdio",
+            "command": sidecar,
+            "args": ["--mcp-only"],
+        }),
+    );
+
+    let pretty =
+        serde_json::to_string_pretty(&root).map_err(|e| format!("serialize config: {e}"))?;
+    let tmp = path.with_extension("json.nv-tmp");
+    fs::write(&tmp, pretty.as_bytes()).map_err(|e| format!("write temp config: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("replace ~/.claude.json: {e}")
+    })?;
+
+    Ok(McpRegisterResult {
+        path: path.display().to_string(),
+        created,
+        updated,
+    })
+}
+
 /// Reveal the MCP config file in the OS file manager so the user can
 /// open/edit it quickly. On Windows uses `explorer /select,`; on macOS
 /// uses `open -R`. No-op on Linux (most distros' file managers vary).
@@ -723,6 +821,130 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 fn hide_to_background(window: tauri::Window) -> Result<(), String> {
     window.hide().map_err(|e| format!("hide: {e}"))
+}
+
+/// Minimise the *main* window to the Dock / taskbar. Targets the main window
+/// by label (not the calling window) so it works from the minitab too, and
+/// uses the Rust window API directly so it needs no `core:window` ACL grant.
+/// Restored by clicking the Dock/taskbar icon — on macOS that routes through
+/// the `RunEvent::Reopen` handler (unminimise+show+focus) — or via the global
+/// Ctrl/Cmd+Shift+Space shortcut.
+#[tauri::command]
+fn minimize_main(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        w.minimize().map_err(|e| format!("minimize: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Bring the full app window to the front — the minitab's "Open app" button.
+#[tauri::command]
+fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        w.show().map_err(|e| format!("show main: {e}"))?;
+        let _ = w.set_focus();
+    }
+    Ok(())
+}
+
+/// Show the floating "minitab" control, parked near the top-right corner.
+#[tauri::command]
+fn show_minitab(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("minitab") {
+        park_minitab_top_right(&w);
+        w.show().map_err(|e| format!("show minitab: {e}"))?;
+        let _ = w.set_focus();
+    }
+    Ok(())
+}
+
+/// Hide the floating minitab.
+#[tauri::command]
+fn hide_minitab(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("minitab") {
+        w.hide().map_err(|e| format!("hide minitab: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Toggle the minitab between its full control card and a tiny logo-only
+/// "puck". The webview decides what to render (full UI vs. just the logo);
+/// this resizes the OS window to match so the transparent area never eats
+/// clicks meant for whatever is behind it, then re-parks top-right so the
+/// shrink/grow always anchors to the same corner.
+#[tauri::command]
+fn set_minitab_collapsed(app: tauri::AppHandle, collapsed: bool) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("minitab") {
+        // Logical sizes — keep in sync with the React layout in Minitab.tsx.
+        let (lw, lh) = if collapsed { (60.0, 60.0) } else { (248.0, 132.0) };
+        w.set_size(tauri::LogicalSize::new(lw, lh))
+            .map_err(|e| format!("resize minitab: {e}"))?;
+        // Position from the *target* logical size rather than outer_size(),
+        // which can still report the pre-resize dimensions on this turn of
+        // the event loop.
+        park_minitab(&w, Some((lw, lh)));
+    }
+    Ok(())
+}
+
+/// Park the minitab window near the top-right corner of its current monitor
+/// (falls back to the primary monitor), with a small margin. Pass `logical`
+/// to position against a known logical size (used right after a resize, when
+/// `outer_size()` may still be stale); pass `None` to use the live size.
+fn park_minitab(w: &tauri::WebviewWindow, logical: Option<(f64, f64)>) {
+    let monitor = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten());
+    if let Some(m) = monitor {
+        let ms = m.size();
+        let mp = m.position();
+        let scale = m.scale_factor();
+        let win_w = match logical {
+            Some((lw, _)) => (lw * scale) as u32,
+            None => w
+                .outer_size()
+                .map(|s| s.width)
+                .unwrap_or_else(|_| (224.0 * scale) as u32),
+        };
+        let margin = (16.0 * scale) as i32;
+        let x = mp.x + ms.width as i32 - win_w as i32 - margin;
+        let y = mp.y + margin;
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+}
+
+/// Back-compat wrapper: park using the window's live size.
+fn park_minitab_top_right(w: &tauri::WebviewWindow) {
+    park_minitab(w, None);
+}
+
+/// "Shrink to widget": swap the full app window for the floating minitab.
+/// Shows + parks the minitab top-right FIRST so there is always an on-screen
+/// surface, *then* hides the main window — the user is never left staring at
+/// nothing. The minitab keeps whatever size/state it was last in (full card
+/// or collapsed puck), so window size and React state stay in sync. Recover
+/// via the minitab's "Open app" button, the Dock icon (macOS Reopen), or
+/// Ctrl/Cmd+Shift+Space.
+#[tauri::command]
+fn shrink_to_widget(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(mt) = app.get_webview_window("minitab") {
+        park_minitab_top_right(&mt);
+        mt.show().map_err(|e| format!("show minitab: {e}"))?;
+        let _ = mt.set_focus();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        main.hide().map_err(|e| format!("hide main: {e}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1223,6 +1445,18 @@ pub fn run() {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
+                    // Also re-summon the floating minitab if it was hidden.
+                    // This is the recovery path for the minitab's "hide"
+                    // (eye) button — the shortcut is the universal "bring
+                    // NeuroVault back" gesture. Showing an already-visible
+                    // minitab is a harmless no-op.
+                    if let Some(mt) = app.get_webview_window("minitab") {
+                        let visible = mt.is_visible().unwrap_or(false);
+                        if !visible {
+                            park_minitab_top_right(&mt);
+                            let _ = mt.show();
+                        }
+                    }
                     let _ = app.emit("quick-capture-shortcut", ());
                 })
                 .build(),
@@ -1324,6 +1558,20 @@ pub fn run() {
                  no Python sidecar — the MCP proxy is a thin HTTP forwarder."
             );
 
+            // `--minitab`: launch straight into the floating control (main
+            // window hidden). This is how the agent brings NeuroVault up
+            // visibly-but-unobtrusively: the backend runs, only the minitab
+            // shows. The user can Open app from there anytime.
+            if std::env::args().any(|a| a == "--minitab") {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.hide();
+                }
+                if let Some(mt) = app.get_webview_window("minitab") {
+                    park_minitab_top_right(&mt);
+                    let _ = mt.show();
+                }
+            }
+
             Ok(())
         })
         .manage(ServerState(Mutex::new(None)))
@@ -1332,7 +1580,10 @@ pub fn run() {
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
             hide_to_background, brain_storage_stats,
+            open_main_window, show_minitab, hide_minitab, set_minitab_collapsed,
+            minimize_main, shrink_to_widget,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
+            claude_code_config_path, register_claude_code_mcp,
             export_brain_as_zip,
             list_brains_offline, set_active_brain_offline,
             // Phase-4 Rust memory commands. Each one replaces an HTTP
