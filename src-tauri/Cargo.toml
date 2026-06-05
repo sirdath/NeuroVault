@@ -48,7 +48,7 @@ strip = "symbols"
 panic = "abort"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"

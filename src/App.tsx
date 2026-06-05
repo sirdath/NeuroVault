@@ -7,6 +7,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
 import { NeuralGraph } from "./components/NeuralGraph";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import { ContextMenu, type ContextMenuEntry } from "./components/ContextMenu";
 import { QuickCapture } from "./components/QuickCapture";
 import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
@@ -311,6 +312,76 @@ export default function App() {
     setView((v) => (v === "editor" ? "graph" : "editor"));
   }, []);
 
+  // Window-mode control (top-bar). One affordance, three ways to get the
+  // app out of the way: minimise to the Dock/taskbar, hide in the
+  // background, or shrink to the floating minitab widget. Each invokes a
+  // custom Rust command; the try/catch is the web/non-Tauri fallback.
+  const [winMenu, setWinMenu] = useState<{ x: number; y: number } | null>(null);
+  const winTriggerRef = useRef<HTMLButtonElement>(null);
+  const winInvoke = useCallback(async (cmd: string) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke(cmd);
+    } catch {
+      /* web fallback — nothing to do */
+    }
+  }, []);
+  // Show the platform-correct restore-shortcut hint on the Hide item.
+  const restoreHint = useMemo(
+    () =>
+      typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+        ? "⌃⇧Space"
+        : "Ctrl+Shift+Space",
+    []
+  );
+  const openWinMenu = useCallback(() => {
+    const r = winTriggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    // Right-align the menu under the trigger (ContextMenu min-w is 200px);
+    // its built-in viewport clamp keeps it on-screen on narrow windows.
+    setWinMenu({ x: r.right - 200, y: r.bottom + 6 });
+  }, []);
+  const winMenuItems: ContextMenuEntry[] = useMemo(
+    () => [
+      {
+        label: "Minimize",
+        onSelect: () => winInvoke("minimize_main"),
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
+            <path d="M5 19h14" />
+          </svg>
+        ),
+      },
+      {
+        label: "Hide in background",
+        hint: restoreHint,
+        onSelect: () => winInvoke("hide_to_background"),
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+            <path d="M2 2l20 20" />
+          </svg>
+        ),
+      },
+      { divider: true },
+      {
+        label: "Shrink to widget",
+        onSelect: () => winInvoke("shrink_to_widget"),
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="4 14 10 14 10 20" />
+            <polyline points="20 10 14 10 14 4" />
+            <line x1="14" y1="10" x2="21" y2="3" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+        ),
+      },
+    ],
+    [winInvoke, restoreHint]
+  );
+
   // Command palette — the ONLY way to access power features
   const brains = useBrainStore((s) => s.brains);
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
@@ -378,15 +449,22 @@ export default function App() {
         action: () => setSettingsOpen(true),
       },
       {
+        id: "window-minimize",
+        title: "Minimize window",
+        category: "Window",
+        action: () => winInvoke("minimize_main"),
+      },
+      {
         id: "hide-window",
         title: "Hide window (keep server running)",
-        category: "Action",
-        action: async () => {
-          try {
-            const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("hide_to_background");
-          } catch { /* web fallback */ }
-        },
+        category: "Window",
+        action: () => winInvoke("hide_to_background"),
+      },
+      {
+        id: "window-shrink-to-widget",
+        title: "Shrink to widget (floating minitab)",
+        category: "Window",
+        action: () => winInvoke("shrink_to_widget"),
       },
       {
         id: "help",
@@ -407,7 +485,7 @@ export default function App() {
           action: () => { void switchBrain(b.id); },
         })),
     ],
-    [saveNote, toggleView, brains, activeBrainId, switchBrain]
+    [saveNote, toggleView, brains, activeBrainId, switchBrain, winInvoke]
   );
 
   // Global keyboard shortcuts
@@ -658,25 +736,39 @@ export default function App() {
               {serverUp ? "connected" : "offline"}
             </span>
           </div>
+          {/* Window mode — minimise / hide / shrink-to-widget. Replaces the
+              old single hide button; opens a small menu (ContextMenu). */}
           <button
-            onClick={async () => {
-              try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("hide_to_background");
-              } catch {
-                // Web fallback — nothing to hide
-              }
-            }}
-            title="Hide window (server keeps running — restore with Ctrl+Shift+Space)"
+            ref={winTriggerRef}
+            onClick={() => (winMenu ? setWinMenu(null) : openWinMenu())}
+            title="Window options"
+            aria-haspopup="menu"
+            aria-expanded={winMenu !== null}
             className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
-            style={{ color: theme.textDim, background: "transparent" }}
+            style={{
+              color: winMenu ? theme.textMuted : theme.textDim,
+              background: winMenu ? theme.surface : "transparent",
+            }}
             onMouseEnter={(e) => { e.currentTarget.style.background = theme.surface; e.currentTarget.style.color = theme.textMuted; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = theme.textDim; }}
+            onMouseLeave={(e) => {
+              if (winMenu) return;
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = theme.textDim;
+            }}
           >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
-              <path d="M5 12h14" />
+            {/* window + chevron: "minimise, with options" */}
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 9h14" />
+              <path d="M8.5 14l3.5 3.5 3.5-3.5" />
             </svg>
           </button>
+          <ContextMenu
+            open={winMenu !== null}
+            x={winMenu?.x ?? 0}
+            y={winMenu?.y ?? 0}
+            items={winMenuItems}
+            onClose={() => setWinMenu(null)}
+          />
         </div>
       </div>
 

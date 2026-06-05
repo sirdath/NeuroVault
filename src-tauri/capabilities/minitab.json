@@ -1,0 +1,6 @@
+{
+  "identifier": "minitab",
+  "description": "Capability for the floating minitab control window — only what it needs to read server status and toggle the backend.",
+  "windows": ["minitab"],
+  "permissions": ["core:default"]
+}

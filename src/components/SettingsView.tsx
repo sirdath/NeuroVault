@@ -665,6 +665,35 @@ function ClaudeCodeMcpSection() {
   const [sidecarPath, setSidecarPath] = useState<string>("");
   const [copiedCli, setCopiedCli] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [registerMsg, setRegisterMsg] = useState<string>("");
+  const [registerOk, setRegisterOk] = useState(false);
+
+  // One-click: merge the neurovault server into ~/.claude.json (NOT
+  // ~/.claude/.mcp.json — Claude Code reads user-scope servers from the
+  // home-root file). The Rust command merges + writes atomically, so the
+  // user's existing auth tokens and other config are preserved.
+  const doRegister = async () => {
+    setRegistering(true);
+    setRegisterMsg("");
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<{ path: string; created: boolean; updated: boolean }>(
+        "register_claude_code_mcp",
+      );
+      setRegisterOk(true);
+      setRegisterMsg(
+        `${res.updated ? "Updated" : "Added"} neurovault in ~/.claude.json${
+          res.created ? " (created the file)" : ""
+        }. Restart your Claude Code session to load it.`,
+      );
+    } catch (e) {
+      setRegisterOk(false);
+      setRegisterMsg(`Couldn't register automatically: ${String(e)}`);
+    } finally {
+      setRegistering(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -718,30 +747,51 @@ function ClaudeCodeMcpSection() {
         <>
           <div>
             <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
-              Run the one-line command below so Claude Code (the terminal CLI) can call <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault in every project you open.
-            </p>
-            <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              Requires the <span className="font-mono">claude</span> CLI on your <span className="font-mono">PATH</span>. The registration lives in <span className="font-mono">~/.claude.json</span>. Restart your Claude Code session after registering.
+              Connect Claude Code (the terminal CLI) so it can <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault in every project. One click registers it in <span className="font-mono">~/.claude.json</span> — your existing login and config are preserved.
             </p>
           </div>
 
-          <div className="relative">
-            <pre
-              className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
-              style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
-            >{cliCommand}</pre>
+          <div className="flex items-center gap-3">
             <button
-              onClick={() => copy(cliCommand, setCopiedCli)}
-              className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
-              style={{
-                background: copiedCli ? "var(--nv-positive)" : "var(--nv-surface)",
-                color: copiedCli ? "var(--nv-bg)" : "var(--nv-text-muted)",
-                border: "1px solid var(--nv-border)",
-              }}
+              onClick={doRegister}
+              disabled={registering}
+              className="text-[12px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all disabled:opacity-50"
+              style={{ background: "var(--nv-accent)", color: "var(--nv-bg)", border: "1px solid var(--nv-accent)" }}
             >
-              {copiedCli ? "Copied" : "Copy command"}
+              {registering ? "Registering…" : "Register automatically"}
             </button>
+            {registerMsg && (
+              <span
+                className="text-[11px] font-[Geist,sans-serif]"
+                style={{ color: registerOk ? "var(--nv-positive)" : "var(--nv-negative)" }}
+              >
+                {registerMsg}
+              </span>
+            )}
           </div>
+
+          <details className="group">
+            <summary className="text-[11px] font-[Geist,sans-serif] cursor-pointer select-none" style={{ color: "var(--nv-text-dim)" }}>
+              Prefer the terminal? Show the <span className="font-mono">claude mcp add</span> command →
+            </summary>
+            <div className="relative mt-2">
+              <pre
+                className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
+                style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+              >{cliCommand}</pre>
+              <button
+                onClick={() => copy(cliCommand, setCopiedCli)}
+                className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
+                style={{
+                  background: copiedCli ? "var(--nv-positive)" : "var(--nv-surface)",
+                  color: copiedCli ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                  border: "1px solid var(--nv-border)",
+                }}
+              >
+                {copiedCli ? "Copied" : "Copy command"}
+              </button>
+            </div>
+          </details>
 
           <details className="group">
             <summary className="text-[11px] font-[Geist,sans-serif] cursor-pointer select-none" style={{ color: "var(--nv-text-dim)" }}>
