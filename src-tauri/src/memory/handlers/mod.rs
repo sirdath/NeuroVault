@@ -1179,7 +1179,10 @@ pub struct RecallQuery {
     as_of: Option<String>,
     #[serde(default)]
     include_observations: Option<bool>,
-    #[serde(default)]
+    // Accept `brain` as well as `brain_id`: the MCP proxy/forwarder sends
+    // `brain` on GET /api/recall, so without this alias a per-call brain
+    // override was silently ignored (recall always used the active brain).
+    #[serde(default, alias = "brain")]
     brain_id: Option<String>,
     /// Comma-separated list of scoring features to disable. Used by
     /// the eval harness to A/B-test which signals earn their weight.

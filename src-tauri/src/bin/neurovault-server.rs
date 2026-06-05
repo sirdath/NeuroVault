@@ -43,11 +43,14 @@ OPTIONS:
                        the way the desktop app spawns the server so the
                        VS Code extension can pass it without branching.
     --mcp-only         Run as a stdio MCP server (Model Context Protocol)
-                       instead of binding HTTP. Every tool call is
-                       forwarded over HTTP to the already-running desktop
-                       app on 127.0.0.1:8765, so this mode loads no model,
-                       opens no database, and never binds port 8765. This
-                       is what Claude Desktop / Claude Code spawn.
+                       instead of binding HTTP. Every tool call is forwarded
+                       over HTTP to a NeuroVault backend on 127.0.0.1:8765.
+                       If nothing is answering there, it AUTO-STARTS a
+                       headless backend (this binary, no --mcp-only) in the
+                       background and forwards to that — so an agent can
+                       bring NeuroVault up itself, with no desktop app and no
+                       user action. This is what Claude Desktop / Claude Code
+                       spawn.
     --port <N>         Bind to 127.0.0.1:N. Defaults to 8765 (matching
                        the desktop app and the MCP proxy).
     --mint-key <LABEL> Generate a new API key with the given label,
@@ -58,7 +61,18 @@ OPTIONS:
     -h, --help         Print this help and exit 0.
 
 ENVIRONMENT:
-    NEUROVAULT_HOME    Override ~/.neurovault as the data root.
+    NEUROVAULT_HOME      Override ~/.neurovault as the data root.
+    NEUROVAULT_API_URL   Backend base URL the --mcp-only shim forwards to.
+                         Default http://127.0.0.1:8765.
+    NEUROVAULT_AUTOSTART Set to 0/false/off to DISABLE the --mcp-only
+                         auto-start of a headless backend.
+    NEUROVAULT_BRAIN     Opt-in per-folder brain: scope an --mcp-only session
+                         to this brain (created if missing) so every tool call
+                         defaults to it. A `.neurovault` file in the working
+                         folder naming a brain does the same.
+    NEUROVAULT_MCP_TIER  Tool tier exposed by --mcp-only: minimal | lite
+                         (default) | standard | full. Also read from
+                         ~/.neurovault/mcp_tier.txt.
 ";
 
 #[tokio::main]

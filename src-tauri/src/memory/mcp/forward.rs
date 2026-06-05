@@ -27,15 +27,80 @@ const DEFAULT_TIMEOUT_SECS: f64 = 30.0;
 pub struct Forwarder {
     client: reqwest::Client,
     base: String,
+    /// When set (opt-in per-folder brain), this brain id is injected as the
+    /// default `brain` on every tool call that accepts one and didn't get an
+    /// explicit brain from the agent — so a session is scoped to its project
+    /// brain without touching the global active brain.
+    session_brain: Option<String>,
+}
+
+/// Resolve the backend base URL: `NEUROVAULT_API_URL` (trailing slash
+/// stripped) or the default loopback `http://127.0.0.1:8765`.
+pub fn resolve_base() -> String {
+    std::env::var("NEUROVAULT_API_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE.to_string())
+}
+
+/// Quick liveness probe: is a NeuroVault backend answering on `base`?
+pub async fn backend_healthy(base: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    matches!(
+        client.get(format!("{base}/api/health")).send().await,
+        Ok(r) if r.status().is_success()
+    )
+}
+
+/// Idempotently ensure a brain named `name` exists, returning its id.
+/// Looks up an existing brain by name first (so we don't create
+/// `project`, `project-2`, `project-3`, … across sessions), then creates
+/// it if absent. Returns `None` if the backend is unreachable.
+pub async fn ensure_brain(base: &str, name: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(0)
+        .build()
+        .ok()?;
+
+    // 1) Existing brain with this name?
+    if let Ok(resp) = client.get(format!("{base}/api/brains")).send().await {
+        if let Ok(Value::Array(arr)) = resp.json::<Value>().await {
+            for b in &arr {
+                if b.get("name").and_then(|v| v.as_str()) == Some(name) {
+                    if let Some(id) = b.get("id").and_then(|v| v.as_str()) {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) Create it.
+    if let Ok(resp) = client
+        .post(format!("{base}/api/brains"))
+        .json(&json!({ "name": name }))
+        .send()
+        .await
+    {
+        if let Ok(v) = resp.json::<Value>().await {
+            if let Some(id) = v.get("id").and_then(|val| val.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
 }
 
 impl Forwarder {
-    pub fn new() -> Self {
-        let base = std::env::var("NEUROVAULT_API_URL")
-            .ok()
-            .map(|s| s.trim().trim_end_matches('/').to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE.to_string());
+    pub fn new(session_brain: Option<String>) -> Self {
+        let base = resolve_base();
 
         let timeout = std::env::var("NEUROVAULT_PROXY_TIMEOUT")
             .ok()
@@ -57,7 +122,7 @@ impl Forwarder {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        Self { client, base }
+        Self { client, base, session_brain }
     }
 
     /// Forward one tool call. Always returns a JSON `Value` — backend
@@ -66,6 +131,21 @@ impl Forwarder {
     pub async fn call(&self, tool: &ToolDef, args: &Map<String, Value>) -> Value {
         let mut a = args.clone();
         apply_defaults(&mut a, &tool.input_schema);
+
+        // Per-folder brain scoping: default `brain` to the session brain for
+        // tools that accept one, unless the agent named a brain explicitly.
+        if let Some(sb) = &self.session_brain {
+            let accepts_brain = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|p| p.contains_key("brain"))
+                .unwrap_or(false);
+            let has_brain = a.get("brain").map(|v| !v.is_null()).unwrap_or(false);
+            if accepts_brain && !has_brain {
+                a.insert("brain".to_string(), Value::String(sb.clone()));
+            }
+        }
 
         match tool.call.special.as_deref() {
             Some("recall") => self.special_recall(&a).await,
