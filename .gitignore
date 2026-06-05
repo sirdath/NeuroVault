@@ -24,6 +24,11 @@ Thumbs.db
 # (per-target neurovault-server[.exe]); never committed.
 src-tauri/binaries/
 
+# Tauri-generated ACL/capability schemas — regenerated on every build from
+# tauri.conf.json + capabilities/*.json. Kept on disk for the local build,
+# never tracked (they churn on any capability change).
+src-tauri/gen/
+
 # Python server
 server/__pycache__/
 server/.venv/
