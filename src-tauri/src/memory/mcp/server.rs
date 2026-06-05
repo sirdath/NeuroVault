@@ -30,11 +30,14 @@ pub struct NeuroVaultMcp {
 }
 
 impl NeuroVaultMcp {
-    pub fn new() -> Self {
+    /// `session_brain` (opt-in per-folder brain) is the resolved brain id
+    /// every tool call is scoped to by default; `None` keeps today's
+    /// behaviour (the global active brain).
+    pub fn new(session_brain: Option<String>) -> Self {
         let tier_name = registry::resolve_tier();
         let allowed = registry::allowed_for_tier(&tier_name);
         Self {
-            forwarder: Forwarder::new(),
+            forwarder: Forwarder::new(session_brain),
             tools: registry::load_tools(),
             allowed,
             tier_name,
@@ -141,7 +144,7 @@ mod tests {
     #[test]
     fn full_tier_shows_all_tools() {
         std::env::set_var("NEUROVAULT_MCP_TIER", "full");
-        let s = NeuroVaultMcp::new();
+        let s = NeuroVaultMcp::new(None);
         assert_eq!(s.visible_tools().len(), 45);
         std::env::remove_var("NEUROVAULT_MCP_TIER");
     }
@@ -149,7 +152,7 @@ mod tests {
     #[test]
     fn lite_tier_shows_eight_tools() {
         std::env::set_var("NEUROVAULT_MCP_TIER", "lite");
-        let s = NeuroVaultMcp::new();
+        let s = NeuroVaultMcp::new(None);
         let tools = s.visible_tools();
         assert_eq!(tools.len(), 8);
         let names: HashSet<String> = tools.iter().map(|t| t.name.to_string()).collect();
@@ -161,7 +164,7 @@ mod tests {
 
     #[test]
     fn get_info_advertises_tools_and_instructions() {
-        let s = NeuroVaultMcp::new();
+        let s = NeuroVaultMcp::new(None);
         let info = s.get_info();
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.as_deref().unwrap_or("").contains("NeuroVault is a persistent"));
