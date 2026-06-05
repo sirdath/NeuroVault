@@ -10,6 +10,52 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.5.0] — 2026-06-05
+
+The open-sourcing release: the agent sets itself up, memory follows the
+folder you're working in, and a tiny floating widget keeps the backend a
+click away without the full window.
+
+### Added
+- **Agent auto-start.** The native MCP server (`neurovault-server
+  --mcp-only`) now health-checks `127.0.0.1:8765` on launch and, if the
+  backend isn't up, starts it detached — so a connected agent gets a live
+  memory backend without the user opening the app first. Opt out with
+  `NEUROVAULT_AUTOSTART=0`.
+- **Opt-in per-folder brains.** Point a working directory at its own brain
+  via a `.neurovault` file (or `NEUROVAULT_BRAIN`); the MCP forwarder
+  injects that brain into each call, so a project's memory stays scoped to
+  the project. Off unless you opt in.
+- **The minitab.** A small, frameless, always-on-top widget showing backend
+  status with Start/Pause and "Open app". It can **shrink to just the
+  logo** (a puck that resizes the OS window so it never eats clicks) or
+  **hide** entirely — the global `Ctrl/Cmd+Shift+Space` shortcut re-summons
+  it.
+- **Window-mode control.** A top-bar menu (and matching command-palette
+  entries) to **Minimize**, **Hide in background**, or **Shrink to widget**.
+  Every mode keeps a recovery path (Dock reopen on macOS, the global
+  shortcut, or the minitab's Open app button).
+- **One-click Claude Code MCP setup.** Settings → Connect Claude Code now
+  has a **Register automatically** button that merges `neurovault` into
+  `~/.claude.json` for you (CLI + JSON snippets remain as fallbacks).
+
+### Fixed
+- **Claude Code MCP registration targets the right file.** Registration now
+  writes user-scope `~/.claude.json` (`mcpServers.neurovault`) — not
+  `~/.claude/.mcp.json`, which Claude Code only reads for project-level
+  approval and never spawns servers from. The write **merges** into the
+  existing file (atomic temp-file + rename) and **refuses to overwrite a
+  malformed file**, so it can never wipe an existing Claude Code login.
+
+### Removed
+- **Leaner public repo.** Dropped ~70 files that never affected the build or
+  runtime: the unused iOS/Android/Windows-Store icon sets, Tauri's
+  build-generated `gen/` schemas (now git-ignored, regenerated locally),
+  two orphan brand images, internal design docs, and one-off dev scripts.
+  Roughly 2.1 MB lighter on a fresh clone.
+
+---
+
 ## [0.4.3] — 2026-06-03
 
 ### Fixed
