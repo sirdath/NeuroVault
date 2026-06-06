@@ -23,7 +23,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use super::handlers::*;
 
@@ -184,16 +184,30 @@ fn router() -> Router {
         .route("/api/todos/:id/complete", post(todos_complete))
         .route("/api/clusters", get(clusters_list))
         .route("/api/clusters/names", post(clusters_set_names))
-        // The Tauri webview's origin (`tauri://localhost` in production,
-        // `http://localhost:1420` in dev) is cross-origin to this server,
-        // so plain `fetch()` from the React side fails the preflight
-        // without these headers. Permissive CORS is safe here because
-        // the listener binds to 127.0.0.1 only — there is no LAN
-        // exposure, so the only origins that can ever reach this port
-        // are running on the same machine as the user.
+        // CORS. The server binds to 127.0.0.1 only, but "loopback-only" is
+        // NOT the same as "safe": a malicious page in the user's browser can
+        // still `fetch('http://127.0.0.1:8765/...')`, and DNS-rebinding can
+        // spoof the Host. The Origin is the axis that actually protects a
+        // brain's contents — so we only emit `Access-Control-Allow-Origin`
+        // for the surfaces NeuroVault ships:
+        //   - Tauri webview: tauri://localhost (macOS),
+        //     https://tauri.localhost (Windows), http://tauri.localhost (Linux)
+        //   - Vite dev server: http://localhost:1420
+        //   - VS Code extension webview: vscode-webview://<dynamic-id>
+        // An arbitrary web origin gets no ACAO header and so can't read a
+        // response. Non-browser clients (the MCP forwarder, curl, agents you
+        // build) send no Origin and bypass CORS entirely — unaffected.
+        // Methods/headers stay permissive; the origin is what matters.
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
+                .allow_origin(AllowOrigin::predicate(|origin, _req| {
+                    let o = origin.as_bytes();
+                    o == b"tauri://localhost"
+                        || o == b"https://tauri.localhost"
+                        || o == b"http://tauri.localhost"
+                        || o == b"http://localhost:1420"
+                        || o.starts_with(b"vscode-webview://")
+                }))
                 .allow_methods(Any)
                 .allow_headers(Any),
         )

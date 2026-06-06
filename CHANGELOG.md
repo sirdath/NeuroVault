@@ -47,6 +47,16 @@ click away without the full window.
   existing file (atomic temp-file + rename) and **refuses to overwrite a
   malformed file**, so it can never wipe an existing Claude Code login.
 
+### Security
+- **CORS is now scoped to NeuroVault's own surfaces.** The loopback HTTP
+  server (`127.0.0.1:8765`) previously sent `Access-Control-Allow-Origin: *`,
+  so a malicious page in the user's browser could read a brain's contents via
+  `fetch()`. It now only allows the app's own origins — the Tauri webview
+  (`tauri://localhost`, `https://tauri.localhost`, `http://tauri.localhost`),
+  the Vite dev server, and the VS Code extension webview
+  (`vscode-webview://…`). Non-browser clients (the MCP forwarder, your own
+  agents) send no `Origin` and are unaffected.
+
 ### Removed
 - **Leaner public repo.** Dropped ~70 files that never affected the build or
   runtime: the unused iOS/Android/Windows-Store icon sets, Tauri's
