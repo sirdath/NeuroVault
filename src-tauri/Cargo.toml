@@ -88,7 +88,7 @@ rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
 
 # ONNX Runtime inference + text embedding (Phase 3). fastembed-rs
 # downloads the exact same BGE-small-en-v1.5 model the Python side
-# uses, into the same ~/.cache/fastembed/ directory — zero re-download
+# uses, into the same ~/.neurovault/.fastembed_cache/ directory — zero re-download
 # on first Rust invocation for existing users.
 fastembed = "4"
 

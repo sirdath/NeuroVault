@@ -2,7 +2,7 @@
 //!
 //! Port of `server/neurovault_server/embeddings.py`. Same model
 //! (`BAAI/bge-small-en-v1.5`), same 384 dims, same on-disk ONNX cache
-//! under `~/.cache/fastembed/`. Existing Python installs have the
+//! under `~/.neurovault/.fastembed_cache/`. Existing Python installs have the
 //! weights already downloaded; Rust picks them up on first `encode()`
 //! with no extra download.
 //!
@@ -258,7 +258,7 @@ mod tests {
 
     // These tests reach the network on first run to download the ONNX
     // model. Mark them `#[ignore]` so CI that doesn't pre-populate
-    // ~/.cache/fastembed/ skips them — run with `cargo test -- --ignored`
+    // ~/.neurovault/.fastembed_cache/ skips them — run with `cargo test -- --ignored`
     // once the model is cached locally.
 
     #[test]

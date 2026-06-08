@@ -50,7 +50,7 @@ The backend binds `127.0.0.1:8765`. If the status reads **offline**:
 ## First recall/ingest is slow
 
 On first use NeuroVault downloads the embedding model
-(BGE-small-en-v1.5, ~90 MB) to `~/.cache/fastembed/`. That's a one-time
+(BGE-small-en-v1.5, ~90 MB) to `~/.neurovault/.fastembed_cache/`. That's a one-time
 download — subsequent calls are fast (embedding a note ≈ 20 ms). If it seems
 stuck, check your network; the download is from Hugging Face.
 
@@ -126,7 +126,7 @@ recoverable:
 ## Uninstall
 
 Removing the app does **not** delete your data. To remove everything, also
-delete `~/.neurovault/` (your notes!) and the model cache `~/.cache/fastembed/`.
+delete `~/.neurovault/` (your notes!) and the model cache `~/.neurovault/.fastembed_cache/`.
 Back up `~/.neurovault/brains/` first if you might want your notes later.
 
 ---

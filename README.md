@@ -201,7 +201,7 @@ npx tauri build
 
 **First run downloads** (once, then cached — instant after that):
 
-- the embedding model **BGE-small-en-v1.5** (~90 MB) to `~/.cache/fastembed/`, on first ingest/recall.
+- the embedding model **BGE-small-en-v1.5** (~90 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
 
 The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. On Intel macOS, run `npx tauri build` on an Intel Mac to get a native `.dmg`.
 

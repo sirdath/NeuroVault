@@ -78,7 +78,7 @@ npx tauri dev          # or: make dev
 - Tauri recompiles + restarts the Rust layer on save (a few seconds).
 
 First run downloads the embedding model (BGE-small-en-v1.5, ~90 MB) to
-`~/.cache/fastembed/` — once, then cached.
+`~/.neurovault/.fastembed_cache/` — once, then cached.
 
 ## Tests
 
