@@ -10,6 +10,35 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.5.1] — 2026-06-08
+
+### Fixed
+- **Wikilinks now connect across parenthetical title suffixes.** A short
+  `[[the run]]` link silently failed to reach a note titled
+  "the run (produces locked dataset)" — the exact-title match never hit, so
+  no graph edge formed and `related` came up empty. Resolution is now a
+  cascade: exact title, then the base title with a trailing `"(...)"` suffix
+  ignored — but only when exactly one note shares that base (it never guesses
+  between two; use the full title to disambiguate). Fixed in the backend and
+  in both frontend resolvers (editor preview + the disk-graph fallback).
+
+### Added
+- **`rebuild_wikilinks` tool** (full tier). Per-note ingest can only link to
+  notes that already exist, so a link to a note written *later* never
+  connects. This re-resolves every link across the whole brain in one pass —
+  fixing forward references and previously-broken links. Call it after
+  writing a cross-linked set of notes, then verify with `related`.
+- **One-click auto-update is now active.** v0.5.0 shipped the updater plumbing
+  but inert; v0.5.1 carries the signed-update endpoint, so the top-bar
+  **Update** pill downloads + installs in place (v0.5.1 and later).
+
+### Changed
+- CI no longer builds an Intel-Mac (`x86_64`) installer — GitHub's Intel
+  runners are unavailable and the job only ever timed out. Intel-Mac users
+  build from source (see the README).
+
+---
+
 ## [0.5.0] — 2026-06-05
 
 The open-sourcing release: the agent sets itself up, memory follows the
