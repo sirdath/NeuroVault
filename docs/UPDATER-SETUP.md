@@ -1,19 +1,33 @@
-# Enabling one-click auto-update
+# One-click auto-update
 
-NeuroVault already ships the **plumbing** for in-app updates: the
+> **Status: ENABLED** (since v0.5.x). `tauri.conf.json` carries the updater
+> public key + a `latest.json` endpoint, `release.yml` signs every build and
+> attaches `latest.json` (`includeUpdaterJson`), and the CI secrets
+> `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are set.
+> The top-bar **Update** pill now *downloads + installs in place* instead of
+> opening the release page.
+>
+> **Forward-looking:** an installed app auto-updates only if *its own* build
+> already had the endpoints (v0.5.x onward). Anyone on a pre-updater build
+> updates manually one last time.
+>
+> **Back up the key (do this):** the private signing key lives **only** in
+> `~/.tauri/neurovault-updater.key` (password in `~/.tauri/neurovault-updater.pass`)
+> and in the two repo secrets — it is never committed. Save both files to a
+> password manager. Losing them means you can't sign future updates and must
+> reset the pubkey (breaking auto-update for already-installed apps). To
+> rotate: re-run step 1, replace the pubkey in `tauri.conf.json`, update the
+> two secrets.
+
+NeuroVault ships the **plumbing** for in-app updates: the
 `tauri-plugin-updater` + `tauri-plugin-process` plugins are registered,
 the capability permissions are granted, and the UI (the top-bar **Update**
-pill and **Settings → Updates**) calls the native updater first.
+pill and **Settings → Updates**) calls the native updater first — falling
+back to *opening the GitHub release page* only if it can't reach a signed
+manifest.
 
-But it's **inert** today, on purpose. There is no `plugins.updater` block
-in `tauri.conf.json` and no signing keypair, so the native `check()` does
-nothing and the UI gracefully falls back to *opening the GitHub release
-page* for a manual download. That fallback is the right behaviour while
-the installers are unsigned.
-
-This doc is the checklist to flip on true download-and-install updates.
-It's four steps and changes the release process, so it's deliberately a
-manual decision.
+The steps below are the checklist that armed it, kept for reference and key
+rotation.
 
 > [!IMPORTANT]
 > The updater's signing keypair is **separate from OS code-signing**

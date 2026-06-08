@@ -52,8 +52,10 @@
       }
     },
     "updater": {
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRBNjRGMTFCMkY4NTVCQkIKUldTN1c0VXZHL0ZrU29aVzZXR2JyUjcwc2cwVUd4bHZxMnVNSEtGOU83dis4Y1FwSG44Ky92ekcK",
+      "endpoints": [
+        "https://github.com/sirdath/NeuroVault/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {
