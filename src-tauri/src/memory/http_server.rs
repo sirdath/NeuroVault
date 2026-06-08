@@ -137,6 +137,7 @@ fn router() -> Router {
         .route("/api/inbox/done", post(inbox_done))
         .route("/api/import_folder", post(import_folder))
         .route("/api/reindex_embeddings", post(reindex_embeddings))
+        .route("/api/rebuild_wikilinks", post(rebuild_wikilinks))
         .route("/api/list_images", get(list_images))
         .route("/api/clutter", get(clutter_report))
         .route("/api/engrams/delete", post(engrams_delete))

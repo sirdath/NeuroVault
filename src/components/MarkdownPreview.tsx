@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useNoteStore } from "../stores/noteStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { resolveWikiTarget } from "../lib/wikilink";
 import { WikiLink } from "./WikiLink";
 
 /**
@@ -54,7 +55,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
       e.preventDefault();
       e.stopPropagation();
       const title = decodeURIComponent(href.slice("#wiki:".length));
-      const match = notes.find((n) => n.title.toLowerCase() === title.toLowerCase());
+      const match = resolveWikiTarget(notes, title);
       if (match) selectNote(match.filename);
     }
     // Real URLs (http/https) fall through — Tauri will handle via its webview
@@ -87,9 +88,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
             a: ({ node, href, children, ...props }) => {
               if (href?.startsWith("#wiki:")) {
                 const target = decodeURIComponent(href.slice("#wiki:".length));
-                const match = notes.find(
-                  (n) => n.title.toLowerCase() === target.toLowerCase(),
-                );
+                const match = resolveWikiTarget(notes, target);
                 return (
                   <WikiLink
                     title={target}

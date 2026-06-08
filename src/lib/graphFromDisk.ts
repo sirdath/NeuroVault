@@ -15,6 +15,7 @@
 
 import * as tauri from "./tauri";
 import type { GraphNode, GraphEdge } from "./api";
+import { stripTrailingParen } from "./wikilink";
 
 /** Match [[Target]] or [[Target|display]] — captures the target title. */
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
@@ -55,6 +56,10 @@ export async function buildGraphFromDisk(): Promise<DiskGraph> {
   // Title → filename index, built in one pass so we can resolve wikilinks
   // without re-scanning the whole list per note.
   const titleToFilename = new Map<string, string>();
+  // Base title (parenthetical stripped) → filenames, so a short [[link]]
+  // resolves to "title (suffix)" when exactly one note shares the base.
+  // Mirrors the backend resolver (ingest.rs resolve_wikilink_target).
+  const baseToFilenames = new Map<string, string[]>();
   const fileToNode = new Map<string, GraphNode>();
 
   // First pass: nodes. Read each file for title + folder attribution.
@@ -79,6 +84,10 @@ export async function buildGraphFromDisk(): Promise<DiskGraph> {
     } as GraphNode & { folder: string };
     fileToNode.set(filename, node);
     titleToFilename.set(title.toLowerCase(), filename);
+    const base = stripTrailingParen(title.toLowerCase());
+    const arr = baseToFilenames.get(base);
+    if (arr) arr.push(filename);
+    else baseToFilenames.set(base, [filename]);
   }
 
   // Second pass: resolve [[wikilinks]] → edges. Case-insensitive title
@@ -93,7 +102,13 @@ export async function buildGraphFromDisk(): Promise<DiskGraph> {
     while ((m = WIKILINK_RE.exec(content)) !== null) {
       const rawTarget = m[1]?.trim();
       if (!rawTarget) continue;
-      const targetFile = titleToFilename.get(rawTarget.toLowerCase());
+      const lower = rawTarget.toLowerCase();
+      let targetFile = titleToFilename.get(lower);
+      if (!targetFile) {
+        // Fall back to a unique base-title match (parenthetical-insensitive).
+        const cands = baseToFilenames.get(stripTrailingParen(lower));
+        if (cands && cands.length === 1) targetFile = cands[0];
+      }
       if (!targetFile || targetFile === filename) continue;
       // Undirected pair key so we don't add both directions.
       const a = filename < targetFile ? filename : targetFile;
