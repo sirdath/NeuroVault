@@ -192,7 +192,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Updater signing. With these present, `tauri build` emits a `.sig`
+          # Updater signing. With these present `tauri build` emits a `.sig`
           # next to each updater artifact and tauri-action rolls every
           # platform into a single `latest.json` (includeUpdaterJson below),
           # which the in-app updater fetches to verify + install updates.
@@ -200,7 +200,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: --target ${{ matrix.rust-target }}
+          # `--config src-tauri/updater-ci.conf.json` turns on
+          # createUpdaterArtifacts for the CI build ONLY (merged via the CLI
+          # --config flag — the bundler ignores the TAURI_CONFIG env var). We
+          # deliberately keep createUpdaterArtifacts OUT of the committed
+          # tauri.conf.json: with a pubkey set, enabling it makes a *local*
+          # keyless `tauri build` fail. So CI signs; local builds stay simple.
+          args: --target ${{ matrix.rust-target }} --config src-tauri/updater-ci.conf.json
           tagName: ${{ github.ref_name }}
           includeUpdaterJson: true
           releaseName: "NeuroVault ${{ github.ref_name }}"
