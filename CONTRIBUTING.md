@@ -1,175 +1,183 @@
 # Contributing to NeuroVault
 
 Thanks for the interest. This document covers the practical stuff:
-what the code is organized as, how to get a dev loop running, how to
+how the code is organized, how to get a dev loop running, and how to
 send a PR that gets merged quickly.
 
-If you're here to file a bug, look at [the issue templates](.github/ISSUE_TEMPLATE/).
+If you're here to file a bug, see [the issue templates](.github/ISSUE_TEMPLATE/).
 For anything security-related, see [SECURITY.md](SECURITY.md).
+
+> **You do NOT need Python.** NeuroVault's backend and MCP server are
+> native **Rust**, running in-process inside the Tauri app. The `server/`
+> Python tree is archived (it was the original prototype) and is not part
+> of the build, the app, or the MCP path.
 
 ---
 
 ## What lives where
 
 ```
-engram/
-├── server/                  # Python MCP server (FastMCP)
-│   ├── neurovault_server/   # Module — tools, retrieval, ingest, intelligence
-│   ├── tests/               # pytest — 257 tests as of v0.1.0
-│   └── neurovault_server.spec  # PyInstaller spec for the sidecar binary
+NeuroVault/
 ├── src/                     # Frontend — React 19 + TypeScript + Vite
-│   ├── components/
-│   └── stores/              # Zustand state
-├── src-tauri/               # Tauri 2 desktop shell (Rust)
-│   ├── src/lib.rs           # Sidecar spawn, FS commands, hotkeys
-│   └── binaries/            # Where the sidecar .exe lives after build
+│   ├── components/          #   editor · graph · sidebar · settings · minitab
+│   ├── stores/              #   Zustand state
+│   └── lib/                 #   API client, config, wikilink resolver, updater
+├── src-tauri/               # Tauri 2 desktop shell + the whole backend (Rust)
+│   ├── src/lib.rs           #   Tauri commands, windows, hotkeys, server lifecycle
+│   ├── src/bin/             #   neurovault-server (the MCP stdio binary)
+│   └── src/memory/          #   the memory engine:
+│       ├── ingest.rs        #     chunk → embed → entities → links → BM25
+│       ├── retriever.rs     #     hybrid recall (vec + BM25 + graph → RRF → rerank)
+│       ├── http_server.rs   #     axum server on 127.0.0.1:8765 (the /api/* surface)
+│       └── mcp/             #     the rmcp MCP server + data-driven tool registry
+│           ├── tools.json   #       the ~46 tools (name, schema, /api/* mapping)
+│           ├── registry.rs  #       loads tools.json + the tier allow-lists
+│           └── forward.rs   #       forwards each MCP call over loopback HTTP
+├── server/                  # ARCHIVED Python prototype (not built, not shipped)
+├── scripts/                 # build helpers (stage-sidecar, make-app-icon, …)
+├── eval/                    # retrieval eval set + baselines (run_eval.py)
+├── docs/                    # in-repo docs (HOW-NEUROVAULT-WORKS, api, troubleshooting…)
 ├── CHANGELOG.md             # Keep-a-Changelog
-├── CLAUDE.md                # Project spec + Claude-as-agent usage rules
-├── PRIVACY.md               # What we do/don't send off your machine
-├── SECURITY.md              # How to report a vuln + response SLA
+├── CLAUDE.md                # project spec + Claude-as-agent usage rules
+├── PRIVACY.md  · SECURITY.md
 └── Makefile                 # dev / test / build targets
 ```
 
-Markdown vaults are the **source of truth** for user data; the SQLite
-DB is a rebuildable index. That's the core invariant — features that
-break it (e.g. data that only exists in the DB, never in a markdown
-file) probably don't fit.
+Markdown vaults (`~/.neurovault/brains/<id>/vault/*.md`) are the **source of
+truth** for user data; `brain.db` is a rebuildable index. That's the core
+invariant — features that break it (data that only exists in the DB, never
+in a markdown file) probably don't fit.
 
 ## Setup
 
-Prerequisites:
-- **Python 3.13+** with [uv](https://docs.astral.sh/uv/)
-- **Node.js 20+**
-- **Rust** (for desktop builds only — `rustup default stable`)
+Prerequisites — **just two**:
 
-Clone + install once:
+- **Node.js 20+**
+- **Rust** (`rustup default stable`)
+
+(Python is *not* required. It's only relevant if you specifically work on the
+archived helpers in `server/`.)
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git
 cd NeuroVault
-make install
+npm install
 ```
-
-That runs `npm install` + `uv sync --extra dev` inside `server/`.
 
 ## Dev loop
 
-You'll typically want two terminals open.
-
-**Terminal 1 — server:**
-
-```bash
-make dev-server
-```
-
-Starts the MCP + HTTP server (FastMCP + uvicorn) on `127.0.0.1:8765`
-via `uv run python -m neurovault_server`. Source-mode, so edits to
-`server/neurovault_server/*.py` take effect on restart.
-
-Add `--http-only` to skip MCP stdio if you're just hitting the HTTP
-API for testing. The app and tests both use HTTP.
-
-**Terminal 2 — desktop app:**
+**One** terminal — the Tauri shell hosts the React frontend **and** the
+in-process Rust backend (the axum HTTP server on `127.0.0.1:8765`). There is
+no separate server process to start.
 
 ```bash
-make dev-app
+npx tauri dev          # or: make dev
 ```
 
-Shorthand for `cargo tauri dev`. Vite HMR handles frontend code;
-Tauri hot-restarts the Rust layer on save.
+- Vite HMR handles frontend code (instant).
+- Tauri recompiles + restarts the Rust layer on save (a few seconds).
 
-**Tests**
+First run downloads the embedding model (BGE-small-en-v1.5, ~90 MB) to
+`~/.cache/fastembed/` — once, then cached.
+
+## Tests
 
 ```bash
-make test       # full suite, ~60 sec (includes reranker tests that load a model)
-make test-fast  # ~6 sec, skips reranker
-make typecheck  # tsc --noEmit
+cd src-tauri && cargo test --no-default-features    # Rust unit + integration
+npx tsc --noEmit                                     # TypeScript typecheck
+npm run build                                        # frontend build (catches more)
 ```
 
-Per-file: `cd server && uv run pytest tests/test_todos.py -v`.
+> Note: a few `recall_cache` tests share global state and can flake under
+> parallel execution; `cargo test --no-default-features -- --test-threads=1`
+> is the deterministic run.
+
+Tests are part of every deliverable. If you change an MCP tool, add/adjust a
+test for the new shape (the tool count is asserted in
+`src-tauri/src/memory/mcp/registry.rs`). If you change the UI, at minimum make
+`npm run build` and `tsc` pass.
+
+## Adding an MCP tool
+
+Tools are **data-driven** — you usually don't write a new handler from
+scratch:
+
+1. Add an HTTP endpoint + handler in `src-tauri/src/memory/handlers/` and a
+   route in `http_server.rs` (mirror an existing one, e.g. `reindex_embeddings`).
+2. Add a tool entry to `src-tauri/src/memory/mcp/tools.json` (name, description,
+   `input_schema`, and a `call` block mapping it to your `/api/*` route).
+3. New tools are `full`-tier by default. To put a tool in a lower tier, add its
+   name to the allow-list in `registry.rs`.
+4. Update the tool-count assertions in `registry.rs` / `mcp/server.rs`.
 
 ## PR flow
 
 1. Fork, branch off `main`. Please don't PR from `main` itself.
-2. Keep the diff small. A 200-line PR gets merged; a 2000-line PR
-   gets a redesign request. Split into multiple PRs if the scope
-   grew.
-3. Tests are part of every deliverable. If you change an MCP tool,
-   add a test that exercises the new shape. If you change the UI,
-   at minimum verify the build (`npm run build`) and typecheck pass.
-4. Fill out the [PR template](.github/PULL_REQUEST_TEMPLATE.md) —
-   the checklist prompts are the things a reviewer would otherwise
-   ask you to fix.
-5. CI must be green. GitHub Actions runs `pytest`, `tsc`,
-   `cargo check`, and the full Tauri build on the three release
-   targets. A red build blocks merge.
-6. If your PR is user-visible, add an `Added / Changed / Fixed`
-   line under `[Unreleased]` in `CHANGELOG.md`. The release pipeline
-   extracts this into GitHub Release notes automatically.
-7. Squash or keep commits — we squash on merge either way, but if
-   your history tells a useful story, keep it.
+2. Keep the diff small. A 200-line PR gets merged; a 2000-line PR gets a
+   redesign request. Split if scope grew.
+3. Tests pass (Rust + tsc + build). CI runs `cargo check`/test, `tsc`, and the
+   full Tauri build on the release targets — a red build blocks merge.
+4. Fill out the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
+5. If your change is user-visible, add an `Added / Changed / Fixed` line to
+   `CHANGELOG.md`. The release pipeline extracts it into the GitHub Release notes.
 
 ## Commit message style
 
-Loose conventional-commits, plus a body that says WHY. Subject in
-imperative mood, no trailing period, under 72 chars.
+Loose conventional-commits, plus a body that says WHY. Subject in imperative
+mood, no trailing period, under 72 chars.
 
 ```
 feat(mcp): add check_duplicate tool for semantic dedup
 
-Mem0's conflict detector pattern. Pure read-only similarity check
-so agents can decide update-vs-create BEFORE writing a duplicate.
+Pure read-only similarity check so agents can decide update-vs-create
+BEFORE writing a duplicate.
 ```
 
-Skip `chore(ci)` and similar prefixes if they don't help — honesty
-beats taxonomy.
+Skip `chore(ci)`-style prefixes if they don't help — honesty beats taxonomy.
 
 ## What we'll merge quickly
 
-- Bug fixes with a failing-test-that-now-passes
-- Documentation corrections
-- Small UX polish that keeps the theme-variable conventions
-- New MCP tools that fit the core / power / code / research tier
-  taxonomy (see `@tiered` in `server.py`)
-- Performance improvements with a before/after measurement
+- Bug fixes with a failing-test-that-now-passes.
+- Documentation corrections.
+- Small UX polish that keeps the theme-variable conventions.
+- New MCP tools that fit the tier taxonomy (`tools.json` + `registry.rs`).
+- Performance improvements with a before/after measurement.
 
 ## What we'll push back on
 
-- Changes that break the "markdown is source of truth, DB is an
-  index" invariant
-- Telemetry of any kind without an opt-in story agreed in the issue
-  first
-- New heavyweight dependencies (adds > 10 MB to the installer or > 5
-  transitive crates) without a strong case
-- Large refactors without a prior issue to align scope
+- Changes that break the "markdown is source of truth, DB is an index" invariant.
+- Telemetry of any kind without an opt-in story agreed in the issue first.
+- New heavyweight dependencies (adds > 10 MB to the installer or several
+  transitive crates) without a strong case.
+- Large refactors without a prior issue to align scope.
 
-## Running from source (for contributors who don't want to install the app)
+## Running the MCP server from source
 
-If you want to test without running the Tauri app at all, point
-Claude Desktop at the source-mode server via your `~/.claude/settings.json`:
+To test the MCP surface without installing the app, build the server binary
+and point your agent at it (native Rust — no Python):
 
-```json
-{
-  "mcpServers": {
-    "neurovault": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/NeuroVault/server", "run", "python", "-m", "neurovault_server"]
-    }
-  }
-}
+```bash
+cd src-tauri && cargo build --bin neurovault-server
+# binary at: src-tauri/target/debug/neurovault-server
 ```
 
-Restart Claude Desktop. You'll see the full MCP tool surface within
-a few seconds (core tier by default — set `NEUROVAULT_MCP_TIER=power`
-in the env block for the wider set).
+Register it with Claude Code (writes `~/.claude.json`):
+
+```bash
+claude mcp add --scope user neurovault \
+  /absolute/path/to/src-tauri/target/debug/neurovault-server -- --mcp-only
+```
+
+It forwards to the HTTP server on `127.0.0.1:8765` and auto-starts the backend
+if it isn't running. Set `NEUROVAULT_MCP_TIER=full` in the env for the whole
+tool surface.
 
 ## Code of Conduct
 
 By participating, you agree to uphold the [Contributor Covenant](CODE_OF_CONDUCT.md).
-Short version: be kind, assume good faith, criticize ideas not
-people.
+Short version: be kind, assume good faith, criticize ideas not people.
 
 ## Questions
 
-Open a discussion thread, a draft PR with `[WIP]` in the title, or
-ask in an existing issue. No formal office hours yet.
+Open a discussion thread, a draft PR with `[WIP]` in the title, or ask in an
+existing issue.
