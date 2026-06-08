@@ -2540,6 +2540,49 @@ pub async fn reindex_embeddings(
     Ok(Json(result))
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct RebuildWikilinksBody {
+    #[serde(default)]
+    brain: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct RebuildWikilinksResult {
+    brain_id: String,
+    engrams_processed: u32,
+    links_resolved: u32,
+    elapsed_ms: u64,
+}
+
+/// Re-resolve every `[[wikilink]]` in the brain in one pass. Fixes links
+/// that couldn't connect at write time — forward references (target written
+/// later) and titles with a parenthetical suffix the short link omits.
+pub async fn rebuild_wikilinks(
+    _s: State<ServerState>,
+    body: Option<Json<RebuildWikilinksBody>>,
+) -> Result<Json<RebuildWikilinksResult>, ApiError> {
+    let body = body.map(|j| j.0).unwrap_or_default();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<RebuildWikilinksResult, MemoryError> {
+            let started = std::time::Instant::now();
+            let id = resolve_brain_id(body.brain.as_deref())?;
+            let db = super::db::open_brain(&id)?;
+            let (engrams_processed, links_resolved) = super::ingest::rebuild_wikilinks(&db)?;
+            super::recall_cache::invalidate_brain(&id);
+            Ok(RebuildWikilinksResult {
+                brain_id: id,
+                engrams_processed,
+                links_resolved,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            })
+        },
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
 // ---------------------------------------------------------------------------
 // Clutter report — surfaces engrams that look like noise so an agent
 // can review and remove. Four categories, one SQL query each:

@@ -712,27 +712,95 @@ fn update_entity_links(db: &BrainDb, engram_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Strip a single trailing parenthetical group from a title, e.g.
+/// `"finalize the run (produces locked dataset)"` -> `"finalize the run"`.
+/// Returns the input trimmed when there's no trailing `"(...)"`. Used so a
+/// short wikilink resolves to a note whose title carries a disambiguating
+/// suffix (and the reverse).
+fn strip_trailing_paren(s: &str) -> String {
+    let t = s.trim();
+    if t.ends_with(')') {
+        if let Some(idx) = t.rfind(" (") {
+            return t[..idx].trim().to_string();
+        }
+    }
+    t.to_string()
+}
+
+/// Resolve a `[[wikilink]]` target (already lowercased) to an engram id.
+///
+/// A cascade — each step requires an UNAMBIGUOUS hit so a link never
+/// invents a wrong edge:
+///   1. exact title (case-insensitive) — the common path;
+///   2. base-title match — ignore a trailing `"(...)"` suffix on either
+///      side, so `[[the run]]` connects to "the run (produces locked
+///      dataset)". Only resolves when exactly one note shares that base
+///      title; two notes with the same base stay unlinked (the author must
+///      use the full title to disambiguate).
+fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<String> {
+    // 1. Exact (case-insensitive).
+    if let Ok(id) = conn.query_row(
+        "SELECT id FROM engrams WHERE lower(title) = ?1 AND state != 'dormant'",
+        [target],
+        |r| r.get::<_, String>(0),
+    ) {
+        return Some(id);
+    }
+
+    // 2. Base-title (parenthetical-insensitive), unique matches only.
+    let base = strip_trailing_paren(target);
+    if base.is_empty() {
+        return None;
+    }
+    // SQL prefilter, then confirm the stripped base matches exactly in Rust.
+    // Escape LIKE wildcards so a literal % or _ in a title can't widen it.
+    let esc = base.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like = format!("{esc} (%");
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, lower(title) FROM engrams
+             WHERE state != 'dormant'
+               AND (lower(title) = ?1 OR lower(title) LIKE ?2 ESCAPE '\\')",
+        )
+        .ok()?;
+    let rows = stmt
+        .query_map(params![&base, &like], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .ok()?;
+    let mut hit: Option<String> = None;
+    for row in rows.flatten() {
+        let (id, title) = row;
+        if strip_trailing_paren(&title) == base {
+            if hit.is_some() {
+                return None; // ambiguous — two notes share this base title
+            }
+            hit = Some(id);
+        }
+    }
+    hit
+}
+
 /// Parse `[[wikilinks]]` (including typed forms) and create bidirectional
 /// `engram_links` rows for each one whose target resolves to a
-/// non-dormant engram. Mirrors `_process_wikilinks`.
-fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<()> {
+/// non-dormant engram. Mirrors `_process_wikilinks`. Returns the number of
+/// links that resolved to a real engram (used by the bulk rebuild).
+fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<u32> {
     let typed = extract_typed_wikilinks(content);
     if typed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let mut resolved = 0u32;
     let conn = db.lock();
     for (target_title, link_type) in typed {
-        let target_id: Option<String> = conn
-            .query_row(
-                "SELECT id FROM engrams
-                 WHERE lower(title) = ?1 AND state != 'dormant'",
-                [&target_title],
-                |r| r.get::<_, String>(0),
-            )
-            .ok();
-        let Some(target_id) = target_id else {
+        let Some(target_id) = resolve_wikilink_target(&conn, &target_title) else {
             continue;
         };
+        // Never link a note to itself (a base-title match can resolve a
+        // short link back to the note that carries the suffixed title).
+        if target_id == engram_id {
+            continue;
+        }
         let resolved_type = link_type.clone().unwrap_or_else(|| "manual".to_string());
         if let Some(ref lt) = link_type {
             if !LINK_TYPES.iter().any(|k| *k == lt.as_str()) {
@@ -757,8 +825,34 @@ fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<()>
              VALUES (?1, ?2, 1.0, ?3)",
             params![&target_id, engram_id, &resolved_type],
         )?;
+        resolved += 1;
     }
-    Ok(())
+    Ok(resolved)
+}
+
+/// Re-resolve `[[wikilinks]]` across the WHOLE brain. Per-note ingest can
+/// only link to engrams that already exist, so a link to a note written
+/// later never connects, and the parenthetical-title fix doesn't reach
+/// notes ingested before it shipped. Running resolution over every note at
+/// once — when all titles are present — fixes both: forward references and
+/// previously-broken links. Idempotent (edges are INSERT OR REPLACE).
+/// Returns `(engrams_processed, links_resolved)`.
+pub fn rebuild_wikilinks(db: &BrainDb) -> Result<(u32, u32)> {
+    let rows: Vec<(String, String)> = {
+        let conn = db.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, content FROM engrams WHERE state != 'dormant' ORDER BY id",
+        )?;
+        let mapped = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        mapped.filter_map(std::result::Result::ok).collect()
+    };
+    let mut links = 0u32;
+    for (id, content) in &rows {
+        links += process_wikilinks(db, id, content)?;
+    }
+    Ok((rows.len() as u32, links))
 }
 
 /// Re-embed a single engram in place: re-chunk its content, batch-
@@ -1119,5 +1213,57 @@ mod tests {
         let sim = cosine_norm(&n, &n);
         // Allow small float drift.
         assert!((sim - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn strip_trailing_paren_cases() {
+        assert_eq!(
+            strip_trailing_paren("the run (produces locked dataset)"),
+            "the run"
+        );
+        assert_eq!(strip_trailing_paren("the run"), "the run");
+        assert_eq!(strip_trailing_paren("  spaced  "), "spaced");
+        // Strips a single trailing group only.
+        assert_eq!(strip_trailing_paren("a (b) (c)"), "a (b)");
+        // No space before the paren → not treated as a suffix.
+        assert_eq!(strip_trailing_paren("nofunc(x)"), "nofunc(x)");
+        assert_eq!(strip_trailing_paren(""), "");
+    }
+
+    #[test]
+    fn wikilink_resolution_handles_parenthetical_titles() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY, title TEXT, state TEXT);
+             INSERT INTO engrams VALUES ('e1','finalize the run (produces locked dataset)','active');
+             INSERT INTO engrams VALUES ('e2','Exact Title','active');
+             INSERT INTO engrams VALUES ('e3','dup (a)','active');
+             INSERT INTO engrams VALUES ('e4','dup (b)','active');
+             INSERT INTO engrams VALUES ('e5','dormant note','dormant');",
+        )
+        .unwrap();
+
+        // Exact, case-insensitive.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "exact title").as_deref(),
+            Some("e2")
+        );
+        // The bug from the field: a short link resolves to the suffixed title.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "finalize the run").as_deref(),
+            Some("e1")
+        );
+        // A link that already carries the suffix still resolves exactly.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "finalize the run (produces locked dataset)")
+                .as_deref(),
+            Some("e1")
+        );
+        // Ambiguous base title → no edge (never guess).
+        assert_eq!(resolve_wikilink_target(&conn, "dup"), None);
+        // Unknown target → no edge.
+        assert_eq!(resolve_wikilink_target(&conn, "nope"), None);
+        // Dormant engrams are not link targets.
+        assert_eq!(resolve_wikilink_target(&conn, "dormant note"), None);
     }
 }

@@ -2081,6 +2081,42 @@
     }
   },
   {
+    "name": "rebuild_wikilinks",
+    "title": "Re-resolve every [[wikilink]] in the brain",
+    "description": "Re-run wikilink resolution across the WHOLE brain in one pass\nand (re)create the graph edges for every link that now\nresolves.\n\nWHY: per-note ingest can only link to engrams that already\nexist, so a [[link]] to a note written LATER never connects,\nand a link whose target title carries a parenthetical suffix\n(e.g. [[the run]] -> \"the run (produces locked dataset)\") used\nto silently fail. This walks every note at once — when all\ntitles are present — and fixes both: forward references and\npreviously-broken links.\n\nWHEN TO CALL:\n- After writing a chain of cross-linked notes, to make the\n  links actually connect (then verify with `related`).\n- Once after upgrading, to repair links created before the\n  resolver understood parenthetical titles.\n\nIdempotent — edges are upserted, so re-running only adds links\nthat now resolve. Resolution is UNIQUE-only: a short link that\nmatches two notes sharing a base title is left unlinked (use\nthe full title to disambiguate).\n\nReturns:\n    brain_id\n    engrams_processed — active notes scanned\n    links_resolved    — links that connected to a real note\n    elapsed_ms\n\nArgs:\n    brain: target brain id (defaults to active).",
+    "annotations": {
+      "read_only": false,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "target brain id (defaults to active)."
+        }
+      },
+      "required": []
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/rebuild_wikilinks",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "never"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
     "name": "import_folder",
     "title": "Bulk-import a folder of markdown into the brain",
     "description": "Cold-start onboarding. Walk a folder of markdown files\n(Obsidian vault, Notion export, past chat transcripts) and\nbulk-ingest each .md into the brain. Idempotent: re-running\nwith the same source after no edits reports zero ingests.\n\nFilenames are namespaced by the source folder name so that two\nimports with overlapping basenames (two READMEs) don't collide.\nPass `prefix` to override the namespace, or `prefix=\"\"` to land\nfiles directly under their relative paths (use this only when\nyou've checked filenames don't clash with existing engrams).\n\nWhat this is NOT: it does NOT copy or symlink the source files.\nContent lands in engrams.content; the original markdown stays\nwhere it lives. Re-run the import to refresh after the source\nfolder changes.\n\nSkipped automatically:\n- dotfile dirs (.git, .obsidian, .DS_Store)\n- any \"trash\" subdirectory\n- non-.md files\n\nWHEN TO CALL:\n- User installs NeuroVault and asks \"can I import my Obsidian\n  vault?\"\n- User has a folder of past Claude conversations / Notion\n  exports they want searchable\n- Periodic re-sync from a curated source folder\n\nReturns:\n    brain_id, source_path, prefix\n    scanned        — total .md files found\n    ingested       — newly written or content-changed engrams\n    unchanged      — files whose content_hash already matched\n    errors         — list of \"<path>: <error>\" lines\n    elapsed_ms\n\nArgs:\n    path: ABSOLUTE path to the folder to import.\n    prefix: namespace override. Default = source folder\n        basename. \"\" = no namespace.\n    brain: target brain id (defaults to active).",
