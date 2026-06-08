@@ -99,7 +99,7 @@ NeuroVault downloads model weights on first run:
 | [ms-marco-MiniLM-L-6-v2](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2) | Apache-2.0 | Microsoft — optional cross-encoder reranker |
 
 Both are fetched from Hugging Face on first use and cached under
-`~/.cache/fastembed/` or `~/.cache/huggingface/`.
+`~/.neurovault/.fastembed_cache/` or `~/.cache/huggingface/`.
 
 ---
 

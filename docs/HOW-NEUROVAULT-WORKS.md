@@ -475,7 +475,7 @@ Every one of these was a real choice between alternatives. Written so a future m
 
 ### fastembed-rs BGE-small-en-v1.5 (384-dim), not Nomic / all-MiniLM / cloud
 - BGE-small scores ~65 MTEB, 10-15% better than MiniLM at the same speed, same 384 dims.
-- Cached at `~/.cache/fastembed/` — shared with the Python version, so migration cost was zero.
+- Cached at `~/.neurovault/.fastembed_cache/` — shared with the Python version, so migration cost was zero.
 - Reconsider if MTEB ever matters for a specific workload; batch cap at 32 keeps RAM bounded.
 
 ### Hybrid retrieval (3 signals + RRF + title boosts), not pure semantic

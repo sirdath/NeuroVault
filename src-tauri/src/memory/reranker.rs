@@ -29,7 +29,7 @@ fn instance() -> Result<&'static Reranker> {
         // `BGERerankerBase` is fastembed's default cross-encoder
         // — ~110 MB ONNX, same HF repo the Python side used for
         // the optional rerank path. Model cache is shared at
-        // `~/.cache/fastembed/` so first-use download is ~10s;
+        // `~/.neurovault/.fastembed_cache/` so first-use download is ~10s;
         // subsequent runs are instant.
         let model = TextRerank::try_new(
             RerankInitOptions::new(RerankerModel::BGERerankerBase)
