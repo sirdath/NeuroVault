@@ -41,9 +41,9 @@ Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github
 | Platform | Asset |
 |---|---|
 | **Windows x64** | `NeuroVault_*_x64-setup.exe` (NSIS installer) |
-| **macOS Apple Silicon** | `NeuroVault_*_aarch64.dmg` |
-| **macOS Intel** | `NeuroVault_*_x64.dmg` |
-| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` |
+| **macOS Apple Silicon (M1–M4)** | `NeuroVault_*_aarch64.dmg` |
+| **macOS Intel** | No prebuilt binary — [build from source](#quick-start-developers) (GitHub's Intel-mac runners are unavailable) |
+| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` / `*.rpm` |
 
 1. Download the installer for your platform and run it.
 2. Notes are saved as plain markdown in `~/.neurovault/`.
@@ -57,7 +57,7 @@ The macOS and Windows builds aren't code-signed, so the first launch warns you. 
 
 Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed.
 
-> **Updates** — NeuroVault checks for a newer release on launch and surfaces an **Update** button in the top bar (and in Settings → Updates). Your data lives in `~/.neurovault/` and is never touched by an update.
+> **Updates** — from **v0.5.1** on, NeuroVault **auto-updates in place**: it checks for a newer *signed* release on launch, and the top-bar **Update** button downloads, installs, and relaunches it — no manual re-download. Your data lives in `~/.neurovault/` and is never touched by an update.
 
 ## What you get
 
@@ -67,13 +67,18 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 - **Drop-folder ingest** — drag any file onto the window; your connected agent reads it and turns it into a clean, indexed note. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
 - **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them.
 - **Multiple brains** — separate vaults/databases per project; switch via the dropdown or `Ctrl+K`.
+- **Per-folder brains** — drop a `.neurovault` file in a project directory to scope that folder's agent memory to its own brain (opt-in).
+- **Agent auto-start** — your MCP agent starts the memory backend for you on first use; no need to open the app first.
+- **Floating minitab + window modes** — shrink the whole app to a tiny always-on-top widget (status · start/pause · open), or **Minimize / Hide / Shrink to widget** from the top bar; bring it back with `Ctrl/Cmd+Shift+Space`.
 - **Open a folder as a vault** — point NeuroVault at an existing Obsidian vault; the folder stays in place.
-- **Notes-tree + graph share colours**, themes, resizable panels, and an in-app updater.
-- **100% local. No telemetry, no account, no cloud.** Loopback-only server on `127.0.0.1:8765`.
+- **Notes-tree + graph share colours**, themes, resizable panels, and **signed one-click auto-update**.
+- **100% local. No telemetry, no account, no cloud.** Loopback-only server on `127.0.0.1:8765`, CORS-scoped to the app's own origins.
 
 ## Connect your agent (MCP)
 
-**Installed app:** open **Settings → Connect Claude Code** (or **Connect Claude Desktop**). It generates the exact snippet for your machine — copy it, restart the agent, done. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
+**Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
+
+> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (18) or `full` (46) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
 
 **Manually**, point your MCP client at the bundled native MCP server — `neurovault-server --mcp-only`, a Rust stdio↔HTTP bridge built on the official [rmcp](https://github.com/modelcontextprotocol/rust-sdk) SDK (no Python):
 
@@ -90,7 +95,7 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 
 (macOS path shown; on Windows/Linux it's the `neurovault-server` binary that ships next to the app. The Settings dialog fills in the exact path for you.)
 
-It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765` — open NeuroVault first, then start your agent session. Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
+It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765`. You don't need to open the app first — the MCP server **auto-starts the backend** if it isn't already running (disable with `NEUROVAULT_AUTOSTART=0`). Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
 
 ## Screenshots
 
@@ -194,9 +199,15 @@ npx tauri dev
 npx tauri build
 ```
 
+**First run downloads** (once, then cached — instant after that):
+
+- the embedding model **BGE-small-en-v1.5** (~90 MB) to `~/.cache/fastembed/`, on first ingest/recall.
+
+The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. On Intel macOS, run `npx tauri build` on an Intel Mac to get a native `.dmg`.
+
 ## MCP tools
 
-Exposed to any MCP-speaking agent via the native Rust MCP server — **~45 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (45). Set it with `NEUROVAULT_MCP_TIER` or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
+Exposed to any MCP-speaking agent via the native Rust MCP server — **~46 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (46). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
 
 | Tool | What it does |
 |------|-------------|
@@ -212,6 +223,7 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **~45 tools
 | `list_unnamed_clusters` / `set_cluster_names` | Agent-driven cluster naming for the graph's Analytics mode. |
 | `find_contradictions` / `supersede_note` / `resolve_contradiction` | Surface conflicting memories and reconcile them — the newer fact wins, reversibly. |
 | `temporal_recall` / `engram_history` / `diagnose_brain` / `find_clutter` | Time-travel queries, per-note edit history, and brain-health/maintenance tools. |
+| `rebuild_wikilinks` | Re-resolve every `[[wikilink]]` across the brain — fixes forward references and links to titles with a `(parenthetical)` suffix. |
 
 ---
 
@@ -250,7 +262,7 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop | Tauri 2 (~30 MB installed, no Electron) |
+| Desktop | Tauri 2 (no Electron — ~24 MB download / ~50 MB installed) |
 | Frontend | React 19, TypeScript (strict), Tailwind v4, Zustand |
 | Editor | CodeMirror 6 |
 | Graph | `react-force-graph-2d/3d` (lazy-loaded), d3-force, canvas painting |
@@ -296,7 +308,12 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 
 ## Documentation
 
-Full docs — quickstart, the graph view, drop-folder ingest, architecture, the HTTP API, and design docs — live at **[neurovault.dathproject.com/docs](https://neurovault.dathproject.com/docs)**.
+Full docs — quickstart, the graph view, drop-folder ingest, architecture, and the HTTP API — live at **[neurovault.dathproject.com/docs](https://neurovault.dathproject.com/docs)**.
+
+In the repo:
+- **[Troubleshooting & data](docs/TROUBLESHOOTING.md)** — install warnings, MCP setup, backup/move/export, recovering a corrupt index.
+- **[How NeuroVault works](docs/HOW-NEUROVAULT-WORKS.md)** — the architecture and retrieval pipeline in depth.
+- **[HTTP API](docs/api.md)** · **[Contributing](CONTRIBUTING.md)** · **[Privacy](PRIVACY.md)** · **[Security](SECURITY.md)**.
 
 ## Contributing
 
