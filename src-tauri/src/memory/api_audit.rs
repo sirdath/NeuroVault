@@ -1,6 +1,6 @@
 //! Append-only audit log for the external API gateway.
 //!
-//! Per `docs/api-gateway-design.md`. Separate from the per-brain
+//! Audit log for the optional external API gateway. Separate from the per-brain
 //! audit.jsonl so external traffic is triageable independently.
 //!
 //! Format: one JSON object per line (ndjson). Fields:

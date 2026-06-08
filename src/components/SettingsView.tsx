@@ -942,7 +942,7 @@ function MCPTierSection() {
 
 /**
  *  API Gateway — toggle the external HTTP gateway on/off and
- *  configure its bind. Per docs/api-gateway-design.md.
+ *  configure its bind.
  *
  *  Default OFF. The gateway only binds a port when this is
  *  enabled. Loopback binding is the safe default; LAN exposure
@@ -1130,7 +1130,7 @@ function APIGatewaySection() {
 /**
  *  API Access — manage external-facing API keys for agents that
  *  call NeuroVault over HTTP (LangChain, n8n, custom Python scripts,
- *  future hosted teams). Per docs/api-gateway-design.md.
+ *  future hosted teams).
  *
  *  Security contract: plaintext keys are shown EXACTLY ONCE at
  *  creation. Storage holds blake3 hashes only. Revocation is

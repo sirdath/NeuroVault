@@ -3928,7 +3928,7 @@ pub async fn mcp_tier_set(
 //   POST   /api/api_keys              create + return plaintext ONCE
 //   DELETE /api/api_keys/:id          revoke (sets revoked_at)
 //
-// Per docs/api-gateway-design.md: plaintext is shown once at
+// API gateway: plaintext is shown once at
 // creation, never recoverable; revocation keeps the row for audit.
 // ---------------------------------------------------------------------------
 

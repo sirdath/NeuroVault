@@ -342,8 +342,7 @@ pub fn ingest_content(
         eprintln!("[ingest] entities skipped for {}: {}", &engram_id[..8], e);
     }
 
-    // 5c. Preference extraction (improvement #1 — see
-    // docs/improvements/01-preference-extraction.md). Pull standing
+    // 5c. Preference extraction. Pull standing
     // assertions ("I always use ripgrep…") out of narrative notes and
     // index them as terse derived `kind='preference'` engrams so a
     // later "what do I use for X?" recall hits them directly instead
@@ -374,8 +373,7 @@ pub fn ingest_content(
         }
     }
 
-    // 5d. Fact supersession (improvement #4 — see
-    // docs/improvements/04-fact-supersession-layer.md). Pull *revised*
+    // 5d. Fact supersession. Pull *revised*
     // values ("bumped the grocery budget to £550") into a typed `facts`
     // table; the newest-ingested value for a (subject, attribute)
     // becomes current and older ones get `superseded_by` set. This is

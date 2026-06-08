@@ -1516,7 +1516,7 @@ pub fn hybrid_retrieve(
     // imp#5 — MMR diversification (post-scoring reorder, ablate flag
     // `mmr`). Greedy relevance-vs-redundancy reorder of the top tier so
     // a single verbose session can't monopolise top-K (the documented
-    // multi-session weakness, retrieval-state.md §6). λ=0.7 is
+    // multi-session weakness). λ=0.7 is
     // relevance-leaning: the best hit stays #1; only the 2..K slots are
     // diversified. Zero extra embed cost — reuses title embeddings.
     if !is_ablated(opts, "mmr") {

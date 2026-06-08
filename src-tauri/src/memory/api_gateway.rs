@@ -1,6 +1,6 @@
 //! External API gateway — sibling to `super::http_server`.
 //!
-//! Per `docs/api-gateway-design.md`. The boundary contract:
+//! The optional external API gateway. The boundary contract:
 //!
 //!   • Loopback path (`http_server`) is **untouched** — same port,
 //!     same routes, same zero-auth trust model.

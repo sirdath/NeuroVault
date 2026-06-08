@@ -1,6 +1,6 @@
 //! API key data model + storage for the external API gateway.
 //!
-//! Self-contained per `docs/api-gateway-design.md`. If the gateway
+//! Self-contained. If the gateway
 //! gets removed, this file gets deleted; nothing else in the
 //! codebase depends on it.
 //!

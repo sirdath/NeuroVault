@@ -14,7 +14,7 @@
 //! PRECEDENT: Letta/MemGPT, Mem0, MemPalace all do write-time
 //! atomic-fact extraction + an explicit update/supersede step;
 //! bitemporal / SCD-Type-2 "current row" modelling is standard data
-//! engineering. See docs/improvements/04-fact-supersession-layer.md.
+//! engineering.
 //!
 //! DESIGN — CONSERVATIVE BY CONSTRUCTION:
 //! A false fact (or a false supersede that demotes the only correct
