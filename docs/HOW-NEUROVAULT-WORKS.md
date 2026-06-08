@@ -31,9 +31,9 @@
 - It is **not** trying to beat LightRAG or Graphiti on academic benchmarks. It optimises for a different axis: "single user, many agents, no cost per ingest, under 100 ms per retrieval."
 - It is **not** a Python app anymore. Phase 0-9 of the migration moved the entire hot path into Rust in-process.
 
-**Concrete numbers** (measured on the current build, April 2026):
-- Installer: **9.3 MB** (was 76 MB before the Rust migration).
-- Idle RAM: **~35 MB** (was 500 MB – 3 GB with the Python sidecar).
+**Concrete numbers** (Rust build; the app + bundled MCP server):
+- Download: **~24 MB** (macOS DMG) / **~26 MB** (Windows installer); ~50 MB installed. A fraction of an Electron app's 150 MB+.
+- Idle RAM: **~35 MB** (was 500 MB – 3 GB with the old Python sidecar).
 - Cold start: **<500 ms** to interactive.
 - Recall latency: **20-50 ms** median for the default pipeline, **~680 ms** when the optional cross-encoder reranker is enabled.
 - Quality (internal eval set, 30 queries): **86.67% hit@1 / MRR 0.867** default, **93.33% hit@1 / MRR 0.933** with reranker.
@@ -61,10 +61,11 @@
 └─────────────────────────────────┼────────────────────────────────────┘
                                   │ loopback HTTP
                   ┌───────────────┴────────────────┐
-                  │ mcp_proxy.py (~30-50 MB)       │
-                  │   - FastMCP stdio transport    │
-                  │   - urllib → HTTP forwarder    │
-                  │   - thin shim, no heavy deps   │
+                  │ neurovault-server --mcp-only   │
+                  │   (native Rust, rmcp SDK)      │
+                  │   - stdio JSON-RPC transport   │
+                  │   - HTTP forwarder → :8765     │
+                  │   - thin shim, no model/DB     │
                   └───────────────┬────────────────┘
                                   │ stdio JSON-RPC
                                   ▼
@@ -78,7 +79,7 @@
 - **One process.** Python had two processes (desktop + sidecar). That meant two fastembed loads, two SQLite connections, two sources of truth. The Rust version collapses that: the memory layer runs *inside* the Tauri process.
 - **Tauri, not Electron.** WebView2 is Chromium already installed on Windows — no shipping a second browser. The installer drops to 9 MB instead of 150 MB.
 - **HTTP server for agents, Tauri IPC for the UI.** Same code answers both: the UI calls `nv_recall` via Tauri's zero-copy command bus; agents call `/api/recall` over loopback HTTP. Both hit the same `memory::retriever::hybrid_retrieve_throttled`.
-- **FastMCP proxy is a separate tiny process.** Claude Code spawns it fresh each session; it imports nothing heavy (`urllib` + `mcp` stdlib-shaped). The actual memory work lives in the always-running `neurovault.exe`. This is the single most important architectural decision: **the heavy stuff never runs in the agent's process tree.**
+- **The MCP server is a separate tiny process.** Claude Code spawns `neurovault-server --mcp-only` (native Rust, built on the official `rmcp` SDK) fresh each session; it loads no model and opens no database — it just forwards stdio JSON-RPC to the HTTP server over loopback. The actual memory work lives in the always-running app. This is the single most important architectural decision: **the heavy stuff never runs in the agent's process tree.**
 
 ---
 
@@ -276,24 +277,27 @@ hybrid_retrieve_throttled(db, query, opts)
 ### The transport stack
 
 ```
-Claude Code ──spawn──► mcp_proxy.py ──HTTP──► axum on 127.0.0.1:8765 ──► Rust memory::*
-             stdio     (~30-50 MB)            (inside neurovault.exe)
+Claude Code ──spawn──► neurovault-server ──HTTP──► axum on 127.0.0.1:8765 ──► Rust memory::*
+             stdio     --mcp-only (Rust)           (inside the running app)
 ```
 
-Claude Code's `~/.claude.json` (or equivalent) registers the proxy via:
+Claude Code's `~/.claude.json` registers the server via (Settings → Connect
+Claude Code → Register automatically writes this for you):
 
 ```json
 {
   "mcpServers": {
     "neurovault": {
-      "command": "uv",
-      "args": ["--directory", "D:/Ai-Brain/engram/server", "run", "python", "-m", "mcp_proxy"]
+      "command": "/Applications/NeuroVault.app/Contents/MacOS/neurovault-server",
+      "args": ["--mcp-only"]
     }
   }
 }
 ```
 
-On session start, Claude Code spawns the proxy. The proxy calls `/api/health` to check the desktop app is up, then answers MCP's `tools/list` + `tools/call` by forwarding HTTP requests.
+On session start, Claude Code spawns the server. It calls `/api/health` and
+**auto-starts the backend** if the app isn't running, then answers MCP's
+`tools/list` + `tools/call` by forwarding HTTP requests.
 
 ### The tool surface (the agent's contract)
 
@@ -325,7 +329,7 @@ Several features exist specifically so agents don't spam or misuse the memory:
 ### MCP protocol choices
 
 - **Tool annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on every tool so Claude Code can auto-confirm safe ones without user prompts.
-- **`outputSchema` + `structuredContent`** — FastMCP auto-derives from Python return types; Claude parses structured JSON instead of regex-ing text.
+- **`outputSchema` + `structuredContent`** — MCP's typed-output channel; the data-driven tool registry can declare schemas per tool so Claude parses structured JSON instead of regex-ing text.
 - **Sentinel resource** at `neurovault://empty` — some strict MCP clients disconnect on empty `resources/list`; this returns a non-empty array of one dummy resource.
 - **Deep-link URL scheme** (`neurovault://engram/<id>[?view=graph]`) — Claude emits clickable markdown links; clicks are forwarded to the running app via Tauri's `single-instance` plugin.
 
@@ -389,7 +393,7 @@ Three primary views, togglable via the tab bar or `Ctrl+1/2/3`:
 ### Local dev
 
 ```bash
-cd D:/Ai-Brain/engram
+cd NeuroVault
 npx tauri dev              # hot-reload frontend + Rust rebuild on change
 ```
 
@@ -398,7 +402,7 @@ First `tauri dev` on a fresh checkout takes ~3-5 min (downloads + compiles the f
 ### Release build
 
 ```bash
-cd D:/Ai-Brain/engram
+cd NeuroVault
 npx tauri build            # ~8-15 min first time, ~3-5 min incremental
 ```
 
@@ -566,7 +570,7 @@ The places a future maintainer will actually be reading/editing:
 - `lib/api.ts` — HTTP API client, prefers `nv_*` Tauri commands with graceful fallback.
 
 **MCP proxy (`server/`):**
-- `mcp_proxy.py` — the only file that matters for MCP integration.
+- `src-tauri/src/bin/neurovault-server.rs` + `src-tauri/src/memory/mcp/` — the native Rust MCP server and its data-driven tool registry. (`server/mcp_proxy.py` is the archived Python predecessor.)
 - `neurovault_server/` — Python codebase kept for advanced features (compile, pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
 
 **Eval (`eval/`):**
@@ -584,4 +588,4 @@ The places a future maintainer will actually be reading/editing:
 
 ---
 
-*Last updated: 2026-04-23 after the Tier A agent-efficiency + Tier 1 perf + reranker + ablation-driven scoring cuts.*
+*Last updated: 2026-06-08 (v0.5.1). The MCP path is the native Rust `neurovault-server --mcp-only`; the Python `server/` tree is archived.*
