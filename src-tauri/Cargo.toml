@@ -128,7 +128,7 @@ axum = "0.7"
 # backend.
 tower-http = { version = "0.5", features = ["cors"] }
 
-# API gateway (per docs/api-gateway-design.md). blake3 hashes API
+# API gateway (the optional external HTTP API). blake3 hashes API
 # keys at rest — fast, constant-time-able, plenty of entropy for
 # 144-bit secrets so password-style KDFs (argon2/bcrypt) are
 # overkill here. `subtle` for constant-time comparison so timing

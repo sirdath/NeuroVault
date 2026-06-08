@@ -309,7 +309,6 @@ CREATE TABLE IF NOT EXISTS compilations (
 -- of X"). A DERIVED index over the markdown (still the source of
 -- truth) — safe to drop & rebuild. The newest-ingested value for a
 -- (subject, attribute) is current; older ones get superseded_by set.
--- See docs/improvements/04-fact-supersession-layer.md.
 CREATE TABLE IF NOT EXISTS facts (
     id            TEXT PRIMARY KEY,
     subject       TEXT NOT NULL,            -- normalised, e.g. "grocery budget"

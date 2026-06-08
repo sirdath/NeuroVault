@@ -20,8 +20,8 @@ requires-python = ">=3.13"
 # transport — everything else is stdlib (urllib, json, os, argparse).
 # Cold start is sub-second; resident RAM is ~30 MB per spawned proxy.
 #
-# See docs/python-server-reference.md for what the deleted package
-# used to contain and the design notes worth keeping.
+# This Python proxy is archived; the native Rust neurovault-server
+# (--mcp-only) is the current MCP path. See server/README.md.
 dependencies = [
     "mcp[cli]>=1.6.0",
 ]

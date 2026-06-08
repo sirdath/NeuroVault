@@ -8,7 +8,7 @@
 //! permissive CORS, loopback bind only. The Tauri webview and
 //! the local Python MCP proxy both talk to it. Anything
 //! external-facing (auth, scopes, rate limits) lives in
-//! `super::api_gateway` (planned per `docs/api-gateway-design.md`),
+//! `super::api_gateway` (the optional external API gateway),
 //! which mounts the same handler functions with its own
 //! middleware stack on a separate port.
 //!
