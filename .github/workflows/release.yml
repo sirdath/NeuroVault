@@ -60,12 +60,11 @@ jobs:
             vec_os: macos
             vec_arch: aarch64
             vec_archive_ext: tar.gz
-          - os: macos-13   # Intel
-            os-label: macos-x64
-            rust-target: x86_64-apple-darwin
-            vec_os: macos
-            vec_arch: x86_64
-            vec_archive_ext: tar.gz
+          # NOTE: no Intel-Mac (macos-13 / x86_64) job. GitHub's Intel macOS
+          # runners are scarce — the v0.5.0 job sat in the queue ~24h waiting
+          # for a runner and then failed, with no artifact. Intel-Mac users
+          # build from source (the website already points them there). Re-add
+          # a `macos-13` entry here if a reliable Intel runner becomes available.
           - os: ubuntu-22.04   # 22.04 has webkit2gtk-4.1; 24.04 phased it out
             os-label: linux-x64
             rust-target: x86_64-unknown-linux-gnu
@@ -193,9 +192,17 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing. With these present, `tauri build` emits a `.sig`
+          # next to each updater artifact and tauri-action rolls every
+          # platform into a single `latest.json` (includeUpdaterJson below),
+          # which the in-app updater fetches to verify + install updates.
+          # Keys live only in repo secrets — see docs/UPDATER-SETUP.md.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: --target ${{ matrix.rust-target }}
           tagName: ${{ github.ref_name }}
+          includeUpdaterJson: true
           releaseName: "NeuroVault ${{ github.ref_name }}"
           releaseBody: |
             ## NeuroVault ${{ github.ref_name }}
@@ -208,7 +215,7 @@ jobs:
 
             - **Windows**: `NeuroVault_*_x64-setup.exe` (NSIS installer)
             - **macOS (Apple Silicon)**: `NeuroVault_*_aarch64.dmg`
-            - **macOS (Intel)**: `NeuroVault_*_x64.dmg`
+            - **macOS (Intel)**: build from source — see the README
             - **Linux**: `neurovault_*_amd64.AppImage` or `neurovault_*_amd64.deb`
 
             ### First-launch warnings
