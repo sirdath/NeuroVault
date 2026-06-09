@@ -48,14 +48,33 @@ Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github
 1. Download the installer for your platform and run it.
 2. Notes are saved as plain markdown in `~/.neurovault/`.
 
-### First-launch warnings
+### First launch — clearing the OS warning
 
-The macOS and Windows builds aren't code-signed, so the first launch warns you. This is expected for an open-source app without a paid signing certificate — it's not a real detection.
+NeuroVault is open-source and **not code-signed** (Apple/Microsoft signing certificates cost hundreds of dollars a year). The installers are built in public from this repo — the warning is about the **missing certificate, not malware**. Here's how to get past it on each OS.
 
-- **Windows SmartScreen** ("Windows protected your PC"): click **More info → Run anyway**.
-- **macOS Gatekeeper** ("damaged, move to trash"): right-click NeuroVault.app → **Open** → **Open Anyway**, or run once: `xattr -cr /Applications/NeuroVault.app`.
+#### 🍎 macOS — "NeuroVault is damaged and can't be opened"
 
-Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed.
+That message just means macOS quarantined an app downloaded outside the App Store. Drag **NeuroVault.app** into your **Applications** folder, then run this **one command** in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/NeuroVault.app
+```
+
+Now open NeuroVault normally — the warning is gone for good. One line, one time. (On Claude Code or any terminal? Just paste it.)
+
+<details>
+<summary>Prefer not to use the Terminal?</summary>
+
+Right-click **NeuroVault.app → Open → Open**. If macOS still refuses (common on Sonoma/Sequoia/Tahoe), open **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the NeuroVault message — then launch the app again.
+</details>
+
+#### 🪟 Windows — "Windows protected your PC"
+
+Click **More info → Run anyway**. SmartScreen flags any installer without a paid EV certificate.
+
+#### 🐧 Linux
+
+The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` first if your file manager doesn't mark it executable.
 
 > **Updates** — from **v0.5.1** on, NeuroVault **auto-updates in place**: it checks for a newer *signed* release on launch, and the top-bar **Update** button downloads, installs, and relaunches it — no manual re-download. Your data lives in `~/.neurovault/` and is never touched by an update.
 
