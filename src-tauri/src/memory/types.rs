@@ -107,6 +107,10 @@ pub struct GraphNode {
     pub state: String,
     pub strength: f64,
     pub access_count: i64,
+    /// Engram kind (note|source|…|code). The graph view styles `code`
+    /// nodes (a graphified codebase) distinctly from authored notes.
+    #[serde(default)]
+    pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
     /// Creation timestamp (SQLite TEXT). Carried so the graph view's
