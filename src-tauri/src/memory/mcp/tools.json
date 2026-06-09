@@ -2945,5 +2945,39 @@
       "body": [],
       "special": null
     }
+  },
+  {
+    "name": "fuse",
+    "title": "Fuse notes to code",
+    "description": "Link your notes/decisions to the code symbols they reference in `inline code` — so 'why is this written this way?' walks from a function to the note about it. Conservative: only backticked identifiers (4+ chars) count, so prose doesn't create spurious edges. Run after `graphify`. Returns the number of note↔code links created.",
+    "annotations": {
+      "read_only": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to operate on; defaults to the active brain."
+        }
+      }
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/code/fuse",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "special": null
+    }
   }
 ]

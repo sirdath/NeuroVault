@@ -509,6 +509,73 @@ fn compute_code_edges(conn: &Connection) -> rusqlite::Result<usize> {
     )
 }
 
+/// Phase 3 — **fuse notes to code**. Link any note (kind != 'code') to the code
+/// file(s) that define a symbol the note references in `inline code`. This is
+/// the thing the headless competitors can't do: "why is this written this way?"
+/// walks from a function to the decision note about it. Conservative by design —
+/// only backticked identifiers of 4+ chars count, so prose mentions of common
+/// words don't manufacture edges. Returns the number of note↔code links created.
+pub fn fuse_notes_to_code(conn: &Connection) -> rusqlite::Result<usize> {
+    use std::collections::{HashMap, HashSet};
+
+    // symbol name → code-file engram ids that DEFINE it.
+    let mut defs: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT v.name, vr.engram_id
+               FROM variables v JOIN variable_references vr
+                 ON vr.variable_id = v.id AND vr.ref_type = 'define'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (name, eng) = row?;
+            defs.entry(name).or_default().push(eng);
+        }
+    }
+    if defs.is_empty() {
+        return Ok(0);
+    }
+
+    let ident = regex::Regex::new(r"`([A-Za-z_][A-Za-z0-9_]{3,})`").expect("valid regex");
+
+    let notes: Vec<(String, String)> = {
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM engrams WHERE COALESCE(kind,'note') != 'code'")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut created = 0usize;
+    for (note_id, content) in &notes {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for cap in ident.captures_iter(content) {
+            let name = cap.get(1).unwrap().as_str();
+            if !seen.insert(name) {
+                continue; // one link per (note, symbol), even if mentioned twice
+            }
+            let Some(files) = defs.get(name) else { continue };
+            for code_id in files {
+                if code_id == note_id {
+                    continue;
+                }
+                // Normalise orientation so the undirected graph view keeps it.
+                let (a, b) = if note_id < code_id {
+                    (note_id, code_id)
+                } else {
+                    (code_id, note_id)
+                };
+                created += conn.execute(
+                    "INSERT OR IGNORE INTO engram_links
+                       (from_engram, to_engram, similarity, link_type)
+                     VALUES (?1, ?2, 1.0, 'references')",
+                    params![a, b],
+                )?;
+            }
+        }
+    }
+    Ok(created)
+}
+
 /// Files + line a symbol is *defined* in: `(filepath, line)`.
 pub fn where_defined(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare(
@@ -813,5 +880,52 @@ function compute(r: number): number { return r * r; }
             "node_modules must be skipped: {paths:?}"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fuse_links_notes_to_code() {
+        let conn = Connection::open_in_memory().unwrap();
+        code_schema(&conn);
+        // a code file that defines `charge`
+        let pf = parse_source("billing.rs", "pub fn charge() {}").unwrap();
+        write_parsed_file(&conn, &pf).unwrap();
+        // a decision note that references `charge` in inline code
+        conn.execute(
+            "INSERT INTO engrams (id, filename, title, content, content_hash, kind)
+             VALUES ('note-1','adr.md','ADR','We decided `charge` must be idempotent.','h','note')",
+            [],
+        )
+        .unwrap();
+
+        assert!(fuse_notes_to_code(&conn).unwrap() >= 1, "expected a note→code link");
+        let code_id = format!("code-{}", short_hash("billing.rs"));
+        let linked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM engram_links WHERE link_type='references' \
+                 AND ((from_engram='note-1' AND to_engram=?1) OR (from_engram=?1 AND to_engram='note-1'))",
+                params![code_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked, 1, "note-1 should link to billing.rs via 'references'");
+
+        // A bare prose mention (no backticks) must NOT manufacture a link.
+        conn.execute(
+            "INSERT INTO engrams (id, filename, title, content, content_hash, kind)
+             VALUES ('note-2','x.md','X','we should charge the customer','h','note')",
+            [],
+        )
+        .unwrap();
+        let total = |c: &Connection| -> i64 {
+            c.query_row(
+                "SELECT COUNT(*) FROM engram_links WHERE link_type='references'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let before = total(&conn);
+        fuse_notes_to_code(&conn).unwrap();
+        assert_eq!(before, total(&conn), "bare prose 'charge' must not link");
     }
 }
