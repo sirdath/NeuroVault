@@ -10,6 +10,20 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [0.5.2] — 2026-06-09
+
+### Added
+- **Wikilinks resolve by filename (Obsidian compatibility).** Obsidian links a
+  note by its *filename*, not its `# title` heading — so importing an Obsidian
+  vault used to leave links like `[[literature_review]]` or
+  `[[01 — data foundation (…)]]` unconnected. The resolver now tries, in order:
+  exact title → **filename basename** → base title (parenthetical-insensitive),
+  each unique-only. A `[[file]]` link connects to `…/file.md` at the vault root
+  or in any subfolder. Run `rebuild_wikilinks` after importing to wire an
+  existing vault together in one pass.
+
+---
+
 ## [0.5.1] — 2026-06-08
 
 ### Fixed
