@@ -138,6 +138,10 @@ interface GraphSettings {
   /** When false, isolated (degree-0) nodes are completely hidden from
    *  the canvas. Default true — they render in the orphan halo. */
   showOrphans: boolean;
+  /** When false, graphified code nodes (kind="code") and every edge that
+   *  touches them are hidden — the graph shows only authored notes.
+   *  Default true so a freshly graphified repo is immediately visible. */
+  showCode: boolean;
   /** When true, only manually-authored wikilinks render. Overrides
    *  showSemanticEdges; entity edges are also hidden. */
   manualOnly: boolean;
@@ -198,6 +202,7 @@ const DEFAULTS: GraphSettings = {
   clusterColors: {},
   searchQuery: "",
   showOrphans: true,
+  showCode: true,
   manualOnly: false,
   nodeSizeScale: 1.0,
   linkThicknessScale: 1.0,
@@ -263,6 +268,7 @@ function load(): GraphSettings {
         clusterColors: sanitizeColorMap(parsed.clusterColors),
         searchQuery: typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
         showOrphans: bool("showOrphans", true),
+        showCode: bool("showCode", true),
         manualOnly: bool("manualOnly", false),
         nodeSizeScale: num("nodeSizeScale", 1.0, 0.3, 3.0),
         linkThicknessScale: num("linkThicknessScale", 1.0, 0.3, 3.0),
@@ -301,6 +307,7 @@ interface GraphSettingsStore extends GraphSettings {
   clearClusterColors: () => void;
   setSearchQuery: (q: string) => void;
   setShowOrphans: (v: boolean) => void;
+  setShowCode: (v: boolean) => void;
   setManualOnly: (v: boolean) => void;
   setNodeSizeScale: (v: number) => void;
   setLinkThicknessScale: (v: number) => void;
@@ -398,6 +405,7 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   },
   setSearchQuery: (searchQuery) => { set({ searchQuery }); persist({ ...get(), searchQuery }); },
   setShowOrphans: (showOrphans) => { set({ showOrphans }); persist({ ...get(), showOrphans }); },
+  setShowCode: (showCode) => { set({ showCode }); persist({ ...get(), showCode }); },
   setManualOnly: (manualOnly) => { set({ manualOnly }); persist({ ...get(), manualOnly }); },
   setNodeSizeScale: (nodeSizeScale) => { set({ nodeSizeScale }); persist({ ...get(), nodeSizeScale }); },
   setLinkThicknessScale: (linkThicknessScale) => { set({ linkThicknessScale }); persist({ ...get(), linkThicknessScale }); },

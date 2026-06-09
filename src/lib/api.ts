@@ -46,6 +46,9 @@ export interface GraphNode {
    *  Rust /api/graph path. Used by the graph time-lapse to order nodes
    *  chronologically. */
   created_at?: string;
+  /** Engram kind (note|source|…|code). Graphified source files arrive as
+   *  kind="code" and get distinct gold styling + their own layer toggle. */
+  kind?: string;
 }
 
 export interface GraphEdge {

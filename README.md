@@ -61,6 +61,7 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 
 ## What you get
 
+- **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your brain: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your agent can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. Your source never leaves the machine.
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, optional cross-encoder rerank. In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
@@ -78,7 +79,7 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 
 **Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
-> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (18) or `full` (46) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
+> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (18) or `full` (52, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
 
 **Manually**, point your MCP client at the bundled native MCP server — `neurovault-server --mcp-only`, a Rust stdio↔HTTP bridge built on the official [rmcp](https://github.com/modelcontextprotocol/rust-sdk) SDK (no Python):
 

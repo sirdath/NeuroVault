@@ -25,6 +25,9 @@ interface Props {
   nodeCount: number;
   orphanCount: number;
   semanticEdgeCount: number;
+  /** kind="code" nodes currently in the graph (a graphified repo).
+   *  0 hides the Code-layer toggle entirely. */
+  codeNodeCount: number;
   /** Callbacks the parent owns because they touch the simulation
    *  reference, not just store state. */
   onTimelapseStart: () => void;
@@ -241,6 +244,7 @@ export function GraphFilterPanel({
   nodeCount,
   orphanCount,
   semanticEdgeCount,
+  codeNodeCount,
   onTimelapseStart,
   onTimelapseStop,
   timelapseActive,
@@ -334,6 +338,14 @@ export function GraphFilterPanel({
             onChange={s.setManualOnly}
             hint="Hide entity + semantic edges. Show only [[wikilinks]] you typed."
           />
+          {codeNodeCount > 0 && (
+            <Toggle
+              label={`Code layer (${codeNodeCount} files)`}
+              checked={s.showCode}
+              onChange={s.setShowCode}
+              hint="Graphified source files (gold nodes) and their call edges. Hide to see only your notes."
+            />
+          )}
           <Toggle
             label="Show arrows"
             checked={s.showArrows}
