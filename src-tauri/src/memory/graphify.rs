@@ -81,7 +81,9 @@ pub struct Import {
 }
 
 /// A call site: `callee` invoked, optionally from within `caller`.
-/// Maps onto a `function_calls` row.
+/// Maps onto a `function_calls` row. Note: calls inside macro invocations
+/// (`format!`, `vec!`, …) aren't captured — tree-sitter parses macro bodies as
+/// opaque token trees, not expressions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
     pub caller: Option<String>,
@@ -507,12 +509,18 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
         if write_parsed_file(&conn, pf).is_ok() {
             stats.files += 1;
             stats.symbols += pf.symbols.len();
-            stats.calls += pf.calls.len();
         }
     }
-    // Second pass: every file's symbols are now in the DB, so resolve each call
-    // to the file that DEFINES the callee and write file→file 'calls' edges into
-    // engram_links — this connects the code nodes in the graph view.
+    // Now that every symbol is in the DB, drop calls to names defined nowhere in
+    // the codebase (stdlib/builtin noise) so who_calls / blast_radius stay about
+    // THIS code, then count what remains.
+    let _ = prune_unresolved_calls(&conn);
+    stats.calls = conn
+        .query_row("SELECT COUNT(*) FROM function_calls", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as usize;
+    // Second pass: resolve each surviving call to the file that DEFINES the
+    // callee and write file→file 'calls' edges into engram_links — this connects
+    // the code nodes in the graph view.
     if let Ok(n) = compute_code_edges(&conn) {
         stats.edges = n;
     }
@@ -592,6 +600,19 @@ fn compute_code_edges(conn: &Connection) -> rusqlite::Result<usize> {
            JOIN variables v ON v.name = fc.callee_name
            JOIN variable_references vr ON vr.variable_id = v.id AND vr.ref_type = 'define'
           WHERE fc.engram_id IS NOT NULL AND fc.engram_id <> vr.engram_id",
+        [],
+    )
+}
+
+/// Drop calls whose callee isn't defined anywhere in the graphified code —
+/// stdlib/builtin/constructor noise (`Some`, `to_string`, `println`, …). Keeps
+/// the call graph (`who_calls` / `blast_radius`) about THIS codebase, not the
+/// standard library. Returns the number of rows removed. (Imports already
+/// capture external dependencies; this is about intra-codebase structure.)
+fn prune_unresolved_calls(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM function_calls
+          WHERE callee_name NOT IN (SELECT name FROM variables)",
         [],
     )
 }
@@ -1065,5 +1086,77 @@ function compute(r: number): number { return r * r; }
         let before = total(&conn);
         fuse_notes_to_code(&conn).unwrap();
         assert_eq!(before, total(&conn), "bare prose 'charge' must not link");
+    }
+
+    /// Verify the whole pipeline against NeuroVault's own real Rust source
+    /// (not toy snippets) — a smoke test that the parser + DB + queries hold up
+    /// on a real codebase. Run with `-- --nocapture` to eyeball the output.
+    #[test]
+    fn verify_against_real_source() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/memory");
+        let files = graphify_repo(&dir);
+        let total_syms: usize = files.iter().map(|f| f.symbols.len()).sum();
+        let total_calls: usize = files.iter().map(|f| f.calls.len()).sum();
+        eprintln!(
+            "\nVERIFY src/memory: {} files, {} symbols, {} calls",
+            files.len(),
+            total_syms,
+            total_calls
+        );
+
+        assert!(files.len() >= 20, "expected many files, got {}", files.len());
+        assert!(total_syms >= 100, "expected many symbols, got {total_syms}");
+
+        let me = files
+            .iter()
+            .find(|f| f.path.ends_with("graphify.rs"))
+            .expect("graphify.rs should be parsed");
+        let names: Vec<&str> = me.symbols.iter().map(|s| s.name.as_str()).collect();
+        eprintln!("graphify.rs: {} symbols {names:?}", names.len());
+        for s in me.symbols.iter().take(10) {
+            eprintln!("  [{}] {}", s.kind.as_schema_kind(), s.signature);
+        }
+        eprintln!("graphify.rs calls (first 10):");
+        for c in me.calls.iter().take(10) {
+            eprintln!("  {} -> {} @{}", c.caller.as_deref().unwrap_or("<mod>"), c.callee, c.line);
+        }
+        assert!(names.contains(&"parse_source"));
+        assert!(names.contains(&"graphify_repo"));
+        assert!(names.contains(&"blast_radius"));
+
+        // DB round-trip + queries on the real corpus
+        let conn = Connection::open_in_memory().unwrap();
+        code_schema(&conn);
+        for f in &files {
+            let _ = write_parsed_file(&conn, f);
+        }
+        let raw: i64 = conn
+            .query_row("SELECT COUNT(*) FROM function_calls", [], |r| r.get(0))
+            .unwrap();
+        let pruned = prune_unresolved_calls(&conn).unwrap();
+        let kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM function_calls", [], |r| r.get(0))
+            .unwrap();
+        eprintln!("calls: {raw} raw → pruned {pruned} stdlib/noise → {kept} intra-codebase");
+        let edges = compute_code_edges(&conn).unwrap();
+        eprintln!("code edges: {edges}");
+
+        let defs = where_defined(&conn, "parse_source").unwrap();
+        eprintln!("where_defined(parse_source): {defs:?}");
+        eprintln!(
+            "who_calls(write_parsed_file): {} sites",
+            who_calls(&conn, "write_parsed_file").unwrap().len()
+        );
+        eprintln!(
+            "blast_radius(compute_code_edges): {} impacted",
+            blast_radius(&conn, "compute_code_edges").unwrap().len()
+        );
+
+        assert!(!defs.is_empty(), "parse_source should be defined somewhere");
+        assert!(kept < raw, "prune should drop stdlib noise ({kept} vs {raw})");
+        assert!(
+            who_calls(&conn, "Some").unwrap().is_empty(),
+            "Some is a constructor, not a codebase fn — must be pruned"
+        );
     }
 }
