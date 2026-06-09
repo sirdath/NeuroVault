@@ -2284,6 +2284,133 @@ pub async fn import_folder(
 }
 
 // ---------------------------------------------------------------------------
+// Graphify: codebase → on-device knowledge graph (see memory::graphify).
+// Parse a repo with tree-sitter, populate the code tables, then query the
+// symbol/call graph. Nothing leaves the machine.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct GraphifyBody {
+    pub path: String,
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// POST /api/code/graphify — parse a repo into the brain's code graph.
+pub async fn code_graphify(
+    _s: State<ServerState>,
+    Json(body): Json<GraphifyBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let root = std::path::PathBuf::from(&body.path);
+        if !root.is_dir() {
+            return Err(MemoryError::Other(format!(
+                "graphify path is not a directory: {}",
+                body.path
+            )));
+        }
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let started = std::time::Instant::now();
+        let stats = super::graphify::graphify_into_brain(&root, &db);
+        Ok(serde_json::json!({
+            "brain_id": id,
+            "path": body.path,
+            "files": stats.files,
+            "symbols": stats.symbols,
+            "calls": stats.calls,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct CodeSymbolQuery {
+    pub symbol: String,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+/// GET /api/code/where_defined?symbol=&brain_id=
+pub async fn code_where_defined(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let defs = super::graphify::where_defined(&conn, &q.symbol)?;
+        let rows: Vec<_> = defs
+            .into_iter()
+            .map(|(file, line)| serde_json::json!({ "file": file, "line": line }))
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "definitions": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/code/who_calls?symbol=&brain_id=
+pub async fn code_who_calls(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let callers = super::graphify::who_calls(&conn, &q.symbol)?;
+        let rows: Vec<_> = callers
+            .into_iter()
+            .map(|(caller, file, line)| {
+                serde_json::json!({ "caller": caller, "file": file, "line": line })
+            })
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "callers": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct CodeFileQuery {
+    pub path: String,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+/// GET /api/code/whats_in_file?path=&brain_id=
+pub async fn code_whats_in_file(
+    Query(q): Query<CodeFileQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let syms = super::graphify::whats_in_file(&conn, &q.path)?;
+        let rows: Vec<_> = syms
+            .into_iter()
+            .map(|(name, kind)| serde_json::json!({ "name": name, "kind": kind }))
+            .collect();
+        Ok(serde_json::json!({ "path": q.path, "count": rows.len(), "symbols": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+// ---------------------------------------------------------------------------
 // Image listing for caption-at-ingest workflow.
 //
 // MCP can't do its own multimodal — the model behind the proxy is
