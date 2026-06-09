@@ -163,6 +163,17 @@ notify = "6"
 rmcp = { version = "1", default-features = false, features = ["server", "macros", "transport-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# ── graphify: parse a codebase into the local knowledge graph (Phase 1).
+# tree-sitter runs entirely in-process (C grammars compiled via `cc`) — no
+# network, no model; source never leaves the machine. `ignore` gives a
+# .gitignore-aware repo walker (the ripgrep engine). Grammars are added
+# incrementally; Rust first to prove the pipeline.
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+ignore = "0.4"
+
 # Self-heal on bind-failure: if `127.0.0.1:8765` is held by a stale
 # `neurovault*` process at startup, identify the holder and kill it
 # rather than failing silently. `netstat2` gives us the cross-platform
