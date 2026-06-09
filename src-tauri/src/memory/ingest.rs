@@ -304,8 +304,13 @@ pub fn ingest_content(
         let embeddings = embedder::encode_batch(&embed_texts)?;
         debug_assert_eq!(embeddings.len(), chunks.len());
         let conn = db.lock();
+        // One transaction for the whole chunk batch: a long note writes
+        // 100+ rows here, and per-statement autocommit overhead dominated
+        // bulk imports. `unchecked_transaction` rolls back on drop, so an
+        // error mid-batch can't leave the shared connection mid-transaction.
+        let tx = conn.unchecked_transaction()?;
         for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO chunks (id, engram_id, content, granularity, chunk_index)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -318,12 +323,13 @@ pub fn ingest_content(
             )?;
             // vec0 tables don't honour INSERT OR REPLACE semantics —
             // explicit DELETE first, matching the Python side.
-            conn.execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [&chunk.id])?;
-            conn.execute(
+            tx.execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [&chunk.id])?;
+            tx.execute(
                 "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?1, ?2)",
                 params![&chunk.id, &serialize_float32(embedding)],
             )?;
         }
+        tx.commit()?;
     }
 
     // --- Slow phase (synchronous in this port). Each step is
