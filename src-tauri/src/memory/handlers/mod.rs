@@ -2401,9 +2401,35 @@ pub async fn code_whats_in_file(
         let syms = super::graphify::whats_in_file(&conn, &q.path)?;
         let rows: Vec<_> = syms
             .into_iter()
-            .map(|(name, kind)| serde_json::json!({ "name": name, "kind": kind }))
+            .map(|(name, kind, signature)| {
+                serde_json::json!({ "name": name, "kind": kind, "signature": signature })
+            })
             .collect();
         Ok(serde_json::json!({ "path": q.path, "count": rows.len(), "symbols": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/code/blast_radius?symbol=&brain_id= — transitive callers (impact).
+pub async fn code_blast_radius(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let impacted = super::graphify::blast_radius(&conn, &q.symbol)?;
+        let rows: Vec<_> = impacted
+            .into_iter()
+            .map(|(name, file, line)| {
+                serde_json::json!({ "name": name, "file": file, "line": line })
+            })
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "impacted": rows }))
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

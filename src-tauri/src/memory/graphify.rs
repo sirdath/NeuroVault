@@ -35,8 +35,10 @@ pub struct Symbol {
     pub kind: SymbolKind,
     /// 1-based line of the declaration.
     pub line: usize,
-    /// Leading doc comment, if cheaply available (None in Phase 1).
-    pub doc: Option<String>,
+    /// The declaration's first line (signature), e.g.
+    /// `pub fn build(n: u32) -> Engine`. Cheap, language-agnostic context
+    /// surfaced by `whats_in_file` so the agent sees shape, not just names.
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,12 +170,35 @@ pub fn parse_source(path: &str, source: &str) -> Option<ParsedFile> {
 }
 
 /// Walk a repo, respecting `.gitignore` (ripgrep's `ignore` engine), and parse
-/// every supported source file. Reading happens locally; nothing leaves.
+/// every supported source file. Also skips common vendor/build dirs even when
+/// they aren't git-ignored, and oversized/generated files. Reading happens
+/// locally; nothing leaves.
 pub fn graphify_repo(root: &Path) -> Vec<ParsedFile> {
+    // Vendored / build output not always in .gitignore. Hidden dirs (.git,
+    // .venv, .next, …) are already skipped by the walker's default.
+    const SKIP_DIRS: &[&str] = &[
+        "node_modules", "target", "dist", "build", "out", "vendor", "venv",
+        "__pycache__", "coverage", ".git",
+    ];
+    // Parsing a 2 MB minified bundle is pure noise; 512 KB clears any
+    // hand-written source with room to spare.
+    const MAX_BYTES: u64 = 512 * 1024;
+
     let mut out = Vec::new();
     for entry in ignore::WalkBuilder::new(root).build().flatten() {
         let p = entry.path();
         if !p.is_file() {
+            continue;
+        }
+        if p.components().any(|c| {
+            c.as_os_str()
+                .to_str()
+                .map(|s| SKIP_DIRS.contains(&s))
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
             continue;
         }
         let rel = p
@@ -285,7 +310,7 @@ fn walk(node: Node, src: &str, pf: &mut ParsedFile, current_fn: Option<String>, 
                 name: name.clone(),
                 kind: sk,
                 line: line_of(node),
-                doc: None,
+                signature: signature_of(node, src),
             });
             if p.is_fn_def(kind) {
                 child_fn = Some(name);
@@ -347,6 +372,31 @@ fn last_segment(s: &str) -> String {
         .unwrap_or(s)
         .trim()
         .to_string()
+}
+
+/// The declaration's first line — up to the first `{` or newline — collapsed to
+/// single spaces. A cheap, language-agnostic "signature": for
+/// `pub fn build(n: u32) -> Engine { … }` it yields `pub fn build(n: u32) -> Engine`.
+fn signature_of(node: Node, src: &str) -> String {
+    let text = node.utf8_text(src.as_bytes()).unwrap_or("");
+    let end = match (text.find('{'), text.find('\n')) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => text.len(),
+    };
+    let sig = text[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate(&sig, 200)
+}
+
+/// Truncate to at most `max` chars on a char boundary, adding `…` if cut.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 // ── DB population + queries (Phase 1b) ─────────────────────────────────────
@@ -414,7 +464,7 @@ fn write_parsed_file(conn: &Connection, pf: &ParsedFile) -> rusqlite::Result<()>
         conn.execute(
             "INSERT OR IGNORE INTO variables (id, name, scope, kind, language, description)
              VALUES (?1, ?2, 'module', ?3, ?4, ?5)",
-            params![var_id, s.name, s.kind.as_schema_kind(), lang, s.doc],
+            params![var_id, s.name, s.kind.as_schema_kind(), lang, s.signature],
         )?;
         let canon_id: String = conn.query_row(
             "SELECT id FROM variables WHERE name=?1 AND scope='module' AND language=?2",
@@ -425,7 +475,7 @@ fn write_parsed_file(conn: &Connection, pf: &ParsedFile) -> rusqlite::Result<()>
             "INSERT OR IGNORE INTO variable_references
                (variable_id, engram_id, filepath, line_number, context, ref_type)
              VALUES (?1, ?2, ?3, ?4, ?5, 'define')",
-            params![canon_id, engram_id, pf.path, s.line as i64, s.kind.as_schema_kind()],
+            params![canon_id, engram_id, pf.path, s.line as i64, s.signature],
         )?;
     }
 
@@ -471,15 +521,24 @@ pub fn where_defined(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(S
     rows.collect()
 }
 
-/// Symbols declared in a file: `(name, kind)`, in declaration order.
-pub fn whats_in_file(conn: &Connection, path: &str) -> rusqlite::Result<Vec<(String, String)>> {
+/// Symbols declared in a file: `(name, kind, signature)`, in declaration order.
+pub fn whats_in_file(
+    conn: &Connection,
+    path: &str,
+) -> rusqlite::Result<Vec<(String, String, String)>> {
     let mut stmt = conn.prepare(
-        "SELECT v.name, v.kind
+        "SELECT v.name, v.kind, COALESCE(r.context, '')
            FROM variable_references r JOIN variables v ON v.id = r.variable_id
           WHERE r.filepath = ?1 AND r.ref_type = 'define'
           ORDER BY r.line_number",
     )?;
-    let rows = stmt.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = stmt.query_map([path], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
     rows.collect()
 }
 
@@ -493,6 +552,41 @@ pub fn who_calls(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(Strin
     )?;
     let rows = stmt.query_map([symbol], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+    })?;
+    rows.collect()
+}
+
+/// Transitive callers of a symbol — the **blast radius** of changing it. Walks
+/// the `function_calls` graph upward (callee → caller) with a recursive CTE;
+/// `UNION` dedups so cycles terminate. Returns each impacted symbol with the
+/// file/line it's defined in (when known), ordered by name.
+pub fn blast_radius(
+    conn: &Connection,
+    symbol: &str,
+) -> rusqlite::Result<Vec<(String, Option<String>, Option<i64>)>> {
+    let mut stmt = conn.prepare(
+        "WITH RECURSIVE impact(name) AS (
+             SELECT DISTINCT caller_name FROM function_calls
+              WHERE callee_name = ?1 AND caller_name IS NOT NULL
+             UNION
+             SELECT DISTINCT fc.caller_name FROM function_calls fc
+               JOIN impact i ON fc.callee_name = i.name
+              WHERE fc.caller_name IS NOT NULL
+         )
+         SELECT i.name, MIN(vr.filepath), MIN(vr.line_number)
+           FROM impact i
+           LEFT JOIN variables v ON v.name = i.name
+           LEFT JOIN variable_references vr
+             ON vr.variable_id = v.id AND vr.ref_type = 'define'
+          GROUP BY i.name
+          ORDER BY i.name",
+    )?;
+    let rows = stmt.query_map([symbol], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+        ))
     })?;
     rows.collect()
 }
@@ -638,12 +732,12 @@ function compute(r: number): number { return r * r; }
             vec![("build".to_string(), "src/engine.rs".to_string(), 1)]
         );
         // what's in the file?
-        let names: Vec<String> = whats_in_file(&conn, "src/engine.rs")
-            .unwrap()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        assert!(names.contains(&"build".to_string()) && names.contains(&"make".to_string()));
+        let in_file = whats_in_file(&conn, "src/engine.rs").unwrap();
+        let names: Vec<&str> = in_file.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"build") && names.contains(&"make"));
+        // the signature carries the declaration line, not just the name
+        let build_sig = &in_file.iter().find(|(n, _, _)| n == "build").unwrap().2;
+        assert!(build_sig.contains("fn build"), "signature: {build_sig}");
 
         // idempotent: a second run must not duplicate the definition
         write_parsed_file(&conn, &pf).unwrap();
@@ -674,5 +768,50 @@ function compute(r: number): number { return r * r; }
             )
             .unwrap();
         assert_eq!(count, 1, "a.rs and b.rs should be linked via a 'calls' edge");
+    }
+
+    #[test]
+    fn blast_radius_walks_transitive_callers() {
+        let conn = Connection::open_in_memory().unwrap();
+        code_schema(&conn);
+        // top → mid → leaf
+        let src = "fn top() { mid() }\nfn mid() { leaf() }\nfn leaf() {}";
+        let pf = parse_source("chain.rs", src).unwrap();
+        write_parsed_file(&conn, &pf).unwrap();
+
+        let radius = |s: &str| {
+            let mut names: Vec<String> = blast_radius(&conn, s)
+                .unwrap()
+                .into_iter()
+                .map(|(n, _, _)| n)
+                .collect();
+            names.sort();
+            names
+        };
+        // changing leaf can break mid and (transitively) top
+        assert_eq!(radius("leaf"), vec!["mid".to_string(), "top".to_string()]);
+        assert_eq!(radius("mid"), vec!["top".to_string()]);
+        assert!(radius("top").is_empty());
+    }
+
+    #[test]
+    fn graphify_repo_skips_vendor_and_parses_source() {
+        use std::fs;
+        let dir = std::env::temp_dir()
+            .join(format!("nv_graphify_{}_{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("node_modules")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "pub fn hello() {}").unwrap();
+        fs::write(dir.join("node_modules/dep.rs"), "pub fn vendored() {}").unwrap();
+
+        let files = graphify_repo(&dir);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"src/lib.rs"), "should parse src: {paths:?}");
+        assert!(
+            !paths.iter().any(|p| p.contains("node_modules")),
+            "node_modules must be skipped: {paths:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
