@@ -1,6 +1,11 @@
 # Graphify — codebase → local knowledge graph
 
-> Status: **design / spec** (not yet built). Target: NeuroVault v0.6 headline feature.
+> Status: **SHIPPED** (Phases 1–3 on `feat/graphify`, 2026-06-10) — 8 languages
+> (Rust, Python, TS, TSX, Go, Java, C#, Ruby), 6 MCP tools (`graphify`,
+> `where_defined`, `whats_in_file`, `who_calls`, `blast_radius`, `fuse`), gold
+> graph layer + Code toggle, e2e HTTP integration test, speed numbers in
+> `docs/benchmarks/README.md`. This document is the original design; deviations
+> are noted inline where they happened.
 > Author: spec drafted 2026-06-09.
 
 ## 1. Summary & position
