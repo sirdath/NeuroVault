@@ -259,6 +259,7 @@ fn parse_dataset(path: &str) -> Result<Vec<LmeQuestion>, String> {
             .unwrap_or_default();
 
         let ids = q["haystack_session_ids"].as_array().cloned().unwrap_or_default();
+        let dates = q["haystack_dates"].as_array().cloned().unwrap_or_default();
         let sessions_json = q["haystack_sessions"].as_array().cloned().unwrap_or_default();
         let mut sessions = Vec::with_capacity(sessions_json.len());
         for (i, sess) in sessions_json.iter().enumerate() {
@@ -270,7 +271,19 @@ fn parse_dataset(path: &str) -> Result<Vec<LmeQuestion>, String> {
             // Serialize turns as a readable transcript. The session id is
             // NOT embedded in the content — mapping back happens via the
             // engram filename, so retrieval can't cheat on id tokens.
-            let mut md = String::from("# Chat session\n\n");
+            //
+            // Each session gets a DISTINCT natural title (its date, which the
+            // dataset provides and which a real chat log would carry). With a
+            // shared title like "Chat session", every doc has title-embedding
+            // cosine 1.0 to every other and the MMR diversifier rightly
+            // collapses them as one redundant cluster — first measured as
+            // hit@5 = 0.20 on real data vs 1.0 on the oracle split.
+            let date = dates.get(i).and_then(|d| d.as_str()).unwrap_or("");
+            let mut md = if date.is_empty() {
+                format!("# Chat session {}\n\n", i + 1)
+            } else {
+                format!("# Chat on {date}\n\n")
+            };
             if let Some(turns) = sess.as_array() {
                 for t in turns {
                     let role = t["role"].as_str().unwrap_or("user");
@@ -317,7 +330,34 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     // metrics (they exist to test answer-stage refusal, not search).
     questions.retain(|q| !q.question_id.ends_with("_abs") && !q.gold.is_empty());
     let after_abs = questions.len();
-    questions.truncate(limit);
+
+    // The dataset file is ordered by question type, so a head-truncation
+    // would benchmark a single type. For --limit subsets, interleave types
+    // round-robin (deterministic, no RNG) so every slice is representative.
+    if limit < questions.len() {
+        let mut by_type: std::collections::BTreeMap<String, Vec<LmeQuestion>> =
+            std::collections::BTreeMap::new();
+        for q in questions.drain(..) {
+            by_type.entry(q.question_type.clone()).or_default().push(q);
+        }
+        let mut picked = Vec::with_capacity(limit);
+        'outer: loop {
+            let mut any = false;
+            for bucket in by_type.values_mut() {
+                if let Some(q) = bucket.pop() {
+                    picked.push(q);
+                    any = true;
+                    if picked.len() == limit {
+                        break 'outer;
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+        questions = picked;
+    }
 
     eprintln!(
         "longmemeval: {total_available} questions in file, {after_abs} scoreable \
