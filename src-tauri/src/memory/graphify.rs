@@ -531,13 +531,16 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
 fn write_parsed_file(conn: &Connection, pf: &ParsedFile) -> rusqlite::Result<()> {
     let engram_id = format!("code-{}", short_hash(&pf.path));
     let lang = pf.language.name();
-    let summary = format!(
-        "[code:{}] {} — {} symbols, {} calls",
-        lang,
-        pf.path,
-        pf.symbols.len(),
-        pf.calls.len()
-    );
+    // The engram body = the file's API surface (path + every symbol's
+    // signature), so a graphified file reads as a meaningful graph node AND is
+    // keyword-searchable by symbol name through the normal recall path.
+    let mut summary = format!("{} ({})\n", pf.path, lang);
+    for s in &pf.symbols {
+        if !s.signature.is_empty() {
+            summary.push_str(&s.signature);
+            summary.push('\n');
+        }
+    }
 
     // Code engram (kind='code') = a graph node for the file, inserted directly
     // so the vault write-back never sees it and the repo stays canonical.
@@ -702,9 +705,11 @@ pub fn whats_in_file(
     path: &str,
 ) -> rusqlite::Result<Vec<(String, String, String)>> {
     let mut stmt = conn.prepare(
+        // Match the exact path, or any stored path ending in `/<query>` so an
+        // agent can pass a basename or partial path and still resolve the file.
         "SELECT v.name, v.kind, COALESCE(r.context, '')
            FROM variable_references r JOIN variables v ON v.id = r.variable_id
-          WHERE r.filepath = ?1 AND r.ref_type = 'define'
+          WHERE (r.filepath = ?1 OR r.filepath LIKE '%/' || ?1) AND r.ref_type = 'define'
           ORDER BY r.line_number",
     )?;
     let rows = stmt.query_map([path], |r| {
@@ -964,6 +969,9 @@ function compute(r: number): number { return r * r; }
         // the signature carries the declaration line, not just the name
         let build_sig = &in_file.iter().find(|(n, _, _)| n == "build").unwrap().2;
         assert!(build_sig.contains("fn build"), "signature: {build_sig}");
+        // passing just the basename still resolves the file (suffix match)
+        let by_base = whats_in_file(&conn, "engine.rs").unwrap();
+        assert!(by_base.iter().any(|(n, _, _)| n == "build"), "basename should match");
 
         // idempotent: a second run must not duplicate the definition
         write_parsed_file(&conn, &pf).unwrap();
