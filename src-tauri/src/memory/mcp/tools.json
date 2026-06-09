@@ -2900,5 +2900,50 @@
       "body": [],
       "special": null
     }
+  },
+  {
+    "name": "blast_radius",
+    "title": "Blast radius of a symbol",
+    "description": "List every function that *transitively* calls a symbol — the impact surface of changing or removing it — from the graphified codebase. Returns impacted symbols with the file/line each is defined in. Run `graphify` on a repo first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The symbol whose transitive callers (blast radius) to compute."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the lookup."
+        }
+      },
+      "required": ["symbol"]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/code/blast_radius",
+      "path_params": [],
+      "query": [
+        {
+          "param": "symbol",
+          "from": "symbol",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
   }
 ]

@@ -129,6 +129,7 @@ fn router() -> Router {
         .route("/api/code/where_defined", get(code_where_defined))
         .route("/api/code/who_calls", get(code_who_calls))
         .route("/api/code/whats_in_file", get(code_whats_in_file))
+        .route("/api/code/blast_radius", get(code_blast_radius))
         .route("/api/notes", post(remember))
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))

@@ -174,9 +174,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_parses_and_has_50_tools() {
+    fn registry_parses_and_has_51_tools() {
         let tools = load_tools();
-        assert_eq!(tools.len(), 50, "expected 50 tools (46 ported + 4 graphify)");
+        assert_eq!(tools.len(), 51, "expected 51 tools (46 ported + 5 graphify)");
         // names unique
         let mut seen = HashSet::new();
         for t in &tools {
