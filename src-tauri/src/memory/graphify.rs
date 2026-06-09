@@ -1,20 +1,31 @@
 //! Graphify — parse a codebase into the local knowledge graph (Phase 1: Map).
 //!
 //! tree-sitter parses each source file **in-process** into a normalized
-//! [`ParsedFile`] of symbols + imports + calls. No network, no model — the
-//! user's source never leaves the machine. The normalized shape maps onto the
-//! (currently dormant) `variables` / `function_calls` / `variable_references`
-//! tables in `schema.sql`; DB population, MCP query tools, and graph rendering
-//! are wired in later phases. See `docs/designs/graphify.md`.
+//! [`ParsedFile`] of symbols + imports + calls (no network, no model — the
+//! user's source never leaves the machine), and [`graphify_into_brain`] writes
+//! that into the brain DB via the (previously dormant) `variables` /
+//! `variable_references` / `function_calls` tables plus a `kind='code'` engram
+//! node per file. The query helpers ([`where_defined`], [`whats_in_file`],
+//! [`who_calls`]) back the MCP tools. See `docs/designs/graphify.md`.
 //!
 //! Each language is a tree-sitter grammar crate + one [`LangProfile`] (a small
 //! table of node-kind → meaning). Resolution is name-heuristic (not a full
 //! type-resolver) — good enough for retrieval + graph edges, matching the
 //! "no full AST diff" stance of the schema's rename-detection design.
-#![allow(dead_code)] // scaffolding ahead of the DB/MCP/UI wiring (phases 1b–3)
+//!
+//! Code is a DERIVED index: the repo is the system of record; the brain stores
+//! only the extracted graph. Rows are written directly, bypassing the note
+//! save / vault write-back path, so source is never copied into the markdown
+//! vault. Re-running graphify upserts the rows.
+#![allow(dead_code)] // some query/handler seams are consumed in later phases
 
 use std::path::Path;
+use std::sync::Arc;
+
+use rusqlite::{params, Connection};
 use tree_sitter::{Node, Parser};
+
+use crate::memory::db::BrainDb;
 
 /// A named thing declared in source. Maps onto a `variables` row
 /// (name, kind, scope, type_hint, language, line).
@@ -338,6 +349,136 @@ fn last_segment(s: &str) -> String {
         .to_string()
 }
 
+// ── DB population + queries (Phase 1b) ─────────────────────────────────────
+
+/// Counts from a graphify run.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GraphifyStats {
+    pub files: usize,
+    pub symbols: usize,
+    pub calls: usize,
+}
+
+/// Walk `root`, parse every supported file, and write the derived graph into
+/// the brain DB. Best-effort per file; local-only, no network.
+pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
+    let files = graphify_repo(root);
+    let mut stats = GraphifyStats::default();
+    let conn = db.lock();
+    for pf in &files {
+        if write_parsed_file(&conn, pf).is_ok() {
+            stats.files += 1;
+            stats.symbols += pf.symbols.len();
+            stats.calls += pf.calls.len();
+        }
+    }
+    stats
+}
+
+/// Persist one parsed file's graph fragment. Idempotent (re-running upserts).
+fn write_parsed_file(conn: &Connection, pf: &ParsedFile) -> rusqlite::Result<()> {
+    let engram_id = format!("code-{}", short_hash(&pf.path));
+    let lang = pf.language.name();
+    let summary = format!(
+        "[code:{}] {} — {} symbols, {} calls",
+        lang,
+        pf.path,
+        pf.symbols.len(),
+        pf.calls.len()
+    );
+
+    // Code engram (kind='code') = a graph node for the file, inserted directly
+    // so the vault write-back never sees it and the repo stays canonical.
+    conn.execute(
+        "INSERT INTO engrams (id, filename, title, content, content_hash, kind,
+                              created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'code',
+                 strftime('%Y-%m-%d %H:%M:%f','now'),
+                 strftime('%Y-%m-%d %H:%M:%f','now'))
+         ON CONFLICT(id) DO UPDATE SET
+           content=excluded.content,
+           content_hash=excluded.content_hash,
+           updated_at=strftime('%Y-%m-%d %H:%M:%f','now')",
+        params![engram_id, pf.path, pf.path, summary, short_hash(&summary)],
+    )?;
+
+    for s in &pf.symbols {
+        let var_id = format!("var-{}", short_hash(&format!("{}|module|{}", s.name, lang)));
+        conn.execute(
+            "INSERT OR IGNORE INTO variables (id, name, scope, kind, language, description)
+             VALUES (?1, ?2, 'module', ?3, ?4, ?5)",
+            params![var_id, s.name, s.kind.as_schema_kind(), lang, s.doc],
+        )?;
+        let canon_id: String = conn.query_row(
+            "SELECT id FROM variables WHERE name=?1 AND scope='module' AND language=?2",
+            params![s.name, lang],
+            |r| r.get(0),
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO variable_references
+               (variable_id, engram_id, filepath, line_number, context, ref_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'define')",
+            params![canon_id, engram_id, pf.path, s.line as i64, s.kind.as_schema_kind()],
+        )?;
+    }
+
+    for c in &pf.calls {
+        conn.execute(
+            "INSERT OR IGNORE INTO function_calls
+               (caller_name, callee_name, language, engram_id, filepath, line_number)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![c.caller, c.callee, lang, engram_id, pf.path, c.line as i64],
+        )?;
+    }
+    Ok(())
+}
+
+/// Files + line a symbol is *defined* in: `(filepath, line)`.
+pub fn where_defined(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.filepath, r.line_number
+           FROM variable_references r JOIN variables v ON v.id = r.variable_id
+          WHERE v.name = ?1 AND r.ref_type = 'define'
+          ORDER BY r.filepath, r.line_number",
+    )?;
+    let rows = stmt.query_map([symbol], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    rows.collect()
+}
+
+/// Symbols declared in a file: `(name, kind)`, in declaration order.
+pub fn whats_in_file(conn: &Connection, path: &str) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT v.name, v.kind
+           FROM variable_references r JOIN variables v ON v.id = r.variable_id
+          WHERE r.filepath = ?1 AND r.ref_type = 'define'
+          ORDER BY r.line_number",
+    )?;
+    let rows = stmt.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    rows.collect()
+}
+
+/// Callers of a symbol: `(caller, filepath, line)`; caller is `<module>` for
+/// top-level calls.
+pub fn who_calls(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(String, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(caller_name,'<module>'), filepath, line_number
+           FROM function_calls WHERE callee_name = ?1
+          ORDER BY filepath, line_number",
+    )?;
+    let rows = stmt.query_map([symbol], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+    })?;
+    rows.collect()
+}
+
+/// Non-cryptographic, stable id hash for derived rows.
+fn short_hash(s: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +564,60 @@ function compute(r: number): number { return r * r; }
     #[test]
     fn non_code_is_skipped() {
         assert!(parse_source("notes.md", "# hello").is_none());
+    }
+
+    /// Minimal in-memory schema covering only the tables graphify writes
+    /// (avoids pulling in the sqlite-vec `vec0` virtual tables from schema.sql).
+    fn code_schema(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY, filename TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL,
+                kind TEXT DEFAULT 'note', created_at TEXT, updated_at TEXT);
+             CREATE TABLE variables (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                scope TEXT DEFAULT 'module', kind TEXT DEFAULT 'variable', type_hint TEXT,
+                language TEXT NOT NULL, description TEXT,
+                first_seen TEXT DEFAULT (datetime('now')),
+                last_seen TEXT DEFAULT (datetime('now')), removed_at TEXT,
+                UNIQUE(name, scope, language));
+             CREATE TABLE variable_references (variable_id TEXT NOT NULL, engram_id TEXT NOT NULL,
+                filepath TEXT, line_number INTEGER, context TEXT, ref_type TEXT DEFAULT 'use',
+                PRIMARY KEY (variable_id, engram_id, line_number));
+             CREATE TABLE function_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, caller_name TEXT,
+                callee_name TEXT NOT NULL, language TEXT NOT NULL, engram_id TEXT, filepath TEXT,
+                line_number INTEGER, UNIQUE(caller_name, callee_name, filepath, line_number));",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn writes_and_queries_code_graph() {
+        let conn = Connection::open_in_memory().unwrap();
+        code_schema(&conn);
+
+        let src = "pub fn build() -> u8 { make() }\nfn make() -> u8 { 1 }";
+        let pf = parse_source("src/engine.rs", src).unwrap();
+        write_parsed_file(&conn, &pf).unwrap();
+
+        // where is `build` defined?
+        assert_eq!(
+            where_defined(&conn, "build").unwrap(),
+            vec![("src/engine.rs".to_string(), 1)]
+        );
+        // who calls `make`? → build, line 1
+        assert_eq!(
+            who_calls(&conn, "make").unwrap(),
+            vec![("build".to_string(), "src/engine.rs".to_string(), 1)]
+        );
+        // what's in the file?
+        let names: Vec<String> = whats_in_file(&conn, "src/engine.rs")
+            .unwrap()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(names.contains(&"build".to_string()) && names.contains(&"make".to_string()));
+
+        // idempotent: a second run must not duplicate the definition
+        write_parsed_file(&conn, &pf).unwrap();
+        assert_eq!(where_defined(&conn, "build").unwrap().len(), 1);
     }
 }
