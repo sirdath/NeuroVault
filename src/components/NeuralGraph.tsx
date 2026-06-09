@@ -60,6 +60,7 @@ function edgeColor(linkType: string, alpha: number): string {
     case "contradicts": return `rgba(255, 100, 100, ${alpha})`;
     case "supersedes":  return `rgba(255, 165, 80, ${alpha})`;
     case "mentions":    return `rgba(150, 150, 170, ${alpha})`;
+    case "calls":       return `rgba(245, 195, 80, ${alpha})`;
     default:            return `rgba(122, 119, 154, ${alpha})`;
   }
 }
@@ -1392,7 +1393,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // node's category reads at a glance. Health/strength + state now live
     // in the ring (drawn below), not in the fill's alpha. Dormant gets a
     // light desaturate so it still reads as "fading".
-    const baseColor = isDormant ? desaturateHex(folderHue, 0.35) : folderHue;
+    //
+    // Graphified code files (kind='code') get a distinct gold fill so a
+    // codebase reads as its own layer, separate from authored notes — and
+    // matches the gold 'calls' dependency edges. Everything else keeps the
+    // folder/cluster hue.
+    const categoryHue =
+      (node as { kind?: string }).kind === "code" ? "#f5c350" : folderHue;
+    const baseColor = isDormant ? desaturateHex(categoryHue, 0.35) : categoryHue;
 
     // Hover-focus dimming unchanged — still the right UX.
     let focusAlpha = 1;
