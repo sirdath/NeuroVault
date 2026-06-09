@@ -502,7 +502,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
   }, [mode]);
 
-  const { nodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
+  const { nodes: rawNodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
   const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
@@ -530,6 +530,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const searchQuery = useGraphSettingsStore((s) => s.searchQuery);
   const showOrphans = useGraphSettingsStore((s) => s.showOrphans);
   const manualOnly = useGraphSettingsStore((s) => s.manualOnly);
+  const showCode = useGraphSettingsStore((s) => s.showCode);
   const nodeSizeScale = useGraphSettingsStore((s) => s.nodeSizeScale);
   const linkThicknessScale = useGraphSettingsStore((s) => s.linkThicknessScale);
   const labelZoomThreshold = useGraphSettingsStore((s) => s.labelZoomThreshold);
@@ -659,11 +660,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // The downstream graphData / adjacency / bidi memos read this
   // filtered list, so the visual graph and the hover-focus
   // neighbourhood match what the user actually wrote.
+  // Code layer: when hidden, drop kind="code" nodes AND every edge touching
+  // them — a dangling source/target would crash the force simulation.
+  const codeIds = useMemo<Set<string>>(
+    () => new Set(rawNodes.filter((n) => n.kind === "code").map((n) => n.id)),
+    [rawNodes],
+  );
+  const nodes = useMemo(
+    () => (showCode ? rawNodes : rawNodes.filter((n) => n.kind !== "code")),
+    [rawNodes, showCode],
+  );
   const edges = useMemo(() => {
-    if (manualOnly) return rawEdges.filter((e) => e.link_type === "manual");
-    if (!showSemanticEdges) return rawEdges.filter((e) => e.link_type !== "semantic");
-    return rawEdges;
-  }, [rawEdges, showSemanticEdges, manualOnly]);
+    let list = rawEdges;
+    if (!showCode && codeIds.size > 0) {
+      list = list.filter((e) => !codeIds.has(e.from) && !codeIds.has(e.to));
+    }
+    if (manualOnly) return list.filter((e) => e.link_type === "manual");
+    if (!showSemanticEdges) return list.filter((e) => e.link_type !== "semantic");
+    return list;
+  }, [rawEdges, codeIds, showCode, showSemanticEdges, manualOnly]);
   const semanticEdgeCount = useMemo(
     () => rawEdges.filter((e) => e.link_type === "semantic").length,
     [rawEdges],
@@ -2088,6 +2103,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         nodeCount={nodes.length}
         orphanCount={nodes.filter((n) => (graphData.adjacency.get(n.id)?.size ?? 0) === 0).length}
         semanticEdgeCount={semanticEdgeCount}
+        codeNodeCount={codeIds.size}
         onTimelapseStart={startTimelapse}
         onTimelapseStop={stopTimelapse}
         timelapseActive={tlActive}

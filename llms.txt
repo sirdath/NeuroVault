@@ -28,6 +28,6 @@ Repo: https://github.com/sirdath/NeuroVault
 - [SECURITY.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/SECURITY.md): security policy + disclosure.
 - [THIRD_PARTY_NOTICES.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/THIRD_PARTY_NOTICES.md): MIT license + dependency notices.
 
-## Design
+## Graphify (codebase → knowledge graph)
 
-- [docs/designs/graphify.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/designs/graphify.md): codebase → local knowledge graph (upcoming flagship): tree-sitter ingestion, the dormant symbol/call-graph schema, and the on-device privacy model.
+- [docs/designs/graphify.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/designs/graphify.md): design + architecture for graphify — point NeuroVault at a repo and it becomes part of the graph, parsed entirely on-device with tree-sitter (8 languages: Rust, Python, TypeScript, TSX, Go, Java, C#, Ruby). Six MCP tools: `graphify`, `where_defined`, `whats_in_file`, `who_calls`, `blast_radius` (transitive impact of changing a symbol), and `fuse` (links notes/decisions to the code symbols they reference in backticks). Code files render as a gold layer in the neural graph; the repo stays the system of record (the brain stores only the derived graph). Source never leaves the machine.
