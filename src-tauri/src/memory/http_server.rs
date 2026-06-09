@@ -130,6 +130,7 @@ fn router() -> Router {
         .route("/api/code/who_calls", get(code_who_calls))
         .route("/api/code/whats_in_file", get(code_whats_in_file))
         .route("/api/code/blast_radius", get(code_blast_radius))
+        .route("/api/code/fuse", post(code_fuse))
         .route("/api/notes", post(remember))
         .route("/api/notes", axum::routing::put(notes_save))
         .route("/api/notes", axum::routing::delete(notes_delete))

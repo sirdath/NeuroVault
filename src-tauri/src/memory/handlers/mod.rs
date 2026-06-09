@@ -2437,6 +2437,30 @@ pub async fn code_blast_radius(
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+pub struct FuseBody {
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// POST /api/code/fuse — link notes to the code symbols they reference.
+pub async fn code_fuse(
+    _s: State<ServerState>,
+    Json(body): Json<FuseBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let links = super::graphify::fuse_notes_to_code(&conn)?;
+        Ok(serde_json::json!({ "brain_id": id, "links": links }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
 // ---------------------------------------------------------------------------
 // Image listing for caption-at-ingest workflow.
 //
