@@ -107,6 +107,10 @@ pub enum Lang {
     Python,
     TypeScript,
     Tsx,
+    Go,
+    Java,
+    CSharp,
+    Ruby,
 }
 
 impl Lang {
@@ -118,6 +122,10 @@ impl Lang {
             Some("py" | "pyi") => Some(Lang::Python),
             Some("ts" | "mts" | "cts") => Some(Lang::TypeScript),
             Some("tsx") => Some(Lang::Tsx),
+            Some("go") => Some(Lang::Go),
+            Some("java") => Some(Lang::Java),
+            Some("cs") => Some(Lang::CSharp),
+            Some("rb") => Some(Lang::Ruby),
             _ => None,
         }
     }
@@ -128,6 +136,10 @@ impl Lang {
             Lang::Rust => "rust",
             Lang::Python => "python",
             Lang::TypeScript | Lang::Tsx => "typescript",
+            Lang::Go => "go",
+            Lang::Java => "java",
+            Lang::CSharp => "csharp",
+            Lang::Ruby => "ruby",
         }
     }
 
@@ -137,6 +149,10 @@ impl Lang {
             Lang::Python => tree_sitter_python::LANGUAGE.into(),
             Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Lang::Go => tree_sitter_go::LANGUAGE.into(),
+            Lang::Java => tree_sitter_java::LANGUAGE.into(),
+            Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Lang::Ruby => tree_sitter_ruby::LANGUAGE.into(),
         }
     }
 
@@ -145,6 +161,10 @@ impl Lang {
             Lang::Rust => &RUST_PROFILE,
             Lang::Python => &PY_PROFILE,
             Lang::TypeScript | Lang::Tsx => &TS_PROFILE,
+            Lang::Go => &GO_PROFILE,
+            Lang::Java => &JAVA_PROFILE,
+            Lang::CSharp => &CSHARP_PROFILE,
+            Lang::Ruby => &RUBY_PROFILE,
         }
     }
 }
@@ -232,6 +252,10 @@ struct LangProfile {
     calls: &'static [&'static str],
     /// prefixes stripped from an import's raw text (e.g. `"use "` for Rust).
     strip_prefixes: &'static [&'static str],
+    /// the field on a call node holding the callee: `"function"` for most
+    /// C-family grammars, `"name"` for Java's `method_invocation`, `"method"`
+    /// for Ruby's `call`.
+    call_fn_field: &'static str,
 }
 
 impl LangProfile {
@@ -265,6 +289,7 @@ const RUST_PROFILE: LangProfile = LangProfile {
     imports: &["use_declaration"],
     calls: &["call_expression"],
     strip_prefixes: &["use "],
+    call_fn_field: "function",
 };
 
 const PY_PROFILE: LangProfile = LangProfile {
@@ -276,6 +301,7 @@ const PY_PROFILE: LangProfile = LangProfile {
     imports: &["import_statement", "import_from_statement"],
     calls: &["call"],
     strip_prefixes: &[],
+    call_fn_field: "function",
 };
 
 const TS_PROFILE: LangProfile = LangProfile {
@@ -297,6 +323,67 @@ const TS_PROFILE: LangProfile = LangProfile {
     imports: &["import_statement"],
     calls: &["call_expression"],
     strip_prefixes: &[],
+    call_fn_field: "function",
+};
+
+const GO_PROFILE: LangProfile = LangProfile {
+    symbols: &[
+        ("function_declaration", SymbolKind::Function),
+        ("method_declaration", SymbolKind::Function),
+        ("type_spec", SymbolKind::Type),
+    ],
+    fn_defs: &["function_declaration", "method_declaration"],
+    imports: &["import_declaration"],
+    calls: &["call_expression"],
+    strip_prefixes: &["import "],
+    call_fn_field: "function",
+};
+
+const JAVA_PROFILE: LangProfile = LangProfile {
+    symbols: &[
+        ("class_declaration", SymbolKind::Class),
+        ("interface_declaration", SymbolKind::Interface),
+        ("enum_declaration", SymbolKind::Enum),
+        ("record_declaration", SymbolKind::Class),
+        ("method_declaration", SymbolKind::Function),
+        ("constructor_declaration", SymbolKind::Function),
+    ],
+    fn_defs: &["method_declaration", "constructor_declaration"],
+    imports: &["import_declaration"],
+    calls: &["method_invocation"],
+    strip_prefixes: &["import "],
+    call_fn_field: "name",
+};
+
+const CSHARP_PROFILE: LangProfile = LangProfile {
+    symbols: &[
+        ("class_declaration", SymbolKind::Class),
+        ("interface_declaration", SymbolKind::Interface),
+        ("struct_declaration", SymbolKind::Struct),
+        ("enum_declaration", SymbolKind::Enum),
+        ("record_declaration", SymbolKind::Class),
+        ("method_declaration", SymbolKind::Function),
+        ("constructor_declaration", SymbolKind::Function),
+    ],
+    fn_defs: &["method_declaration", "constructor_declaration"],
+    imports: &["using_directive"],
+    calls: &["invocation_expression"],
+    strip_prefixes: &["using "],
+    call_fn_field: "function",
+};
+
+const RUBY_PROFILE: LangProfile = LangProfile {
+    symbols: &[
+        ("method", SymbolKind::Function),
+        ("singleton_method", SymbolKind::Function),
+        ("class", SymbolKind::Class),
+        ("module", SymbolKind::Module),
+    ],
+    fn_defs: &["method", "singleton_method"],
+    imports: &[],
+    calls: &["call"],
+    strip_prefixes: &[],
+    call_fn_field: "method",
 };
 
 fn walk(node: Node, src: &str, pf: &mut ParsedFile, current_fn: Option<String>, p: &LangProfile) {
@@ -334,7 +421,7 @@ fn walk(node: Node, src: &str, pf: &mut ParsedFile, current_fn: Option<String>, 
     }
 
     if p.is_call(kind) {
-        if let Some(func) = node.child_by_field_name("function") {
+        if let Some(func) = node.child_by_field_name(p.call_fn_field) {
             if let Ok(text) = func.utf8_text(src.as_bytes()) {
                 let callee = last_segment(text);
                 if !callee.is_empty() {
@@ -739,6 +826,57 @@ function compute(r: number): number { return r * r; }
         assert!(pf.imports.iter().any(|i| i.path.contains("./foo")));
         let c = pf.calls.iter().find(|c| c.callee == "compute").unwrap();
         assert_eq!(c.caller.as_deref(), Some("area"));
+    }
+
+    #[test]
+    fn go_symbols_calls() {
+        let src = "package main\n\nfunc build() int { return helper() }\nfunc helper() int { return 1 }\n";
+        let pf = parse_source("main.go", src).expect("go parses");
+        assert_eq!(pf.language, Lang::Go);
+        let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"build"), "{names:?}");
+        assert!(names.contains(&"helper"), "{names:?}");
+        let c = pf.calls.iter().find(|c| c.callee == "helper").unwrap();
+        assert_eq!(c.caller.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn java_symbols_calls() {
+        let src = "class A {\n  int build() { return helper(); }\n  int helper() { return 1; }\n}\n";
+        let pf = parse_source("A.java", src).expect("java parses");
+        assert_eq!(pf.language, Lang::Java);
+        let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"A"), "{names:?}");
+        assert!(names.contains(&"build"), "{names:?}");
+        assert!(names.contains(&"helper"), "{names:?}");
+        let c = pf.calls.iter().find(|c| c.callee == "helper").unwrap();
+        assert_eq!(c.caller.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn csharp_symbols_calls() {
+        let src = "class A {\n  int Build() { return Helper(); }\n  int Helper() { return 1; }\n}\n";
+        let pf = parse_source("A.cs", src).expect("c# parses");
+        assert_eq!(pf.language, Lang::CSharp);
+        let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"A"), "{names:?}");
+        assert!(names.contains(&"Build"), "{names:?}");
+        assert!(names.contains(&"Helper"), "{names:?}");
+        let c = pf.calls.iter().find(|c| c.callee == "Helper").unwrap();
+        assert_eq!(c.caller.as_deref(), Some("Build"));
+    }
+
+    #[test]
+    fn ruby_symbols_calls() {
+        let src = "class A\n  def build\n    helper(1)\n  end\n  def helper(n)\n    n\n  end\nend\n";
+        let pf = parse_source("a.rb", src).expect("ruby parses");
+        assert_eq!(pf.language, Lang::Ruby);
+        let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"A"), "{names:?}");
+        assert!(names.contains(&"build"), "{names:?}");
+        assert!(names.contains(&"helper"), "{names:?}");
+        let c = pf.calls.iter().find(|c| c.callee == "helper").unwrap();
+        assert_eq!(c.caller.as_deref(), Some("build"));
     }
 
     #[test]
