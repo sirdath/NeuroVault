@@ -326,7 +326,9 @@ CREATE INDEX IF NOT EXISTS idx_engrams_strength ON engrams(strength DESC);
 CREATE INDEX IF NOT EXISTS idx_engrams_accessed ON engrams(accessed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_engrams_filename ON engrams(filename);
 CREATE INDEX IF NOT EXISTS idx_engrams_updated  ON engrams(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_chunks_engram    ON chunks(engram_id);
+-- idx_chunks_granularity (engram_id, granularity) also serves plain
+-- engram_id lookups via its leftmost-prefix column, so a separate
+-- idx_chunks_engram(engram_id) is pure redundant storage — dropped.
 CREATE INDEX IF NOT EXISTS idx_chunks_granularity ON chunks(engram_id, granularity);
 CREATE INDEX IF NOT EXISTS idx_mentions_engram  ON entity_mentions(engram_id);
 CREATE INDEX IF NOT EXISTS idx_mentions_entity  ON entity_mentions(entity_id);
