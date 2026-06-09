@@ -357,6 +357,7 @@ pub struct GraphifyStats {
     pub files: usize,
     pub symbols: usize,
     pub calls: usize,
+    pub edges: usize,
 }
 
 /// Walk `root`, parse every supported file, and write the derived graph into
@@ -371,6 +372,12 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
             stats.symbols += pf.symbols.len();
             stats.calls += pf.calls.len();
         }
+    }
+    // Second pass: every file's symbols are now in the DB, so resolve each call
+    // to the file that DEFINES the callee and write file→file 'calls' edges into
+    // engram_links — this connects the code nodes in the graph view.
+    if let Ok(n) = compute_code_edges(&conn) {
+        stats.edges = n;
     }
     stats
 }
@@ -431,6 +438,25 @@ fn write_parsed_file(conn: &Connection, pf: &ParsedFile) -> rusqlite::Result<()>
         )?;
     }
     Ok(())
+}
+
+/// Resolve calls to the file that defines the callee and write file→file
+/// `'calls'` edges into `engram_links`. Run after all files are written so
+/// cross-file callees resolve. Returns the number of edges inserted.
+fn compute_code_edges(conn: &Connection) -> rusqlite::Result<usize> {
+    // Normalise orientation (from < to) because the graph view treats
+    // engram_links as undirected and keeps only the from<to row. Direction is
+    // preserved in `function_calls` (read by `who_calls`); here we only need
+    // the file pair to be connected in the graph.
+    conn.execute(
+        "INSERT OR IGNORE INTO engram_links (from_engram, to_engram, similarity, link_type)
+         SELECT DISTINCT MIN(fc.engram_id, vr.engram_id), MAX(fc.engram_id, vr.engram_id), 1.0, 'calls'
+           FROM function_calls fc
+           JOIN variables v ON v.name = fc.callee_name
+           JOIN variable_references vr ON vr.variable_id = v.id AND vr.ref_type = 'define'
+          WHERE fc.engram_id IS NOT NULL AND fc.engram_id <> vr.engram_id",
+        [],
+    )
 }
 
 /// Files + line a symbol is *defined* in: `(filepath, line)`.
@@ -584,7 +610,10 @@ function compute(r: number): number { return r * r; }
                 PRIMARY KEY (variable_id, engram_id, line_number));
              CREATE TABLE function_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, caller_name TEXT,
                 callee_name TEXT NOT NULL, language TEXT NOT NULL, engram_id TEXT, filepath TEXT,
-                line_number INTEGER, UNIQUE(caller_name, callee_name, filepath, line_number));",
+                line_number INTEGER, UNIQUE(caller_name, callee_name, filepath, line_number));
+             CREATE TABLE engram_links (from_engram TEXT NOT NULL, to_engram TEXT NOT NULL,
+                similarity REAL NOT NULL, link_type TEXT DEFAULT 'semantic',
+                PRIMARY KEY (from_engram, to_engram));",
         )
         .unwrap();
     }
@@ -619,5 +648,31 @@ function compute(r: number): number { return r * r; }
         // idempotent: a second run must not duplicate the definition
         write_parsed_file(&conn, &pf).unwrap();
         assert_eq!(where_defined(&conn, "build").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn code_edges_link_caller_to_callee_file() {
+        let conn = Connection::open_in_memory().unwrap();
+        code_schema(&conn);
+        // a.rs::build calls make, which is defined in b.rs.
+        let a = parse_source("a.rs", "pub fn build() -> u8 { make() }").unwrap();
+        let b = parse_source("b.rs", "pub fn make() -> u8 { 1 }").unwrap();
+        write_parsed_file(&conn, &a).unwrap();
+        write_parsed_file(&conn, &b).unwrap();
+
+        let n = compute_code_edges(&conn).unwrap();
+        assert!(n >= 1, "expected at least one file→file call edge");
+
+        let a_id = format!("code-{}", short_hash("a.rs"));
+        let b_id = format!("code-{}", short_hash("b.rs"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM engram_links WHERE link_type='calls' \
+                 AND ((from_engram=?1 AND to_engram=?2) OR (from_engram=?2 AND to_engram=?1))",
+                params![a_id, b_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "a.rs and b.rs should be linked via a 'calls' edge");
     }
 }

@@ -2319,6 +2319,7 @@ pub async fn code_graphify(
             "files": stats.files,
             "symbols": stats.symbols,
             "calls": stats.calls,
+            "edges": stats.edges,
             "elapsed_ms": started.elapsed().as_millis() as u64,
         }))
     })
