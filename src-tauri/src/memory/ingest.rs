@@ -730,13 +730,17 @@ fn strip_trailing_paren(s: &str) -> String {
 /// A cascade — each step requires an UNAMBIGUOUS hit so a link never
 /// invents a wrong edge:
 ///   1. exact title (case-insensitive) — the common path;
-///   2. base-title match — ignore a trailing `"(...)"` suffix on either
+///   2. filename basename — Obsidian-style `[[file]]` links reference a note
+///      by its filename, not its `# title`, so `[[literature_review]]`
+///      connects to `Notes&Research/Literature_Review.md`. Unique only;
+///      duplicate basenames across folders stay unlinked.
+///   3. base-title match — ignore a trailing `"(...)"` suffix on either
 ///      side, so `[[the run]]` connects to "the run (produces locked
 ///      dataset)". Only resolves when exactly one note shares that base
 ///      title; two notes with the same base stay unlinked (the author must
 ///      use the full title to disambiguate).
 fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<String> {
-    // 1. Exact (case-insensitive).
+    // 1. Exact title (case-insensitive).
     if let Ok(id) = conn.query_row(
         "SELECT id FROM engrams WHERE lower(title) = ?1 AND state != 'dormant'",
         [target],
@@ -745,7 +749,42 @@ fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<
         return Some(id);
     }
 
-    // 2. Base-title (parenthetical-insensitive), unique matches only.
+    // 2. Filename basename (the Obsidian convention). The `filename` column
+    //    holds the vault-relative path; match a note whose basename equals the
+    //    target (with or without a trailing `.md`), at the root or in any
+    //    subfolder. Unique only — a basename shared across folders is ambiguous.
+    let stem = target.strip_suffix(".md").unwrap_or(target).trim();
+    if !stem.is_empty() {
+        let esc = stem.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let exact_fname = format!("{stem}.md");
+        let like_fname = format!("%/{esc}.md");
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT id FROM engrams
+             WHERE state != 'dormant'
+               AND (lower(filename) = ?1 OR lower(filename) LIKE ?2 ESCAPE '\\')",
+        ) {
+            if let Ok(rows) =
+                stmt.query_map(params![&exact_fname, &like_fname], |r| r.get::<_, String>(0))
+            {
+                let mut hit: Option<String> = None;
+                let mut ambiguous = false;
+                for id in rows.flatten() {
+                    if hit.is_some() {
+                        ambiguous = true;
+                        break;
+                    }
+                    hit = Some(id);
+                }
+                if !ambiguous {
+                    if let Some(id) = hit {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Base-title (parenthetical-insensitive), unique matches only.
     let base = strip_trailing_paren(target);
     if base.is_empty() {
         return None;
@@ -1263,5 +1302,39 @@ mod tests {
         assert_eq!(resolve_wikilink_target(&conn, "nope"), None);
         // Dormant engrams are not link targets.
         assert_eq!(resolve_wikilink_target(&conn, "dormant note"), None);
+    }
+
+    #[test]
+    fn wikilink_resolution_matches_filename() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY, title TEXT, filename TEXT, state TEXT);
+             INSERT INTO engrams VALUES ('e1','Publishable Literature Reviews','Notes&Research/Literature_Review.md','active');
+             INSERT INTO engrams VALUES ('e2','Data Foundation','01 — data foundation (dataset & cleaning).md','active');
+             INSERT INTO engrams VALUES ('e3','Dup A','sub_a/readme.md','active');
+             INSERT INTO engrams VALUES ('e4','Dup B','sub_b/readme.md','active');",
+        )
+        .unwrap();
+
+        // Obsidian-style [[file]] link resolves by filename basename, not title.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "literature_review").as_deref(),
+            Some("e1")
+        );
+        // A trailing .md is tolerated.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "literature_review.md").as_deref(),
+            Some("e1")
+        );
+        // Root-level file with spaces / parens / & in the name.
+        assert_eq!(
+            resolve_wikilink_target(&conn, "01 — data foundation (dataset & cleaning)")
+                .as_deref(),
+            Some("e2")
+        );
+        // A `_` in the target is a literal, not a LIKE wildcard.
+        assert_eq!(resolve_wikilink_target(&conn, "literatureXreview"), None);
+        // Same basename in two folders → ambiguous, no edge.
+        assert_eq!(resolve_wikilink_target(&conn, "readme"), None);
     }
 }
