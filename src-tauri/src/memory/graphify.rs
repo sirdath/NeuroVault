@@ -505,12 +505,16 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
     let files = graphify_repo(root);
     let mut stats = GraphifyStats::default();
     let conn = db.lock();
+    // One transaction for the whole write pass: per-statement autocommit
+    // fsyncs dominate otherwise (measured ~10x slower on a 1.9k-file repo).
+    let _ = conn.execute_batch("BEGIN");
     for pf in &files {
         if write_parsed_file(&conn, pf).is_ok() {
             stats.files += 1;
             stats.symbols += pf.symbols.len();
         }
     }
+    let _ = conn.execute_batch("COMMIT");
     // Now that every symbol is in the DB, drop calls to names defined nowhere in
     // the codebase (stdlib/builtin noise) so who_calls / blast_radius stay about
     // THIS code, then count what remains.
