@@ -102,10 +102,25 @@ product, ask which of these it is.
 | Config | hit@5 ("R@5") | recall@5 | ndcg@5 | mrr | questions |
 |---|---|---|---|---|---|
 | Plumbing check (oracle, gold-only haystacks) | 1.000 | 1.000 | 1.000 | 1.000 | 5 |
-| Full run — *in progress* | — | — | — | — | 500 |
+| Stratified preliminary (2 per question type) | **1.000** | **1.000** | 0.861 | 0.819 | 12 |
+| Larger runs — *in progress* | — | — | — | — | 100 / 500 |
+
+Query latency on the 12-question run: **147 ms/question** over ~50-session
+haystacks, fully local.
 
 *(This table is updated from `nv-bench` output; the JSON report with
-per-question receipts is committed alongside.)*
+per-question receipts is committed alongside. The 12-question slice is
+deliberately labelled preliminary — small n — and will be superseded by the
+100- and 500-question runs.)*
+
+One more methodology note, learned the hard way and worth stating plainly:
+**title boosts are ablated in the bench config** along with recency.
+LongMemEval documents have no titles, so whatever title the adapter writes
+is synthetic — and we measured the boost *burying* gold sessions (rank
+#11–13 → #1–2 when ablated) because uniform "Chat on ⟨date⟩" titles make
+title-affinity differences pure date-numeral noise. A benchmark must not
+let its serialization adapter manufacture signal in either direction; run
+`--keep-title-boosts` to measure the production default anyway.
 
 ### How the published competitor numbers were produced (for honest comparison)
 
