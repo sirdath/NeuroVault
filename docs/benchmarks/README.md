@@ -99,14 +99,23 @@ product, ask which of these it is.
 
 ### Results
 
-| Config | hit@5 ("R@5") | recall@5 | ndcg@5 | mrr | questions |
-|---|---|---|---|---|---|
-| Plumbing check (oracle, gold-only haystacks) | 1.000 | 1.000 | 1.000 | 1.000 | 5 |
-| Stratified preliminary (2 per question type) | **1.000** | **1.000** | 0.861 | 0.819 | 12 |
-| Larger runs — *in progress* | — | — | — | — | 100 / 500 |
+| Config | hit@5 ("R@5") | hit@10 | recall@5 | recall@10 | ndcg@5 | mrr | questions |
+|---|---|---|---|---|---|---|---|
+| Plumbing check (oracle, gold-only haystacks) | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 5 |
+| Stratified preliminary (2 per type) | 1.000 | 1.000 | 1.000 | 1.000 | 0.861 | 0.819 | 12 |
+| **Stratified run** | **0.910** | **0.970** | 0.858 | 0.960 | 0.767 | 0.778 | **100** |
+| Full run — *pending* | — | — | — | — | — | — | 470 |
 
-Query latency on the 12-question run: **147 ms/question** over ~50-session
-haystacks, fully local.
+Per-type recall@5 at n=100: single-session-user 0.938 · temporal-reasoning
+0.896 · single-session-assistant 0.882 · knowledge-update 0.853 ·
+multi-session 0.824 · single-session-preference 0.765.
+
+Query latency: **118 ms/question** over ~50-session (~120k-token) haystacks,
+fully local, 384-dim embeddings. For scale: agentmemory publishes 0.952
+hit@5 with no chunking and 512-char embeds; gbrain publishes 0.976 using
+OpenAI's 3072-dim cloud embeddings (their own vector-only ablation: 0.974 —
+on this task, embedder capacity dominates pipeline design). We publish the
+local number we actually ship, both metrics, and every per-question receipt.
 
 *(This table is updated from `nv-bench` output; the JSON report with
 per-question receipts is committed alongside. The 12-question slice is
