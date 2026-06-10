@@ -314,6 +314,15 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     let kmax = ks.iter().copied().max().unwrap_or(10);
     let rerank = has_flag(args, "--rerank");
     let keep_recency = has_flag(args, "--keep-recency");
+    // Extra scoring features to switch off (comma-separated; see RecallOpts
+    // for the vocabulary). Diagnosis lever: `--ablate mmr` isolates the MMR
+    // diversifier, `--ablate semantic` runs keyword+graph only, etc.
+    let extra_ablate: Vec<String> = flag_value(args, "--ablate")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
     let out_path = flag_value(args, "--out");
 
     let mut questions = match parse_dataset(&dataset) {
@@ -365,7 +374,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         questions.len()
     );
     eprintln!(
-        "config: k={ks:?} rerank={rerank} recency={}",
+        "config: k={ks:?} rerank={rerank} recency={} extra_ablate={extra_ablate:?}",
         if keep_recency { "production (wall-clock)" } else { "ablated (reproducible)" }
     );
 
@@ -410,7 +419,13 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             exclude_kinds: vec!["observation".to_string()],
             as_of: None,
             use_reranker: rerank,
-            ablate: if keep_recency { vec![] } else { vec!["recency".to_string()] },
+            ablate: {
+                let mut a = extra_ablate.clone();
+                if !keep_recency {
+                    a.push("recency".to_string());
+                }
+                a
+            },
         };
         let t1 = Instant::now();
         let hits = match retriever::hybrid_retrieve(&brain, &q.question, &opts) {
@@ -520,6 +535,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                 "retrieval": "hybrid vec+bm25+graph RRF",
                 "rerank": rerank,
                 "recency_ablated": !keep_recency,
+                "extra_ablate": extra_ablate,
                 "embedder": "BGE-small-en-v1.5 (fastembed, local ONNX)",
             },
             "means": means,

@@ -784,6 +784,18 @@ pub fn hybrid_retrieve(
     };
 
     let candidate_pool = (opts.top_k * 4).max(10);
+    // Chunk-level search depth. The candidate pool is counted in ENGRAMS,
+    // but KNN/BM25 rank CHUNKS — and a long document fans out into hundreds
+    // of chunks, so a pool-sized chunk cutoff lets a few verbose documents
+    // crowd everything else out of the candidate set before scoring even
+    // runs (measured on LongMemEval-style 50-transcript brains: the right
+    // session was absent from the top-10 because 40 chunks ≈ 4 documents).
+    // Searching 8× deeper at chunk level and cutting at candidate_pool
+    // DISTINCT engrams fixes the starvation; downstream scoring cost is
+    // unchanged because each signal still contributes at most
+    // candidate_pool engrams. sqlite-vec computes every row's distance
+    // regardless of LIMIT, so the deeper KNN is effectively free.
+    let chunk_search_depth = candidate_pool * 8;
     let query_type = classify_query(effective_query);
     let temporal_intent = classify_temporal_intent(effective_query);
     let (w_sem_base, w_bm25_base, w_graph_base) = weights_for(query_type);
@@ -802,19 +814,22 @@ pub fn hybrid_retrieve(
 
     // --- Signal 1: semantic KNN ---
     let query_embedding = embedder::encode_query(&expanded)?;
-    let semantic_hits = knn_search(db, &query_embedding, candidate_pool)?;
+    let semantic_hits = knn_search(db, &query_embedding, chunk_search_depth)?;
     let mut seen_semantic = HashSet::new();
     let mut semantic_ranked: Vec<String> = Vec::new();
     for h in &semantic_hits {
         if seen_semantic.insert(h.engram_id.clone()) {
             semantic_ranked.push(h.engram_id.clone());
+            if semantic_ranked.len() >= candidate_pool {
+                break;
+            }
         }
     }
 
     // --- Signal 2: BM25 on orig + expanded, merged ---
     let bm25_idx = ensure_bm25_built(db)?;
-    let bm25_orig = bm25_idx.search(effective_query, candidate_pool);
-    let bm25_exp = bm25_idx.search(&expanded, candidate_pool);
+    let bm25_orig = bm25_idx.search(effective_query, chunk_search_depth);
+    let bm25_exp = bm25_idx.search(&expanded, chunk_search_depth);
     let mut bm25_scores: HashMap<String, f64> = HashMap::new();
     for (cid, s) in bm25_orig {
         bm25_scores.insert(cid, s * 1.2);
@@ -832,6 +847,9 @@ pub fn hybrid_retrieve(
         if let Some(eid) = chunk_to_engram.get(cid) {
             if seen_bm25.insert(eid.clone()) {
                 bm25_ranked.push(eid.clone());
+                if bm25_ranked.len() >= candidate_pool {
+                    break;
+                }
             }
         }
     }
