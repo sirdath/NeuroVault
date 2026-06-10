@@ -53,6 +53,7 @@ fn main() {
     let code = match args.first().map(String::as_str) {
         Some("graphify") => cmd_graphify(&args[1..]),
         Some("longmemeval") => cmd_longmemeval(&args[1..]),
+        Some("probe") => cmd_probe(&args[1..]),
         Some("--help") | Some("-h") | None => {
             print!("{HELP}");
             0
@@ -84,6 +85,14 @@ fn isolated_home(tag: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&home);
     fs::create_dir_all(&home).expect("create bench home");
     std::env::set_var("NEUROVAULT_HOME", &home);
+    // Benchmark corpus = the documents themselves, nothing else. Ingest's
+    // silent-capture features spawn terse derived engrams (preferences,
+    // facts) from chat content; on LongMemEval those duplicate the sessions
+    // and compete with them for top-k slots — measured: terse `pref-*` notes
+    // crowding every session out of a top-20. Production keeps these on;
+    // the bench must measure document retrieval.
+    std::env::set_var("NEUROVAULT_DISABLE_PREFERENCE_EXTRACTION", "1");
+    std::env::set_var("NEUROVAULT_DISABLE_FACT_SUPERSESSION", "1");
     fs::write(
         home.join("brains.json"),
         r#"{"active":"bench","brains":[{"id":"bench","name":"Bench"}]}"#,
@@ -416,13 +425,25 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         let opts = RecallOpts {
             top_k: kmax,
             spread_hops: 0,
-            exclude_kinds: vec!["observation".to_string()],
+            exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
             as_of: None,
             use_reranker: rerank,
             ablate: {
                 let mut a = extra_ablate.clone();
                 if !keep_recency {
                     a.push("recency".to_string());
+                }
+                // Title boosts are ablated because LongMemEval documents have
+                // no titles — whatever title the adapter writes (we use the
+                // session date) is a synthetic artifact, and boosting on it
+                // injects rank noise that buries content-relevant sessions
+                // (measured: gold at #11-13 with boosts, #1-2 without, on
+                // multiple failing questions). A benchmark must not let the
+                // serialization adapter manufacture signal in either
+                // direction. Pass --keep-title-boosts to measure anyway.
+                if !has_flag(args, "--keep-title-boosts") {
+                    a.push("title_semantic".to_string());
+                    a.push("title_keyword".to_string());
                 }
                 a
             },
@@ -549,6 +570,139 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     }
 
     let _ = fs::remove_dir_all(&home);
+    0
+}
+
+// ─────────────────────────── probe (diagnosis) ────────────────────────────
+
+/// Ingest ONE question's haystack, then run its query under a matrix of
+/// ablation configs and print the gold sessions' ranks in each — pinpoints
+/// which scoring signal/stage buries the evidence, in seconds instead of a
+/// full re-run. Usage:
+///   nv-bench probe --dataset <file> --question-id <id>
+fn cmd_probe(args: &[String]) -> i32 {
+    let Some(dataset) = flag_value(args, "--dataset") else {
+        eprintln!("probe: --dataset required");
+        return 2;
+    };
+    let Some(qid) = flag_value(args, "--question-id") else {
+        eprintln!("probe: --question-id required");
+        return 2;
+    };
+    let questions = match parse_dataset(&dataset) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("probe: {e}");
+            return 1;
+        }
+    };
+    let Some(q) = questions.into_iter().find(|q| q.question_id == qid) else {
+        eprintln!("probe: question {qid} not found");
+        return 1;
+    };
+
+    // --reuse-home <path>: skip ingest and query an existing probe home
+    // (printed by a previous run) — iteration drops from ~6 min to seconds.
+    let reuse = flag_value(args, "--reuse-home");
+    let home = match &reuse {
+        Some(p) => {
+            let home = PathBuf::from(p);
+            std::env::set_var("NEUROVAULT_HOME", &home);
+            home
+        }
+        None => isolated_home("probe"),
+    };
+    let brain = db::open_brain("probe").expect("open probe brain");
+    if reuse.is_none() {
+        eprintln!("probe: ingesting {} sessions …", q.sessions.len());
+        let t0 = Instant::now();
+        let mut errs = 0;
+        for (sid, md) in &q.sessions {
+            if let Err(e) = ingest::ingest_content(&format!("sess-{sid}.md"), md, &brain) {
+                errs += 1;
+                eprintln!("  ingest error ({sid}): {e}");
+            }
+        }
+        eprintln!(
+            "probe: ingested in {:.0}s ({errs} errors)",
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    let engrams: i64 = {
+        let conn = brain.lock();
+        conn.query_row("SELECT COUNT(*) FROM engrams", [], |r| r.get(0)).unwrap_or(-1)
+    };
+    eprintln!("probe: home={} engrams={engrams}", home.display());
+    println!("\nQ: {}", q.question);
+    println!("gold: {:?}\n", q.gold);
+
+    // (label, ablate list, rerank)
+    let configs: Vec<(&str, Vec<&str>, bool)> = vec![
+        ("full (bench default)", vec!["recency"], false),
+        ("no-mmr", vec!["recency", "mmr"], false),
+        ("semantic only", vec!["recency", "bm25", "entity_graph"], false),
+        ("bm25 only", vec!["recency", "semantic", "entity_graph"], false),
+        ("no-graph", vec!["recency", "entity_graph"], false),
+        ("no-title-boosts", vec!["recency", "title_semantic", "title_keyword"], false),
+        ("full + rerank", vec!["recency"], true),
+    ];
+
+    println!("{:<22} {:>10}  top-5", "config", "gold-rank");
+    for (label, ablate, rerank) in configs {
+        let opts = RecallOpts {
+            top_k: 20,
+            spread_hops: 0,
+            exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
+            as_of: None,
+            use_reranker: rerank,
+            ablate: ablate.iter().map(|s| s.to_string()).collect(),
+        };
+        let hits = match retriever::hybrid_retrieve(&brain, &q.question, &opts) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("{label:<22} RECALL ERROR: {e}");
+                continue;
+            }
+        };
+        let raw_hits = hits.len();
+        let ranked: Vec<String> = {
+            let conn = brain.lock();
+            hits.iter()
+                .filter(|h| h.engram_id != retriever::THROTTLE_HINT_ID)
+                .filter_map(|h| {
+                    conn.query_row(
+                        "SELECT filename FROM engrams WHERE id = ?1",
+                        [&h.engram_id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok()
+                })
+                .filter_map(|f| {
+                    f.strip_prefix("sess-")
+                        .and_then(|s| s.strip_suffix(".md"))
+                        .map(String::from)
+                })
+                .collect()
+        };
+        let gold_rank: String = q
+            .gold
+            .iter()
+            .map(|g| {
+                ranked
+                    .iter()
+                    .position(|r| r == g)
+                    .map(|p| (p + 1).to_string())
+                    .unwrap_or_else(|| "-".into())
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let top5: Vec<&str> = ranked.iter().take(5).map(|s| s.as_str()).collect();
+        println!("{label:<22} {gold_rank:>10}  raw_hits={raw_hits} {top5:?}");
+    }
+
+    // Keep the home for --reuse-home iteration; it lives in the OS temp dir
+    // and is cleaned by the system (or by a fresh probe run of the same pid).
+    eprintln!("\nprobe home kept for --reuse-home: {}", home.display());
     0
 }
 

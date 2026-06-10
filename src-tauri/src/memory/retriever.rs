@@ -604,7 +604,10 @@ fn knn_search(db: &BrainDb, query_emb: &[f32], limit: usize) -> Result<Vec<KnnHi
     for f in query_emb {
         bytes.extend_from_slice(&f.to_le_bytes());
     }
-    let oversampled_k = limit.saturating_mul(OVERSAMPLE).max(limit);
+    // sqlite-vec rejects KNN queries with k > 4096 outright. Deep callers
+    // (chunk_search_depth × this oversample) can exceed that on big pools;
+    // clamping trades a little dormant-filtering parity for not erroring.
+    let oversampled_k = limit.saturating_mul(OVERSAMPLE).max(limit).min(4096);
     let conn = db.lock();
     let mut stmt = conn.prepare(
         "SELECT v.chunk_id, v.distance, c.content, c.engram_id, c.granularity
