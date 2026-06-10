@@ -600,15 +600,42 @@ fn compute_code_edges(conn: &Connection) -> rusqlite::Result<usize> {
     // engram_links as undirected and keeps only the from<to row. Direction is
     // preserved in `function_calls` (read by `who_calls`); here we only need
     // the file pair to be connected in the graph.
-    conn.execute(
-        "INSERT OR IGNORE INTO engram_links (from_engram, to_engram, similarity, link_type)
-         SELECT DISTINCT MIN(fc.engram_id, vr.engram_id), MAX(fc.engram_id, vr.engram_id), 1.0, 'calls'
+    //
+    // Edge weight = COUPLING STRENGTH, not a constant: a real repo produces
+    // one cross-file pair per shared call, and rendering them all at
+    // similarity 1.0 is an unreadable hairball (112-file repo → 793
+    // max-strength edges). Instead, similarity = 0.7 + 0.3·ln(1+calls)/
+    // ln(1+max_calls): the most-coupled pair scores 1.0, single-call pairs
+    // sit near 0.7 — BELOW the graph's default 0.85 similarity floor, so
+    // the default view shows the architectural skeleton and the existing
+    // similarity slider reveals progressively weaker coupling on demand.
+    // INSERT OR REPLACE so re-graphify updates weights as the code evolves.
+    let mut stmt = conn.prepare(
+        "SELECT MIN(fc.engram_id, vr.engram_id), MAX(fc.engram_id, vr.engram_id), COUNT(*)
            FROM function_calls fc
            JOIN variables v ON v.name = fc.callee_name
            JOIN variable_references vr ON vr.variable_id = v.id AND vr.ref_type = 'define'
-          WHERE fc.engram_id IS NOT NULL AND fc.engram_id <> vr.engram_id",
-        [],
-    )
+          WHERE fc.engram_id IS NOT NULL AND fc.engram_id <> vr.engram_id
+          GROUP BY 1, 2",
+    )?;
+    let pairs: Vec<(String, String, i64)> = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let max_calls = pairs.iter().map(|(_, _, c)| *c).max().unwrap_or(1).max(1) as f64;
+    let mut inserted = 0usize;
+    for (a, b, c) in &pairs {
+        let sim = 0.7 + 0.3 * ((1.0 + *c as f64).ln() / (1.0 + max_calls).ln());
+        inserted += conn.execute(
+            "INSERT OR REPLACE INTO engram_links (from_engram, to_engram, similarity, link_type)
+             VALUES (?1, ?2, ?3, 'calls')",
+            params![a, b, sim],
+        )?;
+    }
+    Ok(inserted)
 }
 
 /// Drop calls whose callee isn't defined anywhere in the graphified code —
