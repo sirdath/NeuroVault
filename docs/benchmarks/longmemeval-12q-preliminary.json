@@ -1,0 +1,275 @@
+{
+  "benchmark": "longmemeval-retrieval",
+  "config": {
+    "embedder": "BGE-small-en-v1.5 (fastembed, local ONNX)",
+    "extra_ablate": [],
+    "recency_ablated": true,
+    "rerank": false,
+    "retrieval": "hybrid vec+bm25+graph RRF"
+  },
+  "dataset": "/tmp/longmemeval/longmemeval_s_cleaned.json",
+  "means": {
+    "hit@1": 0.6666666666666666,
+    "hit@10": 1.0,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr": 0.8194444444444445,
+    "ndcg@1": 0.6666666666666666,
+    "ndcg@10": 0.8610417688415195,
+    "ndcg@3": 0.8390360919604704,
+    "ndcg@5": 0.8610417688415195,
+    "recall@1": 0.4583333333333333,
+    "recall@10": 1.0,
+    "recall@3": 0.9583333333333334,
+    "recall@5": 1.0
+  },
+  "per_question": [
+    {
+      "gold": [
+        "answer_7e9ad7b4_1",
+        "answer_7e9ad7b4_2"
+      ],
+      "question_id": "07741c45",
+      "ranked_top": [
+        "answer_7e9ad7b4_2",
+        "answer_7e9ad7b4_1",
+        "df846730",
+        "af4a2fd1",
+        "5300bfba",
+        "9918640f",
+        "ultrachat_267176",
+        "604de0a3_2",
+        "d0fc2426",
+        "sharegpt_KmPHpfj_0"
+      ],
+      "recall@5": 1.0,
+      "type": "knowledge-update"
+    },
+    {
+      "gold": [
+        "answer_2c637141_2",
+        "answer_2c637141_1"
+      ],
+      "question_id": "21d02d0d",
+      "ranked_top": [
+        "answer_2c637141_2",
+        "answer_2c637141_1",
+        "8946a161",
+        "414b8ddb",
+        "3afe42d6_1",
+        "sharegpt_B9jlITg_0",
+        "sharegpt_adeEi7y_7",
+        "2e28f3db",
+        "cf021b36_2",
+        "sharegpt_0RDKk9A_0"
+      ],
+      "recall@5": 1.0,
+      "type": "multi-session"
+    },
+    {
+      "gold": [
+        "answer_ultrachat_399000"
+      ],
+      "question_id": "778164c6",
+      "ranked_top": [
+        "answer_ultrachat_399000",
+        "ultrachat_144598",
+        "490bb46d_1",
+        "ultrachat_346016",
+        "e42d0467_1",
+        "81e406dd_2",
+        "c15dadce_4",
+        "sharegpt_CyJ3dal_43",
+        "1340826c",
+        "c6bd5277"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-assistant"
+    },
+    {
+      "gold": [
+        "answer_cebb7159"
+      ],
+      "question_id": "0a34ad58",
+      "ranked_top": [
+        "answer_cebb7159",
+        "51fe163e_2",
+        "58ad78d6_2",
+        "44fc2b1e",
+        "8f589040_3",
+        "dd3d8e73_1",
+        "b869d7ed_2",
+        "f0cb130e_4",
+        "f7e682c3_5",
+        "1e65e79a"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-preference"
+    },
+    {
+      "gold": [
+        "answer_787e6a6d"
+      ],
+      "question_id": "a82c026e",
+      "ranked_top": [
+        "f18ebe36_4",
+        "answer_787e6a6d",
+        "ccaabf0b_1",
+        "752392bb_3",
+        "3009ba66_2",
+        "sharegpt_vIkUTvg_0",
+        "sharegpt_u71pVhw_0",
+        "sharegpt_MBVSMQO_45",
+        "sharegpt_mrZ90jA_33",
+        "a6c41826_3"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-user"
+    },
+    {
+      "gold": [
+        "answer_124f5dc3_2",
+        "answer_124f5dc3_1"
+      ],
+      "question_id": "8c18457d",
+      "ranked_top": [
+        "answer_124f5dc3_1",
+        "answer_124f5dc3_2",
+        "98cd882c_2",
+        "9f803df5_1",
+        "7073a9cd_1",
+        "1a5369b9",
+        "3c8e7c0e_2",
+        "sharegpt_2wY0N2C_0",
+        "438bb3d4",
+        "deb12028_5"
+      ],
+      "recall@5": 1.0,
+      "type": "temporal-reasoning"
+    },
+    {
+      "gold": [
+        "answer_e1403127_1",
+        "answer_e1403127_2"
+      ],
+      "question_id": "89941a94",
+      "ranked_top": [
+        "answer_e1403127_2",
+        "answer_e1403127_1",
+        "de275215_3",
+        "f334878c",
+        "sharegpt_NL3eQna_0",
+        "sharegpt_rfvV7Pv_0",
+        "ultrachat_524214",
+        "ultrachat_295944",
+        "927b9087",
+        "1a654915_2"
+      ],
+      "recall@5": 1.0,
+      "type": "knowledge-update"
+    },
+    {
+      "gold": [
+        "answer_fc81d1a2_1",
+        "answer_fc81d1a2_2"
+      ],
+      "question_id": "efc3f7c2",
+      "ranked_top": [
+        "answer_fc81d1a2_2",
+        "fc005760",
+        "answer_fc81d1a2_1",
+        "c4251d8d_1",
+        "ba195e55",
+        "ultrachat_95509",
+        "ultrachat_38938",
+        "0f013a55",
+        "263f2395",
+        "8a7df17e_1"
+      ],
+      "recall@5": 1.0,
+      "type": "multi-session"
+    },
+    {
+      "gold": [
+        "answer_ultrachat_403752"
+      ],
+      "question_id": "65240037",
+      "ranked_top": [
+        "f8dc1273",
+        "answer_ultrachat_403752",
+        "9139676d",
+        "7df4c735_1",
+        "0504a710_3",
+        "92466e8e_1",
+        "0984a772",
+        "fce669f5_3",
+        "fd6f60f0_4",
+        "dba5a924"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-assistant"
+    },
+    {
+      "gold": [
+        "answer_8da8c7e0"
+      ],
+      "question_id": "1c0ddc50",
+      "ranked_top": [
+        "b33e89b5_1",
+        "2aa70c9c_1",
+        "answer_8da8c7e0",
+        "a0aa5035",
+        "0a7d5bf6_2",
+        "c723431f",
+        "sharegpt_ikJXzOG_0",
+        "3d006c58_2",
+        "sharegpt_Bf5wBOC_3",
+        "c7ca6dff"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-preference"
+    },
+    {
+      "gold": [
+        "answer_19c24c11"
+      ],
+      "question_id": "3d86fd0a",
+      "ranked_top": [
+        "answer_19c24c11",
+        "cf8e352f_1",
+        "69674f25",
+        "1f643033_2",
+        "b225c0fe",
+        "1c1a2b7f_2",
+        "d1d3fd12_2",
+        "6227a491_2",
+        "cc85ac85_1",
+        "06d1a1a0"
+      ],
+      "recall@5": 1.0,
+      "type": "single-session-user"
+    },
+    {
+      "gold": [
+        "answer_65600ff6_2",
+        "answer_65600ff6_1"
+      ],
+      "question_id": "gpt4_fe651585",
+      "ranked_top": [
+        "e30c4a7b_2",
+        "answer_65600ff6_2",
+        "da828711",
+        "answer_65600ff6_1",
+        "231c60aa",
+        "sharegpt_gupA3qh_0",
+        "987b36db_3",
+        "ff6b8624",
+        "sharegpt_izuEpAx_20",
+        "sharegpt_mJ7MnQS_219"
+      ],
+      "recall@5": 1.0,
+      "type": "temporal-reasoning"
+    }
+  ],
+  "questions": 12
+}
