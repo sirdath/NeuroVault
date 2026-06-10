@@ -74,6 +74,15 @@ curl -L -o /tmp/longmemeval_s_cleaned.json \
   scorer has a wall-clock age-decay term, which makes scores drift
   minute-to-minute. LongMemEval probes content, not freshness. Run
   `--keep-recency` to measure the production default instead.
+- **Each session carries a distinct natural title** (its dataset-provided
+  date). This matters, and we learned it the hard way: our first harness
+  draft titled every session "Chat session", which made every document's
+  title-embedding identical — and NeuroVault's MMR diversifier *correctly*
+  collapsed them as one redundant cluster, scoring hit@5 = 0.20. A benchmark
+  that silently rewards or punishes serialization choices is measuring the
+  adapter, not the retriever; we publish ours so you can audit it.
+  (`--ablate mmr,...` exposes every scoring feature for exactly this kind of
+  diagnosis.)
 
 ### Metrics
 
