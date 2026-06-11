@@ -350,31 +350,45 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     let after_abs = questions.len();
 
     // The dataset file is ordered by question type, so a head-truncation
-    // would benchmark a single type. For --limit subsets, interleave types
-    // round-robin (deterministic, no RNG) so every slice is representative.
-    if limit < questions.len() {
+    // would benchmark a single type. ALWAYS interleave types round-robin
+    // (deterministic, no RNG) into one stable global order, then slice
+    // [--offset, --offset + --limit). Because the order is stable, chunked
+    // runs (e.g. --offset 0/100/200… --limit 100) are disjoint and together
+    // cover the full set — merge their reports with
+    // docs/benchmarks/merge_reports.py for the combined scorecard.
+    let offset: usize = flag_value(args, "--offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    {
         let mut by_type: std::collections::BTreeMap<String, Vec<LmeQuestion>> =
             std::collections::BTreeMap::new();
         for q in questions.drain(..) {
             by_type.entry(q.question_type.clone()).or_default().push(q);
         }
-        let mut picked = Vec::with_capacity(limit);
-        'outer: loop {
+        let mut interleaved = Vec::new();
+        loop {
             let mut any = false;
             for bucket in by_type.values_mut() {
                 if let Some(q) = bucket.pop() {
-                    picked.push(q);
+                    interleaved.push(q);
                     any = true;
-                    if picked.len() == limit {
-                        break 'outer;
-                    }
                 }
             }
             if !any {
                 break;
             }
         }
-        questions = picked;
+        questions = interleaved.into_iter().skip(offset).take(limit).collect();
+    }
+
+    // --list: print the slice (id + type) without running anything — verify
+    // chunk boundaries instantly before committing hours of compute.
+    if has_flag(args, "--list") {
+        for q in &questions {
+            println!("{}\t{}", q.question_id, q.question_type);
+        }
+        eprintln!("({} questions in slice; offset {offset})", questions.len());
+        return 0;
     }
 
     eprintln!(
