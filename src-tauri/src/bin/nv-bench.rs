@@ -638,19 +638,26 @@ fn cmd_probe(args: &[String]) -> i32 {
 
     // (label, ablate list, rerank)
     let configs: Vec<(&str, Vec<&str>, bool)> = vec![
-        ("full (bench default)", vec!["recency"], false),
+        ("full (prod-ish)", vec!["recency"], false),
         ("no-mmr", vec!["recency", "mmr"], false),
         ("semantic only", vec!["recency", "bm25", "entity_graph"], false),
         ("bm25 only", vec!["recency", "semantic", "entity_graph"], false),
         ("no-graph", vec!["recency", "entity_graph"], false),
-        ("no-title-boosts", vec!["recency", "title_semantic", "title_keyword"], false),
+        ("bench (no-title)", vec!["recency", "title_semantic", "title_keyword"], false),
+        ("bench + no-mmr", vec!["recency", "title_semantic", "title_keyword", "mmr"], false),
         ("full + rerank", vec!["recency"], true),
     ];
+    // Match the longmemeval runner's top_k so probe ranks reproduce bench
+    // ranks exactly (MMR diversifies within the top_k tier, so tier size
+    // changes the ordering). Override with --top-k.
+    let probe_top_k: usize = flag_value(args, "--top-k")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
 
     println!("{:<22} {:>10}  top-5", "config", "gold-rank");
     for (label, ablate, rerank) in configs {
         let opts = RecallOpts {
-            top_k: 20,
+            top_k: probe_top_k,
             spread_hops: 0,
             exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
             as_of: None,
