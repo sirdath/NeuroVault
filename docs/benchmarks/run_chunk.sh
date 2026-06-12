@@ -21,7 +21,7 @@ SECS_PER_Q=190                       # measured average (~3.2 min/question)
 THROTTLE=()
 if [ "$MODE" = "chill" ]; then
   THROTTLE=(taskpolicy -b)
-  SECS_PER_Q=570
+  SECS_PER_Q=960
 fi
 DATASET="${DATASET:-/tmp/longmemeval/longmemeval_s_cleaned.json}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
