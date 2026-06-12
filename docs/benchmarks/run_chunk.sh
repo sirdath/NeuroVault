@@ -10,8 +10,19 @@
 #   python3 merge_reports.py chunks/chunk_*.json -o longmemeval-470q.json
 set -euo pipefail
 
-HOURS="${1:?usage: ./run_chunk.sh <hours, e.g. 2>}"
+HOURS="${1:?usage: ./run_chunk.sh <hours> [chill]}"
+MODE="${2:-}"
 SECS_PER_Q=190                       # measured average (~3.2 min/question)
+# chill mode: taskpolicy -b puts the run in the background QoS band — on
+# Apple Silicon that means efficiency cores only. ~3x slower, but cool and
+# quiet enough to run while you work (or overnight) with no thermal-emergency
+# risk. Scores are identical — retrieval ranking is deterministic math; only
+# wall time changes (don't quote latency stats from chill chunks).
+THROTTLE=()
+if [ "$MODE" = "chill" ]; then
+  THROTTLE=(taskpolicy -b)
+  SECS_PER_Q=570
+fi
 DATASET="${DATASET:-/tmp/longmemeval/longmemeval_s_cleaned.json}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$REPO_ROOT/src-tauri/target/release/nv-bench"
@@ -36,8 +47,8 @@ REMAIN=$((TOTAL - OFFSET))
 [ "$N" -gt "$REMAIN" ] && N=$REMAIN
 ETA_MIN=$((N * SECS_PER_Q / 60))
 
-echo "chunk: questions $OFFSET..$((OFFSET+N-1)) of $TOTAL  (~${ETA_MIN} min)"
-caffeinate -is "$BIN" longmemeval \
+echo "chunk: questions $OFFSET..$((OFFSET+N-1)) of $TOTAL  (~${ETA_MIN} min${MODE:+, $MODE mode})"
+"${THROTTLE[@]}" caffeinate -is "$BIN" longmemeval \
   --dataset "$DATASET" \
   --offset "$OFFSET" --limit "$N" \
   --out "$CHUNKDIR/chunk_${OFFSET}.json"
