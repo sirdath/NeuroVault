@@ -54,8 +54,14 @@ def main():
     by_id = {}
     for path in args:
         with open(path) as f:
-            report = json.load(f)
-        for q in report["per_question"]:
+            if path.endswith(".jsonl"):
+                # Incremental checkpoint files: one per-question record per
+                # line, written as each question completes. An interrupted
+                # chunk's partial work merges like any finished report.
+                questions = [json.loads(line) for line in f if line.strip()]
+            else:
+                questions = json.load(f)["per_question"]
+        for q in questions:
             by_id[q["question_id"]] = q  # later files win on duplicates
 
     qs = list(by_id.values())

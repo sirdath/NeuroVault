@@ -503,13 +503,29 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         entry.0 += recall_at_k(&ranked, &q.gold, 5);
         entry.1 += 1;
 
-        per_question.push(serde_json::json!({
+        let record = serde_json::json!({
             "question_id": q.question_id,
             "type": q.question_type,
             "gold": q.gold,
             "ranked_top": ranked.iter().take(kmax).collect::<Vec<_>>(),
             "recall@5": recall_at_k(&ranked, &q.gold, 5),
-        }));
+        });
+        // Checkpoint EVERY question the moment it's scored (append-only
+        // JSONL next to the --out path). A sleep/kill mid-run then costs at
+        // most the question in flight — learned after an overnight 6-hour
+        // chunk died to a lid-close thermal sleep and lost everything.
+        // merge_reports.py reads .partial.jsonl files directly.
+        if let Some(out) = &out_path {
+            use std::io::Write;
+            if let Ok(mut f) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!("{out}.partial.jsonl"))
+            {
+                let _ = writeln!(f, "{record}");
+            }
+        }
+        per_question.push(record);
 
         eprintln!(
             "[{}/{}] {} ({}) r@5={:.2}  ({} sessions, {:.1}s)",
