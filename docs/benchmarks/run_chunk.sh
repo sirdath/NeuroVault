@@ -37,7 +37,7 @@ REMAIN=$((TOTAL - OFFSET))
 ETA_MIN=$((N * SECS_PER_Q / 60))
 
 echo "chunk: questions $OFFSET..$((OFFSET+N-1)) of $TOTAL  (~${ETA_MIN} min)"
-caffeinate -i "$BIN" longmemeval \
+caffeinate -is "$BIN" longmemeval \
   --dataset "$DATASET" \
   --offset "$OFFSET" --limit "$N" \
   --out "$CHUNKDIR/chunk_${OFFSET}.json"
