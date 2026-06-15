@@ -55,7 +55,10 @@ REMAIN=$((TOTAL - OFFSET))
 ETA_MIN=$((N * SECS_PER_Q / 60))
 
 echo "chunk: questions $OFFSET..$((OFFSET+N-1)) of $TOTAL  (~${ETA_MIN} min${MODE:+, $MODE mode})"
-"${THROTTLE[@]}" caffeinate -is "$BIN" longmemeval \
+# `${THROTTLE[@]+...}` guard: on macOS bash 3.2, expanding an empty array
+# under `set -u` is treated as unbound. Full-speed mode leaves THROTTLE
+# empty, so guard it — expands to nothing when unset, to the elements when set.
+"${THROTTLE[@]+"${THROTTLE[@]}"}" caffeinate -is "$BIN" longmemeval \
   --dataset "$DATASET" \
   --offset "$OFFSET" --limit "$N" \
   --out "$CHUNKDIR/chunk_${OFFSET}.json"
