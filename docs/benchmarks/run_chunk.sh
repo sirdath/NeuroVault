@@ -10,18 +10,25 @@
 #   python3 merge_reports.py chunks/chunk_*.json -o longmemeval-470q.json
 set -euo pipefail
 
-HOURS="${1:?usage: ./run_chunk.sh <hours> [chill]}"
+HOURS="${1:?usage: ./run_chunk.sh <hours> [chill|medium]}"
 MODE="${2:-}"
 SECS_PER_Q=190                       # measured average (~3.2 min/question)
-# chill mode: taskpolicy -b puts the run in the background QoS band — on
-# Apple Silicon that means efficiency cores only. ~3x slower, but cool and
-# quiet enough to run while you work (or overnight) with no thermal-emergency
-# risk. Scores are identical — retrieval ranking is deterministic math; only
-# wall time changes (don't quote latency stats from chill chunks).
+# Throttle modes (Apple Silicon QoS bands via taskpolicy). Scores are
+# IDENTICAL across modes — retrieval ranking is deterministic math; only
+# wall time + heat change (don't quote latency stats from throttled chunks):
+#   chill  = -b (background QoS) → efficiency cores only. Coolest/quietest,
+#            ~5x slower than full. Safe to run while you work or overnight.
+#   medium = -c utility (utility QoS) → performance cores ALLOWED but at
+#            reduced frequency and yielding to your foreground work. Roughly
+#            2x faster than chill, noticeably cooler than full-speed.
+#   (none) = full speed, performance cores unthrottled — fastest, hottest.
 THROTTLE=()
 if [ "$MODE" = "chill" ]; then
   THROTTLE=(taskpolicy -b)
   SECS_PER_Q=960
+elif [ "$MODE" = "medium" ]; then
+  THROTTLE=(taskpolicy -c utility)
+  SECS_PER_Q=420
 fi
 DATASET="${DATASET:-/tmp/longmemeval/longmemeval_s_cleaned.json}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
