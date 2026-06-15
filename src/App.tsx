@@ -6,6 +6,7 @@ import { nvInboxAdd } from "./lib/tauri";
 import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
 import { NeuralGraph } from "./components/NeuralGraph";
+import { useGraphSettingsStore } from "./stores/graphSettingsStore";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ContextMenu, type ContextMenuEntry } from "./components/ContextMenu";
 import { QuickCapture } from "./components/QuickCapture";
@@ -26,6 +27,44 @@ import { fetchStatus, fetchHealth } from "./lib/api";
 
 type View = "editor" | "graph";
 
+/** Shown in place of the graph when Performance mode is "off". Keeps the
+ *  graph nav button discoverable (the user can still click into the graph
+ *  view) while spending zero CPU on the simulation — a one-click re-enable
+ *  brings it back. */
+function GraphOffPlaceholder({ onEnable }: { onEnable: () => void }) {
+  return (
+    <div
+      className="flex-1 flex items-center justify-center"
+      style={{ color: "var(--nv-text-muted)" }}
+    >
+      <div className="text-center px-6" style={{ maxWidth: "22rem" }}>
+        <div
+          className="text-[15px] font-[Geist,sans-serif] font-medium mb-2"
+          style={{ color: "var(--nv-text)" }}
+        >
+          Graph view is off
+        </div>
+        <p className="text-[13px] leading-relaxed mb-4">
+          You set the graph to <strong>Off</strong> in Performance settings, so
+          it isn&rsquo;t rendering — no CPU spent on the simulation. Your notes
+          and links are untouched.
+        </p>
+        <button
+          onClick={onEnable}
+          className="px-4 py-2 rounded-lg text-[13px] font-[Geist,sans-serif] font-medium transition-colors"
+          style={{
+            background: "var(--nv-surface)",
+            color: "var(--nv-text)",
+            border: "1px solid var(--nv-border)",
+          }}
+        >
+          Turn the graph back on
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
@@ -40,6 +79,10 @@ export default function App() {
     } catch { /* quota / disabled storage */ }
     return "editor";
   });
+  // Graph performance mode. "off" keeps the nav button but renders a
+  // re-enable placeholder instead of mounting NeuralGraph (zero graph cost).
+  const graphMode = useGraphSettingsStore((s) => s.graphMode);
+  const setGraphMode = useGraphSettingsStore((s) => s.setGraphMode);
   const setView = useCallback((v: View | ((prev: View) => View)) => {
     setViewState((prev) => {
       const next = typeof v === "function" ? (v as (p: View) => View)(prev) : v;
@@ -784,7 +827,12 @@ export default function App() {
         )}
         <div className="flex-1 flex overflow-hidden">
           {view === "editor" && <Editor />}
-          {view === "graph" && <NeuralGraph onOpenNote={() => setView("editor")} />}
+          {view === "graph" &&
+            (graphMode === "off" ? (
+              <GraphOffPlaceholder onEnable={() => setGraphMode("full")} />
+            ) : (
+              <NeuralGraph onOpenNote={() => setView("editor")} />
+            ))}
         </div>
       </div>
 
