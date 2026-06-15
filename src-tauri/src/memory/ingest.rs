@@ -595,10 +595,23 @@ fn write_facts(db: &Arc<BrainDb>, engram_id: &str, content: &str) -> Result<()> 
     Ok(())
 }
 
+/// Optional cap on semantic edges per document, from the
+/// `NEUROVAULT_SEMANTIC_TOPK` env var. `None` (unset / 0 / unparseable) =
+/// no cap — link to every doc above threshold (the default, all-pairs
+/// behaviour). A positive K keeps only the K most-similar neighbours,
+/// turning the O(n^2) hairball into an O(k*n) graph for large brains.
+fn semantic_topk() -> Option<usize> {
+    std::env::var("NEUROVAULT_SEMANTIC_TOPK")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&k| k > 0)
+}
+
 /// Incremental semantic-link update. Ports
 /// `ingest.py::_update_semantic_links`. O(n) cosine against every
 /// existing doc-level embedding, inserts bidirectional edges above
-/// threshold.
+/// threshold — optionally keeping only the top-K most-similar neighbours
+/// (`NEUROVAULT_SEMANTIC_TOPK`) so large brains stay a graph, not a hairball.
 fn update_semantic_links(db: &BrainDb, engram_id: &str, content: &str) -> Result<()> {
     let head: String = content.chars().take(DOC_EMBED_MAX_CHARS).collect();
     let new_embedding = embedder::encode(&head)?;
@@ -616,10 +629,9 @@ fn update_semantic_links(db: &BrainDb, engram_id: &str, content: &str) -> Result
         )?;
     }
 
-    // Pull every other doc-level embedding.
+    // Pull every other doc-level embedding and score it.
     let others = get_all_doc_embeddings(db)?;
-
-    let conn = db.lock();
+    let mut candidates: Vec<(String, f64)> = Vec::new();
     for (other_id, other_emb) in others {
         if other_id == engram_id {
             continue;
@@ -635,19 +647,45 @@ fn update_semantic_links(db: &BrainDb, engram_id: &str, content: &str) -> Result
         };
         let sim = cosine_norm(&new_normalized, &other_normalized) as f64;
         if sim >= LINK_THRESHOLD {
-            conn.execute(
-                "INSERT OR IGNORE INTO engram_links
-                 (from_engram, to_engram, similarity, link_type)
-                 VALUES (?1, ?2, ?3, 'semantic')",
-                params![engram_id, &other_id, sim],
-            )?;
-            conn.execute(
-                "INSERT OR IGNORE INTO engram_links
-                 (from_engram, to_engram, similarity, link_type)
-                 VALUES (?1, ?2, ?3, 'semantic')",
-                params![&other_id, engram_id, sim],
-            )?;
+            candidates.push((other_id, sim));
         }
+    }
+
+    // Optional top-K cap. Default (env unset) keeps every candidate above
+    // threshold — byte-identical to the original all-pairs behaviour, since
+    // INSERT OR IGNORE makes insert order irrelevant to the final set. When
+    // capped, keep only the K most-similar neighbours. Edges stay
+    // bidirectional and per-node caps UNION across ingests (an edge survives
+    // if EITHER endpoint keeps the other).
+    //
+    // Caveat (incremental re-ingest only): the DELETE above drops every
+    // semantic edge touching this engram, so a re-ingest re-asserts only
+    // THIS node's top-K; an edge kept solely by the other node is restored
+    // when that node is next re-ingested. Fresh brain builds (and the
+    // benchmark) are unaffected — each doc ingests exactly once.
+    if let Some(k) = semantic_topk() {
+        if candidates.len() > k {
+            candidates.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            candidates.truncate(k);
+        }
+    }
+
+    let conn = db.lock();
+    for (other_id, sim) in candidates {
+        conn.execute(
+            "INSERT OR IGNORE INTO engram_links
+             (from_engram, to_engram, similarity, link_type)
+             VALUES (?1, ?2, ?3, 'semantic')",
+            params![engram_id, &other_id, sim],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO engram_links
+             (from_engram, to_engram, similarity, link_type)
+             VALUES (?1, ?2, ?3, 'semantic')",
+            params![&other_id, engram_id, sim],
+        )?;
     }
     Ok(())
 }
@@ -1227,6 +1265,20 @@ mod tests {
         // `hashlib.sha256(b"hello").hexdigest()` in Python.
         let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert_eq!(content_hash("hello"), expected);
+    }
+
+    #[test]
+    fn semantic_topk_parses_env() {
+        // Unique env var → safe even under parallel test threads.
+        std::env::remove_var("NEUROVAULT_SEMANTIC_TOPK");
+        assert_eq!(semantic_topk(), None, "unset = no cap (all-pairs default)");
+        std::env::set_var("NEUROVAULT_SEMANTIC_TOPK", "5");
+        assert_eq!(semantic_topk(), Some(5));
+        std::env::set_var("NEUROVAULT_SEMANTIC_TOPK", "0");
+        assert_eq!(semantic_topk(), None, "0 = no cap");
+        std::env::set_var("NEUROVAULT_SEMANTIC_TOPK", "notanumber");
+        assert_eq!(semantic_topk(), None, "unparseable = no cap");
+        std::env::remove_var("NEUROVAULT_SEMANTIC_TOPK");
     }
 
     #[test]
