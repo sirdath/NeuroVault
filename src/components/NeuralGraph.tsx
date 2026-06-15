@@ -566,6 +566,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const linkDistanceCfg = lite ? 18 : linkDistanceCfgRaw;
   const groupingStyle = lite ? "soft" : groupingStyleRaw;
 
+  // Lite mode drops the high-volume `semantic` edges at the SOURCE (server
+  // SQL), so the low-power view never transfers or simulates the hairball.
+  // Full mode keeps every edge (instant client-side semantic toggle stays
+  // unchanged). Flipping mode re-fetches (it's in the load effect deps).
+  const graphExcludeTypes = useMemo<string[]>(() => (lite ? ["semantic"] : []), [lite]);
+
   // Filter panel open/close state — local, not persisted.
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
 
@@ -577,13 +583,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await loadGraph();
+      await loadGraph(graphExcludeTypes);
     } finally {
       // Keep the spinner up a beat so a sub-100ms reload still reads as
       // an action rather than a flicker.
       setTimeout(() => setRefreshing(false), 400);
     }
-  }, [refreshing, loadGraph]);
+  }, [refreshing, loadGraph, graphExcludeTypes]);
 
   // Time-lapse: when active, nodes appear progressively in
   // chronological order. tlStartMs is the wall-clock start of the
@@ -818,16 +824,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // the debounced effect below: re-fetching the whole graph + re-heating the
   // simulation on EVERY note save (i.e. every keystroke) was the dominant
   // source of perceived lag with the graph open on a large brain.
-  useEffect(() => { loadGraph(); }, [loadGraph, activeBrainId]);
+  // Reload on brain switch AND when the performance mode flips (Lite drops
+  // semantic edges server-side, so changing mode needs a re-fetch with the
+  // right exclude set).
+  useEffect(() => { loadGraph(graphExcludeTypes); }, [loadGraph, activeBrainId, graphExcludeTypes]);
   const notesReloadInitRef = useRef(true);
   useEffect(() => {
     // Skip the first run (the brain-switch effect already loaded), then
     // debounce: refresh the graph ~3s after the user stops editing, not on
     // every keystroke-driven notesList change.
     if (notesReloadInitRef.current) { notesReloadInitRef.current = false; return; }
-    const t = window.setTimeout(() => { loadGraph(); }, 3000);
+    const t = window.setTimeout(() => { loadGraph(graphExcludeTypes); }, 3000);
     return () => window.clearTimeout(t);
-  }, [loadGraph, notesList]);
+  }, [loadGraph, notesList, graphExcludeTypes]);
 
   // Pulse-ring state. `focusPulse` carries the node id + start time
   // of the most recent focus request. The per-frame renderer reads
