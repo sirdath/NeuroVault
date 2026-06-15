@@ -1144,6 +1144,10 @@ pub struct GraphQuery {
     include_observations: Option<bool>,
     #[serde(default)]
     min_similarity: Option<f64>,
+    /// CSV of link_types to drop server-side (e.g. "semantic"). Missing /
+    /// empty = no filter. Lets a low-power view skip the semantic hairball.
+    #[serde(default)]
+    exclude_types: Option<String>,
 }
 
 pub async fn graph(
@@ -1152,6 +1156,14 @@ pub async fn graph(
 ) -> Result<Json<GraphData>, ApiError> {
     let id = resolve_brain_id(None)?;
     let db = open_brain(&id)?;
+    let exclude_types: Vec<String> = q
+        .exclude_types
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     Ok(Json(get_graph(
         &db,
         q.include_observations.unwrap_or(false),
@@ -1162,6 +1174,7 @@ pub async fn graph(
         // noise — measured on NeuroVaultBrain1, edges drop from 11758
         // to 2202 (avg 15/node, which actually reads as a graph).
         q.min_similarity.unwrap_or(0.85),
+        &exclude_types,
     )?))
 }
 
@@ -1479,11 +1492,10 @@ pub async fn recall_multi(
 //
 // Score merge: RRF scores are unitless and brain-relative — a 0.85
 // in a small brain isn't directly comparable to a 0.85 in a large
-// one. We sort by raw score anyway because (a) building a calibrator
-// would be a research project, (b) the user's intent here is
-// "anywhere this exists" not "rank these globally," and (c) the
-// brain_id annotation lets the caller weight by brain themselves
-// if they care.
+// one. We normalize each brain's hits to a z-score before merging, so
+// the merge key is "best relative to its own brain" rather than raw
+// scale (with a small-sample guard for brains returning <2 hits). The
+// brain_id annotation still lets the caller re-weight by brain.
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -1608,10 +1620,47 @@ pub async fn recall_across_brains(
             }
         }
 
-        // Sort by score desc; partial_cmp is fine — RRF scores are
-        // never NaN. Unwrap_or keeps things sane in the unlikely
-        // case the future score signal becomes nullable.
-        all_hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        // Per-brain score normalization (z-score) before the global merge.
+        // RRF scores are brain-relative — a 0.85 in a small brain isn't
+        // comparable to a 0.85 in a large one — so a raw-score merge lets a
+        // big brain's scale crowd out another brain's genuinely-better hit.
+        // Centering each brain's hits to mean 0 / std 1 makes "best relative
+        // to its own brain" the merge key.
+        //
+        // Small-sample guard (per_brain caps at 20, often 5): a brain with
+        // <2 hits or ~zero spread can't tell us whether its lone hit is
+        // relatively strong, so it gets a neutral z of 0.0 — this deliberately
+        // avoids the naive min-max trap where one weak lone hit normalizes to
+        // the very top.
+        let mut score_by_brain: std::collections::HashMap<String, Vec<f64>> =
+            std::collections::HashMap::new();
+        for h in &all_hits {
+            score_by_brain.entry(h.brain_id.clone()).or_default().push(h.score);
+        }
+        let brain_stats: std::collections::HashMap<String, (f64, f64)> = score_by_brain
+            .into_iter()
+            .map(|(brain, scores)| {
+                let n = scores.len() as f64;
+                let mean = scores.iter().sum::<f64>() / n;
+                let std = if scores.len() >= 2 {
+                    (scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+                } else {
+                    0.0
+                };
+                (brain, (mean, std))
+            })
+            .collect();
+        let znorm = |h: &CrossBrainHit| -> f64 {
+            match brain_stats.get(&h.brain_id) {
+                Some(&(mean, std)) if std > 1e-9 => (h.score - mean) / std,
+                _ => 0.0, // single-hit / zero-spread brain → neutral
+            }
+        };
+        // Sort by normalized score desc; partial_cmp is fine — z-scores are
+        // finite. Unwrap_or keeps things sane in any degenerate case.
+        all_hits.sort_by(|a, b| {
+            znorm(b).partial_cmp(&znorm(a)).unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_hits.truncate(top_k);
         let total = all_hits.len();
         Ok(CrossBrainResponse {

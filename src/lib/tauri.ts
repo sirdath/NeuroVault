@@ -298,18 +298,28 @@ export const nvGetGraph = (opts?: {
   brainId?: string;
   includeObservations?: boolean;
   minSimilarity?: number;
-}) =>
-  IS_TAURI
+  /** link_types to drop server-side (e.g. ["semantic"]) so a low-power view
+   *  never transfers / simulates the semantic hairball. */
+  excludeTypes?: string[];
+}) => {
+  const excludeCsv =
+    opts?.excludeTypes && opts.excludeTypes.length
+      ? opts.excludeTypes.join(",")
+      : undefined;
+  return IS_TAURI
     ? invoke<NvGraphData>("nv_get_graph", {
         brainId: opts?.brainId ?? null,
         includeObservations: opts?.includeObservations ?? null,
         minSimilarity: opts?.minSimilarity ?? null,
+        excludeTypes: opts?.excludeTypes ?? null,
       })
     : httpJsonGet<NvGraphData>("/api/graph", {
         brain: opts?.brainId,
         include_observations: opts?.includeObservations,
         min_similarity: opts?.minSimilarity,
+        exclude_types: excludeCsv,
       });
+};
 
 // --- Phase-5 write-path: full ingest pipeline (chunk/embed/link/BM25) ---
 

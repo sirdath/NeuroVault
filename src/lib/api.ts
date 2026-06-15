@@ -131,10 +131,10 @@ async function preferNv<T>(nv: () => Promise<T>, http: () => Promise<T>): Promis
   }
 }
 
-export const fetchGraph = () =>
+export const fetchGraph = (excludeTypes?: string[]) =>
   preferNv<GraphData>(
     async () => {
-      const g = (await nvGetGraph()) as NvGraphData;
+      const g = (await nvGetGraph({ excludeTypes })) as NvGraphData;
       // Rust serializes absent `folder` as JSON `null`; GraphData wants
       // `string | undefined`. One-shot normalise so downstream callers
       // can treat the two transports identically.
@@ -146,7 +146,13 @@ export const fetchGraph = () =>
         edges: g.edges,
       };
     },
-    () => get<GraphData>("/api/graph")
+    () => {
+      const qs =
+        excludeTypes && excludeTypes.length
+          ? `?exclude_types=${encodeURIComponent(excludeTypes.join(","))}`
+          : "";
+      return get<GraphData>(`/api/graph${qs}`);
+    }
   );
 export const fetchStatus = () => get<ServerStatus>("/api/status");
 /** Brain-independent liveness probe. Unlike `/api/status` (which opens the

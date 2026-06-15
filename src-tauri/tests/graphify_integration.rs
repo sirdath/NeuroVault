@@ -205,6 +205,33 @@ async fn graphify_end_to_end_over_http() {
         "graph must carry the note→code 'references' edge: {edges:?}"
     );
 
+    // ---- 8. server-side exclude_types filter --------------------------------
+    // The low-power graph view drops edge types at the SOURCE. exclude_types=
+    // calls must remove the 'calls' edges, keep the other types, and leave the
+    // node set untouched.
+    let filtered: serde_json::Value = client
+        .get(format!("{}/api/graph?exclude_types=calls", base()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let fedges = filtered["edges"].as_array().unwrap();
+    assert!(
+        !fedges.iter().any(|e| e["link_type"] == "calls"),
+        "exclude_types=calls must drop the 'calls' edges: {fedges:?}"
+    );
+    assert!(
+        fedges.iter().any(|e| e["link_type"] == "references"),
+        "exclude_types=calls must keep other edge types: {fedges:?}"
+    );
+    assert_eq!(
+        filtered["nodes"].as_array().unwrap().len(),
+        nodes.len(),
+        "an edge-type filter must not change the node set"
+    );
+
     // ---- teardown ------------------------------------------------------------
     server.stop().await;
     let _ = fs::remove_dir_all(&home);
