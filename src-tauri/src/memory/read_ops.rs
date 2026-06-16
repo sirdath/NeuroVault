@@ -302,6 +302,7 @@ pub fn get_graph(
     db: &BrainDb,
     include_observations: bool,
     min_similarity: f64,
+    exclude_types: &[String],
 ) -> Result<GraphData> {
     let conn = db.lock();
 
@@ -317,8 +318,27 @@ pub fn get_graph(
     let e1_kind_filter = kind_filter.replace("kind", "e1.kind");
     let e2_kind_filter = kind_filter.replace("kind", "e2.kind");
 
+    // Optional server-side edge-type exclusion. Lets a low-power / large-brain
+    // view drop the high-volume auto-computed `semantic` edges so they're never
+    // transferred or simulated (they're ~70-80% of the edge payload and hidden
+    // by default anyway). Empty slice = no filter (unchanged behaviour). Values
+    // are sanitized to [a-z_] so the literal IN clause carries no injection risk
+    // (link_type is a fixed vocabulary: manual/entity/semantic/calls/…).
+    let type_filter = {
+        let safe: Vec<String> = exclude_types
+            .iter()
+            .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .map(|t| format!("'{}'", t))
+            .collect();
+        if safe.is_empty() {
+            String::new()
+        } else {
+            format!(" AND l.link_type NOT IN ({})", safe.join(", "))
+        }
+    };
+
     let nodes_sql = format!(
-        "SELECT id, title, state, strength, access_count, created_at
+        "SELECT id, title, state, strength, access_count, created_at, COALESCE(kind, 'note')
          FROM engrams
          WHERE state != 'dormant'{}",
         kind_filter
@@ -334,6 +354,7 @@ pub fn get_graph(
                 access_count: r.get(4)?,
                 folder: None,
                 created_at: r.get::<_, Option<String>>(5).unwrap_or(None),
+                kind: r.get::<_, String>(6).unwrap_or_else(|_| "note".into()),
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -345,8 +366,8 @@ pub fn get_graph(
          JOIN engrams e1 ON e1.id = l.from_engram AND e1.state != 'dormant'{}
          JOIN engrams e2 ON e2.id = l.to_engram AND e2.state != 'dormant'{}
          WHERE l.from_engram < l.to_engram
-           AND l.similarity >= ?1",
-        e1_kind_filter, e2_kind_filter
+           AND l.similarity >= ?1{}",
+        e1_kind_filter, e2_kind_filter, type_filter
     );
     let mut stmt = conn.prepare(&edges_sql)?;
     let edges: Vec<GraphEdge> = stmt

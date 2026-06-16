@@ -14,6 +14,7 @@ import type {
   GraphPalette,
   GraphNodeShape,
   GraphLayoutShape,
+  GraphMode,
 } from "../stores/graphSettingsStore";
 
 interface Props {
@@ -25,6 +26,9 @@ interface Props {
   nodeCount: number;
   orphanCount: number;
   semanticEdgeCount: number;
+  /** kind="code" nodes currently in the graph (a graphified repo).
+   *  0 hides the Code-layer toggle entirely. */
+  codeNodeCount: number;
   /** Callbacks the parent owns because they touch the simulation
    *  reference, not just store state. */
   onTimelapseStart: () => void;
@@ -48,6 +52,12 @@ const SHAPE_LABELS: { value: GraphNodeShape; label: string }[] = [
 const LAYOUT_LABELS: { value: GraphLayoutShape; label: string; hint: string }[] = [
   { value: "organic", label: "Organic", hint: "Default d3-force" },
   { value: "circle", label: "Circle", hint: "Connected nodes on a ring" },
+];
+
+const GRAPHMODE_LABELS: { value: GraphMode; label: string; hint: string }[] = [
+  { value: "full", label: "Full", hint: "Every effect (default)" },
+  { value: "lite", label: "Lite", hint: "Low-power preset for big brains" },
+  { value: "off", label: "Off", hint: "Disable the graph entirely" },
 ];
 
 function Section({
@@ -241,6 +251,7 @@ export function GraphFilterPanel({
   nodeCount,
   orphanCount,
   semanticEdgeCount,
+  codeNodeCount,
   onTimelapseStart,
   onTimelapseStop,
   timelapseActive,
@@ -298,6 +309,50 @@ export function GraphFilterPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        {/* Performance — master switch. Lite derives a low-power preset
+            (the filters below are overridden for speed); Off unmounts the
+            graph entirely (re-enable from the placeholder or here). */}
+        <div className="px-4 py-3 border-b" style={{ borderColor: "var(--nv-border)" }}>
+          <div
+            className="text-[12px] font-[Geist,sans-serif] font-medium uppercase tracking-wider mb-2"
+            style={{ color: "var(--nv-text-muted)" }}
+          >
+            Performance
+          </div>
+          <div
+            className="flex gap-0.5 rounded-lg p-0.5"
+            style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+          >
+            {GRAPHMODE_LABELS.map((m) => (
+              <button
+                key={m.value}
+                onClick={() => s.setGraphMode(m.value)}
+                title={m.hint}
+                className="flex-1 px-2 py-1 text-[11px] font-medium font-[Geist,sans-serif] rounded transition-all"
+                style={
+                  s.graphMode === m.value
+                    ? {
+                        background: "var(--nv-bg)",
+                        color: "var(--nv-text)",
+                        border: "1px solid var(--nv-border)",
+                      }
+                    : { color: "var(--nv-text-muted)" }
+                }
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          {s.graphMode === "lite" && (
+            <div
+              className="text-[10px] mt-1.5 font-[Geist,sans-serif]"
+              style={{ color: "var(--nv-text-muted)" }}
+            >
+              Lite overrides the filters below for speed; your settings return on Full.
+            </div>
+          )}
+        </div>
+
         {/* Filters */}
         <Section
           title="Filters"
@@ -334,6 +389,14 @@ export function GraphFilterPanel({
             onChange={s.setManualOnly}
             hint="Hide entity + semantic edges. Show only [[wikilinks]] you typed."
           />
+          {codeNodeCount > 0 && (
+            <Toggle
+              label={`Code layer (${codeNodeCount} files)`}
+              checked={s.showCode}
+              onChange={s.setShowCode}
+              hint="Graphified source files (gold nodes) and their call edges. Hide to see only your notes."
+            />
+          )}
           <Toggle
             label="Show arrows"
             checked={s.showArrows}
