@@ -208,7 +208,7 @@ The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no
 
 ## MCP tools
 
-Exposed to any MCP-speaking agent via the native Rust MCP server — **~46 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (46). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
+Exposed to any MCP-speaking agent via the native Rust MCP server — **52 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (52, includes the graphify code tools). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
 
 | Tool | What it does |
 |------|-------------|
@@ -283,13 +283,13 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Recall (with reranker) | ~133 ms median |
 | Full vault ingest (25 notes) | ~4 s cold start |
 
-**Retrieval quality** — measured on a **30-query hand-curated set**, reproducible via [`eval/run_eval.py`](eval/run_eval.py) against a running instance (`eval/baselines/2026-04-23-tier1-real.json`):
+**Retrieval quality** — measured on the full **470-question [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark** (long multi-session histories, facts that get updated and contradicted, temporal reasoning), using NeuroVault's real `recall()` path with **100% on-device** embeddings:
 
-| hit@1 | hit@3 | hit@5 | MRR | median latency |
-|-------|-------|-------|-----|----------------|
-| **83%** | **90%** | **90%** | **0.86** | ~22 ms |
+| hit@5 | hit@10 | recall@5 | MRR | hit@1 |
+|-------|--------|----------|-----|-------|
+| **93.8%** | **98.1%** | **0.861** | **0.838** | **0.762** |
 
-> This is a small internal retrieval set, not a standard benchmark — it's how we catch ranking regressions, not a leaderboard claim. We don't currently publish a long-memory-benchmark (e.g. LongMemEval) number.
+> The right memory lands in the **top 5 results 94% of the time**, in the top 10 **98%** — running entirely on your machine, no cloud, no API keys. Reproducible end-to-end: full harness + a per-question receipt for every answer in [`docs/benchmarks/`](docs/benchmarks/). (A smaller 30-query hand-curated set, [`eval/run_eval.py`](eval/run_eval.py), is also kept for catching day-to-day ranking regressions.)
 
 **Cost** — running locally, embeddings and retrieval cost effectively nothing (your own machine, no per-call API), versus hosted memory services that bill monthly. 100% local and open source.
 
