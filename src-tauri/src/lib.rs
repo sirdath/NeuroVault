@@ -1062,6 +1062,7 @@ fn nv_get_graph(
     brain_id: Option<String>,
     include_observations: Option<bool>,
     min_similarity: Option<f64>,
+    exclude_types: Option<Vec<String>>,
 ) -> std::result::Result<memory::types::GraphData, String> {
     let (_id, db) =
         memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
@@ -1069,6 +1070,7 @@ fn nv_get_graph(
         &db,
         include_observations.unwrap_or(false),
         min_similarity.unwrap_or(0.85),
+        &exclude_types.unwrap_or_default(),
     )
     .map_err(|e| e.to_string())
 }

@@ -2720,5 +2720,264 @@
       ],
       "special": null
     }
+  },
+  {
+    "name": "graphify",
+    "title": "Graphify a codebase",
+    "description": "Parse a local code repository into the brain's on-device knowledge graph (files, symbols, imports, call edges) with tree-sitter. Nothing leaves the machine — no network, no model. Languages: Rust, Python, TypeScript/TSX. After graphifying, query the graph with where_defined / who_calls / whats_in_file. Re-run any time to refresh.",
+    "annotations": {
+      "read_only": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path to the repository root to graphify."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to write the code graph into; defaults to the active brain."
+        }
+      },
+      "required": ["path"]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/code/graphify",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "path",
+          "from": "path",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "where_defined",
+    "title": "Where is a symbol defined?",
+    "description": "Find the file(s) and line where a code symbol (function, class, struct, type, etc.) is defined, from the graphified codebase. Run `graphify` on a repo first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The symbol name to locate (e.g. a function or class name)."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the lookup."
+        }
+      },
+      "required": ["symbol"]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/code/where_defined",
+      "path_params": [],
+      "query": [
+        {
+          "param": "symbol",
+          "from": "symbol",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "who_calls",
+    "title": "Who calls this symbol?",
+    "description": "List the call sites of a function/symbol (caller, file, line) from the graphified codebase — the impact surface of a change. Run `graphify` on a repo first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The callee symbol whose callers to list."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the lookup."
+        }
+      },
+      "required": ["symbol"]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/code/who_calls",
+      "path_params": [],
+      "query": [
+        {
+          "param": "symbol",
+          "from": "symbol",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "whats_in_file",
+    "title": "What's declared in a file?",
+    "description": "List the symbols (functions, classes, types, …) declared in a source file from the graphified codebase. Run `graphify` on a repo first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Repo-relative path of the file (as stored by graphify, e.g. src/engine.rs)."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the lookup."
+        }
+      },
+      "required": ["path"]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/code/whats_in_file",
+      "path_params": [],
+      "query": [
+        {
+          "param": "path",
+          "from": "path",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "blast_radius",
+    "title": "Blast radius of a symbol",
+    "description": "List every function that *transitively* calls a symbol — the impact surface of changing or removing it — from the graphified codebase. Returns impacted symbols with the file/line each is defined in. Run `graphify` on a repo first.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The symbol whose transitive callers (blast radius) to compute."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to scope the lookup."
+        }
+      },
+      "required": ["symbol"]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/code/blast_radius",
+      "path_params": [],
+      "query": [
+        {
+          "param": "symbol",
+          "from": "symbol",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain_id",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
+      "special": null
+    }
+  },
+  {
+    "name": "fuse",
+    "title": "Fuse notes to code",
+    "description": "Link your notes/decisions to the code symbols they reference in `inline code` — so 'why is this written this way?' walks from a function to the note about it. Conservative: only backticked identifiers (4+ chars) count, so prose doesn't create spurious edges. Run after `graphify`. Returns the number of note↔code links created.",
+    "annotations": {
+      "read_only": false,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id to operate on; defaults to the active brain."
+        }
+      }
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/code/fuse",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_none"
+        }
+      ],
+      "special": null
+    }
   }
 ]

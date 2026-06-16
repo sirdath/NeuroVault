@@ -17,6 +17,8 @@ import { create } from "zustand";
 
 export type GraphPalette = "warm" | "cool" | "mono" | "vivid";
 export type GraphNodeShape = "circle" | "square" | "hex";
+/** Master performance switch for the graph view. */
+export type GraphMode = "full" | "lite" | "off";
 
 /** Hand-tuned palettes — opinionated defaults beat infinite color
  *  pickers for an OSS tool. Each palette is 8 hues meant to look
@@ -138,6 +140,10 @@ interface GraphSettings {
   /** When false, isolated (degree-0) nodes are completely hidden from
    *  the canvas. Default true — they render in the orphan halo. */
   showOrphans: boolean;
+  /** When false, graphified code nodes (kind="code") and every edge that
+   *  touches them are hidden — the graph shows only authored notes.
+   *  Default true so a freshly graphified repo is immediately visible. */
+  showCode: boolean;
   /** When true, only manually-authored wikilinks render. Overrides
    *  showSemanticEdges; entity edges are also hidden. */
   manualOnly: boolean;
@@ -178,6 +184,13 @@ interface GraphSettings {
   /** Cluster-background style: "soft" circles (default) or "hull"
    *  convex-hull polygons (venn-diagram look, one colour per category). */
   groupingStyle: GraphGroupingStyle;
+  /** Master performance switch. "full" = every effect (default). "lite" =
+   *  a derived low-power preset (semantic edges off, flat node paint, no
+   *  animations, faster settle) for large brains — the overrides are applied
+   *  at read time in NeuralGraph so the user's real preferences are preserved
+   *  and restored when they switch back. "off" = the graph view never mounts
+   *  (zero cost); the nav button shows a re-enable placeholder instead. */
+  graphMode: GraphMode;
 }
 
 export type GraphGroupingStyle = "soft" | "hull";
@@ -198,6 +211,7 @@ const DEFAULTS: GraphSettings = {
   clusterColors: {},
   searchQuery: "",
   showOrphans: true,
+  showCode: true,
   manualOnly: false,
   nodeSizeScale: 1.0,
   linkThicknessScale: 1.0,
@@ -211,6 +225,7 @@ const DEFAULTS: GraphSettings = {
   spread: 0.5,
   animations: true,
   groupingStyle: "soft",
+  graphMode: "full",
 };
 
 /** Tight `#rrggbb` validator. We only persist colours that match this
@@ -263,6 +278,7 @@ function load(): GraphSettings {
         clusterColors: sanitizeColorMap(parsed.clusterColors),
         searchQuery: typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
         showOrphans: bool("showOrphans", true),
+        showCode: bool("showCode", true),
         manualOnly: bool("manualOnly", false),
         nodeSizeScale: num("nodeSizeScale", 1.0, 0.3, 3.0),
         linkThicknessScale: num("linkThicknessScale", 1.0, 0.3, 3.0),
@@ -276,6 +292,10 @@ function load(): GraphSettings {
         spread: num("spread", 0.5, 0, 1),
         animations: bool("animations", true),
         groupingStyle: parsed.groupingStyle === "hull" ? "hull" : "soft",
+        graphMode:
+          parsed.graphMode === "lite" || parsed.graphMode === "off"
+            ? parsed.graphMode
+            : "full",
       };
     }
   } catch { /* corrupt / private mode */ }
@@ -301,6 +321,7 @@ interface GraphSettingsStore extends GraphSettings {
   clearClusterColors: () => void;
   setSearchQuery: (q: string) => void;
   setShowOrphans: (v: boolean) => void;
+  setShowCode: (v: boolean) => void;
   setManualOnly: (v: boolean) => void;
   setNodeSizeScale: (v: number) => void;
   setLinkThicknessScale: (v: number) => void;
@@ -316,6 +337,7 @@ interface GraphSettingsStore extends GraphSettings {
   setAnimations: (v: boolean) => void;
   toggleAnimations: () => void;
   setGroupingStyle: (v: GraphGroupingStyle) => void;
+  setGraphMode: (m: GraphMode) => void;
 }
 
 function persist(s: GraphSettings) {
@@ -398,6 +420,7 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   },
   setSearchQuery: (searchQuery) => { set({ searchQuery }); persist({ ...get(), searchQuery }); },
   setShowOrphans: (showOrphans) => { set({ showOrphans }); persist({ ...get(), showOrphans }); },
+  setShowCode: (showCode) => { set({ showCode }); persist({ ...get(), showCode }); },
   setManualOnly: (manualOnly) => { set({ manualOnly }); persist({ ...get(), manualOnly }); },
   setNodeSizeScale: (nodeSizeScale) => { set({ nodeSizeScale }); persist({ ...get(), nodeSizeScale }); },
   setLinkThicknessScale: (linkThicknessScale) => { set({ linkThicknessScale }); persist({ ...get(), linkThicknessScale }); },
@@ -420,4 +443,5 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setAnimations: (animations) => { set({ animations }); persist({ ...get(), animations }); },
   toggleAnimations: () => { const next = !get().animations; set({ animations: next }); persist({ ...get(), animations: next }); },
   setGroupingStyle: (groupingStyle) => { set({ groupingStyle }); persist({ ...get(), groupingStyle }); },
+  setGraphMode: (graphMode) => { set({ graphMode }); persist({ ...get(), graphMode }); },
 }));

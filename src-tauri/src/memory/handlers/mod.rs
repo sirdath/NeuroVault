@@ -1144,6 +1144,10 @@ pub struct GraphQuery {
     include_observations: Option<bool>,
     #[serde(default)]
     min_similarity: Option<f64>,
+    /// CSV of link_types to drop server-side (e.g. "semantic"). Missing /
+    /// empty = no filter. Lets a low-power view skip the semantic hairball.
+    #[serde(default)]
+    exclude_types: Option<String>,
 }
 
 pub async fn graph(
@@ -1152,6 +1156,14 @@ pub async fn graph(
 ) -> Result<Json<GraphData>, ApiError> {
     let id = resolve_brain_id(None)?;
     let db = open_brain(&id)?;
+    let exclude_types: Vec<String> = q
+        .exclude_types
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     Ok(Json(get_graph(
         &db,
         q.include_observations.unwrap_or(false),
@@ -1162,6 +1174,7 @@ pub async fn graph(
         // noise — measured on NeuroVaultBrain1, edges drop from 11758
         // to 2202 (avg 15/node, which actually reads as a graph).
         q.min_similarity.unwrap_or(0.85),
+        &exclude_types,
     )?))
 }
 
@@ -1479,11 +1492,10 @@ pub async fn recall_multi(
 //
 // Score merge: RRF scores are unitless and brain-relative — a 0.85
 // in a small brain isn't directly comparable to a 0.85 in a large
-// one. We sort by raw score anyway because (a) building a calibrator
-// would be a research project, (b) the user's intent here is
-// "anywhere this exists" not "rank these globally," and (c) the
-// brain_id annotation lets the caller weight by brain themselves
-// if they care.
+// one. We normalize each brain's hits to a z-score before merging, so
+// the merge key is "best relative to its own brain" rather than raw
+// scale (with a small-sample guard for brains returning <2 hits). The
+// brain_id annotation still lets the caller re-weight by brain.
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -1608,10 +1620,47 @@ pub async fn recall_across_brains(
             }
         }
 
-        // Sort by score desc; partial_cmp is fine — RRF scores are
-        // never NaN. Unwrap_or keeps things sane in the unlikely
-        // case the future score signal becomes nullable.
-        all_hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        // Per-brain score normalization (z-score) before the global merge.
+        // RRF scores are brain-relative — a 0.85 in a small brain isn't
+        // comparable to a 0.85 in a large one — so a raw-score merge lets a
+        // big brain's scale crowd out another brain's genuinely-better hit.
+        // Centering each brain's hits to mean 0 / std 1 makes "best relative
+        // to its own brain" the merge key.
+        //
+        // Small-sample guard (per_brain caps at 20, often 5): a brain with
+        // <2 hits or ~zero spread can't tell us whether its lone hit is
+        // relatively strong, so it gets a neutral z of 0.0 — this deliberately
+        // avoids the naive min-max trap where one weak lone hit normalizes to
+        // the very top.
+        let mut score_by_brain: std::collections::HashMap<String, Vec<f64>> =
+            std::collections::HashMap::new();
+        for h in &all_hits {
+            score_by_brain.entry(h.brain_id.clone()).or_default().push(h.score);
+        }
+        let brain_stats: std::collections::HashMap<String, (f64, f64)> = score_by_brain
+            .into_iter()
+            .map(|(brain, scores)| {
+                let n = scores.len() as f64;
+                let mean = scores.iter().sum::<f64>() / n;
+                let std = if scores.len() >= 2 {
+                    (scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+                } else {
+                    0.0
+                };
+                (brain, (mean, std))
+            })
+            .collect();
+        let znorm = |h: &CrossBrainHit| -> f64 {
+            match brain_stats.get(&h.brain_id) {
+                Some(&(mean, std)) if std > 1e-9 => (h.score - mean) / std,
+                _ => 0.0, // single-hit / zero-spread brain → neutral
+            }
+        };
+        // Sort by normalized score desc; partial_cmp is fine — z-scores are
+        // finite. Unwrap_or keeps things sane in any degenerate case.
+        all_hits.sort_by(|a, b| {
+            znorm(b).partial_cmp(&znorm(a)).unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_hits.truncate(top_k);
         let total = all_hits.len();
         Ok(CrossBrainResponse {
@@ -2281,6 +2330,184 @@ pub async fn import_folder(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
     Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Graphify: codebase → on-device knowledge graph (see memory::graphify).
+// Parse a repo with tree-sitter, populate the code tables, then query the
+// symbol/call graph. Nothing leaves the machine.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct GraphifyBody {
+    pub path: String,
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// POST /api/code/graphify — parse a repo into the brain's code graph.
+pub async fn code_graphify(
+    _s: State<ServerState>,
+    Json(body): Json<GraphifyBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let root = std::path::PathBuf::from(&body.path);
+        if !root.is_dir() {
+            return Err(MemoryError::Other(format!(
+                "graphify path is not a directory: {}",
+                body.path
+            )));
+        }
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let started = std::time::Instant::now();
+        let stats = super::graphify::graphify_into_brain(&root, &db);
+        Ok(serde_json::json!({
+            "brain_id": id,
+            "path": body.path,
+            "files": stats.files,
+            "symbols": stats.symbols,
+            "calls": stats.calls,
+            "edges": stats.edges,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct CodeSymbolQuery {
+    pub symbol: String,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+/// GET /api/code/where_defined?symbol=&brain_id=
+pub async fn code_where_defined(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let defs = super::graphify::where_defined(&conn, &q.symbol)?;
+        let rows: Vec<_> = defs
+            .into_iter()
+            .map(|(file, line)| serde_json::json!({ "file": file, "line": line }))
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "definitions": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/code/who_calls?symbol=&brain_id=
+pub async fn code_who_calls(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let callers = super::graphify::who_calls(&conn, &q.symbol)?;
+        let rows: Vec<_> = callers
+            .into_iter()
+            .map(|(caller, file, line)| {
+                serde_json::json!({ "caller": caller, "file": file, "line": line })
+            })
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "callers": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct CodeFileQuery {
+    pub path: String,
+    #[serde(default)]
+    pub brain_id: Option<String>,
+}
+
+/// GET /api/code/whats_in_file?path=&brain_id=
+pub async fn code_whats_in_file(
+    Query(q): Query<CodeFileQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let syms = super::graphify::whats_in_file(&conn, &q.path)?;
+        let rows: Vec<_> = syms
+            .into_iter()
+            .map(|(name, kind, signature)| {
+                serde_json::json!({ "name": name, "kind": kind, "signature": signature })
+            })
+            .collect();
+        Ok(serde_json::json!({ "path": q.path, "count": rows.len(), "symbols": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/code/blast_radius?symbol=&brain_id= — transitive callers (impact).
+pub async fn code_blast_radius(
+    Query(q): Query<CodeSymbolQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let impacted = super::graphify::blast_radius(&conn, &q.symbol)?;
+        let rows: Vec<_> = impacted
+            .into_iter()
+            .map(|(name, file, line)| {
+                serde_json::json!({ "name": name, "file": file, "line": line })
+            })
+            .collect();
+        Ok(serde_json::json!({ "symbol": q.symbol, "count": rows.len(), "impacted": rows }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct FuseBody {
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// POST /api/code/fuse — link notes to the code symbols they reference.
+pub async fn code_fuse(
+    _s: State<ServerState>,
+    Json(body): Json<FuseBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let db = open_brain(&id)?;
+        let conn = db.lock();
+        let links = super::graphify::fuse_notes_to_code(&conn)?;
+        Ok(serde_json::json!({ "brain_id": id, "links": links }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
 }
 
 // ---------------------------------------------------------------------------

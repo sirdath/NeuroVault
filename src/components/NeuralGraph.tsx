@@ -60,6 +60,7 @@ function edgeColor(linkType: string, alpha: number): string {
     case "contradicts": return `rgba(255, 100, 100, ${alpha})`;
     case "supersedes":  return `rgba(255, 165, 80, ${alpha})`;
     case "mentions":    return `rgba(150, 150, 170, ${alpha})`;
+    case "calls":       return `rgba(245, 195, 80, ${alpha})`;
     default:            return `rgba(122, 119, 154, ${alpha})`;
   }
 }
@@ -322,7 +323,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const clusterAttachedRef = useRef(false);
   // Declared early (before the bloom effect below references it) to avoid
   // a temporal-dead-zone error in the effect's dependency array.
-  const animations = useGraphSettingsStore((s) => s.animations);
+  const animationsRaw = useGraphSettingsStore((s) => s.animations);
+  // Master performance switch. "lite" derives a low-power preset at read
+  // time — the individual settings below are shadowed when lite is on, so
+  // the user's real preferences are preserved and restored on switch back.
+  // ("off" is handled at the mount site in App.tsx; the component never
+  // renders in that mode.)
+  const graphMode = useGraphSettingsStore((s) => s.graphMode);
+  const lite = graphMode === "lite";
+  const animations = lite ? false : animationsRaw;
   // Live snapshot the d3-force collide+link callbacks read on every
   // tick. Keeping it in a ref avoids re-attaching the forces (which
   // would restart the simulation) every time analytics state flips.
@@ -501,7 +510,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
   }, [mode]);
 
-  const { nodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
+  const { nodes: rawNodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
   const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
   const allNotes = useNoteStore((s) => s.notes);
@@ -511,7 +520,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // consumers of the others (Zustand subscribes per-selector).
   const palette = useGraphSettingsStore((s) => s.palette);
   const nodeShape = useGraphSettingsStore((s) => s.nodeShape);
-  const showClusterLabels = useGraphSettingsStore((s) => s.showClusterLabels);
+  const showClusterLabelsRaw = useGraphSettingsStore((s) => s.showClusterLabels);
   // User colour overrides — folder name → hex, cluster name → hex.
   // Selecting individually so a change to one doesn't rerender the
   // other consumer.
@@ -520,25 +529,48 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // Analytics-mode master toggle + per-layer toggles. The master
   // gates whether anything analytics-y renders at all; the per-layer
   // booleans decide which specific overlays light up.
-  const analyticsMode = useGraphSettingsStore((s) => s.analyticsMode);
+  const analyticsModeRaw = useGraphSettingsStore((s) => s.analyticsMode);
   const toggleAnalyticsMode = useGraphSettingsStore((s) => s.toggleAnalyticsMode);
   const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
   const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
-  const showSemanticEdges = useGraphSettingsStore((s) => s.showSemanticEdges);
+  const showSemanticEdgesRaw = useGraphSettingsStore((s) => s.showSemanticEdges);
   // -- v0.1.8 graph filter panel inputs ----------------------------------
   const searchQuery = useGraphSettingsStore((s) => s.searchQuery);
-  const showOrphans = useGraphSettingsStore((s) => s.showOrphans);
-  const manualOnly = useGraphSettingsStore((s) => s.manualOnly);
+  const showOrphansRaw = useGraphSettingsStore((s) => s.showOrphans);
+  const manualOnlyRaw = useGraphSettingsStore((s) => s.manualOnly);
+  const showCodeRaw = useGraphSettingsStore((s) => s.showCode);
   const nodeSizeScale = useGraphSettingsStore((s) => s.nodeSizeScale);
   const linkThicknessScale = useGraphSettingsStore((s) => s.linkThicknessScale);
-  const labelZoomThreshold = useGraphSettingsStore((s) => s.labelZoomThreshold);
+  const labelZoomThresholdRaw = useGraphSettingsStore((s) => s.labelZoomThreshold);
   const showArrows = useGraphSettingsStore((s) => s.showArrows);
   const centeringStrength = useGraphSettingsStore((s) => s.centeringStrength);
-  const chargeStrength = useGraphSettingsStore((s) => s.chargeStrength);
-  const linkDistanceCfg = useGraphSettingsStore((s) => s.linkDistance);
+  const chargeStrengthRaw = useGraphSettingsStore((s) => s.chargeStrength);
+  const linkDistanceCfgRaw = useGraphSettingsStore((s) => s.linkDistance);
   const layoutShape = useGraphSettingsStore((s) => s.layoutShape);
   const timelapseSpeedSec = useGraphSettingsStore((s) => s.timelapseSpeedSec);
-  const groupingStyle = useGraphSettingsStore((s) => s.groupingStyle);
+  const groupingStyleRaw = useGraphSettingsStore((s) => s.groupingStyle);
+
+  // Lite preset: derive the cheap overrides from `lite` so the user's
+  // persisted choices are untouched and snap back when they pick Full again.
+  // (Semantic-edge hairball off, code layer off, orphans hidden, manual-only
+  // edges, no cluster labels, soft tints, analytics off, labels only when
+  // zoomed in, and a wider/cheaper force tune.)
+  const showSemanticEdges = lite ? false : showSemanticEdgesRaw;
+  const showOrphans = lite ? false : showOrphansRaw;
+  const manualOnly = lite ? true : manualOnlyRaw;
+  const showCode = lite ? false : showCodeRaw;
+  const showClusterLabels = lite ? false : showClusterLabelsRaw;
+  const analyticsMode = lite ? false : analyticsModeRaw;
+  const labelZoomThreshold = lite ? 5.0 : labelZoomThresholdRaw;
+  const chargeStrength = lite ? -50 : chargeStrengthRaw;
+  const linkDistanceCfg = lite ? 18 : linkDistanceCfgRaw;
+  const groupingStyle = lite ? "soft" : groupingStyleRaw;
+
+  // Lite mode drops the high-volume `semantic` edges at the SOURCE (server
+  // SQL), so the low-power view never transfers or simulates the hairball.
+  // Full mode keeps every edge (instant client-side semantic toggle stays
+  // unchanged). Flipping mode re-fetches (it's in the load effect deps).
+  const graphExcludeTypes = useMemo<string[]>(() => (lite ? ["semantic"] : []), [lite]);
 
   // Filter panel open/close state — local, not persisted.
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
@@ -551,13 +583,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await loadGraph();
+      await loadGraph(graphExcludeTypes);
     } finally {
       // Keep the spinner up a beat so a sub-100ms reload still reads as
       // an action rather than a flicker.
       setTimeout(() => setRefreshing(false), 400);
     }
-  }, [refreshing, loadGraph]);
+  }, [refreshing, loadGraph, graphExcludeTypes]);
 
   // Time-lapse: when active, nodes appear progressively in
   // chronological order. tlStartMs is the wall-clock start of the
@@ -658,11 +690,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // The downstream graphData / adjacency / bidi memos read this
   // filtered list, so the visual graph and the hover-focus
   // neighbourhood match what the user actually wrote.
+  // Code layer: when hidden, drop kind="code" nodes AND every edge touching
+  // them — a dangling source/target would crash the force simulation.
+  const codeIds = useMemo<Set<string>>(
+    () => new Set(rawNodes.filter((n) => n.kind === "code").map((n) => n.id)),
+    [rawNodes],
+  );
+  const nodes = useMemo(
+    () => (showCode ? rawNodes : rawNodes.filter((n) => n.kind !== "code")),
+    [rawNodes, showCode],
+  );
   const edges = useMemo(() => {
-    if (manualOnly) return rawEdges.filter((e) => e.link_type === "manual");
-    if (!showSemanticEdges) return rawEdges.filter((e) => e.link_type !== "semantic");
-    return rawEdges;
-  }, [rawEdges, showSemanticEdges, manualOnly]);
+    let list = rawEdges;
+    if (!showCode && codeIds.size > 0) {
+      list = list.filter((e) => !codeIds.has(e.from) && !codeIds.has(e.to));
+    }
+    if (manualOnly) return list.filter((e) => e.link_type === "manual");
+    if (!showSemanticEdges) return list.filter((e) => e.link_type !== "semantic");
+    return list;
+  }, [rawEdges, codeIds, showCode, showSemanticEdges, manualOnly]);
   const semanticEdgeCount = useMemo(
     () => rawEdges.filter((e) => e.link_type === "semantic").length,
     [rawEdges],
@@ -774,7 +820,23 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const notesList = useNoteStore((s) => s.notes);
   const brainName = brains.find((b) => b.id === activeBrainId)?.name ?? "brain";
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
-  useEffect(() => { loadGraph(); }, [loadGraph, activeBrainId, notesList]);
+  // Reload immediately when the brain switches. Note edits are handled by
+  // the debounced effect below: re-fetching the whole graph + re-heating the
+  // simulation on EVERY note save (i.e. every keystroke) was the dominant
+  // source of perceived lag with the graph open on a large brain.
+  // Reload on brain switch AND when the performance mode flips (Lite drops
+  // semantic edges server-side, so changing mode needs a re-fetch with the
+  // right exclude set).
+  useEffect(() => { loadGraph(graphExcludeTypes); }, [loadGraph, activeBrainId, graphExcludeTypes]);
+  const notesReloadInitRef = useRef(true);
+  useEffect(() => {
+    // Skip the first run (the brain-switch effect already loaded), then
+    // debounce: refresh the graph ~3s after the user stops editing, not on
+    // every keystroke-driven notesList change.
+    if (notesReloadInitRef.current) { notesReloadInitRef.current = false; return; }
+    const t = window.setTimeout(() => { loadGraph(graphExcludeTypes); }, 3000);
+    return () => window.clearTimeout(t);
+  }, [loadGraph, notesList, graphExcludeTypes]);
 
   // Pulse-ring state. `focusPulse` carries the node id + start time
   // of the most recent focus request. The per-frame renderer reads
@@ -1392,7 +1454,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // node's category reads at a glance. Health/strength + state now live
     // in the ring (drawn below), not in the fill's alpha. Dormant gets a
     // light desaturate so it still reads as "fading".
-    const baseColor = isDormant ? desaturateHex(folderHue, 0.35) : folderHue;
+    //
+    // Graphified code files (kind='code') get a distinct gold fill so a
+    // codebase reads as its own layer, separate from authored notes — and
+    // matches the gold 'calls' dependency edges. Everything else keeps the
+    // folder/cluster hue.
+    const categoryHue =
+      (node as { kind?: string }).kind === "code" ? "#f5c350" : folderHue;
+    const baseColor = isDormant ? desaturateHex(categoryHue, 0.35) : categoryHue;
 
     // Hover-focus dimming unchanged — still the right UX.
     let focusAlpha = 1;
@@ -1404,6 +1473,16 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
 
     const alpha = 0.94 * focusAlpha * orphanAlphaMult * searchAlphaMult;
+
+    // Lite (low-power) mode: a single flat fill, no radial gradient, drop
+    // shadow, specular highlight, health ring, or label. The glassy per-node
+    // paint is the dominant cost at scale; the preset trades it for speed.
+    if (lite) {
+      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
+      ctx.fillStyle = withAlpha(baseColor, alpha);
+      ctx.fill();
+      return;
+    }
 
     // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
     // shadow follows the orb shape, not just the path.
@@ -1531,7 +1610,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fillStyle = withAlpha("#c7c5dc", labelAlpha);
       ctx.fillText(truncated, node.x, labelY);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors, lite]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -1812,6 +1891,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // radius curve onto a 1-10 range.
     return 1 + Math.min(9, n.access_count * 0.6);
   }, []);
+  // Precompute edgeConfidence per edge once (it depends only on the edge
+  // fields + the bidi set). The per-frame linkColor / linkWidth callbacks
+  // then do a Map lookup instead of recomputing confidence for thousands of
+  // edges every frame — the dominant per-frame cost when edges are shown.
+  // Falls back to a live compute if a key is somehow missing.
+  const edgeConfByKey = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of rawEdges as GraphEdge[]) {
+      m.set(
+        `${e.from}|${e.to}|${e.link_type}`,
+        edgeConfidence(
+          { from: e.from, to: e.to, similarity: e.similarity, link_type: e.link_type },
+          { bidi: graphData.bidi },
+        ),
+      );
+    }
+    return m;
+  }, [rawEdges, graphData.bidi]);
+
   const linkColor = useCallback((rawLink: unknown) => {
     const l = rawLink as {
       from?: string;
@@ -1827,10 +1925,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // for what the relationship actually is.
     const fromId = typeof l.source === "string" ? l.source : l.source.id;
     const toId = typeof l.target === "string" ? l.target : l.target.id;
-    const conf = edgeConfidence(
-      { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
-      { bidi: graphData.bidi },
-    );
+    const conf =
+      edgeConfByKey.get(`${l.from ?? fromId}|${l.to ?? toId}|${l.link_type}`) ??
+      edgeConfidence(
+        { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
+        { bidi: graphData.bidi },
+      );
     const baseAlpha = Math.max(0.08, Math.min(0.55, conf * 0.55));
     // Dim non-neighbourhood edges when hover-focus is on. (react-force-
     // graph mutates source/target into node objects once the simulation
@@ -1841,7 +1941,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       return edgeColor(l.link_type, a);
     }
     return edgeColor(l.link_type, baseAlpha);
-  }, [focusedNodeId, graphData.bidi]);
+  }, [focusedNodeId, graphData.bidi, edgeConfByKey]);
   const linkWidth = useCallback((rawLink: unknown) => {
     const l = rawLink as {
       from?: string;
@@ -1860,16 +1960,18 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // Search dim: edges that touch a non-matching node go thin.
     const searchOk =
       !searchMatches || (searchMatches.has(fromId) && searchMatches.has(toId));
-    const conf = edgeConfidence(
-      { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
-      { bidi: graphData.bidi },
-    );
+    const conf =
+      edgeConfByKey.get(`${l.from ?? fromId}|${l.to ?? toId}|${l.link_type}`) ??
+      edgeConfidence(
+        { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
+        { bidi: graphData.bidi },
+      );
     const base = (0.25 + conf * 0.7) * linkThicknessScale * (searchOk ? 1 : 0.25);
     if (focusedNodeId) {
       if (fromId === focusedNodeId || toId === focusedNodeId) return base * 2.4;
     }
     return base;
-  }, [focusedNodeId, graphData.bidi, linkThicknessScale, isNodeVisibleAtTl, searchMatches]);
+  }, [focusedNodeId, graphData.bidi, linkThicknessScale, isNodeVisibleAtTl, searchMatches, edgeConfByKey]);
   // Bidirectional edge curvature: when both A→B and B→A exist, curve
   // them in opposite directions so they no longer draw on top of each
   // other. Each direction gets ±0.15 curvature — subtle enough not
@@ -2080,6 +2182,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         nodeCount={nodes.length}
         orphanCount={nodes.filter((n) => (graphData.adjacency.get(n.id)?.size ?? 0) === 0).length}
         semanticEdgeCount={semanticEdgeCount}
+        codeNodeCount={codeIds.size}
         onTimelapseStart={startTimelapse}
         onTimelapseStop={stopTimelapse}
         timelapseActive={tlActive}
@@ -2114,9 +2217,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkDirectionalParticles={0}
             linkDirectionalArrowLength={showArrows ? 3.5 : 0}
             linkDirectionalArrowRelPos={0.92}
-            onRenderFramePre={paintBackgroundTints}
-            onRenderFramePost={paintClusterLabels}
-            cooldownTicks={100}
+            onRenderFramePre={lite ? undefined : paintBackgroundTints}
+            onRenderFramePost={lite ? undefined : paintClusterLabels}
+            cooldownTicks={lite ? 25 : 100}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
             enableNodeDrag={true}

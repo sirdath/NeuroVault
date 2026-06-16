@@ -30,7 +30,7 @@ interface GraphStore {
   loading: boolean;
   focusRequest: FocusRequest | null;
 
-  loadGraph: () => Promise<void>;
+  loadGraph: (excludeTypes?: string[]) => Promise<void>;
   setHovered: (id: string | null) => void;
   setSelected: (id: string | null) => void;
   pinNode: (id: string, x: number, y: number) => void;
@@ -50,7 +50,7 @@ export const useGraphStore = create<GraphStore>((set) => ({
   loading: false,
   focusRequest: null,
 
-  loadGraph: async () => {
+  loadGraph: async (excludeTypes?: string[]) => {
     set({ loading: true });
 
     // Normalise a GraphData-like payload into sim nodes, backfilling the
@@ -68,7 +68,7 @@ export const useGraphStore = create<GraphStore>((set) => ({
       }));
 
     try {
-      const data = await fetchGraph();
+      const data = await fetchGraph(excludeTypes);
       if (data.nodes.length > 0) {
         set({ nodes: toSimNodes(data.nodes), edges: data.edges, loading: false });
         return;

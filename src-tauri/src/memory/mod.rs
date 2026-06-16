@@ -43,6 +43,7 @@ pub mod embedder;
 pub mod entities;
 pub mod handlers;
 pub mod facts;
+pub mod graphify;
 pub mod http_server;
 pub mod inbox;
 pub mod ingest;

@@ -1,0 +1,33 @@
+# NeuroVault
+
+> NeuroVault is a local-first, open-source AI memory system for Claude and any MCP agent. It's a Tauri desktop app (markdown editor + neural graph) with an in-process Rust backend: hybrid retrieval (sqlite-vec + BM25 + entity graph → RRF → local cross-encoder rerank), local ONNX embeddings (fastembed, BGE-small), a `notify` file watcher, and a native Rust MCP server. Markdown in `~/.neurovault/brains/<id>/vault/*.md` is canonical; the SQLite DB is a rebuildable index. 100% local — no cloud, no account, no API keys, loopback-only.
+
+Repo: https://github.com/sirdath/NeuroVault
+
+## Start here
+
+- [README.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/README.md): project overview, install (macOS + Windows), one-click MCP setup, feature tour.
+- [docs/HOW-NEUROVAULT-WORKS.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/HOW-NEUROVAULT-WORKS.md): architecture — the Tauri app, the in-process Rust backend (axum on `127.0.0.1:8765`), the hybrid retrieval pipeline, and markdown write-back.
+- [CLAUDE.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/CLAUDE.md): build spec / source of truth, plus how an agent should use NeuroVault's own MCP (session_start → recall → remember).
+
+## API & MCP
+
+- [docs/api.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/api.md): the loopback HTTP API on `127.0.0.1:8765` (recall, remember, status, graph, brains, …).
+- MCP server: `neurovault-server --mcp-only` (native Rust, built on the `rmcp` SDK; stdio JSON-RPC). It loads no model and opens no DB — it forwards tool calls over loopback HTTP to the running app. ~45 tools across tiers: `minimal` (3), `lite` (8, default), `standard` (18), `full` (45). Set the tier via `NEUROVAULT_MCP_TIER` or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter.
+
+## Build & operate
+
+- [docs/BUILDING_SIDECAR.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/BUILDING_SIDECAR.md): building the bundled `neurovault-server` MCP binary.
+- [docs/TROUBLESHOOTING.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/TROUBLESHOOTING.md): common issues and fixes.
+- [docs/UPDATER-SETUP.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/UPDATER-SETUP.md): the signed auto-updater (minisign + latest.json).
+- [CONTRIBUTING.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/CONTRIBUTING.md): dev setup (Node + Rust, no Python needed), tests (`cd src-tauri && cargo test --no-default-features`), commit conventions.
+
+## Privacy & trust
+
+- [PRIVACY.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/PRIVACY.md): no telemetry, no account, no cloud sync, loopback-only HTTP, no API keys. The only outbound call by default is the one-time embedding-model download.
+- [SECURITY.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/SECURITY.md): security policy + disclosure.
+- [THIRD_PARTY_NOTICES.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/THIRD_PARTY_NOTICES.md): MIT license + dependency notices.
+
+## Graphify (codebase → knowledge graph)
+
+- [docs/designs/graphify.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/designs/graphify.md): design + architecture for graphify — point NeuroVault at a repo and it becomes part of the graph, parsed entirely on-device with tree-sitter (8 languages: Rust, Python, TypeScript, TSX, Go, Java, C#, Ruby). Six MCP tools: `graphify`, `where_defined`, `whats_in_file`, `who_calls`, `blast_radius` (transitive impact of changing a symbol), and `fuse` (links notes/decisions to the code symbols they reference in backticks). Code files render as a gold layer in the neural graph; the repo stays the system of record (the brain stores only the derived graph). Source never leaves the machine.
