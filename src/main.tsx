@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { Minitab } from "./components/Minitab";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { SplashScreen } from "./components/SplashScreen";
 import "./index.css";
 
 // The minitab is a second, frameless Tauri window that loads this same
@@ -14,6 +15,15 @@ if (isMinitab) document.documentElement.classList.add("minitab-window");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary>{isMinitab ? <Minitab /> : <App />}</ErrorBoundary>
+    <ErrorBoundary>
+      {isMinitab ? (
+        <Minitab />
+      ) : (
+        <>
+          <App />
+          <SplashScreen />
+        </>
+      )}
+    </ErrorBoundary>
   </React.StrictMode>
 );
