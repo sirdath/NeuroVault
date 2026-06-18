@@ -229,6 +229,144 @@ fn ndcg_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
     }
 }
 
+// ─────────────────────── abstention (retrieval-gate) ──────────────────────
+
+/// Result of sweeping the retrieval-confidence abstention threshold τ.
+///
+/// NeuroVault is retrieval-only — it has no answer stage to "refuse" with —
+/// so LongMemEval's answer-level abstention judge does not apply. Instead we
+/// measure whether retrieval *confidence* separates answerable from
+/// unanswerable (`_abs`) questions: the system "abstains" when its top
+/// retrieval score is below τ. For an `_abs` question abstaining is CORRECT;
+/// for an answerable question it is WRONG. "abstain" is the positive class.
+///
+/// τ* maximizes balanced accuracy (robust to the ~30/470 answerable/abstention
+/// imbalance, where raw accuracy would reward always-answer); ties resolve to
+/// the larger τ (more willing to abstain). No known competitor publishes a
+/// retrieval-confidence abstention metric — this lets NeuroVault report all
+/// five LongMemEval dimensions.
+struct AbstentionReport {
+    available: bool,
+    tau_star: f64,
+    /// Abstention@τ* = (TP+TN)/total at τ*.
+    accuracy: f64,
+    balanced_acc: f64,
+    /// Of the questions we abstained on, how many were truly `_abs`.
+    precision: f64,
+    /// Sensitivity = TP/(TP+FN): of `_abs` questions, how many we caught.
+    recall: f64,
+    /// TN/(TN+FP): of answerable questions, how many we answered.
+    specificity: f64,
+    f1: f64,
+    n_abs: usize,
+    n_ans: usize,
+    /// Mean top score on answerable questions (should exceed `abs_mean`).
+    ans_mean: f64,
+    /// Mean top score on `_abs` questions.
+    abs_mean: f64,
+    /// (τ, precision, recall, balanced_acc, f1, accuracy) per swept threshold.
+    curve: Vec<(f64, f64, f64, f64, f64, f64)>,
+}
+
+impl AbstentionReport {
+    /// Sentinel for a slice with no `_abs` (or no answerable) questions —
+    /// the gate is undefined without both classes present.
+    fn na() -> Self {
+        AbstentionReport {
+            available: false,
+            tau_star: 0.0,
+            accuracy: 0.0,
+            balanced_acc: 0.0,
+            precision: 0.0,
+            recall: 0.0,
+            specificity: 0.0,
+            f1: 0.0,
+            n_abs: 0,
+            n_ans: 0,
+            ans_mean: 0.0,
+            abs_mean: 0.0,
+            curve: Vec::new(),
+        }
+    }
+}
+
+/// Sweep τ over midpoints of the observed top-score distribution and pick
+/// τ* = argmax balanced accuracy. `samples` = (top_score, is_abs) per
+/// question. Pure (no I/O, no recall) so it is unit-testable in isolation.
+///
+/// The candidate grid is the set of midpoints between consecutive sorted
+/// scores plus two end sentinels — grid-independent, always finds the optimal
+/// split point. Scores are config-dependent in magnitude (RRF-only vs rerank
+/// vs recency live on different scales), so τ is only meaningful within the
+/// single run that produced these samples; never reuse a τ across configs.
+fn abstention_curve(samples: &[(f64, bool)]) -> AbstentionReport {
+    let n_abs = samples.iter().filter(|(_, a)| *a).count();
+    let n_ans = samples.len() - n_abs;
+    if n_abs == 0 || n_ans == 0 {
+        return AbstentionReport::na();
+    }
+    let ans_mean =
+        samples.iter().filter(|(_, a)| !*a).map(|(s, _)| *s).sum::<f64>() / n_ans as f64;
+    let abs_mean =
+        samples.iter().filter(|(_, a)| *a).map(|(s, _)| *s).sum::<f64>() / n_abs as f64;
+
+    let mut scores: Vec<f64> = samples.iter().map(|(s, _)| *s).collect();
+    scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut taus = vec![scores[0] - 1e-6];
+    for w in scores.windows(2) {
+        taus.push((w[0] + w[1]) / 2.0);
+    }
+    taus.push(scores[scores.len() - 1] + 1e-6);
+    taus.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+
+    let mut curve = Vec::with_capacity(taus.len());
+    // (balanced_acc, tau, precision, recall, specificity, f1, accuracy)
+    let mut best: Option<(f64, f64, f64, f64, f64, f64, f64)> = None;
+    for &tau in &taus {
+        let (mut tp, mut fp, mut fn_, mut tn) = (0usize, 0usize, 0usize, 0usize);
+        for &(s, is_abs) in samples {
+            let abstain = s < tau; // abstain = top score below threshold
+            match (is_abs, abstain) {
+                (true, true) => tp += 1,
+                (true, false) => fn_ += 1,
+                (false, true) => fp += 1,
+                (false, false) => tn += 1,
+            }
+        }
+        let sens = tp as f64 / (tp + fn_).max(1) as f64;
+        let spec = tn as f64 / (tn + fp).max(1) as f64;
+        let bal = 0.5 * (sens + spec);
+        let prec = if tp + fp == 0 { 0.0 } else { tp as f64 / (tp + fp) as f64 };
+        let f1 = if prec + sens == 0.0 { 0.0 } else { 2.0 * prec * sens / (prec + sens) };
+        let acc = (tp + tn) as f64 / samples.len() as f64;
+        curve.push((tau, prec, sens, bal, f1, acc));
+        let better = match best {
+            None => true,
+            // tie on balanced accuracy → prefer the larger τ
+            Some((b_bal, b_tau, ..)) => bal > b_bal || (bal == b_bal && tau > b_tau),
+        };
+        if better {
+            best = Some((bal, tau, prec, sens, spec, f1, acc));
+        }
+    }
+    let (bal, tau, prec, sens, spec, f1, acc) = best.unwrap();
+    AbstentionReport {
+        available: true,
+        tau_star: tau,
+        accuracy: acc,
+        balanced_acc: bal,
+        precision: prec,
+        recall: sens,
+        specificity: spec,
+        f1,
+        n_abs,
+        n_ans,
+        ans_mean,
+        abs_mean,
+        curve,
+    }
+}
+
 // ──────────────────────────── longmemeval mode ────────────────────────────
 
 /// One question after dataset parsing — adapter output, scorer input.
@@ -333,6 +471,11 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         .filter(|s| !s.is_empty())
         .collect();
     let out_path = flag_value(args, "--out");
+    // Abstention questions (id suffix "_abs") are KEPT by default and scored
+    // via the retrieval-confidence gate (see AbstentionReport). Pass
+    // --no-abstention to restore the legacy exclusion so old "engine-only"
+    // numbers stay byte-reproducible.
+    let include_abstention = !has_flag(args, "--no-abstention");
 
     let mut questions = match parse_dataset(&dataset) {
         Ok(q) => q,
@@ -343,10 +486,17 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     };
     let total_available = questions.len();
 
-    // Abstention questions (id suffix "_abs") have no retrievable answer
-    // by design — standard practice is to exclude them from retrieval
-    // metrics (they exist to test answer-stage refusal, not search).
-    questions.retain(|q| !q.question_id.ends_with("_abs") && !q.gold.is_empty());
+    // `_abs` questions carry a DECOY gold id and a real "you did not mention…"
+    // answer; their decoy gold is irrelevant — correctness for an `_abs`
+    // question is purely "did we abstain?" (handled by abstention_curve). Keep
+    // them unless --no-abstention. Answerable questions still need real gold.
+    questions.retain(|q| {
+        if q.question_id.ends_with("_abs") {
+            include_abstention
+        } else {
+            !q.gold.is_empty()
+        }
+    });
     let after_abs = questions.len();
 
     // The dataset file is ordered by question type, so a head-truncation
@@ -391,14 +541,35 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         return 0;
     }
 
+    // Split the slice: `_abs` questions are scored by the abstention gate
+    // only; answerable questions feed the gold-retrieval metrics. Means must
+    // divide by n_scoreable, NOT the full slice, or abstention questions would
+    // dilute hit@k / recall@k.
+    let n_abs_q = questions.iter().filter(|q| q.question_id.ends_with("_abs")).count();
+    let n_scoreable = questions.len() - n_abs_q;
+
+    // A self-describing config label so every report file is unambiguous about
+    // which recall path produced it. Production = the real recall() path
+    // (rerank + recency); engine-only = the reproducible ablated config.
+    let keep_title_boosts = has_flag(args, "--keep-title-boosts");
+    let title_boosts_ablated = !keep_title_boosts;
+    let config_label = match (rerank, keep_recency, keep_title_boosts) {
+        (true, true, false) => "production-A",
+        (true, true, true) => "production-B",
+        (false, false, false) if extra_ablate.is_empty() => "engine-only",
+        _ => "custom",
+    };
+
     eprintln!(
-        "longmemeval: {total_available} questions in file, {after_abs} scoreable \
-         (abstention excluded), running {}",
+        "longmemeval: {total_available} in file → {after_abs} kept; running {} \
+         ({n_scoreable} answerable + {n_abs_q} abstention)",
         questions.len()
     );
     eprintln!(
-        "config: k={ks:?} rerank={rerank} recency={} extra_ablate={extra_ablate:?}",
-        if keep_recency { "production (wall-clock)" } else { "ablated (reproducible)" }
+        "config: [{config_label}] k={ks:?} rerank={rerank} recency={} \
+         title_boosts={} extra_ablate={extra_ablate:?}",
+        if keep_recency { "production (wall-clock)" } else { "ablated (reproducible)" },
+        if keep_title_boosts { "on" } else { "ablated" },
     );
 
     let home = isolated_home("lme");
@@ -408,11 +579,14 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     let mut sums: HashMap<String, f64> = HashMap::new();
     let mut type_sums: HashMap<String, (f64, usize)> = HashMap::new(); // r@5 only
     let mut per_question: Vec<serde_json::Value> = Vec::new();
+    // (top_score, is_abs) per question — the retrieval-confidence gate input.
+    let mut abstain_samples: Vec<(f64, bool)> = Vec::new();
     let mut ingest_secs = 0.0f64;
     let mut query_secs = 0.0f64;
     let n = questions.len();
 
     for (qi, q) in questions.iter().enumerate() {
+        let is_abs = q.question_id.ends_with("_abs");
         // Fresh brain per question — with a UNIQUE id, not a reused one:
         // several layers (BM25 index, recall cache, pagerank state) cache by
         // brain id, so reusing "bench" across questions could silently serve
@@ -472,6 +646,17 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         };
         query_secs += t1.elapsed().as_secs_f64();
 
+        // Retrieval-confidence gate input: the top score among real hits
+        // (0.0 when nothing was retrieved). Collected for EVERY question,
+        // abstention and answerable alike — abstention_curve separates them.
+        let top_score = hits
+            .iter()
+            .filter(|h| h.engram_id != retriever::THROTTLE_HINT_ID)
+            .map(|h| h.score)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let top_score = if top_score.is_finite() { top_score } else { 0.0 };
+        abstain_samples.push((top_score, is_abs));
+
         // engram_id -> session id via the stored filename (sess-<id>.md).
         let ranked: Vec<String> = {
             let conn = brain.lock();
@@ -493,22 +678,31 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                 .collect()
         };
 
-        for &k in &ks {
-            *sums.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked, &q.gold, k);
-            *sums.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked, &q.gold, k);
-            *sums.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked, &q.gold, k);
+        // Gold-retrieval metrics apply ONLY to answerable questions. `_abs`
+        // questions have a decoy gold, so scoring them here would be
+        // meaningless — they are judged solely by the abstention gate.
+        if !is_abs {
+            for &k in &ks {
+                *sums.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked, &q.gold, k);
+                *sums.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked, &q.gold, k);
+                *sums.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked, &q.gold, k);
+            }
+            *sums.entry("mrr".into()).or_default() += mrr(&ranked, &q.gold);
+            let entry = type_sums.entry(q.question_type.clone()).or_insert((0.0, 0));
+            entry.0 += recall_at_k(&ranked, &q.gold, 5);
+            entry.1 += 1;
         }
-        *sums.entry("mrr".into()).or_default() += mrr(&ranked, &q.gold);
-        let entry = type_sums.entry(q.question_type.clone()).or_insert((0.0, 0));
-        entry.0 += recall_at_k(&ranked, &q.gold, 5);
-        entry.1 += 1;
 
         let record = serde_json::json!({
             "question_id": q.question_id,
             "type": q.question_type,
+            "is_abs": is_abs,
+            "abstain_top_score": top_score,
             "gold": q.gold,
             "ranked_top": ranked.iter().take(kmax).collect::<Vec<_>>(),
-            "recall@5": recall_at_k(&ranked, &q.gold, 5),
+            // null for `_abs` — merge_reports.py branches on is_abs.
+            "recall@5": if is_abs { serde_json::Value::Null }
+                        else { serde_json::json!(recall_at_k(&ranked, &q.gold, 5)) },
         });
         // Checkpoint EVERY question the moment it's scored (append-only
         // JSONL next to the --out path). A sleep/kill mid-run then costs at
@@ -527,16 +721,28 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         }
         per_question.push(record);
 
-        eprintln!(
-            "[{}/{}] {} ({}) r@5={:.2}  ({} sessions, {:.1}s)",
-            qi + 1,
-            n,
-            q.question_id,
-            q.question_type,
-            recall_at_k(&ranked, &q.gold, 5),
-            q.sessions.len(),
-            t0.elapsed().as_secs_f64(),
-        );
+        if is_abs {
+            eprintln!(
+                "[{}/{}] {} (ABSTENTION) top_score={:.3}  ({} sessions, {:.1}s)",
+                qi + 1,
+                n,
+                q.question_id,
+                top_score,
+                q.sessions.len(),
+                t0.elapsed().as_secs_f64(),
+            );
+        } else {
+            eprintln!(
+                "[{}/{}] {} ({}) r@5={:.2}  ({} sessions, {:.1}s)",
+                qi + 1,
+                n,
+                q.question_id,
+                q.question_type,
+                recall_at_k(&ranked, &q.gold, 5),
+                q.sessions.len(),
+                t0.elapsed().as_secs_f64(),
+            );
+        }
 
         // Free the handle + disk before the next question; 500 brains of
         // ~50 embedded sessions each would otherwise pile up gigabytes.
@@ -544,18 +750,22 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         let _ = fs::remove_dir_all(&brain_dir);
     }
 
-    let nf = n as f64;
-    println!("\n━━ nv-bench longmemeval — {} questions ━━", n);
+    let nf = n as f64; // all questions (for per-question timing)
+    let nf_score = (n_scoreable as f64).max(1.0); // answerable only (for gold metrics)
+    println!(
+        "\n━━ nv-bench longmemeval — {} questions ({} answerable + {} abstention) ━━",
+        n, n_scoreable, n_abs_q
+    );
     println!("dataset:      {dataset}");
     println!(
-        "config:       hybrid (vec+bm25+graph, RRF){}{}",
+        "config:       [{config_label}] hybrid (vec+bm25+graph, RRF){}{}",
         if rerank { " + cross-encoder rerank" } else { "" },
         if keep_recency { ", production recency" } else { ", recency-ablated (reproducible)" },
     );
     let mut keys: Vec<&String> = sums.keys().collect();
     keys.sort();
     for k in keys {
-        println!("{k:<12} {:.4}", sums[k] / nf);
+        println!("{k:<12} {:.4}", sums[k] / nf_score);
     }
     println!("\nper question type (recall@5):");
     let mut tkeys: Vec<&String> = type_sums.keys().collect();
@@ -564,6 +774,44 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         let (s, c) = type_sums[t];
         println!("  {t:<28} {:.4}  (n={c})", s / c as f64);
     }
+
+    // ── abstention (retrieval-confidence gate) ──
+    let abs_report = abstention_curve(&abstain_samples);
+    println!("\n━━ abstention (retrieval-confidence gate) ━━");
+    if !abs_report.available {
+        println!(
+            "  N/A (slice has no _abs questions — include abstention questions, i.e."
+        );
+        println!("       run without --no-abstention, to measure this dimension)");
+    } else {
+        println!("  τ* (argmax balanced acc):  {:.4}", abs_report.tau_star);
+        println!("  Abstention@τ* (accuracy):  {:.4}", abs_report.accuracy);
+        println!("  balanced accuracy:         {:.4}", abs_report.balanced_acc);
+        println!(
+            "  precision / recall / F1:   {:.4} / {:.4} / {:.4}",
+            abs_report.precision, abs_report.recall, abs_report.f1
+        );
+        println!("  specificity:               {:.4}", abs_report.specificity);
+        println!(
+            "  top-score separation:      answerable μ={:.4}  vs  _abs μ={:.4}  (Δ={:+.4})",
+            abs_report.ans_mean,
+            abs_report.abs_mean,
+            abs_report.ans_mean - abs_report.abs_mean
+        );
+        println!(
+            "  (n: {} answerable, {} abstention)",
+            abs_report.n_ans, abs_report.n_abs
+        );
+        // Compact P/R/balanced-acc curve — ~8 sampled thresholds + the last.
+        println!("  sweep (τ → prec / rec / bal / acc):");
+        let step = (abs_report.curve.len() / 8).max(1);
+        for (i, (tau, prec, sens, bal, _f1, acc)) in abs_report.curve.iter().enumerate() {
+            if i % step == 0 || i + 1 == abs_report.curve.len() {
+                println!("    {tau:>9.4}  p={prec:.3} r={sens:.3} bal={bal:.3} acc={acc:.3}");
+            }
+        }
+    }
+
     println!(
         "\ntiming: ingest {:.1}s total ({:.2}s/question) · query {:.1}s total ({:.0} ms/question) · wall {:.1}s",
         ingest_secs,
@@ -576,20 +824,43 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     if let Some(out) = out_path {
         let mut means = serde_json::Map::new();
         for (k, v) in &sums {
-            means.insert(k.clone(), serde_json::json!(v / nf));
+            means.insert(k.clone(), serde_json::json!(v / nf_score));
         }
+        let abstention_json = if abs_report.available {
+            serde_json::json!({
+                "available": true,
+                "tau_star": abs_report.tau_star,
+                "accuracy": abs_report.accuracy,
+                "balanced_accuracy": abs_report.balanced_acc,
+                "precision": abs_report.precision,
+                "recall": abs_report.recall,
+                "specificity": abs_report.specificity,
+                "f1": abs_report.f1,
+                "n_abs": abs_report.n_abs,
+                "n_ans": abs_report.n_ans,
+                "answerable_mean_top_score": abs_report.ans_mean,
+                "abs_mean_top_score": abs_report.abs_mean,
+            })
+        } else {
+            serde_json::json!({ "available": false })
+        };
         let report = serde_json::json!({
             "benchmark": "longmemeval-retrieval",
             "dataset": dataset,
             "questions": n,
+            "scoreable": n_scoreable,
+            "abstention_questions": n_abs_q,
             "config": {
+                "label": config_label,
                 "retrieval": "hybrid vec+bm25+graph RRF",
                 "rerank": rerank,
                 "recency_ablated": !keep_recency,
+                "title_boosts_ablated": title_boosts_ablated,
                 "extra_ablate": extra_ablate,
                 "embedder": "BGE-small-en-v1.5 (fastembed, local ONNX)",
             },
             "means": means,
+            "abstention": abstention_json,
             "per_question": per_question,
         });
         if let Err(e) = fs::write(&out, serde_json::to_string_pretty(&report).unwrap()) {
@@ -781,5 +1052,87 @@ mod tests {
         // gold at rank 2: dcg = 1/log2(3), idcg = 1/log2(2) = 1
         let expect = 1.0 / 3f64.log2();
         assert!((ndcg_at_k(&s(&["x", "g"]), &gold, 5) - expect).abs() < 1e-9);
+    }
+
+    // ── abstention (retrieval-confidence gate) ──
+
+    /// Answerable scores cleanly above `_abs` scores → the gate separates them
+    /// perfectly: balanced accuracy, Abstention@τ*, and F1 all == 1.0.
+    #[test]
+    fn abstention_perfect_separation() {
+        let samples = vec![
+            (0.9, false),
+            (0.9, false),
+            (0.9, false),
+            (0.1, true),
+            (0.1, true),
+        ];
+        let r = abstention_curve(&samples);
+        assert!(r.available);
+        assert_eq!(r.n_ans, 3);
+        assert_eq!(r.n_abs, 2);
+        assert!((r.balanced_acc - 1.0).abs() < 1e-9);
+        assert!((r.accuracy - 1.0).abs() < 1e-9);
+        assert!((r.f1 - 1.0).abs() < 1e-9);
+        assert!((r.precision - 1.0).abs() < 1e-9);
+        assert!((r.recall - 1.0).abs() < 1e-9);
+        assert!((r.specificity - 1.0).abs() < 1e-9);
+        // the empirical proof the signal exists: answerable score > `_abs` score
+        assert!(r.ans_mean > r.abs_mean);
+    }
+
+    /// Identical scores carry no signal → balanced accuracy collapses to 0.5
+    /// (chance), τ* is finite, and the sweep never panics on the degenerate
+    /// (zero-variance) distribution.
+    #[test]
+    fn abstention_no_separation() {
+        let samples = vec![(0.5, false), (0.5, false), (0.5, true), (0.5, true)];
+        let r = abstention_curve(&samples);
+        assert!(r.available);
+        assert!((r.balanced_acc - 0.5).abs() < 1e-9);
+        assert!(r.tau_star.is_finite());
+        assert!((r.ans_mean - r.abs_mean).abs() < 1e-9);
+    }
+
+    /// 3 `_abs` vs 9 answerable, cleanly separated: balanced accuracy is robust
+    /// to the imbalance and precision/recall/accuracy all hit 1.0 (raw accuracy
+    /// alone could be gamed by always-answer, but not here).
+    #[test]
+    fn abstention_imbalance() {
+        let mut samples = vec![(0.2, true), (0.2, true), (0.2, true)];
+        for _ in 0..9 {
+            samples.push((0.8, false));
+        }
+        let r = abstention_curve(&samples);
+        assert!(r.available);
+        assert_eq!(r.n_abs, 3);
+        assert_eq!(r.n_ans, 9);
+        assert!((r.accuracy - 1.0).abs() < 1e-9);
+        assert!((r.precision - 1.0).abs() < 1e-9);
+        assert!((r.recall - 1.0).abs() < 1e-9);
+    }
+
+    /// A slice with no `_abs` (or no answerable) question leaves the gate
+    /// undefined → the N/A sentinel, never a divide-by-zero.
+    #[test]
+    fn abstention_empty_abs() {
+        let r = abstention_curve(&[(0.5, false), (0.6, false)]);
+        assert!(!r.available);
+        assert_eq!(r.n_abs, 0);
+        // the all-`_abs` mirror is equally undefined
+        let r2 = abstention_curve(&[(0.5, true), (0.6, true)]);
+        assert!(!r2.available);
+    }
+
+    /// When two thresholds tie on balanced accuracy, the sweep prefers the
+    /// larger τ (more willing to abstain). Here τ=0.3 and τ=0.5 both classify
+    /// perfectly; τ* must be the larger, 0.5.
+    #[test]
+    fn abstention_tie_break_larger_tau() {
+        let samples = vec![(0.1, true), (0.5, false), (0.5, false)];
+        let r = abstention_curve(&samples);
+        assert!(r.available);
+        assert!((r.balanced_acc - 1.0).abs() < 1e-9);
+        assert!((r.tau_star - 0.5).abs() < 1e-9);
     }
 }
