@@ -33,14 +33,35 @@ fi
 DATASET="${DATASET:-/tmp/longmemeval/longmemeval_s_cleaned.json}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$REPO_ROOT/src-tauri/target/release/nv-bench"
-PROGRESS="$HOME/.neurovault/bench_progress.txt"
-CHUNKDIR="$(dirname "$0")/chunks"
+
+# Production mode (BENCH_PROD=1): run the REAL recall() path — cross-encoder
+# rerank ON + production recency — and KEEP the abstention (_abs) questions so
+# one run yields the production hit@k AND the Abstention@k dimension. Uses a
+# SEPARATE progress file + chunk dir so it never mixes with the published
+# engine-only (reproducible) run.  Usage: BENCH_PROD=1 ./run_chunk.sh 2 chill
+PROD="${BENCH_PROD:-}"
+if [ -n "$PROD" ]; then
+  PROGRESS="$HOME/.neurovault/bench_progress_prod.txt"
+  CHUNKDIR="$(dirname "$0")/chunks_prod"
+  EXTRA_FLAGS=(--rerank --keep-recency)
+else
+  PROGRESS="$HOME/.neurovault/bench_progress.txt"
+  CHUNKDIR="$(dirname "$0")/chunks"
+  EXTRA_FLAGS=()
+fi
 TOTAL=470
 
 mkdir -p "$CHUNKDIR"
 [ -f "$DATASET" ] || { echo "dataset missing — downloading (~277 MB, one-time)…";
   mkdir -p "$(dirname "$DATASET")";
   curl -L -o "$DATASET" "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"; }
+
+# Production mode keeps the _abs questions, so the iterate count is the full
+# retained set (~500), not 470. Compute it from the dataset so chunk sizing +
+# completion detection are correct.
+if [ -n "$PROD" ]; then
+  TOTAL=$(python3 -c "import json;d=json.load(open('$DATASET'));print(sum(1 for q in d if q['question_id'].endswith('_abs') or q.get('answer_session_ids')))")
+fi
 
 OFFSET=$(cat "$PROGRESS" 2>/dev/null || echo 0)
 if [ "$OFFSET" -ge "$TOTAL" ]; then
@@ -61,6 +82,7 @@ echo "chunk: questions $OFFSET..$((OFFSET+N-1)) of $TOTAL  (~${ETA_MIN} min${MOD
 "${THROTTLE[@]+"${THROTTLE[@]}"}" caffeinate -is "$BIN" longmemeval \
   --dataset "$DATASET" \
   --offset "$OFFSET" --limit "$N" \
+  ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} \
   --out "$CHUNKDIR/chunk_${OFFSET}.json"
 
 echo $((OFFSET + N)) > "$PROGRESS"
