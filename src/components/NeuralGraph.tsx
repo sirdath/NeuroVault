@@ -290,7 +290,11 @@ function createClusterForce(strength: number = 0.08) {
   return force;
 }
 
-type Mode = "2d" | "3d";
+// "static" is a frozen, interactive 2D layout: the same ForceGraph2D canvas
+// as "2d" (pan/zoom/hover/click all work) but with the d3-force simulation
+// disabled, so there is no per-frame physics loop burning CPU. It exists for
+// large graphs that are too heavy to animate continuously.
+type Mode = "2d" | "3d" | "static";
 
 interface HoverCard {
   node: SimNode;
@@ -311,7 +315,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const [mode, setMode] = useState<Mode>(() => {
     try {
       const v = localStorage.getItem("nv.graph.mode");
-      return v === "3d" ? "3d" : "2d";
+      // Accept the three known modes; anything else falls back to "2d".
+      return v === "3d" ? "3d" : v === "static" ? "static" : "2d";
     } catch { return "2d"; }
   });
   // Ref to the 3D force-graph instance so we can attach an UnrealBloomPass
@@ -319,6 +324,22 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // to ForceGraph3D as-is; we narrow at the use site.
   const fg3dRef = useRef<unknown>(undefined);
   const fg2dRef = useRef<unknown>(undefined);
+  // Static-mode layout cache. When the 2D sim settles (onEngineStop) we
+  // snapshot each node's resting {x,y} here AND to localStorage, so that
+  // entering "static" mode can pin every node to its last-settled spot (via
+  // fx/fy) without ever running the physics loop. Keyed by node id.
+  const staticPosRef = useRef<Record<string, [number, number]>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem("nv.graph.static-pos");
+        if (!raw) return {};
+        const parsed = JSON.parse(raw) as unknown;
+        return parsed && typeof parsed === "object"
+          ? (parsed as Record<string, [number, number]>)
+          : {};
+      } catch { return {}; }
+    })(),
+  );
   const bloomAttachedRef = useRef(false);
   const clusterAttachedRef = useRef(false);
   // Declared early (before the bloom effect below references it) to avoid
@@ -388,7 +409,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // Clearing the flag on mode-switch so bloom re-attaches if the user
   // toggles 3D → 2D → 3D (the composer is a fresh instance each time).
   useEffect(() => {
-    if (mode === "2d") bloomAttachedRef.current = false;
+    // Any non-3D mode (2d or static) has no Three.js composer, so drop the
+    // bloom flag — it re-attaches if the user returns to 3D.
+    if (mode !== "3d") bloomAttachedRef.current = false;
     // Same story for the cluster force — re-mounted ForceGraph instance
     // means a fresh d3-force graph with no custom forces attached.
     clusterAttachedRef.current = false;
@@ -860,7 +883,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (!focusRequest) return;
     if (focusRequest.at === lastHandledAtRef.current) return;
     lastHandledAtRef.current = focusRequest.at;
-    if (mode !== "2d") return; // 3D camera tween would need a different API
+    // Static shares the ForceGraph2D ref + d3-zoom camera, so it tweens
+    // exactly like 2d. Only 3D needs a different (camera-position) API.
+    if (mode === "3d") return;
     const target = (nodes as Array<SimNode & { x?: number; y?: number }>)
       .find((n) => n.id === focusRequest.nodeId);
     if (!target || target.x == null || target.y == null) return;
@@ -887,7 +912,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // camera distance via cameraPosition() since OrbitControls don't
   // expose a clean dolly. `zoomToFit` reframes the whole graph.
   const handleZoomIn = useCallback(() => {
-    if (mode === "2d") {
+    // Static uses the same ForceGraph2D ref + d3-zoom as 2d; only 3d dollies
+    // the Three.js camera.
+    if (mode !== "3d") {
       type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
       const fg = fg2dRef.current as CamApi | undefined;
       if (!fg) return;
@@ -904,7 +931,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [mode]);
   const handleZoomOut = useCallback(() => {
-    if (mode === "2d") {
+    // Static uses the 2d d3-zoom path; only 3d dollies the camera.
+    if (mode !== "3d") {
       type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
       const fg = fg2dRef.current as CamApi | undefined;
       if (!fg) return;
@@ -921,7 +949,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [mode]);
   const handleZoomFit = useCallback(() => {
-    if (mode === "2d") {
+    // Static reframes via the 2d zoomToFit; only 3d uses the 3d ref.
+    if (mode !== "3d") {
       type CamApi = { zoomToFit: (ms?: number, padding?: number) => unknown };
       const fg = fg2dRef.current as CamApi | undefined;
       fg?.zoomToFit?.(400, 80);
@@ -941,7 +970,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     const com = focusClusterRef.current;
     const inCluster = (n: unknown) => com?.get((n as SimNode).id) === comId;
     type CamApi = { zoomToFit: (ms?: number, padding?: number, filter?: (n: unknown) => boolean) => unknown };
-    const fg = (mode === "2d" ? fg2dRef.current : fg3dRef.current) as CamApi | undefined;
+    // Static and 2d both drive the ForceGraph2D ref; only 3d uses fg3dRef.
+    const fg = (mode === "3d" ? fg3dRef.current : fg2dRef.current) as CamApi | undefined;
     fg?.zoomToFit?.(500, 120, inCluster);
   }, [mode]);
 
@@ -1089,6 +1119,71 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       adjacency,
     };
   }, [nodes, edges, showSemanticEdges]);
+
+  // Static-mode graph data. Same nodes/links/bidi/adjacency as the live 2D
+  // `graphData`, but every node is *pinned* via fx/fy so ForceGraph2D
+  // (rendered with cooldownTicks=0) draws it at a fixed spot and never moves
+  // it. Position source, in priority order:
+  //   1. cached settled position (from a prior 2D render's onEngineStop),
+  //   2. the node's current live x/y if it already has one,
+  //   3. a deterministic phyllotaxis ("sunflower") spiral seat — pure math,
+  //      no simulation — so a graph that has never been viewed in 2D is still
+  //      readable instead of collapsing onto the origin.
+  // Only recomputed when graphData or the mode changes, so 2D/3D pay nothing.
+  const staticGraphData = useMemo(() => {
+    if (mode !== "static") return graphData;
+    const cache = staticPosRef.current;
+    const liveNodes = graphData.nodes as Array<
+      SimNode & { x?: number; y?: number; fx?: number; fy?: number }
+    >;
+    // Phyllotaxis spiral: golden-angle placement gives an even, gap-free disc
+    // whose radius scales with sqrt(count) — matching the density d3-force
+    // would settle into. Used only for nodes with no known spot.
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const spread = Math.max(150, Math.sqrt(Math.max(1, liveNodes.length)) * 26);
+    let spiralIdx = 0;
+    const pinned = liveNodes.map((n) => {
+      const cached = cache[n.id];
+      let fx: number;
+      let fy: number;
+      if (cached && Number.isFinite(cached[0]) && Number.isFinite(cached[1])) {
+        [fx, fy] = cached;
+      } else if (n.x != null && n.y != null && Number.isFinite(n.x) && Number.isFinite(n.y)) {
+        fx = n.x; fy = n.y;
+      } else {
+        const k = spiralIdx++;
+        const r = spread * Math.sqrt(k + 0.5);
+        const a = k * golden;
+        fx = r * Math.cos(a);
+        fy = r * Math.sin(a);
+      }
+      return { ...n, fx, fy };
+    });
+    return { ...graphData, nodes: pinned };
+  }, [mode, graphData]);
+
+  // Snapshot the settled 2D layout when the simulation stops. ForceGraph2D
+  // fires onEngineStop after it cools down; at that point each node object
+  // carries its resting x/y. We persist a {id: [x,y]} map to localStorage so
+  // a later switch into "static" mode can pin nodes to these exact spots.
+  // Guards against empty graphs and NaN coords so we never clobber a good
+  // cache with garbage.
+  const handleEngineStop = useCallback(() => {
+    const liveNodes = graphData.nodes as Array<SimNode & { x?: number; y?: number }>;
+    if (liveNodes.length === 0) return;
+    const next: Record<string, [number, number]> = {};
+    let wrote = 0;
+    for (const n of liveNodes) {
+      if (n.x == null || n.y == null) continue;
+      if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+      next[n.id] = [n.x, n.y];
+      wrote += 1;
+    }
+    if (wrote === 0) return; // nothing valid settled — keep the old cache
+    staticPosRef.current = next;
+    try { localStorage.setItem("nv.graph.static-pos", JSON.stringify(next)); }
+    catch { /* quota / private mode — in-memory cache still serves static */ }
+  }, [graphData]);
 
   // Cache key for analytics computations — same brain state = same key.
   // Used by the analyticsData memo below so toggling analytics off and
@@ -1247,12 +1342,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [cancelClose, setSelected, allNotes, selectNote, onOpenNote]);
 
-  const toggleMode = useCallback(() => {
-    setMode((m) => {
-      const next = m === "2d" ? "3d" : "2d";
-      try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
-      return next;
-    });
+  // Select an explicit mode and persist it. Replaces the old 2-way
+  // `toggleMode` swap now that there are three modes (a swap can't express a
+  // 3-way pick); the toolbar buttons call this with the clicked mode.
+  const setModePersist = useCallback((next: Mode) => {
+    setMode(next);
+    try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
   }, []);
 
   // Hover-focus state. When set, `paintNode2D` dims every node that
@@ -2008,10 +2103,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         <div className="flex gap-1 rounded-lg p-0.5"
           style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
         >
-          {(["2d", "3d"] as const).map((m) => (
+          {(["2d", "3d", "static"] as const).map((m) => (
             <button
               key={m}
-              onClick={() => { if (mode !== m) toggleMode(); }}
+              onClick={() => { if (mode !== m) setModePersist(m); }}
               className="px-3 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors"
               style={{
                 background: mode === m ? "var(--nv-accent)" : "transparent",
@@ -2195,11 +2290,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           </p>
         </div>
       }>
-        {mode === "2d" ? (
+        {mode !== "3d" ? (
+          // Both "2d" and "static" render the same ForceGraph2D canvas so they
+          // look identical; "static" just freezes the simulation (cooldown /
+          // warmup = 0, drag off) and feeds pre-pinned positions. All the
+          // read-only interactions (zoom/pan/hover/click) stay on.
           <ForceGraph2D
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ref={fg2dRef as any}
-            graphData={graphData}
+            graphData={mode === "static" ? staticGraphData : graphData}
             width={size.w}
             height={size.h}
             backgroundColor="rgba(0,0,0,0)"
@@ -2219,10 +2318,20 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkDirectionalArrowRelPos={0.92}
             onRenderFramePre={lite ? undefined : paintBackgroundTints}
             onRenderFramePost={lite ? undefined : paintClusterLabels}
-            cooldownTicks={lite ? 25 : 100}
+            // Static kills the physics loop entirely (no warmup, no cooldown
+            // ticks) so nodes sit exactly where fx/fy pin them and the CPU
+            // stays idle between interactions. 2D keeps its settle (25 in lite,
+            // else 100). onEngineStop (non-static only) captures the settled
+            // layout for static to reuse later.
+            cooldownTicks={mode === "static" ? 0 : lite ? 25 : 100}
+            cooldownTime={mode === "static" ? 0 : undefined}
+            warmupTicks={mode === "static" ? 0 : undefined}
+            onEngineStop={mode === "static" ? undefined : handleEngineStop}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
-            enableNodeDrag={true}
+            // Dragging a node requires the live simulation to relax around it;
+            // with physics off in static there's nothing to drag against.
+            enableNodeDrag={mode !== "static"}
             enableZoomInteraction={true}
             enablePanInteraction={true}
             minZoom={0.05}
