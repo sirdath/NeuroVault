@@ -20,6 +20,44 @@ export interface IngestProgress {
 import { API_HOST } from "../lib/config";
 const API = API_HOST;
 
+// --- Per-brain source folders -----------------------------------------------
+
+export interface BrainSource {
+  path: string;
+  enabled: boolean;
+  last_synced: string | null;
+  file_count: number;
+}
+
+interface SourcesResponse {
+  sources: BrainSource[];
+}
+
+interface SyncSourcesResult {
+  synced: number;
+  removed: number;
+  skipped_duplicates: number;
+}
+
+/** Read-only preview of what a sync would do (the /sources/preview dry run).
+ * The list fields hold source-file absolute paths. */
+export interface SyncPlan {
+  to_add: string[];
+  to_update: string[];
+  to_remove: string[];
+  duplicates: string[];
+  unchanged: number;
+}
+
+/** Result of indexing a source folder's CODE into the on-device knowledge
+ * graph via the native (Rust, tree-sitter) graphify pipeline — no Python. */
+export interface GraphifyResult {
+  files: number;
+  symbols: number;
+  calls: number;
+  edges: number;
+}
+
 interface BrainStore {
   brains: BrainInfo[];
   activeBrainId: string | null;
@@ -36,6 +74,11 @@ interface BrainStore {
   ) => Promise<{ brain_id: string; name: string; vault_path?: string; is_external?: boolean } | null>;
   updateBrain: (brainId: string, patch: { name?: string; description?: string }) => Promise<boolean>;
   deleteBrain: (brainId: string) => Promise<boolean>;
+  listSources: (brainId: string) => Promise<BrainSource[]>;
+  setSources: (brainId: string, sources: { path: string; enabled: boolean }[]) => Promise<BrainSource[]>;
+  previewSources: (brainId: string) => Promise<SyncPlan>;
+  syncSources: (brainId: string) => Promise<SyncSourcesResult>;
+  graphifyFolder: (brainId: string, path: string) => Promise<GraphifyResult>;
 }
 
 export const useBrainStore = create<BrainStore>((set, get) => ({
@@ -225,5 +268,77 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
     } catch {
       return false;
     }
+  },
+
+  listSources: async (brainId: string): Promise<BrainSource[]> => {
+    const res = await fetch(`${API}/api/brains/${encodeURIComponent(brainId)}/sources`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Failed to load sources (HTTP ${res.status}): ${text}`);
+    }
+    const data = (await res.json()) as SourcesResponse;
+    return data.sources;
+  },
+
+  setSources: async (
+    brainId: string,
+    sources: { path: string; enabled: boolean }[],
+  ): Promise<BrainSource[]> => {
+    const res = await fetch(`${API}/api/brains/${encodeURIComponent(brainId)}/sources`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sources }),
+    });
+    if (!res.ok) {
+      // Surface the backend's error message on 400 so the UI can show it inline.
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as SourcesResponse;
+    return data.sources;
+  },
+
+  previewSources: async (brainId: string): Promise<SyncPlan> => {
+    const res = await fetch(`${API}/api/brains/${encodeURIComponent(brainId)}/sources/preview`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `Preview failed (${res.status})`);
+    }
+    return (await res.json()) as SyncPlan;
+  },
+
+  syncSources: async (brainId: string): Promise<SyncSourcesResult> => {
+    const res = await fetch(`${API}/api/brains/${encodeURIComponent(brainId)}/sources/sync`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    }
+    return (await res.json()) as SyncSourcesResult;
+  },
+
+  // Index a folder's CODE (functions, types, call edges) into this brain's
+  // on-device knowledge graph via the native graphify pipeline — Rust +
+  // tree-sitter, no Python, source never leaves the machine. Complements the
+  // markdown mirror: `syncSources` brings in `.md`, this brings in code
+  // structure so `who_calls` / `blast_radius` work over the source folder.
+  graphifyFolder: async (brainId: string, path: string): Promise<GraphifyResult> => {
+    const res = await fetch(`${API}/api/code/graphify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, brain: brainId }),
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    }
+    const d = (await res.json()) as Partial<GraphifyResult>;
+    return {
+      files: d.files ?? 0,
+      symbols: d.symbols ?? 0,
+      calls: d.calls ?? 0,
+      edges: d.edges ?? 0,
+    };
   },
 }));

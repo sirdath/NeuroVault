@@ -1,10 +1,20 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useBrainStore } from "../stores/brainStore";
+import { BrainSourcesPanel } from "./BrainSourcesPanel";
 import { API_HOST } from "../lib/config";
 
 const API = API_HOST;
 
-interface BrainStats { note_count: number; total_bytes: number }
+interface BrainStats { note_count: number; total_bytes: number; last_modified_secs: number }
+
+// Sort options for the vault list. `key` is persisted to localStorage.
+const SORT_OPTIONS = [
+  { key: "name", label: "Name (A–Z)" },
+  { key: "created", label: "Date added" },
+  { key: "modified", label: "Recently changed" },
+  { key: "notes", label: "Most notes" },
+] as const;
+type SortKey = (typeof SORT_OPTIONS)[number]["key"];
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -17,6 +27,15 @@ export function BrainSelector() {
   const { brains, activeBrainName, loading, switchBrain, createBrain, updateBrain, deleteBrain, loadBrains } =
     useBrainStore();
   const [open, setOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    try {
+      const v = localStorage.getItem("neurovault.brainSelector.sort");
+      return SORT_OPTIONS.some((o) => o.key === v) ? (v as SortKey) : "name";
+    } catch {
+      return "name";
+    }
+  });
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -26,8 +45,38 @@ export function BrainSelector() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // When set, the per-brain Source Folders panel is open for this brain id.
+  // The panel portals to document.body, so it survives the dropdown closing.
+  const [sourcesPanelBrainId, setSourcesPanelBrainId] = useState<string | null>(null);
 
   useEffect(() => { loadBrains(); }, [loadBrains]);
+
+  useEffect(() => {
+    try { localStorage.setItem("neurovault.brainSelector.sort", sortKey); } catch { /* ignore */ }
+  }, [sortKey]);
+
+  // Sorted view of the brains. `name`/`created` use fields present
+  // immediately; `modified`/`notes` read per-brain stats (fetched on open)
+  // and re-sort once those arrive. Pure sort by the chosen key — the active
+  // brain is not pinned.
+  const sortedBrains = useMemo(() => {
+    const arr = [...brains];
+    arr.sort((a, b) => {
+      switch (sortKey) {
+        case "name":
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        case "created":
+          return (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0);
+        case "modified":
+          return (stats[b.id]?.last_modified_secs ?? 0) - (stats[a.id]?.last_modified_secs ?? 0);
+        case "notes":
+          return (stats[b.id]?.note_count ?? 0) - (stats[a.id]?.note_count ?? 0);
+        default:
+          return 0;
+      }
+    });
+    return arr;
+  }, [brains, sortKey, stats]);
 
   useEffect(() => {
     if (!open || brains.length === 0) return;
@@ -42,7 +91,11 @@ export function BrainSelector() {
           if (!r.ok) return;
           const s = await r.json();
           if (s && typeof s.note_count === "number") {
-            next[b.id] = { note_count: s.note_count, total_bytes: s.total_bytes };
+            next[b.id] = {
+              note_count: s.note_count,
+              total_bytes: s.total_bytes,
+              last_modified_secs: s.last_modified_secs ?? 0,
+            };
           }
         } catch { /* server offline — skip */ }
       }));
@@ -57,6 +110,7 @@ export function BrainSelector() {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpen(false);
         setCreating(false);
+        setSortMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -65,6 +119,7 @@ export function BrainSelector() {
 
   const handleSwitch = async (brainId: string) => {
     setOpen(false);
+    setSortMenuOpen(false);
     await switchBrain(brainId);
   };
 
@@ -162,9 +217,71 @@ export function BrainSelector() {
             boxShadow: "0 -8px 32px rgba(0,0,0,0.3)",
           }}
         >
+          {/* Header — vault count + sort control */}
+          <div
+            className="flex items-center justify-between px-3 py-1.5"
+            style={{ borderBottom: "1px solid var(--nv-border)" }}
+          >
+            <span
+              className="text-[10px] font-[Geist,sans-serif] uppercase tracking-wider"
+              style={{ color: "var(--nv-text-dim)" }}
+            >
+              {brains.length} {brains.length === 1 ? "vault" : "vaults"}
+            </span>
+            <div className="relative">
+              <button
+                onClick={() => setSortMenuOpen((s) => !s)}
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md transition-colors"
+                style={{
+                  color: "var(--nv-text-dim)",
+                  background: sortMenuOpen ? "var(--nv-surface)" : "transparent",
+                }}
+                title="Sort vaults"
+                aria-label="Sort vaults"
+                aria-haspopup="menu"
+                aria-expanded={sortMenuOpen}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h12M3 12h8M3 17h5M17 5v14m0 0l-3-3m3 3l3-3" />
+                </svg>
+                <span className="text-[10px] font-[Geist,sans-serif] whitespace-nowrap">
+                  {SORT_OPTIONS.find((o) => o.key === sortKey)?.label}
+                </span>
+              </button>
+              {sortMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-[28px] z-[60] rounded-md overflow-hidden shadow-xl min-w-[150px]"
+                  style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)" }}
+                >
+                  {SORT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      role="menuitemradio"
+                      aria-checked={sortKey === opt.key}
+                      onClick={() => { setSortKey(opt.key); setSortMenuOpen(false); }}
+                      className="w-full text-left px-2.5 py-1.5 text-[11px] font-[Geist,sans-serif] flex items-center justify-between gap-2 transition-colors"
+                      style={{
+                        color: sortKey === opt.key ? "var(--nv-text)" : "var(--nv-text-muted)",
+                        background: sortKey === opt.key ? "var(--nv-surface)" : "transparent",
+                      }}
+                      onMouseEnter={(e) => { if (sortKey !== opt.key) e.currentTarget.style.background = "var(--nv-surface)"; }}
+                      onMouseLeave={(e) => { if (sortKey !== opt.key) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      {opt.label}
+                      {sortKey === opt.key && (
+                        <span className="text-[10px]" style={{ color: "var(--nv-accent)" }}>✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Vault list */}
           <div className="max-h-[280px] overflow-y-auto py-1">
-            {brains.map((brain) => {
+            {sortedBrains.map((brain) => {
               const isEditing = editingId === brain.id;
               const isConfirming = confirmDelete === brain.id;
               if (isEditing) {
@@ -325,6 +442,24 @@ export function BrainSelector() {
                       <span className="text-[10px] mt-0.5" style={{ color: "var(--nv-accent)" }}>✓</span>
                     )}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {/* Source folders — open the per-brain mirror panel.
+                          Lets this brain lock onto one or more folders on
+                          disk and keep their markdown in sync. */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSourcesPanelBrainId(brain.id);
+                        }}
+                        className="w-5 h-5 flex items-center justify-center rounded transition-colors"
+                        style={{ color: "var(--nv-text-dim)" }}
+                        title="Source folders"
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-text)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                        </svg>
+                      </button>
                       {/* Rename — available for every brain. brain_id
                           stays stable, so no on-disk moves happen. */}
                       <button
@@ -451,6 +586,20 @@ export function BrainSelector() {
           )}
         </div>
       )}
+
+      {/* Per-brain source folders panel — portals to document.body, so it
+          survives the dropdown closing and uses its own z-layer. */}
+      {sourcesPanelBrainId !== null && (() => {
+        const brain = brains.find((b) => b.id === sourcesPanelBrainId);
+        if (!brain) return null;
+        return (
+          <BrainSourcesPanel
+            brainId={brain.id}
+            brainName={brain.name}
+            onClose={() => setSourcesPanelBrainId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -22,8 +22,9 @@ use slug::slugify;
 
 use super::db::{open_brain, BrainDb};
 use super::ingest;
+use super::paths::registry_path;
 use super::read_ops::resolve_brain_id;
-use super::types::{MemoryError, Result};
+use super::types::{MemoryError, Result, SourceFolder};
 
 /// Convenience bundle — brain id + open DB handle + vault path.
 /// Every write command resolves this once, then uses it for both
@@ -155,6 +156,32 @@ pub fn delete_note(ctx: &BrainContext, filename: &str) -> Result<WriteResult> {
         brain_id: ctx.brain_id.clone(),
         status: "deleted".to_string(),
     })
+}
+
+/// Persist a brain's `source_folders` list into its record in `brains.json`.
+/// Read-modify-write on the registry, mirroring the pattern brain activation
+/// uses for the `active` field. Errors if the registry is
+/// unreadable/unparseable or the brain id isn't present.
+///
+/// This writes ONLY config — it does not touch the manifest, the vault, or
+/// any watcher. The caller (the PUT handler) decides whether to (re)start
+/// watchers + run a sync after a successful persist.
+pub fn set_source_folders(brain_id: &str, folders: &[SourceFolder]) -> Result<()> {
+    let data = std::fs::read_to_string(registry_path())
+        .map_err(|e| MemoryError::Other(format!("brains.json unreadable: {}", e)))?;
+    let mut parsed: serde_json::Value = serde_json::from_str(&data)?;
+    let brains = parsed
+        .get_mut("brains")
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| MemoryError::BrainNotFound(brain_id.to_string()))?;
+    let brain = brains
+        .iter_mut()
+        .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(brain_id))
+        .ok_or_else(|| MemoryError::BrainNotFound(brain_id.to_string()))?;
+    brain["source_folders"] = serde_json::to_value(folders)?;
+    let serialised = serde_json::to_string_pretty(&parsed)?;
+    std::fs::write(registry_path(), serialised)?;
+    Ok(())
 }
 
 /// Mark `old_id` as superseded by `new_id` at the engram level.

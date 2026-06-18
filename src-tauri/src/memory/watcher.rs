@@ -58,6 +58,13 @@ pub struct WatcherHandle {
     // Keep the underlying platform watcher alive for the lifetime
     // of this handle. Dropping it stops the OS-level watch.
     _watcher: RecommendedWatcher,
+    // Source-folder mirroring (per-brain `source_folders`). When the active
+    // brain has configured source folders we ALSO watch each one and mirror
+    // its `.md` changes into the vault. These stay alive for the lifetime of
+    // the handle; dropping them stops the OS-level source watches. Empty for
+    // a brain with no sources, so a plain vault-only brain is unaffected.
+    _source_watchers: Vec<RecommendedWatcher>,
+    source_worker: Option<JoinHandle<()>>,
 }
 
 impl WatcherHandle {
@@ -71,6 +78,9 @@ impl WatcherHandle {
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
+        if let Some(w) = self.source_worker.take() {
             let _ = w.join();
         }
     }
@@ -125,12 +135,165 @@ pub fn start_watcher(brain_id: &str, vault_path: PathBuf) -> Result<WatcherHandl
         .spawn(move || worker_loop(brain_id_owned, vault_root, rx, stop_worker))
         .map_err(|e| MemoryError::Other(format!("worker spawn failed: {}", e)))?;
 
+    // Source-folder mirroring. If this brain has enabled source folders,
+    // start a recursive watcher on each + a worker that routes events through
+    // the mirror engine. Failures here are non-fatal: a brain with an
+    // unavailable source (unplugged drive) still watches its vault normally.
+    let (source_watchers, source_worker) = start_source_watchers(brain_id, &stop);
+
     Ok(WatcherHandle {
         brain_id: brain_id.to_string(),
         stop,
         worker: Some(worker),
         _watcher: watcher,
+        _source_watchers: source_watchers,
+        source_worker,
     })
+}
+
+/// Build recursive watchers for each enabled source folder of `brain_id`
+/// plus a worker thread that mirrors their `.md` changes into the vault.
+/// Returns `(watchers, worker)` — both empty/`None` when the brain has no
+/// usable source folders. Never errors: a folder that can't be watched
+/// (missing, permissions) is logged + skipped so the rest of the watcher
+/// keeps working.
+fn start_source_watchers(
+    brain_id: &str,
+    stop: &Arc<AtomicBool>,
+) -> (Vec<RecommendedWatcher>, Option<JoinHandle<()>>) {
+    let folders = match super::read_ops::registry_source_folders(brain_id) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[watcher] could not read source_folders for {}: {}", brain_id, e);
+            return (Vec::new(), None);
+        }
+    };
+    let enabled: Vec<PathBuf> = folders
+        .into_iter()
+        .filter(|f| f.enabled)
+        .map(|f| PathBuf::from(f.path))
+        .filter(|p| p.is_dir())
+        .collect();
+    if enabled.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    let (tx, rx) = mpsc::channel::<notify::Event>();
+    let mut watchers = Vec::with_capacity(enabled.len());
+    for root in &enabled {
+        let tx = tx.clone();
+        let mut w = match RecommendedWatcher::new(
+            move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            },
+            Config::default(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[watcher] source notify init failed for {}: {}", root.display(), e);
+                continue;
+            }
+        };
+        if let Err(e) = w.watch(root, RecursiveMode::Recursive) {
+            eprintln!("[watcher] source watch failed for {}: {}", root.display(), e);
+            continue;
+        }
+        watchers.push(w);
+    }
+    if watchers.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    let stop_worker = Arc::clone(stop);
+    let brain_id_owned = brain_id.to_string();
+    let worker = thread::Builder::new()
+        .name(format!("nv-src-watch-{}", brain_id))
+        .spawn(move || source_worker_loop(brain_id_owned, rx, stop_worker))
+        .ok();
+    (watchers, worker)
+}
+
+/// Worker loop for source-folder events. Mirrors the vault worker's per-file
+/// debounce, but routes by event kind: Create/Modify of a `.md` →
+/// mirror+ingest; Remove/Rename → unmirror (delete vault file + engram +
+/// manifest entry). The vault worker can't do the second half because it
+/// ignores Remove/Rename — that's exactly why the mirror owns deletions.
+fn source_worker_loop(brain_id: String, rx: mpsc::Receiver<notify::Event>, stop: Arc<AtomicBool>) {
+    // Pending upserts + removes, each with a fire-at deadline (debounce).
+    let mut pending_upsert: HashMap<PathBuf, Instant> = HashMap::new();
+    let mut pending_remove: HashMap<PathBuf, Instant> = HashMap::new();
+
+    while !stop.load(Ordering::Acquire) {
+        match rx.recv_timeout(Duration::from_millis(POLL_MS)) {
+            Ok(event) => {
+                let deadline = Instant::now() + Duration::from_millis(DEBOUNCE_MS);
+                match event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) => {
+                        for p in &event.paths {
+                            if is_markdown(p) && !is_temp_or_dotfile(p) {
+                                pending_remove.remove(p);
+                                pending_upsert.insert(p.clone(), deadline);
+                            }
+                        }
+                    }
+                    EventKind::Remove(_) => {
+                        for p in &event.paths {
+                            // A removed file may no longer have an extension
+                            // reported reliably; mirror by path match in the
+                            // manifest, so accept any path.
+                            pending_upsert.remove(p);
+                            pending_remove.insert(p.clone(), deadline);
+                        }
+                    }
+                    // Rename shows up as Modify(Name(_)) on most platforms;
+                    // notify also surfaces it under Modify(_) which we treat
+                    // as upsert above. The "from" side of a rename (file now
+                    // gone) is caught by the manifest-diff on the next full
+                    // sync; we additionally enqueue a remove for any path that
+                    // no longer exists when its deadline fires (below).
+                    _ => {}
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+
+        let now = Instant::now();
+
+        let ready_up: Vec<PathBuf> = pending_upsert
+            .iter()
+            .filter(|(_, d)| **d <= now)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for path in ready_up {
+            pending_upsert.remove(&path);
+            // A path that vanished before its deadline (rename/atomic save)
+            // becomes a remove instead.
+            if !path.exists() {
+                if let Err(e) = super::source_mirror::handle_source_remove(&brain_id, &path) {
+                    eprintln!("[src-watch] remove {} failed: {}", path.display(), e);
+                }
+                continue;
+            }
+            if let Err(e) = super::source_mirror::handle_source_upsert(&brain_id, &path) {
+                eprintln!("[src-watch] upsert {} failed: {}", path.display(), e);
+            }
+        }
+
+        let ready_rm: Vec<PathBuf> = pending_remove
+            .iter()
+            .filter(|(_, d)| **d <= now)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for path in ready_rm {
+            pending_remove.remove(&path);
+            if let Err(e) = super::source_mirror::handle_source_remove(&brain_id, &path) {
+                eprintln!("[src-watch] remove {} failed: {}", path.display(), e);
+            }
+        }
+    }
 }
 
 /// The worker thread main loop. Debounces per-file and runs
@@ -295,7 +458,33 @@ pub fn start_for_brain(brain_id: &str, vault_path: PathBuf) -> Result<()> {
     }
     let handle = start_watcher(brain_id, vault_path)?;
     cache().write().insert(brain_id.to_string(), handle);
+
+    // Initial source-folder mirror for the now-active brain. This is the
+    // integration point that makes activation pick up source folders: any
+    // activation path that calls `start_for_brain` gets an initial sync for
+    // free without those callers knowing about sources. Run on a detached
+    // thread so a large initial mirror doesn't block the activation request;
+    // errors are logged, never fatal.
+    let brain_owned = brain_id.to_string();
+    let _ = thread::Builder::new()
+        .name(format!("nv-src-sync-{}", brain_id))
+        .spawn(move || {
+            if let Err(e) = super::source_mirror::sync(&brain_owned) {
+                eprintln!("[watcher] initial source sync for {} failed: {}", brain_owned, e);
+            }
+        });
     Ok(())
+}
+
+/// Restart the watcher for `brain_id` (stop + start), re-reading its
+/// `source_folders` from the registry and running a fresh initial sync.
+/// Called by the PUT /sources handler after persisting a new source list
+/// for the ACTIVE brain so the OS-level source watches reflect the new
+/// config immediately. No-op-safe to call for a non-running brain: it
+/// simply starts a fresh watcher.
+pub fn restart_for_brain(brain_id: &str, vault_path: PathBuf) -> Result<()> {
+    stop_for_brain(brain_id);
+    start_for_brain(brain_id, vault_path)
 }
 
 /// Stop the watcher for `brain_id` if one is running. Idempotent.
