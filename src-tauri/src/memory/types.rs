@@ -86,6 +86,29 @@ pub struct Brain {
     pub created_at: Option<String>,
     #[serde(default)]
     pub is_active: bool,
+    /// External folders this brain mirrors `.md` files from. Empty for a
+    /// plain brain that has no configured sources. Canonical config, so it
+    /// lives in the registry (`brains.json`), never only in the rebuildable
+    /// `brain.db`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_folders: Vec<SourceFolder>,
+}
+
+/// One configured source folder for a brain. `path` is the absolute folder
+/// path as the user entered it (Windows backslashes are fine). `enabled`
+/// lets the user keep a folder configured but pause mirroring without losing
+/// the entry. `last_synced` / `file_count` are NOT stored here — the GET
+/// handler derives them from the per-brain `sources_manifest.json` at
+/// response time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceFolder {
+    pub path: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Graph payload returned by `GET /api/graph` and the upcoming Rust

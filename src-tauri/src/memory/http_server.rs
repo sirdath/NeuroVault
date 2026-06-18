@@ -112,6 +112,12 @@ fn router() -> Router {
         .route("/api/brains/:brain_id/activate", post(brains_activate))
         .route("/api/brains/:brain_id/stats", get(brains_stats))
         .route("/api/brains/:brain_id/reset", post(brains_reset))
+        .route(
+            "/api/brains/:brain_id/sources",
+            get(brain_sources_list).put(brain_sources_set),
+        )
+        .route("/api/brains/:brain_id/sources/sync", post(brain_sources_sync))
+        .route("/api/brains/:brain_id/sources/preview", get(brain_sources_preview))
         .route("/api/observations", post(observations))
         .route("/api/audit/recent", get(audit_recent))
         .route("/api/notes", get(notes_list))

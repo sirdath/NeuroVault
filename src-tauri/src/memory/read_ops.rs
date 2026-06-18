@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use super::db::{open_brain, BrainDb};
 use super::paths::{brain_dir, registry_path};
-use super::types::{GraphData, GraphEdge, GraphNode, MemoryError, Result};
+use super::types::{GraphData, GraphEdge, GraphNode, MemoryError, Result, SourceFolder};
 
 // ---- Response shapes ------------------------------------------------------
 
@@ -90,6 +90,10 @@ pub struct BrainStats {
     pub total_bytes: u64,
     pub vault_path: String,
     pub is_external: bool,
+    /// Unix seconds of the most-recently-modified markdown file in the vault
+    /// (0 if empty). Lets the UI sort brains by "recently changed".
+    #[serde(default)]
+    pub last_modified_secs: u64,
 }
 
 /// Brain registry entry enriched with disk footprint — superset of the
@@ -164,6 +168,31 @@ fn registry_entries() -> Result<Vec<(String, String, Option<String>, Option<Stri
         out.push((id, name, description, vault_path, is_active));
     }
     Ok(out)
+}
+
+/// Read the `source_folders` list for one brain straight out of
+/// `brains.json`. Returns an empty vec for a brain with none configured
+/// (or a missing/unparseable registry — sources are optional). Errors only
+/// when the brain id isn't present in the registry at all, so the
+/// source-mirror endpoints can surface a clean 404.
+pub fn registry_source_folders(brain_id: &str) -> Result<Vec<SourceFolder>> {
+    let data = fs::read_to_string(registry_path())
+        .map_err(|e| MemoryError::Other(format!("brains.json unreadable: {}", e)))?;
+    let parsed: serde_json::Value = serde_json::from_str(&data)?;
+    let brains = parsed
+        .get("brains")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| MemoryError::BrainNotFound(brain_id.to_string()))?;
+    let brain = brains
+        .iter()
+        .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(brain_id))
+        .ok_or_else(|| MemoryError::BrainNotFound(brain_id.to_string()))?;
+    let Some(raw) = brain.get("source_folders") else {
+        return Ok(Vec::new());
+    };
+    // Tolerate a malformed/legacy value (e.g. someone hand-edited the
+    // registry) by treating it as "no sources" rather than erroring.
+    Ok(serde_json::from_value::<Vec<SourceFolder>>(raw.clone()).unwrap_or_default())
 }
 
 // ---- Notes ----------------------------------------------------------------
@@ -405,10 +434,10 @@ pub fn brain_stats(brain_id: &str) -> Result<BrainStats> {
         None => (root.join("vault"), false),
     };
 
-    let (note_count, markdown_bytes) = if vault.exists() {
+    let (note_count, markdown_bytes, last_modified_secs) = if vault.exists() {
         count_markdown(&vault)
     } else {
-        (0, 0)
+        (0, 0, 0)
     };
 
     let mut db_bytes: u64 = 0;
@@ -427,33 +456,42 @@ pub fn brain_stats(brain_id: &str) -> Result<BrainStats> {
         total_bytes: markdown_bytes + db_bytes,
         vault_path: vault.to_string_lossy().to_string(),
         is_external,
+        last_modified_secs,
     })
 }
 
-/// Recursively count markdown files + byte total under `root`. Silently
-/// skips entries we can't stat — matches Python's `OSError` swallow.
-fn count_markdown(root: &Path) -> (i64, u64) {
+/// Recursively count markdown files + byte total under `root`, plus the
+/// newest mtime seen (unix secs). Silently skips entries we can't stat —
+/// matches Python's `OSError` swallow.
+fn count_markdown(root: &Path) -> (i64, u64, u64) {
     let mut count: i64 = 0;
     let mut bytes: u64 = 0;
+    let mut newest: u64 = 0;
     let Ok(entries) = fs::read_dir(root) else {
-        return (0, 0);
+        return (0, 0, 0);
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let (c, b) = count_markdown(&path);
+            let (c, b, m) = count_markdown(&path);
             count += c;
             bytes += b;
+            newest = newest.max(m);
             continue;
         }
         if path.extension().map_or(false, |e| e == "md") {
             if let Ok(meta) = fs::metadata(&path) {
                 bytes += meta.len();
                 count += 1;
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        newest = newest.max(dur.as_secs());
+                    }
+                }
             }
         }
     }
-    (count, bytes)
+    (count, bytes, newest)
 }
 
 /// Equivalent of `GET /api/brains` — every brain in `brains.json`
@@ -473,6 +511,7 @@ pub fn list_brains_with_stats() -> Result<Vec<BrainSummary>> {
             total_bytes: 0,
             vault_path: vault_path.clone().unwrap_or_default(),
             is_external: vault_path.is_some(),
+            last_modified_secs: 0,
         });
         out.push(BrainSummary {
             id,

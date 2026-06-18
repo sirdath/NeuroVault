@@ -5693,3 +5693,175 @@ pub async fn inbox_done(
     super::inbox::mark_done(&brain_id, &body.name)?;
     Ok(Json(serde_json::json!({ "status": "ok", "name": body.name })))
 }
+
+// ---------------------------------------------------------------------------
+// Per-brain source folders.
+//
+//   GET  /api/brains/:brain_id/sources         — list configured sources,
+//        each enriched with manifest-derived file_count + last_synced.
+//   PUT  /api/brains/:brain_id/sources         — replace the source list
+//        (validates each path is a directory), persist, and if the brain
+//        is active (re)start its mirror watchers + run an initial sync.
+//   POST /api/brains/:brain_id/sources/sync    — force a full re-mirror now
+//        (works whether or not the brain is active).
+//   GET  /api/brains/:brain_id/sources/preview — read-only dry run.
+//
+// Source-folder CONFIG lives in brains.json (canonical config, never only
+// in the rebuildable brain.db). file_count + last_synced are NOT stored in
+// the brain record — they're computed from the per-brain
+// `sources_manifest.json` at response time.
+// ---------------------------------------------------------------------------
+
+/// One source folder in a GET response — config plus manifest-derived
+/// status. Matches the frontend contract exactly.
+#[derive(Serialize)]
+pub struct SourceOut {
+    pub path: String,
+    pub enabled: bool,
+    /// RFC3339 of the most recent sync that touched any file from this
+    /// folder, or null if it has never produced a mirrored note.
+    pub last_synced: Option<String>,
+    /// Number of files this folder currently contributes to the vault.
+    pub file_count: u32,
+}
+
+#[derive(Serialize)]
+pub struct SourcesListResponse {
+    pub sources: Vec<SourceOut>,
+}
+
+/// One source folder in a PUT body — config only (status is derived, never
+/// accepted from the client).
+#[derive(Deserialize)]
+pub struct SourceIn {
+    pub path: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+pub struct SourcesPutBody {
+    pub sources: Vec<SourceIn>,
+}
+
+/// Build the GET response shape for a brain from its registry config +
+/// manifest-derived status. Shared by GET and PUT (which returns the same
+/// shape on success).
+fn sources_response(brain_id: &str) -> Result<SourcesListResponse, ApiError> {
+    let folders = super::read_ops::registry_source_folders(brain_id)?;
+    let sources = folders
+        .into_iter()
+        .map(|f| {
+            let status = super::source_mirror::source_status(brain_id, &f.path);
+            SourceOut {
+                path: f.path,
+                enabled: f.enabled,
+                last_synced: status.last_synced,
+                file_count: status.file_count,
+            }
+        })
+        .collect();
+    Ok(SourcesListResponse { sources })
+}
+
+pub async fn brain_sources_list(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<SourcesListResponse>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || sources_response(&brain_id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(out))
+}
+
+pub async fn brain_sources_set(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<SourcesPutBody>,
+) -> Result<Json<SourcesListResponse>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<SourcesListResponse, ApiError> {
+        // Validate the brain exists (clean 404 rather than a write error).
+        let _ = super::read_ops::registry_source_folders(&brain_id)?;
+
+        // Validate every path is an existing directory FIRST — persist
+        // nothing if any is invalid.
+        for s in &body.sources {
+            if !std::path::Path::new(&s.path).is_dir() {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    format!("{} is not a directory", s.path),
+                ));
+            }
+        }
+
+        let folders: Vec<super::types::SourceFolder> = body
+            .sources
+            .iter()
+            .map(|s| super::types::SourceFolder {
+                path: s.path.clone(),
+                enabled: s.enabled,
+            })
+            .collect();
+
+        // Persist config to brains.json.
+        super::write_ops::set_source_folders(&brain_id, &folders)?;
+
+        // If this is the active brain, (re)start its mirror watchers and run
+        // an initial sync so the new config takes effect now.
+        // restart_for_brain re-reads source_folders + syncs.
+        let active = resolve_brain_id(None).ok();
+        if active.as_deref() == Some(brain_id.as_str()) {
+            let vault = super::read_ops::resolve_vault_path(&brain_id)?;
+            if let Err(e) = super::watcher::restart_for_brain(&brain_id, vault) {
+                eprintln!(
+                    "[brain_sources_set] watcher restart for {} failed: {}",
+                    brain_id, e
+                );
+            }
+        }
+
+        sources_response(&brain_id)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(out))
+}
+
+#[derive(Serialize)]
+pub struct SourcesSyncResponse {
+    pub synced: u32,
+    pub removed: u32,
+    pub skipped_duplicates: u32,
+}
+
+pub async fn brain_sources_sync(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<SourcesSyncResponse>, ApiError> {
+    let report = tokio::task::spawn_blocking(move || super::source_mirror::sync(&brain_id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
+    Ok(Json(SourcesSyncResponse {
+        synced: report.synced,
+        removed: report.removed,
+        skipped_duplicates: report.skipped_duplicates,
+    }))
+}
+
+/// GET /api/brains/:brain_id/sources/preview — a read-only dry run: what a
+/// sync WOULD add / update / remove / skip, with no changes to the brain.
+pub async fn brain_sources_preview(
+    Path(brain_id): Path<String>,
+    _s: State<ServerState>,
+) -> Result<Json<super::source_mirror::SyncPlan>, ApiError> {
+    let plan = tokio::task::spawn_blocking(move || super::source_mirror::plan(&brain_id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
+    Ok(Json(plan))
+}

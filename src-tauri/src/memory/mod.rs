@@ -58,6 +58,7 @@ pub mod query_parser;
 pub mod read_ops;
 pub mod recall_cache;
 pub mod related;
+pub mod source_mirror;
 pub mod reranker;
 pub mod retriever;
 pub mod rrf;
@@ -86,5 +87,9 @@ pub use read_ops::{
 pub use related::{get_related, get_related_checked, RelatedHit, RelatedOpts};
 pub use retriever::{hybrid_retrieve, hybrid_retrieve_throttled, RecallHit, RecallOpts, THROTTLE_HINT_ID};
 pub use summaries::{generate_summaries, generate_summaries_default};
-pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result};
-pub use write_ops::{create_note, delete_note, save_note, supersede_note, BrainContext, WriteResult};
+pub use source_mirror::{sync as source_sync, SourceStatus, SyncReport};
+pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result, SourceFolder};
+pub use write_ops::{
+    create_note, delete_note, save_note, set_source_folders, supersede_note, BrainContext,
+    WriteResult,
+};
