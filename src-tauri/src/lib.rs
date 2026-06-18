@@ -1634,6 +1634,14 @@ pub fn run() {
                     // background listener on Windows can keep the process
                     // alive for a few seconds after the main window closes.
                     memory::watcher::stop_all();
+                    // Watchers are now stopped, so nothing is mid-write:
+                    // flush every brain's WAL into brain.db and release the
+                    // memory-maps + file handles. This leaves each brain.db
+                    // complete and self-contained on disk, so a volume hosting
+                    // the brains (e.g. an external SSD) can be unmounted
+                    // cleanly right after quit. Best-effort.
+                    memory::db::checkpoint_all();
+                    memory::db::close_all();
                 }
                 // macOS only: clicking the Dock icon while no window is on
                 // screen — after a native minimise, or after

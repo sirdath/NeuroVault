@@ -600,6 +600,15 @@ export default function App() {
     "--nv-negative": theme.negative,
   } as React.CSSProperties & Record<string, string>;
 
+  // Mirror the theme vars onto :root too, so UI portaled into document.body
+  // (e.g. the Source Folders modal) inherits them. Without this, those portals
+  // sit outside the themed wrapper <div> below and every var(--nv-*) resolves
+  // to nothing → transparent, unstyled backgrounds.
+  useEffect(() => {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(themeVars)) root.style.setProperty(k, String(v));
+  }, [themeVars]);
+
   return (
     <div
       className={`flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}

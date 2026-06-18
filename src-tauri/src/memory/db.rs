@@ -117,6 +117,27 @@ pub fn close_all() {
     cache().write().clear();
 }
 
+/// Checkpoint (TRUNCATE) the WAL of every currently-open brain so all pending
+/// writes land in `brain.db` and the `-wal`/`-shm` sidecar files shrink to
+/// zero. Best-effort. Call this before app quit, or before ejecting an
+/// external drive that hosts the brains, so the on-disk database is complete
+/// and consistent. Stop the vault watchers first so nothing is mid-write
+/// during the checkpoint.
+pub fn checkpoint_all() {
+    let map = cache().read();
+    for db in map.values() {
+        let conn = db.lock();
+        // Drop the memory-map FIRST (mmap_size=0 unmaps on the live
+        // connection). The mapping keeps the hosting volume marked in-use and
+        // can linger until the process exits — which is why ejecting an
+        // external drive used to require fully quitting the app. Releasing the
+        // mapping here lets a subsequent close_all() free every file handle
+        // while the app is still running. Then TRUNCATE-checkpoint so brain.db
+        // is the complete, single source of truth on disk.
+        let _ = conn.execute_batch("PRAGMA mmap_size=0; PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+}
+
 /// Core open routine: create the brain dir, open the SQLite file, set
 /// pragmas, load sqlite-vec, run migrations, apply the schema script,
 /// create the vec0 virtual table if it's absent. Not cached — callers
