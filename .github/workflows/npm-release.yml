@@ -1,10 +1,10 @@
 name: npm-release
 
 # Publish the headless NeuroVault MCP server to npm as `@neurovault/mcp` plus
-# its per-platform binary subpackages. v0 ships macOS (arm64 + x64) and Linux
-# x64 (glibc). The headless binary is built with --no-default-features so it
-# links no Tauri (no WebKit/GTK), and fastembed uses rustls so it needs no
-# OpenSSL — verified per-runner below.
+# its per-platform binary subpackages: macOS (arm64 + x64), Linux x64 (glibc),
+# and Windows x64. The headless binary is built with --no-default-features so it
+# links no Tauri (no WebKit/GTK/WebView2), and fastembed uses rustls so it needs
+# no OpenSSL — verified per-runner below.
 #
 # Trigger by pushing a tag like `npm-v0.5.2`. Requires repo secret NPM_TOKEN.
 on:
@@ -22,21 +22,33 @@ jobs:
           - os: macos-14
             triple: aarch64-apple-darwin
             subpkg: mcp-darwin-arm64
+            binfile: neurovault-server
             link_tool: otool -L
             forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
             ort_cache: ~/Library/Caches/ort.pyke.io
           - os: macos-13
             triple: x86_64-apple-darwin
             subpkg: mcp-darwin-x64
+            binfile: neurovault-server
             link_tool: otool -L
             forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
             ort_cache: ~/Library/Caches/ort.pyke.io
           - os: ubuntu-22.04
             triple: x86_64-unknown-linux-gnu
             subpkg: mcp-linux-x64
+            binfile: neurovault-server
             link_tool: ldd
             forbidden: 'webkit|libssl|libcrypto|libonnxruntime'
             ort_cache: ~/.cache/ort.pyke.io
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            subpkg: mcp-win32-x64
+            binfile: neurovault-server.exe
+            # No otool/ldd on Windows + vec0.dll is committed; the --help smoke
+            # (binary loads + runs) is the dependency-resolution proof here.
+            link_tool: ''
+            forbidden: ''
+            ort_cache: ~/AppData/Local/ort.pyke.io
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -69,15 +81,16 @@ jobs:
       - name: Build + stage headless binary
         run: node scripts/build-headless.mjs ${{ matrix.triple }}
       - name: Sanity — no GUI / OpenSSL / dynamic-onnx leaked in
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          BIN="dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server"
+          BIN="dist-npm/packages/${{ matrix.subpkg }}/bin/${{ matrix.binfile }}"
           ${{ matrix.link_tool }} "$BIN" | tee /tmp/links
           if grep -qiE '${{ matrix.forbidden }}' /tmp/links; then
             echo "::error::forbidden dynamic dependency leaked into the headless binary"; exit 1
           fi
       - name: Smoke — binary executes (proves dynamic deps resolve)
-        run: dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server --help
+        run: dist-npm/packages/${{ matrix.subpkg }}/bin/${{ matrix.binfile }} --help
       - name: Pack subpackage
         run: npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
       - uses: actions/upload-artifact@v4

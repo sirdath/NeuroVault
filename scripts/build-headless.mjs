@@ -27,7 +27,8 @@ const TARGETS = {
   // vec0.so is NOT committed (a glibc-built .so can't be vendored portably) —
   // CI builds it from sqlite-vec source into src-tauri/resources/ before this runs.
   'x86_64-unknown-linux-gnu': { subpkg: 'mcp-linux-x64', vec: 'vec0.so', bin: 'neurovault-server' },
-  // 'x86_64-pc-windows-msvc':   { subpkg: 'mcp-win32-x64', vec: 'vec0.dll', bin: 'neurovault-server.exe' },
+  // vec0.dll IS committed in src-tauri/resources/, so Windows needs no download.
+  'x86_64-pc-windows-msvc': { subpkg: 'mcp-win32-x64', vec: 'vec0.dll', bin: 'neurovault-server.exe' },
 };
 
 function hostTriple() {
