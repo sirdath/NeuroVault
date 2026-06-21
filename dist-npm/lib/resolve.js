@@ -5,8 +5,8 @@
 // optionalDependencies, gated by each subpackage's own `os`/`cpu` fields), so
 // resolution survives `--ignore-scripts` — there is no postinstall download.
 //
-// v0 ships macOS (arm64 + x64) and Linux x64 **glibc**. Windows and Linux
-// **musl** (Alpine) are not shipped yet: npm's os/cpu fields cannot distinguish
+// Ships macOS (arm64 + x64), Linux x64 **glibc**, and Windows x64. Linux
+// **musl** (Alpine) is not shipped: npm's os/cpu fields cannot distinguish
 // glibc from musl, and a glibc binary + glibc-built vec0.so will not run on
 // musl — so we detect libc at runtime and fail with a clear message rather than
 // hand a musl user a binary that segfaults.
@@ -14,7 +14,7 @@ const PLATFORM_PACKAGES = {
   'darwin-arm64': '@neurovault/mcp-darwin-arm64',
   'darwin-x64': '@neurovault/mcp-darwin-x64',
   'linux-x64': '@neurovault/mcp-linux-x64',
-  // 'win32-x64': '@neurovault/mcp-win32-x64',   // after a Windows vec0.dll build
+  'win32-x64': '@neurovault/mcp-win32-x64',
 };
 
 function binName() {
