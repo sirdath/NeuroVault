@@ -1,0 +1,81 @@
+name: npm-release
+
+# Publish the headless NeuroVault MCP server to npm as `@neurovault/mcp` plus
+# its per-platform binary subpackages. v0 ships macOS only (arm64 + x64); the
+# headless binary is built with --no-default-features so it links no Tauri.
+#
+# Trigger by pushing a tag like `npm-v0.5.2`. Requires repo secret NPM_TOKEN.
+on:
+  push:
+    tags: ['npm-v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build ${{ matrix.triple }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            triple: aarch64-apple-darwin
+            subpkg: mcp-darwin-arm64
+          - os: macos-13
+            triple: x86_64-apple-darwin
+            subpkg: mcp-darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Cache the ort static-onnxruntime download to de-flake the build.
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ort.pyke.io
+          key: ort-${{ matrix.triple }}
+      - name: Build + stage headless binary
+        run: node scripts/build-headless.mjs ${{ matrix.triple }}
+      - name: Sanity — binary links no WebKit
+        run: |
+          otool -L "dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server" | tee /tmp/links
+          if grep -qiE 'WebKit|AppKit|GTK' /tmp/links; then echo "GUI frameworks leaked into headless binary"; exit 1; fi
+      - name: Pack subpackage
+        run: npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.subpkg }}
+          path: artifacts/*.tgz
+
+  publish:
+    name: publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # npm --provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      # Subpackages MUST publish before the root — the root's optionalDependencies
+      # pin them at the same exact version and npm resolves them at install time.
+      - name: Publish platform subpackages
+        run: |
+          for tgz in artifacts/*/*.tgz; do
+            echo "publishing $tgz"
+            npm publish "$tgz" --access public --provenance
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish root @neurovault/mcp
+        run: npm publish ./dist-npm --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

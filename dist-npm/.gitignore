@@ -1,0 +1,5 @@
+# Built binaries are staged by scripts/build-headless.mjs / CI — never committed.
+packages/*/bin/
+# Local smoke-test artifacts
+node_modules/
+*.tgz
