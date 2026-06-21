@@ -24,7 +24,9 @@ const SRC = join(ROOT, 'src-tauri');
 const TARGETS = {
   'aarch64-apple-darwin': { subpkg: 'mcp-darwin-arm64', vec: 'vec0.dylib', bin: 'neurovault-server' },
   'x86_64-apple-darwin': { subpkg: 'mcp-darwin-x64', vec: 'vec0.dylib', bin: 'neurovault-server' },
-  // 'x86_64-unknown-linux-gnu': { subpkg: 'mcp-linux-x64', vec: 'vec0.so',  bin: 'neurovault-server' },
+  // vec0.so is NOT committed (a glibc-built .so can't be vendored portably) —
+  // CI builds it from sqlite-vec source into src-tauri/resources/ before this runs.
+  'x86_64-unknown-linux-gnu': { subpkg: 'mcp-linux-x64', vec: 'vec0.so', bin: 'neurovault-server' },
   // 'x86_64-pc-windows-msvc':   { subpkg: 'mcp-win32-x64', vec: 'vec0.dll', bin: 'neurovault-server.exe' },
 };
 

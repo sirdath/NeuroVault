@@ -1,8 +1,10 @@
 name: npm-release
 
 # Publish the headless NeuroVault MCP server to npm as `@neurovault/mcp` plus
-# its per-platform binary subpackages. v0 ships macOS only (arm64 + x64); the
-# headless binary is built with --no-default-features so it links no Tauri.
+# its per-platform binary subpackages. v0 ships macOS (arm64 + x64) and Linux
+# x64 (glibc). The headless binary is built with --no-default-features so it
+# links no Tauri (no WebKit/GTK), and fastembed uses rustls so it needs no
+# OpenSSL — verified per-runner below.
 #
 # Trigger by pushing a tag like `npm-v0.5.2`. Requires repo secret NPM_TOKEN.
 on:
@@ -20,9 +22,21 @@ jobs:
           - os: macos-14
             triple: aarch64-apple-darwin
             subpkg: mcp-darwin-arm64
+            link_tool: otool -L
+            forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
+            ort_cache: ~/Library/Caches/ort.pyke.io
           - os: macos-13
             triple: x86_64-apple-darwin
             subpkg: mcp-darwin-x64
+            link_tool: otool -L
+            forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
+            ort_cache: ~/Library/Caches/ort.pyke.io
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            subpkg: mcp-linux-x64
+            link_tool: ldd
+            forbidden: 'webkit|libssl|libcrypto|libonnxruntime'
+            ort_cache: ~/.cache/ort.pyke.io
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -32,17 +46,38 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # Linux ships no committed vec0 — fetch the matching loadable extension
+      # (vec0.so) from the same sqlite-vec release the desktop app pins. macOS
+      # uses the committed src-tauri/resources/vec0.dylib.
+      - name: Download vec0.so (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="v0.1.9"; STRIPPED="${VERSION#v}"
+          ASSET="sqlite-vec-${STRIPPED}-loadable-linux-x86_64.tar.gz"
+          curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/vec.tgz \
+            "https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
+          mkdir -p src-tauri/resources
+          tar -xzf /tmp/vec.tgz -C src-tauri/resources/
+          ls -lh src-tauri/resources/vec0.so
       # Cache the ort static-onnxruntime download to de-flake the build.
       - uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/ort.pyke.io
+          path: ${{ matrix.ort_cache }}
           key: ort-${{ matrix.triple }}
       - name: Build + stage headless binary
         run: node scripts/build-headless.mjs ${{ matrix.triple }}
-      - name: Sanity — binary links no WebKit
+      - name: Sanity — no GUI / OpenSSL / dynamic-onnx leaked in
+        shell: bash
         run: |
-          otool -L "dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server" | tee /tmp/links
-          if grep -qiE 'WebKit|AppKit|GTK' /tmp/links; then echo "GUI frameworks leaked into headless binary"; exit 1; fi
+          BIN="dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server"
+          ${{ matrix.link_tool }} "$BIN" | tee /tmp/links
+          if grep -qiE '${{ matrix.forbidden }}' /tmp/links; then
+            echo "::error::forbidden dynamic dependency leaked into the headless binary"; exit 1
+          fi
+      - name: Smoke — binary executes (proves dynamic deps resolve)
+        run: dist-npm/packages/${{ matrix.subpkg }}/bin/neurovault-server --help
       - name: Pack subpackage
         run: npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
       - uses: actions/upload-artifact@v4
