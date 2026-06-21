@@ -106,6 +106,7 @@ pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
 fn router() -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/version", get(version))
         .route("/api/status", get(status))
         .route("/api/brains", get(brains_list))
         .route("/api/brains/active", get(brains_active))

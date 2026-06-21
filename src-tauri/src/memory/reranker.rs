@@ -14,6 +14,7 @@ use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
+use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
 /// Global lazy-init reranker singleton. Guards concurrent use; the
@@ -33,7 +34,14 @@ fn instance() -> Result<&'static Reranker> {
         // subsequent runs are instant.
         let model = TextRerank::try_new(
             RerankInitOptions::new(RerankerModel::BGERerankerBase)
-                .with_show_download_progress(false),
+                .with_show_download_progress(false)
+                // Pin the model cache to ~/.neurovault/.fastembed_cache (matches
+                // embedder.rs). Without this, fastembed defaults to the process
+                // CWD — fine for the GUI app (launched from a stable dir) but
+                // wrong for a headless `neurovault-server` started from an
+                // arbitrary cwd (npm bin shim, brew, curl), which would scatter
+                // a ~110 MB model under whatever folder the agent ran from.
+                .with_cache_dir(nv_home().join(".fastembed_cache")),
         )
         .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
         Ok::<Reranker, MemoryError>(Reranker {
