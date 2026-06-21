@@ -47,26 +47,44 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 
+[features]
+# `gui` pulls in Tauri + all desktop plugins and compiles `app.rs`. Default ON
+# so `cargo build` / `tauri dev` build the full app. A `--no-default-features`
+# build (used for the headless `neurovault-server` shipped via npm) drops Tauri
+# entirely, so the binary links no WebKit/GTK and runs on a headless host.
+default = ["gui"]
+gui = [
+  "dep:tauri",
+  "dep:tauri-plugin-fs",
+  "dep:tauri-plugin-shell",
+  "dep:tauri-plugin-global-shortcut",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-deep-link",
+  "dep:tauri-plugin-single-instance",
+  "dep:tauri-plugin-updater",
+  "dep:tauri-plugin-process",
+]
+
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = ["macos-private-api"], optional = true }
+tauri-plugin-fs = { version = "2", optional = true }
+tauri-plugin-shell = { version = "2", optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 # Phase 7b: `neurovault://engram/<id>` URL scheme. Claude Code can
 # emit clickable links in chat that jump the user straight to an
 # engram. The `single-instance` plugin (with the `deep-link` feature)
 # makes sure clicking a link while the app is already open forwards
 # the URL to the running instance instead of spawning a duplicate.
-tauri-plugin-deep-link = "2"
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"], optional = true }
 # In-app updater. Registered always; it only does work when a
 # `plugins.updater` block (endpoints + pubkey) is present in
 # tauri.conf.json. Until the signing keypair + CI signing step land, the
 # native `check()` path no-ops and the UI falls back to opening the
 # GitHub release page. See docs/UPDATER-SETUP.md to turn it on.
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
+tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-process = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "v5"] }

@@ -123,6 +123,19 @@ pub struct StatusBody {
     links: LinkBreakdown,
 }
 
+/// GET /api/version — the running backend's version + pid. No auth, no DB
+/// access (answers before any brain exists). Lets a launcher / MCP shim detect
+/// version skew against a backend already listening on :8765 — the shared
+/// singleton port that the desktop app, a prior `npx` session, or a curl-
+/// installed binary all bind (first wins) — and gives a "kill PID N" target
+/// when the live backend is older than the caller.
+pub async fn version(_s: State<ServerState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+    })))
+}
+
 pub async fn status(_s: State<ServerState>) -> Result<Json<StatusBody>, ApiError> {
     let id = resolve_brain_id(None)?;
     let db = open_brain(&id)?;
