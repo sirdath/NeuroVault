@@ -10,8 +10,10 @@
 //     All notices/errors go to stderr.
 //   - empty argv defaults to `--mcp-only` (the MCP-client path). Any explicit
 //     args (--port N, --http-only, --help) are passed straight through.
-//   - the child inherits stdio so the JSON-RPC stream flows untouched.
-const { spawnSync } = require('child_process');
+//   - the child inherits stdio so the JSON-RPC stream flows untouched, and we
+//     forward exit code + termination signals (this is a thin launcher, not a
+//     proxy — we never sit in the data path).
+const { spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -38,11 +40,25 @@ try {
 } catch (err) {
   let msg = err.message;
   if (err.code === 'MISSING_PACKAGE') {
-    msg += `\nThe optional platform package did not install. Try:\n  npm install ${err.pkg}`;
+    msg +=
+      `\nThe optional platform package did not install (a known npm lockfile bug can drop it).` +
+      `\nFix: remove package-lock.json + node_modules and reinstall, or: npm install ${err.pkg}`;
   } else if (err.code === 'UNSUPPORTED_PLATFORM') {
-    msg += '\nNeuroVault currently ships prebuilt binaries for macOS (arm64, x64).';
+    msg += '\nNeuroVault ships prebuilt binaries for macOS (arm64/x64), Linux x64 (glibc), and Windows x64.';
   }
   die(msg);
+}
+
+// npm/pnpm can drop the execute bit on non-`bin` files during extract (the
+// binary is a `files` entry, not a declared bin). Restore it defensively on
+// Unix so a fresh install always runs. Best-effort: a read-only store throws,
+// and the binary is usually already +x.
+if (process.platform !== 'win32') {
+  try {
+    fs.chmodSync(binPath, 0o755);
+  } catch (_e) {
+    /* ignore — already executable, or store is read-only */
+  }
 }
 
 // The embedder + reranker cache the on-device ONNX models under
@@ -61,11 +77,40 @@ if (!fs.existsSync(modelDir)) {
 const argv = process.argv.slice(2);
 const args = argv.length ? argv : ['--mcp-only'];
 
-const res = spawnSync(binPath, args, {
+// Async spawn (not spawnSync): keep the event loop free, get crash detection,
+// and forward signals. stdio:'inherit' wires the child's stdin/stdout straight
+// to ours, so the JSON-RPC stream is untouched and we never buffer it.
+const child = spawn(binPath, args, {
   stdio: 'inherit',
   env: { ...process.env, FASTEMBED_CACHE_DIR: cacheDir },
 });
-if (res.error) {
-  die(`NeuroVault: failed to launch ${binPath}: ${res.error.message}`);
+
+child.on('error', (e) => die(`NeuroVault: failed to launch ${binPath}: ${e.message}`));
+
+// Forward termination so an MCP client stopping us also stops the server.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  try {
+    process.on(sig, () => {
+      try {
+        child.kill(sig);
+      } catch (_e) {
+        /* child already gone */
+      }
+    });
+  } catch (_e) {
+    /* signal not supported on this platform */
+  }
 }
-process.exit(res.status == null ? 1 : res.status);
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    // Re-raise the signal so our exit status reflects how the child died.
+    try {
+      process.kill(process.pid, signal);
+      return;
+    } catch (_e) {
+      process.exit(1);
+    }
+  }
+  process.exit(code == null ? 0 : code);
+});

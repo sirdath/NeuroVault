@@ -12,12 +12,22 @@ No desktop app required. The NeuroVault desktop app adds a notes editor and a li
 claude mcp add neurovault -- npx -y @neurovault/mcp
 ```
 
-**Cursor / Claude Desktop / Codex** — add to your MCP config:
+**Cursor / Claude Desktop / Codex (macOS / Linux)** — add to your MCP config:
 
 ```json
 {
   "mcpServers": {
     "neurovault": { "command": "npx", "args": ["-y", "@neurovault/mcp"] }
+  }
+}
+```
+
+**Windows** — MCP clients spawn the command without a shell, and Node can't spawn `npx.cmd` directly (you'd get `spawn npx ENOENT`). Wrap it in `cmd /c`:
+
+```json
+{
+  "mcpServers": {
+    "neurovault": { "command": "cmd", "args": ["/c", "npx", "-y", "@neurovault/mcp"] }
   }
 }
 ```
@@ -36,6 +46,7 @@ That's it. `recall`, `remember`, `related`, `session_start`, and the rest appear
 - **Platforms:** macOS 11+ (Apple Silicon or Intel), **Linux x64 (glibc 2.35+)**, and **Windows x64**. Alpine/musl Linux is not shipped (musl needs its own build; the installer detects it and tells you rather than handing over a binary that won't run).
 - **One backend owns `:8765`.** If you also run the NeuroVault desktop app, it and this server share the same backend — quit one if you switch between them.
 - **First recall downloads the embedding model** (~130 MB, once) to `~/.neurovault/.fastembed_cache`. Pre-seed that folder for offline/air-gapped setups.
+- **Behind a corporate TLS-intercepting proxy?** The model download uses rustls with the bundled CA set, so a private/MITM root CA in your OS store isn't trusted and the download can fail with a certificate error. Pre-seed `~/.neurovault/.fastembed_cache` from an unproxied machine (copy the `models--Xenova--*` folders), or point `HF_ENDPOINT` at an internal mirror.
 - For a long-lived setup, prefer a pinned global install (`npm i -g @neurovault/mcp`) over bare `npx -y`, so the auto-started backend keeps a stable binary path.
 
 MIT © NeuroVault Contributors
