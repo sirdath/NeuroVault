@@ -11,6 +11,15 @@ on:
   push:
     tags: ['npm-v*']
   workflow_dispatch:
+  # Build + per-platform smoke (incl. Windows) on a PR into main, so the
+  # headless distribution is verified BEFORE merge. Publish stays tag-only.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dist-npm/**'
+      - 'scripts/build-headless.mjs'
+      - 'src-tauri/**'
+      - '.github/workflows/npm-release.yml'
 
 jobs:
   build:
