@@ -118,6 +118,10 @@ jobs:
   publish:
     name: publish to npm
     needs: build
+    # Only publish on a real `npm-v*` tag. A manual `workflow_dispatch` run does
+    # the build + per-platform smokes ONLY — so you can dry-run the Windows
+    # build with no npm token, then tag when it's green.
+    if: startsWith(github.ref, 'refs/tags/npm-v')
     runs-on: ubuntu-latest
     permissions:
       id-token: write # npm --provenance
