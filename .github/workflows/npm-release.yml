@@ -89,8 +89,25 @@ jobs:
           if grep -qiE '${{ matrix.forbidden }}' /tmp/links; then
             echo "::error::forbidden dynamic dependency leaked into the headless binary"; exit 1
           fi
-      - name: Smoke — binary executes (proves dynamic deps resolve)
-        run: dist-npm/packages/${{ matrix.subpkg }}/bin/${{ matrix.binfile }} --help
+      # Real smoke (all platforms, incl. Windows via git-bash): the binary not
+      # only links but starts as a server, serves HTTP, and LOADS vec0 by opening
+      # a brain DB — the path that --help never touches. No model download
+      # (the embedder is lazy; opening a brain doesn't embed).
+      - name: Smoke — server starts, serves, loads vec0
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="dist-npm/packages/${{ matrix.subpkg }}/bin/${{ matrix.binfile }}"
+          "$BIN" --help >/dev/null
+          "$BIN" --port 8799 &
+          SRV=$!
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8799/api/version >/dev/null 2>&1 && break || sleep 1; done
+          curl -fsS http://127.0.0.1:8799/api/version | grep -q '"version"'
+          # Create a brain + read its stats → opens brain.db → load_extension(vec0).
+          curl -fsS -X POST http://127.0.0.1:8799/api/brains -H 'content-type: application/json' -d '{"name":"smoke"}' >/dev/null
+          curl -fsS http://127.0.0.1:8799/api/brains/smoke/stats | grep -q '"brain_id"'
+          kill "$SRV" 2>/dev/null || true
+          echo "✓ ${{ matrix.triple }}: server + vec0 load OK"
       - name: Pack subpackage
         run: npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
       - uses: actions/upload-artifact@v4

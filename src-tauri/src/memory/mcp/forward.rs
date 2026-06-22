@@ -58,6 +58,23 @@ pub async fn backend_healthy(base: &str) -> bool {
     )
 }
 
+/// Fetch the live backend's reported version from `/api/version`, if reachable.
+/// Used to warn about version skew when an OLDER backend already owns :8765 (the
+/// desktop app, a prior npx session, or a curl install all bind it; first wins).
+/// Returns None on any failure — including an old backend that predates the route.
+pub async fn backend_version(base: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let resp = client.get(format!("{base}/api/version")).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: Value = resp.json().await.ok()?;
+    v.get("version").and_then(|x| x.as_str()).map(String::from)
+}
+
 /// Idempotently ensure a brain named `name` exists, returning its id.
 /// Looks up an existing brain by name first (so we don't create
 /// `project`, `project-2`, `project-3`, … across sessions), then creates

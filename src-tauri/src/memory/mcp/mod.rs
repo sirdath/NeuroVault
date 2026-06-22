@@ -90,6 +90,21 @@ async fn ensure_backend(base: &str) {
     }
     // Already up (desktop app, or a backend a previous session started)?
     if forward::backend_healthy(base).await {
+        // The :8765 port is a shared singleton — the desktop app, a prior npx
+        // session, or a curl install all bind it and the first wins. If the
+        // running backend is a DIFFERENT version than this server, warn loudly:
+        // otherwise we'd silently forward every tool call to a stale engine with
+        // a possibly-incompatible schema/contract.
+        if let Some(live) = forward::backend_version(base).await {
+            let mine = env!("CARGO_PKG_VERSION");
+            if live != mine {
+                eprintln!(
+                    "[neurovault-mcp] WARNING: a NeuroVault backend v{live} already owns {base}, \
+                     but this server is v{mine}. Tool calls go to the RUNNING v{live} engine — if \
+                     that's stale, quit the NeuroVault app or kill the old process, then retry."
+                );
+            }
+        }
         return;
     }
     // Only auto-start a LOCAL backend. A custom remote NEUROVAULT_API_URL means
