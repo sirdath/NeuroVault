@@ -461,6 +461,13 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     let kmax = ks.iter().copied().max().unwrap_or(10);
     let rerank = has_flag(args, "--rerank");
     let keep_recency = has_flag(args, "--keep-recency");
+    // --compare-rerank: ingest each question ONCE, then run recall twice —
+    // baseline (rerank OFF) into `sums`, reranked (rerker ON) into `sums_b` —
+    // and print both scorecards. A controlled A/B that isolates the
+    // cross-encoder's effect (same brain, same candidates, same ablation) at
+    // half the cost of two separate runs. Recency is governed by --keep-recency
+    // as usual; run WITHOUT it so recency doesn't confound the rerank delta.
+    let compare_rerank = has_flag(args, "--compare-rerank");
     // Extra scoring features to switch off (comma-separated; see RecallOpts
     // for the vocabulary). Diagnosis lever: `--ablate mmr` isolates the MMR
     // diversifier, `--ablate semantic` runs keyword+graph only, etc.
@@ -578,6 +585,8 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     // Aggregates: metric -> sum, plus per-question-type breakdown.
     let mut sums: HashMap<String, f64> = HashMap::new();
     let mut type_sums: HashMap<String, (f64, usize)> = HashMap::new(); // r@5 only
+    // --compare-rerank: the rerank-ON aggregate, scored on the SAME questions.
+    let mut sums_b: HashMap<String, f64> = HashMap::new();
     let mut per_question: Vec<serde_json::Value> = Vec::new();
     // (top_score, is_abs) per question — the retrieval-confidence gate input.
     let mut abstain_samples: Vec<(f64, bool)> = Vec::new();
@@ -615,7 +624,9 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             spread_hops: 0,
             exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
             as_of: None,
-            use_reranker: rerank,
+            // In compare mode the primary pass is always the rerank-OFF baseline;
+            // the rerank-ON pass runs separately below into sums_b.
+            use_reranker: if compare_rerank { false } else { rerank },
             ablate: {
                 let mut a = extra_ablate.clone();
                 if !keep_recency {
@@ -693,6 +704,48 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             entry.1 += 1;
         }
 
+        // --compare-rerank: re-run recall on the SAME ingested brain with the
+        // cross-encoder reranker ON, scoring into sums_b. Everything else
+        // (candidates, ablation, exclusions) is identical to the baseline
+        // above, so the sums vs sums_b delta is purely the reranker's effect.
+        if compare_rerank && !is_abs {
+            let opts_b = RecallOpts {
+                top_k: kmax,
+                spread_hops: 0,
+                exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
+                as_of: None,
+                use_reranker: true,
+                ablate: opts.ablate.clone(),
+            };
+            let hits_b = retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
+            let ranked_b: Vec<String> = {
+                let conn = brain.lock();
+                hits_b
+                    .iter()
+                    .filter(|h| h.engram_id != retriever::THROTTLE_HINT_ID)
+                    .filter_map(|h| {
+                        conn.query_row(
+                            "SELECT filename FROM engrams WHERE id = ?1",
+                            [&h.engram_id],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .ok()
+                    })
+                    .filter_map(|f| {
+                        f.strip_prefix("sess-")
+                            .and_then(|s| s.strip_suffix(".md"))
+                            .map(String::from)
+                    })
+                    .collect()
+            };
+            for &k in &ks {
+                *sums_b.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked_b, &q.gold, k);
+            }
+            *sums_b.entry("mrr".into()).or_default() += mrr(&ranked_b, &q.gold);
+        }
+
         let record = serde_json::json!({
             "question_id": q.question_id,
             "type": q.question_type,
@@ -764,9 +817,22 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     );
     let mut keys: Vec<&String> = sums.keys().collect();
     keys.sort();
-    for k in keys {
-        println!("{k:<12} {:.4}", sums[k] / nf_score);
+    for k in keys.iter() {
+        println!("{k:<12} {:.4}", sums[*k] / nf_score);
     }
+
+    // --compare-rerank: print the rerank-ON column + the delta vs baseline, on
+    // the identical questions. Positive delta = the reranker helps.
+    if compare_rerank {
+        println!("\n━━ A/B: reranker isolated (same {n_scoreable} questions, recency ablated) ━━");
+        println!("{:<12} {:>10} {:>10} {:>9}", "metric", "baseline", "+rerank", "delta");
+        for k in keys.iter() {
+            let a = sums[*k] / nf_score;
+            let b = sums_b.get(*k).copied().unwrap_or(0.0) / nf_score;
+            println!("{:<12} {a:>10.4} {b:>10.4} {:>+9.4}", k, b - a);
+        }
+    }
+
     println!("\nper question type (recall@5):");
     let mut tkeys: Vec<&String> = type_sums.keys().collect();
     tkeys.sort();
