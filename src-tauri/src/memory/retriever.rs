@@ -254,6 +254,68 @@ fn weights_for(query_type: &str) -> (f64, f64, f64) {
     }
 }
 
+// ---- Cross-encoder rank fusion -------------------------------------------
+//
+// The cross-encoder reranker (cross-attention query↔doc) is a stronger
+// relevance signal than any single dual-encoder / BM25 / graph list, but
+// its raw output is a logit in ~[-10, 10] → sigmoid ∈ [0, 1]. The previous
+// design blended `0.3·hybrid + 0.7·sigmoid(CE)` directly into rerank_score.
+// Because the hybrid score lives in ~[0.01, 0.4] (RRF base ~0.016 plus
+// additive title / exact-match / graph boosts), the [0, 1] sigmoid term
+// numerically SWAMPS the hybrid — the 0.3 weight is nominal, CE effectively
+// gets the whole vote, and a single CE miss ejects a true gold past k.
+// Measured on a recency-ablated LongMemEval slice (2026-06-24): rerank kept
+// hit@5 flat but cost −5pp recall@10 / −1q hit@10, while winning +13pp
+// hit@1 — the signature of a good reranker behind a broken fusion.
+//
+// Fix: rank fusion. Convert BOTH the hybrid ordering and the CE ordering to
+// reciprocal-rank scores (commensurable by construction), fuse them, then
+// map the window's existing score magnitudes back onto the fused order.
+// CE re-orders the window without erasing the hybrid prior, and the
+// downstream final-score scale is untouched because the multiset of
+// magnitudes is preserved — only their assignment permutes. The weights
+// are the tuning lever: CE leads, the hybrid rank anchors against ejection.
+const RERANK_HYBRID_W: f64 = 0.7;
+const RERANK_CE_W: f64 = 1.0;
+
+/// Rank-fuse the cross-encoder against the hybrid ordering.
+///
+/// `mags[i]` is windowed candidate `i`'s current hybrid score; the slice is
+/// in hybrid-rank order, so the index `i` IS the hybrid rank (0-based).
+/// `ce[i]` is the cross-encoder logit for that same candidate. Returns a new
+/// score per candidate: the SAME multiset of magnitudes, permuted so the
+/// k-th best fused candidate receives the k-th largest magnitude. Preserving
+/// the multiset keeps the downstream final-score scale (strength, recency)
+/// byte-identical; only the order changes.
+fn fuse_cross_encoder(mags: &[f64], ce: &[f32], w_hybrid: f64, w_ce: f64) -> Vec<f64> {
+    let w = mags.len().min(ce.len());
+    if w == 0 {
+        return mags.to_vec();
+    }
+    // CE rank = position in CE-logit-descending order, per candidate.
+    let mut ce_order: Vec<usize> = (0..w).collect();
+    ce_order.sort_by(|&a, &b| ce[b].partial_cmp(&ce[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ce_rank = vec![0usize; w];
+    for (r, &i) in ce_order.iter().enumerate() {
+        ce_rank[i] = r;
+    }
+    // Fused reciprocal-rank score: hybrid rank is the index, CE rank above.
+    let mut fused: Vec<(usize, f64)> = (0..w)
+        .map(|i| (i, w_hybrid * rrf_score(i + 1) + w_ce * rrf_score(ce_rank[i] + 1)))
+        .collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // The window's magnitudes, largest first, to remap onto the fused order.
+    let mut sorted_mags: Vec<f64> = mags[..w].to_vec();
+    sorted_mags.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    // k-th fused-ranked candidate gets the k-th largest magnitude. Any
+    // candidate beyond `w` (defensive: mismatched lengths) keeps its own.
+    let mut out = mags.to_vec();
+    for (k, &(i, _)) in fused.iter().enumerate() {
+        out[i] = sorted_mags[k];
+    }
+    out
+}
+
 // ---- Query expansion ------------------------------------------------------
 //
 // REMOVED. The hardcoded synonym table (`frontend` → `ui, react, …`
@@ -1439,13 +1501,11 @@ pub fn hybrid_retrieve(
     // is CPU-bound at ~5ms per pair so 40 pairs is ~200ms worst
     // case; we cap at 20 below to stay interactive.
     //
-    // Score blending: the reranker outputs logits, roughly in
-    // [-10, 10]. We sigmoid to [0, 1] then blend at 70/30 with the
-    // existing RRF — giving the cross-encoder the majority vote
-    // on the top tier while preserving the dual-encoder's broader
-    // coverage. Pure 100% reranker tends to overfit on short
-    // titles; 70/30 is the tuned balance per common hybrid-rerank
-    // literature.
+    // Score fusion: the reranker outputs logits, roughly in [-10, 10].
+    // Rather than blend the sigmoid into rerank_score (which let the
+    // [0,1] CE term swamp the ~[0.01,0.4] hybrid score and eject golds),
+    // we RANK-fuse the cross-encoder against the hybrid ordering on a
+    // commensurable reciprocal-rank scale — see fuse_cross_encoder.
     // Conditional reranking (2026-05-21). The cross-encoder helps focused
     // keyword lookups (picking the best of many lexically-similar
     // candidates) but HURTS natural-language / conversational recall: it
@@ -1483,10 +1543,16 @@ pub fn hybrid_retrieve(
             .collect();
         match reranker::rerank(effective_query, &docs) {
             Ok(scores) => {
-                for (i, s) in scores.iter().enumerate() {
-                    let sig = 1.0 / (1.0 + (-(*s as f64)).exp());
-                    candidates[i].rerank_score =
-                        candidates[i].rerank_score * 0.3 + sig * 0.7;
+                // Rank-fuse the cross-encoder with the hybrid ordering
+                // (see fuse_cross_encoder) instead of a magnitude blend.
+                let mags: Vec<f64> = candidates
+                    .iter()
+                    .take(scores.len())
+                    .map(|c| c.rerank_score)
+                    .collect();
+                let fused = fuse_cross_encoder(&mags, &scores, RERANK_HYBRID_W, RERANK_CE_W);
+                for (i, s) in fused.into_iter().enumerate() {
+                    candidates[i].rerank_score = s;
                 }
             }
             Err(e) => {
@@ -1973,5 +2039,84 @@ fn compute_superseded_fraction(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod fusion_tests {
+    use super::fuse_cross_encoder;
+
+    // Helper: is `out` a permutation of `mags` (same multiset)? The fusion
+    // must never invent or drop a magnitude — only reorder. We compare
+    // sorted copies because the floats are exact here (we only move them).
+    fn same_multiset(a: &[f64], b: &[f64]) -> bool {
+        let mut a = a.to_vec();
+        let mut b = b.to_vec();
+        a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        b.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        a == b
+    }
+
+    #[test]
+    fn empty_input_is_identity() {
+        let out = fuse_cross_encoder(&[], &[], 0.7, 1.0);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn agreement_is_identity() {
+        // CE order == hybrid order (both descending) → nothing should move.
+        let mags = vec![0.5, 0.4, 0.3, 0.2, 0.1];
+        let ce = vec![5.0_f32, 4.0, 3.0, 2.0, 1.0];
+        let out = fuse_cross_encoder(&mags, &ce, 0.7, 1.0);
+        assert_eq!(out, mags);
+    }
+
+    #[test]
+    fn preserves_magnitude_multiset_and_scale() {
+        // Whatever CE says, the set of scores (hence min/max → downstream
+        // scale) is unchanged; only the assignment permutes.
+        let mags = vec![0.40, 0.32, 0.18, 0.05];
+        let ce = vec![-2.0_f32, 9.0, 1.0, 4.0]; // CE disagrees wildly
+        let out = fuse_cross_encoder(&mags, &ce, 0.7, 1.0);
+        assert!(same_multiset(&mags, &out));
+        let max_in = mags.iter().cloned().fold(f64::MIN, f64::max);
+        let min_in = mags.iter().cloned().fold(f64::MAX, f64::min);
+        let max_out = out.iter().cloned().fold(f64::MIN, f64::max);
+        let min_out = out.iter().cloned().fold(f64::MAX, f64::min);
+        assert_eq!(max_in, max_out);
+        assert_eq!(min_in, min_out);
+    }
+
+    #[test]
+    fn cross_encoder_promotes_a_hybrid_low_candidate() {
+        // Hybrid ranks index 4 last; CE ranks it FIRST. With CE leading,
+        // index 4's fused score should outrank index 0's → it receives a
+        // larger magnitude than it started with, and beats the old top.
+        let mags = vec![0.50, 0.40, 0.30, 0.20, 0.10];
+        let ce = vec![0.0_f32, 0.1, 0.2, 0.3, 9.0]; // index 4 is CE's best
+        let out = fuse_cross_encoder(&mags, &ce, 0.7, 1.0);
+        assert!(same_multiset(&mags, &out));
+        assert!(
+            out[4] > out[0],
+            "CE's favourite (idx4) should now outrank the old hybrid top (idx0): out={out:?}"
+        );
+        assert!(out[4] > mags[4], "idx4 should have been promoted: {out:?}");
+    }
+
+    #[test]
+    fn hybrid_prior_anchors_against_ejection() {
+        // The failure the fix targets: CE buries a hybrid-strong gold.
+        // Here idx0 is hybrid #1 but CE ranks it LAST. The hybrid anchor
+        // (w_hybrid·rrf(1)) must keep it from collapsing to the bottom —
+        // it should not receive the smallest magnitude.
+        let mags = vec![0.50, 0.40, 0.30, 0.20, 0.10];
+        let ce = vec![-9.0_f32, 0.3, 0.2, 0.1, 0.0]; // idx0 is CE's worst
+        let out = fuse_cross_encoder(&mags, &ce, 0.7, 1.0);
+        let min_out = out.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            out[0] > min_out,
+            "hybrid #1 should not collapse to the lowest score: out={out:?}"
+        );
+    }
 }
 
