@@ -39,8 +39,19 @@ BIN="$REPO_ROOT/src-tauri/target/release/nv-bench"
 # one run yields the production hit@k AND the Abstention@k dimension. Uses a
 # SEPARATE progress file + chunk dir so it never mixes with the published
 # engine-only (reproducible) run.  Usage: BENCH_PROD=1 ./run_chunk.sh 2 chill
+# Rerank-fusion mode (BENCH_RERANK=1): the published engine-only config
+# (recency + title boosts ablated, 470 answerable) PLUS the cross-encoder
+# rerank — now rank-fused (fuse_cross_encoder), not the old magnitude blend.
+# Isolates fusion-rerank's effect at full scale vs the engine-only 0.938
+# baseline. SEPARATE progress + chunk dir so it never mixes with the
+# engine-only / prod runs.  Usage: BENCH_RERANK=1 ./run_chunk.sh 6 medium
 PROD="${BENCH_PROD:-}"
-if [ -n "$PROD" ]; then
+RERANK="${BENCH_RERANK:-}"
+if [ -n "$RERANK" ]; then
+  PROGRESS="$HOME/.neurovault/bench_progress_rerank.txt"
+  CHUNKDIR="$(dirname "$0")/chunks_rerank"
+  EXTRA_FLAGS=(--rerank --no-abstention --k 1,5,10)
+elif [ -n "$PROD" ]; then
   PROGRESS="$HOME/.neurovault/bench_progress_prod.txt"
   CHUNKDIR="$(dirname "$0")/chunks_prod"
   EXTRA_FLAGS=(--rerank --keep-recency)
