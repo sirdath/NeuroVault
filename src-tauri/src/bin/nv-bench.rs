@@ -199,6 +199,21 @@ fn hit_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
     }
 }
 
+/// Precision@k against the gold session set: of the k slots shown, the
+/// fraction that are gold. NOTE: on LongMemEval most questions have a
+/// SINGLE gold session, so precision@k ceilings at |gold|/k (≤0.20 at
+/// k=5) even for perfect retrieval — it largely reflects gold-set size,
+/// not ranking quality. Reported alongside recall@k for completeness;
+/// hit@1 / MRR / nDCG are the informative few-gold ranking metrics.
+fn precision_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
+    if k == 0 {
+        return 0.0;
+    }
+    let top: Vec<&String> = ranked.iter().take(k).collect();
+    let hit = gold.iter().filter(|g| top.iter().any(|t| t == g)).count();
+    hit as f64 / k as f64
+}
+
 /// Mean reciprocal rank of the FIRST gold session.
 fn mrr(ranked: &[String], gold: &[String]) -> f64 {
     for (i, r) in ranked.iter().enumerate() {
@@ -695,6 +710,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         if !is_abs {
             for &k in &ks {
                 *sums.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked, &q.gold, k);
+                *sums.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked, &q.gold, k);
                 *sums.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked, &q.gold, k);
                 *sums.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked, &q.gold, k);
             }
@@ -740,6 +756,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             };
             for &k in &ks {
                 *sums_b.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked_b, &q.gold, k);
             }
@@ -1095,6 +1112,19 @@ mod tests {
         assert_eq!(recall_at_k(&ranked, &s(&["a", "d"]), 4), 1.0);
         assert_eq!(recall_at_k(&ranked, &s(&["a", "d"]), 1), 0.5);
         assert_eq!(recall_at_k(&ranked, &s(&["x"]), 4), 0.0);
+    }
+
+    #[test]
+    fn precision_at_k_slots_relevant() {
+        let ranked = s(&["a", "b", "c", "d"]);
+        // 1 gold among the top-4 slots → 1/4; among top-2 → still 1/2.
+        assert!((precision_at_k(&ranked, &s(&["a"]), 4) - 0.25).abs() < 1e-9);
+        assert!((precision_at_k(&ranked, &s(&["a"]), 2) - 0.5).abs() < 1e-9);
+        // 2 golds in top-4 → 2/4; the |gold|/k ceiling: 1 gold caps @5 at 0.2.
+        assert!((precision_at_k(&ranked, &s(&["a", "d"]), 4) - 0.5).abs() < 1e-9);
+        assert!((precision_at_k(&ranked, &s(&["a"]), 5) - 0.2).abs() < 1e-9);
+        assert_eq!(precision_at_k(&ranked, &s(&["x"]), 4), 0.0);
+        assert_eq!(precision_at_k(&ranked, &s(&["a"]), 0), 0.0);
     }
 
     #[test]
