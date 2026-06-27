@@ -1328,7 +1328,14 @@ pub fn hybrid_retrieve(
 
     // Sort by RRF and take candidate_pool for scoring.
     let mut sorted_candidates: Vec<(String, f64)> = rrf_scores.into_iter().collect();
-    sorted_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Deterministic tie-break by engram id (a.0) — see the final-score sort
+    // below: HashMap iteration order must not decide which tied engrams make
+    // the candidate-pool cut, or results aren't reproducible run-to-run.
+    sorted_candidates.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     // Build candidates — resolve each engram id to its row, filtering
     // dormant/excluded/after-as_of rows as we go. `filename` +
@@ -1618,6 +1625,12 @@ pub fn hybrid_retrieve(
         b.final_score
             .partial_cmp(&a.final_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            // Deterministic tie-break by engram_id. rrf_scores is a HashMap
+            // (randomized iteration order per instance), so without this,
+            // tied final_scores ranked differently on every recall —
+            // non-reproducible results and a hit@1 noise floor that
+            // confounds same-brain A/B isolation.
+            .then_with(|| a.engram_id.cmp(&b.engram_id))
     });
 
     // imp#5 — MMR diversification (post-scoring reorder, ablate flag
