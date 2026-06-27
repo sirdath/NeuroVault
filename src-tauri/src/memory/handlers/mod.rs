@@ -5250,6 +5250,10 @@ pub async fn recall_chunks(
 #[derive(Deserialize)]
 pub struct SessionStartQuery {
     brain: Option<String>,
+    /// Optional: scope the bootstrap to one agent — return THAT agent's own
+    /// recent engrams + its inbox instead of the brain-wide view. Absent =>
+    /// unchanged (back-compat).
+    agent: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -5281,27 +5285,51 @@ pub async fn session_start(
             .ok()
             .and_then(|all| all.into_iter().find(|b| b.id == id));
         let core_memory = core_memory::list_blocks(&id).unwrap_or_default();
-        let open_todos = todos::list_todos(&id, Some("open")).unwrap_or_default();
+        // Agent-scoped (optional): `agent` set => that agent's own recent
+        // engrams + its inbox; absent => brain-wide (unchanged).
+        let agent = q.agent.as_deref().filter(|a| !a.is_empty());
+        let open_todos = match agent {
+            Some(a) => todos::inbox_for_agent(&id, a, false).unwrap_or_default(),
+            None => todos::list_todos(&id, Some("open")).unwrap_or_default(),
+        };
 
         let db = open_brain(&id)?;
         let conn = db.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, title, strength, state, access_count \
-             FROM engrams \
-             WHERE state != 'dormant' \
-             ORDER BY strength DESC, access_count DESC LIMIT 5",
-        )?;
-        let top = stmt
-            .query_map([], |r| {
-                Ok(TopMemorySummary {
-                    engram_id: r.get(0)?,
-                    title: r.get(1)?,
-                    strength: r.get(2)?,
-                    state: r.get(3)?,
-                    access_count: r.get(4)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let row_to_summary = |r: &rusqlite::Row| {
+            Ok(TopMemorySummary {
+                engram_id: r.get(0)?,
+                title: r.get(1)?,
+                strength: r.get(2)?,
+                state: r.get(3)?,
+                access_count: r.get(4)?,
+            })
+        };
+        let top = match agent {
+            Some(a) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, title, strength, state, access_count \
+                     FROM engrams \
+                     WHERE state != 'dormant' AND agent_id = ?1 \
+                     ORDER BY updated_at DESC, strength DESC LIMIT 5",
+                )?;
+                let rows = stmt
+                    .query_map([a], row_to_summary)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, title, strength, state, access_count \
+                     FROM engrams \
+                     WHERE state != 'dormant' \
+                     ORDER BY strength DESC, access_count DESC LIMIT 5",
+                )?;
+                let rows = stmt
+                    .query_map([], row_to_summary)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            }
+        };
 
         Ok(SessionStartResponse {
             brain,
@@ -5539,7 +5567,77 @@ pub async fn todos_add(
             priority: body.priority,
             created_by: body.created_by,
             note: body.note,
+            kind: None,
+            payload: None,
+            source_engram: None,
         })
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+// --- Multi-agent coordination: handoff + agent inbox -----------------------
+// A handoff is a directed todo (kind set) addressed to another agent via
+// agent_match. Inert: it just sits in the inbox until that agent polls and
+// acts. No scheduler, no auto-run — NeuroVault is the shared brain, not a
+// runtime. See docs/specs/agent-coordination.md.
+
+#[derive(Deserialize)]
+pub struct HandoffBody {
+    to_agent: String,
+    #[serde(rename = "type")]
+    kind: String,
+    payload: Option<serde_json::Value>,
+    source_engram: Option<String>,
+    note: Option<String>,
+    from_agent: Option<String>,
+    priority: Option<String>,
+    brain: Option<String>,
+}
+
+pub async fn handoff(
+    _s: State<ServerState>,
+    Json(body): Json<HandoffBody>,
+) -> Result<Json<Todo>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Todo, MemoryError> {
+        let id = resolve_brain_id(body.brain.as_deref())?;
+        let text = format!("handoff:{}", body.kind);
+        todos::add_todo(
+            &id,
+            AddTodoArgs {
+                text,
+                agent_match: Some(body.to_agent),
+                priority: body.priority,
+                created_by: body.from_agent,
+                note: body.note,
+                kind: Some(body.kind),
+                payload: body.payload,
+                source_engram: body.source_engram,
+            },
+        )
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct AgentInboxQuery {
+    agent: String,
+    brain: Option<String>,
+}
+
+pub async fn agent_inbox(
+    Query(q): Query<AgentInboxQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<Todo>>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<Todo>, MemoryError> {
+        let id = resolve_brain_id(q.brain.as_deref())?;
+        // handoffs_only=true: an inbox is inter-agent handoffs, not plain todos.
+        todos::inbox_for_agent(&id, &q.agent, true)
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
