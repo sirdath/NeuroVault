@@ -117,6 +117,8 @@ const TIER_STANDARD_ADD: &[&str] = &[
     "delete_engrams",
     "find_clutter",
     "engram_history",
+    "handoff",
+    "agent_inbox",
 ];
 
 /// Allow-set of tool names for a tier. `None` means "full" (no filter).
@@ -174,9 +176,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_parses_and_has_52_tools() {
+    fn registry_parses_and_has_54_tools() {
         let tools = load_tools();
-        assert_eq!(tools.len(), 52, "expected 52 tools (46 ported + 6 graphify)");
+        assert_eq!(
+            tools.len(),
+            54,
+            "expected 54 tools (46 ported + 6 graphify + handoff + agent_inbox)"
+        );
         // names unique
         let mut seen = HashSet::new();
         for t in &tools {
@@ -196,7 +202,7 @@ mod tests {
     fn tier_sets_match_proxy_counts() {
         assert_eq!(allowed_for_tier("minimal").unwrap().len(), 3);
         assert_eq!(allowed_for_tier("lite").unwrap().len(), 8);
-        assert_eq!(allowed_for_tier("standard").unwrap().len(), 18);
+        assert_eq!(allowed_for_tier("standard").unwrap().len(), 20);
         assert!(allowed_for_tier("full").is_none());
         // unknown -> lite
         assert_eq!(allowed_for_tier("bogus").unwrap().len(), 8);

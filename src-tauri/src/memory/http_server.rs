@@ -196,6 +196,8 @@ fn router() -> Router {
         .route("/api/todos/:id", get(todos_get))
         .route("/api/todos/:id/claim", post(todos_claim))
         .route("/api/todos/:id/complete", post(todos_complete))
+        .route("/api/handoff", post(handoff))
+        .route("/api/agent_inbox", get(agent_inbox))
         .route("/api/clusters", get(clusters_list))
         .route("/api/clusters/names", post(clusters_set_names))
         // CORS. The server binds to 127.0.0.1 only, but "loopback-only" is

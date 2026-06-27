@@ -2742,7 +2742,9 @@
           "description": "Optional brain id to write the code graph into; defaults to the active brain."
         }
       },
-      "required": ["path"]
+      "required": [
+        "path"
+      ]
     },
     "call": {
       "method": "POST",
@@ -2787,7 +2789,9 @@
           "description": "Optional brain id to scope the lookup."
         }
       },
-      "required": ["symbol"]
+      "required": [
+        "symbol"
+      ]
     },
     "call": {
       "method": "GET",
@@ -2832,7 +2836,9 @@
           "description": "Optional brain id to scope the lookup."
         }
       },
-      "required": ["symbol"]
+      "required": [
+        "symbol"
+      ]
     },
     "call": {
       "method": "GET",
@@ -2877,7 +2883,9 @@
           "description": "Optional brain id to scope the lookup."
         }
       },
-      "required": ["path"]
+      "required": [
+        "path"
+      ]
     },
     "call": {
       "method": "GET",
@@ -2922,7 +2930,9 @@
           "description": "Optional brain id to scope the lookup."
         }
       },
-      "required": ["symbol"]
+      "required": [
+        "symbol"
+      ]
     },
     "call": {
       "method": "GET",
@@ -2977,6 +2987,165 @@
           "omit": "if_none"
         }
       ],
+      "special": null
+    }
+  },
+  {
+    "name": "handoff",
+    "title": "Hand off work to another agent",
+    "description": "Hand a piece of work or a signal to ANOTHER agent. Creates a directed message in the shared brain's queue, addressed to `to_agent` (an agent id, or a regex; empty = broadcast to any agent). The recipient sees it when it calls `agent_inbox` or `session_start(agent=...)`.\n\nINERT by design: nothing runs automatically — the handoff just waits until that agent reads and acts on it. NeuroVault is the shared brain, not a scheduler.\n\nUse for: routing a feature-request / bug / churn-risk you noticed to the agent that owns it, or passing a finding (cite the `source_engram`) for another agent to follow up. `payload` carries structured data; `type` is a freeform tag.",
+    "annotations": {
+      "read_only": false,
+      "idempotent": false,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "to_agent": {
+          "type": "string",
+          "description": "Agent id (or regex) to address; empty = broadcast to any agent."
+        },
+        "type": {
+          "type": "string",
+          "description": "Handoff type tag, e.g. 'feature-request', 'churn-risk', or freeform."
+        },
+        "payload": {
+          "type": "object",
+          "description": "Optional structured data the receiving agent reads."
+        },
+        "source_engram": {
+          "type": "string",
+          "description": "Optional engram id that motivated this handoff (provenance)."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional free-text context."
+        },
+        "from_agent": {
+          "type": "string",
+          "description": "Your agent id (provenance)."
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id; defaults to active brain."
+        }
+      },
+      "required": [
+        "to_agent",
+        "type"
+      ]
+    },
+    "call": {
+      "method": "POST",
+      "path": "/api/handoff",
+      "path_params": [],
+      "query": [],
+      "body": [
+        {
+          "param": "to_agent",
+          "from": "to_agent",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "type",
+          "from": "type",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "payload",
+          "from": "payload",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "source_engram",
+          "from": "source_engram",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "note",
+          "from": "note",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "from_agent",
+          "from": "from_agent",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "priority",
+          "from": "priority",
+          "transform": "none",
+          "omit": "if_falsy"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "special": null
+    }
+  },
+  {
+    "name": "agent_inbox",
+    "title": "Read an agent's handoff inbox",
+    "description": "Read the open handoffs addressed to an agent — work other agents routed to it via `handoff`. Returns open, unclaimed directed messages matching `agent` (by id, or the handoff's agent_match regex; broadcasts to all are included). Each item has `kind` (the handoff type), `created_by` (sender), `payload`, `source_engram`, and `note`.\n\nTo take one: claim it (todos claim). To finish: complete it. Pull-based — call this (or `session_start` with an agent) to see what's waiting; nothing is pushed.",
+    "annotations": {
+      "read_only": true,
+      "idempotent": true,
+      "open_world": false
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The agent id whose inbox to read."
+        },
+        "brain": {
+          "type": "string",
+          "description": "Optional brain id; defaults to active brain."
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "call": {
+      "method": "GET",
+      "path": "/api/agent_inbox",
+      "path_params": [],
+      "query": [
+        {
+          "param": "agent",
+          "from": "agent",
+          "transform": "none",
+          "omit": "never"
+        },
+        {
+          "param": "brain",
+          "from": "brain",
+          "transform": "none",
+          "omit": "if_falsy"
+        }
+      ],
+      "body": [],
       "special": null
     }
   }
