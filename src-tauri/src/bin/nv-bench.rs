@@ -483,6 +483,12 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     // half the cost of two separate runs. Recency is governed by --keep-recency
     // as usual; run WITHOUT it so recency doesn't confound the rerank delta.
     let compare_rerank = has_flag(args, "--compare-rerank");
+    // --compare-ablate <flag>: like --compare-rerank but isolates ANY ablate
+    // feature on the SAME ingested brain — baseline pass runs with <flag>
+    // ablated (the OLD behavior), treatment pass with it active (the NEW
+    // default). Use to prove a flagged change is bench-neutral or measure its
+    // delta without ingest-jitter confounding (e.g. --compare-ablate title_pool_scope).
+    let compare_ablate: Option<String> = flag_value(args, "--compare-ablate");
     // Extra scoring features to switch off (comma-separated; see RecallOpts
     // for the vocabulary). Diagnosis lever: `--ablate mmr` isolates the MMR
     // diversifier, `--ablate semantic` runs keyword+graph only, etc.
@@ -659,6 +665,13 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                     a.push("title_semantic".to_string());
                     a.push("title_keyword".to_string());
                 }
+                // --compare-ablate: the baseline pass runs with <flag>
+                // ablated (OLD behavior); the treatment pass below removes it.
+                if let Some(f) = &compare_ablate {
+                    if !a.iter().any(|x| x == f) {
+                        a.push(f.clone());
+                    }
+                }
                 a
             },
         };
@@ -732,6 +745,52 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                 as_of: None,
                 use_reranker: true,
                 ablate: opts.ablate.clone(),
+            };
+            let hits_b = retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
+            let ranked_b: Vec<String> = {
+                let conn = brain.lock();
+                hits_b
+                    .iter()
+                    .filter(|h| h.engram_id != retriever::THROTTLE_HINT_ID)
+                    .filter_map(|h| {
+                        conn.query_row(
+                            "SELECT filename FROM engrams WHERE id = ?1",
+                            [&h.engram_id],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .ok()
+                    })
+                    .filter_map(|f| {
+                        f.strip_prefix("sess-")
+                            .and_then(|s| s.strip_suffix(".md"))
+                            .map(String::from)
+                    })
+                    .collect()
+            };
+            for &k in &ks {
+                *sums_b.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked_b, &q.gold, k);
+            }
+            *sums_b.entry("mrr".into()).or_default() += mrr(&ranked_b, &q.gold);
+        }
+
+        // --compare-ablate <flag>: re-run recall on the SAME brain with <flag>
+        // REMOVED from ablate (the NEW default) into sums_b, so the
+        // sums(baseline, flag ablated) vs sums_b(treatment, flag active) delta
+        // isolates the feature on identical candidates. delta≈0 ⇒ bench-neutral.
+        if compare_ablate.is_some() && !is_abs {
+            let flag = compare_ablate.as_ref().unwrap();
+            let ablate_b: Vec<String> =
+                opts.ablate.iter().filter(|a| *a != flag).cloned().collect();
+            let opts_b = RecallOpts {
+                top_k: kmax,
+                spread_hops: 0,
+                exclude_kinds: vec!["observation".to_string(), "preference".to_string()],
+                as_of: None,
+                use_reranker: opts.use_reranker,
+                ablate: ablate_b,
             };
             let hits_b = retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
             let ranked_b: Vec<String> = {
@@ -840,9 +899,15 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
 
     // --compare-rerank: print the rerank-ON column + the delta vs baseline, on
     // the identical questions. Positive delta = the reranker helps.
-    if compare_rerank {
-        println!("\n━━ A/B: reranker isolated (same {n_scoreable} questions, recency ablated) ━━");
-        println!("{:<12} {:>10} {:>10} {:>9}", "metric", "baseline", "+rerank", "delta");
+    if compare_rerank || compare_ablate.is_some() {
+        let (label, col) = if compare_rerank {
+            ("reranker isolated".to_string(), "+rerank".to_string())
+        } else {
+            let f = compare_ablate.as_deref().unwrap_or("");
+            (format!("ablate '{f}' isolated"), format!("+{f}"))
+        };
+        println!("\n━━ A/B: {label} (same {n_scoreable} questions) ━━");
+        println!("{:<12} {:>10} {:>10} {:>9}", "metric", "baseline", col, "delta");
         for k in keys.iter() {
             let a = sums[*k] / nf_score;
             let b = sums_b.get(*k).copied().unwrap_or(0.0) / nf_score;
