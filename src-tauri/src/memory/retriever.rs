@@ -1012,38 +1012,14 @@ pub fn hybrid_retrieve(
 
     let mut semantic_title_scores: HashMap<String, f64> = HashMap::new();
     let mut keyword_title_scores: HashMap<String, f64> = HashMap::new();
-    // imp#5 (MMR): normalised title embedding per engram, reused as the
-    // redundancy metric for diversification. Captured here so MMR costs
-    // ZERO extra embed calls — `title_embeddings` is already computed
-    // for the semantic-title boost. Near-duplicate notes from the same
-    // session share topic/title, so title-embedding cosine is an
-    // effective (and free) redundancy proxy.
-    let mut title_emb_norm: HashMap<String, Vec<f32>> = HashMap::new();
     let query_token_set: HashSet<String> = bm25_tokenize(effective_query).into_iter().collect();
     let query_token_count = query_token_set.len().max(1) as f64;
 
     if !engrams_meta.is_empty() {
-        let titles: Vec<String> = engrams_meta.iter().map(|(_, t, _)| t.clone()).collect();
-        let t_embeddings = title_embeddings(&titles)?;
-        let mut q_norm = query_embedding.clone();
-        let q_ok = normalize_inplace(&mut q_norm);
-
-        for (i, (eid, title, filename)) in engrams_meta.iter().enumerate() {
-            // (a) Semantic cosine against title embedding.
-            if i < t_embeddings.len() && t_embeddings[i].len() == EMBEDDING_DIM {
-                let mut t_emb = t_embeddings[i].clone();
-                if normalize_inplace(&mut t_emb) {
-                    if q_ok {
-                        let sim = cosine(&q_norm, &t_emb) as f64;
-                        if sim > 0.45 {
-                            semantic_title_scores.insert(eid.clone(), sim);
-                        }
-                    }
-                    title_emb_norm.insert(eid.clone(), t_emb);
-                }
-            }
-
-            // (b) Bidirectional keyword coverage against (title ∪ slug).
+        // (b) Bidirectional keyword coverage against (title ∪ slug). Pure
+        // token overlap — NO model inference — so it stays whole-vault:
+        // find-by-title keeps working for every engram at negligible cost.
+        for (eid, title, filename) in engrams_meta.iter() {
             let slug = filename
                 .replace(".md", "")
                 .replace('-', " ")
@@ -1065,6 +1041,50 @@ pub fn hybrid_retrieve(
                     let coverage = c_query.max(c_title);
                     if coverage >= 0.4 {
                         keyword_title_scores.insert(eid.clone(), 0.4 + 0.6 * coverage);
+                    }
+                }
+            }
+        }
+
+        // (a) Semantic cosine against title embedding — the EXPENSIVE leg
+        // (one ONNX forward pass per title). Scope the embedding to the
+        // candidate pool (union of the three primary signals) so a large
+        // vault does NOT re-embed every title on every recall — the
+        // per-recall O(notes) title-embedding storm that pegs the CPU on
+        // big brains (titles overflow the LRU and thrash). `--ablate
+        // title_pool_scope` embeds ALL titles (old behavior) for A/B.
+        // Bench-neutral on LongMemEval (titles are session ids that never
+        // match the query); in production this only changes the weak,
+        // top-10-capped semantic-title boost for engrams ALREADY outside
+        // all three primary signals. Keyword-title (above) is unscoped, so
+        // exact "find by title" is unaffected.
+        let scope_pool = !is_ablated(opts, "title_pool_scope");
+        let pool: HashSet<&String> = if scope_pool {
+            semantic_ranked
+                .iter()
+                .chain(bm25_ranked.iter())
+                .chain(graph_ranked.iter())
+                .collect()
+        } else {
+            engrams_meta.iter().map(|(e, _, _)| e).collect()
+        };
+        let scored: Vec<(&String, &String)> = engrams_meta
+            .iter()
+            .filter(|(e, _, _)| pool.contains(e))
+            .map(|(e, t, _)| (e, t))
+            .collect();
+        let titles: Vec<String> = scored.iter().map(|(_, t)| (*t).clone()).collect();
+        let t_embeddings = title_embeddings(&titles)?;
+        let mut q_norm = query_embedding.clone();
+        if normalize_inplace(&mut q_norm) {
+            for (j, (eid, _)) in scored.iter().enumerate() {
+                if j < t_embeddings.len() && t_embeddings[j].len() == EMBEDDING_DIM {
+                    let mut t_emb = t_embeddings[j].clone();
+                    if normalize_inplace(&mut t_emb) {
+                        let sim = cosine(&q_norm, &t_emb) as f64;
+                        if sim > 0.45 {
+                            semantic_title_scores.insert((*eid).clone(), sim);
+                        }
                     }
                 }
             }
@@ -1607,6 +1627,24 @@ pub fn hybrid_retrieve(
     // relevance-leaning: the best hit stays #1; only the 2..K slots are
     // diversified. Zero extra embed cost — reuses title embeddings.
     if !is_ablated(opts, "mmr") {
+        // MMR redundancy = title-embedding cosine, computed HERE over the
+        // CANDIDATE set (≤candidate_pool, cheap + LRU-cached) rather than
+        // piggybacking on the semantic-title boost pass. Decoupling makes
+        // the diversification identical regardless of `title_pool_scope`,
+        // so the scope flag only ever changes the production semantic-title
+        // BOOST — never MMR, and provably nothing on the LongMemEval bench
+        // (where title boosts are already ablated). A candidate whose title
+        // fails to embed is simply absent → MMR treats it as maximally
+        // novel (apply_mmr's documented, conservative fallback).
+        let cand_titles: Vec<String> = candidates.iter().map(|c| c.title.clone()).collect();
+        let mut title_emb_norm: HashMap<String, Vec<f32>> = HashMap::new();
+        if let Ok(embs) = title_embeddings(&cand_titles) {
+            for (c, mut e) in candidates.iter().zip(embs.into_iter()) {
+                if e.len() == EMBEDDING_DIM && normalize_inplace(&mut e) {
+                    title_emb_norm.insert(c.engram_id.clone(), e);
+                }
+            }
+        }
         apply_mmr(&mut candidates, &title_emb_norm, opts.top_k);
     }
 
