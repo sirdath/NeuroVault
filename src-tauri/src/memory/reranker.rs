@@ -27,11 +27,17 @@ struct Reranker {
 fn instance() -> Result<&'static Reranker> {
     static INSTANCE: OnceCell<Reranker> = OnceCell::new();
     INSTANCE.get_or_try_init(|| {
-        // `BGERerankerBase` is fastembed's default cross-encoder
-        // — ~110 MB ONNX, same HF repo the Python side used for
-        // the optional rerank path. Model cache is shared at
-        // `~/.neurovault/.fastembed_cache/` so first-use download is ~10s;
-        // subsequent runs are instant.
+        // `BGERerankerBase` is fastembed's default cross-encoder — a
+        // ~278M-param model whose fp32 ONNX is ~1.0 GB on disk and
+        // resident (NOT ~110 MB; corrected 2026-06-26). fastembed 4.9.1
+        // exposes NO quantized BGERerankerBase variant (RerankerModel has
+        // only BGERerankerBase / BGERerankerV2M3 / JINA*), so this cannot
+        // be int8-swapped the way the embedder can (BGESmallENV15Q).
+        // It is CPU/RAM-heavy and — measured on LongMemEval — NEUTRAL vs
+        // engine-only at scale, so it stays OFF by default (use_reranker
+        // false; fires only for keyword-shaped queries). Model cache is
+        // shared at `~/.neurovault/.fastembed_cache/`; first-use download
+        // is the full ~1 GB.
         let model = TextRerank::try_new(
             RerankInitOptions::new(RerankerModel::BGERerankerBase)
                 .with_show_download_progress(false)
@@ -40,7 +46,7 @@ fn instance() -> Result<&'static Reranker> {
                 // CWD — fine for the GUI app (launched from a stable dir) but
                 // wrong for a headless `neurovault-server` started from an
                 // arbitrary cwd (npm bin shim, brew, curl), which would scatter
-                // a ~110 MB model under whatever folder the agent ran from.
+                // a ~1.0 GB model under whatever folder the agent ran from.
                 .with_cache_dir(nv_home().join(".fastembed_cache")),
         )
         .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
