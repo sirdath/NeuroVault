@@ -848,7 +848,12 @@ pub fn hybrid_retrieve(
         None => None,
     };
 
-    let candidate_pool = (opts.top_k * 4).max(10);
+    // candidate_pool: how many distinct engrams reach the scorer. Wider lets
+    // more distinct sessions compete (recall@k upside) but costs per-query CPU
+    // (bigger title-embed pool + chunk_search_depth = pool*8). Phase-1 probe:
+    // default *6; `--ablate wide_pool` restores the *4 baseline for A/B.
+    let pool_mult = if is_ablated(opts, "wide_pool") { 4 } else { 6 };
+    let candidate_pool = (opts.top_k * pool_mult).max(10);
     // Chunk-level search depth. The candidate pool is counted in ENGRAMS,
     // but KNN/BM25 rank CHUNKS — and a long document fans out into hundreds
     // of chunks, so a pool-sized chunk cutoff lets a few verbose documents
