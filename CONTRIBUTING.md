@@ -30,7 +30,7 @@ NeuroVault/
 │       ├── retriever.rs     #     hybrid recall (vec + BM25 + graph → RRF → rerank)
 │       ├── http_server.rs   #     axum server on 127.0.0.1:8765 (the /api/* surface)
 │       └── mcp/             #     the rmcp MCP server + data-driven tool registry
-│           ├── tools.json   #       the ~46 tools (name, schema, /api/* mapping)
+│           ├── tools.json   #       the 54 tools (name, schema, /api/* mapping)
 │           ├── registry.rs  #       loads tools.json + the tier allow-lists
 │           └── forward.rs   #       forwards each MCP call over loopback HTTP
 ├── server/                  # ARCHIVED Python prototype (not built, not shipped)

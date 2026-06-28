@@ -79,7 +79,7 @@ Linux AppImage runs without warnings; `chmod +x neurovault_*.AppImage` if needed
 
 **Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
-> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (18) or `full` (52, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
+> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (20) or `full` (54, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
 
 **Manually**, point your MCP client at the bundled native MCP server — `neurovault-server --mcp-only`, a Rust stdio↔HTTP bridge built on the official [rmcp](https://github.com/modelcontextprotocol/rust-sdk) SDK (no Python):
 
@@ -208,7 +208,7 @@ The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no
 
 ## MCP tools
 
-Exposed to any MCP-speaking agent via the native Rust MCP server — **52 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (18) · `full` (52, includes the graphify code tools). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
+Exposed to any MCP-speaking agent via the native Rust MCP server — **54 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (20) · `full` (54, includes the graphify code tools). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
 
 | Tool | What it does |
 |------|-------------|
@@ -217,7 +217,8 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **52 tools*
 | `related(engram_id, hops, link_types?)` | Direct graph neighbours of an engram. ~50× cheaper than a fresh recall. |
 | `remember(content, title?, dedupe?)` | Save a memory (chunk + embed + entities + graph link). |
 | `list_inbox` / `read_inbox_file` / `mark_inbox_done` | Drop-folder workflow — read raw dropped files and turn them into notes. |
-| `session_start(agent_id?, since?)` | Wake-up: brain stats + L0 identity + top memories + open todos in one call. |
+| `session_start(agent?, since?)` | Wake-up: brain stats + L0 identity + top memories + open todos in one call. Pass `agent=X` to scope it to X's own recent engrams + X's inbox instead of the brain-wide view. |
+| `handoff(to_agent, type, …)` / `agent_inbox(agent)` | Multi-agent coordination — route a directed, inert message to another agent through the shared brain, and read the open handoffs addressed to an agent. Pull-based; nothing auto-runs. |
 | `core_memory_set` / `_append` / `_replace` / `_read` | Persona-style always-included blocks (Letta pattern). |
 | `list_brains` / `switch_brain` / `create_brain` | Multi-brain navigation. |
 | `check_duplicate(content, threshold)` | Pure cosine pre-check before `remember()`. |
