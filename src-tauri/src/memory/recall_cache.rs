@@ -230,6 +230,7 @@ mod tests {
             score: 0.0,
             strength: 1.0,
             state: "fresh".to_string(),
+            confidence: 1.0,
         }
     }
 

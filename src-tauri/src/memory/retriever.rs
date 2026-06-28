@@ -88,6 +88,51 @@ pub struct RecallHit {
     pub score: f64,
     pub strength: f64,
     pub state: String,
+    /// How much to TRUST this fact, in [0,1] — distinct from `score`
+    /// (retrieval relevance) and `strength` (usage/recency). Zero-LLM:
+    /// an authoritative value from `memory_types` if one was written,
+    /// else a structural estimate from the engram kind (provenance, not
+    /// an LLM judge). Lets a reading agent weigh facts — especially ones
+    /// written by OTHER agents — instead of trusting every hit equally.
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    1.0
+}
+
+/// Zero-LLM structural confidence by engram kind. Source-mirrored facts
+/// are verbatim-from-disk (verified); human/agent-authored notes are
+/// trusted; passive observations are weakest. Deliberately conservative
+/// and tunable; overridden by an authoritative `memory_types.confidence`
+/// when present.
+pub fn structural_confidence(kind: &str) -> f64 {
+    match kind {
+        "source" | "code" => 1.0,
+        "decision" | "insight" | "note" => 0.9,
+        "preference" => 0.85,
+        "observation" => 0.6,
+        _ => 0.8,
+    }
+}
+
+/// Confidence for one engram: the authoritative `memory_types` value if
+/// written (the column is otherwise dormant), else the structural
+/// estimate from kind. Cheap PK lookup; safe to call per hit.
+fn engram_confidence(db: &BrainDb, engram_id: &str, kind: &str) -> f64 {
+    let stored = {
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT confidence FROM memory_types WHERE engram_id = ?1",
+            [engram_id],
+            |r| r.get::<_, f64>(0),
+        )
+        .ok()
+    };
+    stored
+        .map(|c| c.clamp(0.0, 1.0))
+        .unwrap_or_else(|| structural_confidence(kind))
 }
 
 /// Recall inputs. `mode` is accepted for forwards-compat with the
@@ -1668,6 +1713,7 @@ pub fn hybrid_retrieve(
 
     let mut results: Vec<RecallHit> = Vec::with_capacity(opts.top_k);
     for c in candidates.into_iter().take(opts.top_k) {
+        let confidence = engram_confidence(db, &c.engram_id, &c.kind);
         bump_access(db, &c.engram_id).ok();
         results.push(RecallHit {
             engram_id: c.engram_id,
@@ -1676,6 +1722,7 @@ pub fn hybrid_retrieve(
             score: c.final_score,
             strength: c.strength,
             state: c.state,
+            confidence,
         });
     }
     Ok(results)
@@ -1976,6 +2023,7 @@ pub fn hybrid_retrieve_throttled(
                         score: 0.0,
                         strength: 0.0,
                         state: "throttle_hint".to_string(),
+                        confidence: 1.0,
                     },
                 );
             }
@@ -2008,6 +2056,7 @@ pub fn hybrid_retrieve_throttled(
                 score: 0.0,
                 strength: 0.0,
                 state: "throttle_hint".to_string(),
+                confidence: 1.0,
             },
         );
     }
@@ -2095,6 +2144,23 @@ fn compute_superseded_fraction(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::structural_confidence;
+
+    #[test]
+    fn structural_confidence_orders_provenance() {
+        // Verified-from-disk > authored notes > passive observation.
+        assert_eq!(structural_confidence("source"), 1.0);
+        assert!(structural_confidence("note") > structural_confidence("preference"));
+        assert!(structural_confidence("preference") > structural_confidence("observation"));
+        assert_eq!(structural_confidence("observation"), 0.6);
+        // Unknown kind gets the conservative middle default, never >1 or <0.
+        let d = structural_confidence("something-new");
+        assert!((0.0..=1.0).contains(&d) && d == 0.8);
+    }
 }
 
 #[cfg(test)]
