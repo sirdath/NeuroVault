@@ -305,7 +305,7 @@ On session start, Claude Code spawns the server. It calls `/api/health` and
 - `recall(query, mode, limit, brain, include_observations, rerank, spread_hops, as_of)` — hybrid search. Primary tool. Supports search operators inside `query`: `kind:`, `folder:`, `after:`, `before:`, `entity:`, `state:`, `agent:`.
 - `related(engram_id, hops, limit, min_similarity, link_types, include_observations, brain)` — direct 1-or-2-hop neighbour lookup. ~50× cheaper than a follow-up recall.
 - `recall_chunks(query, limit, brain)` — passage-level retrieval when the matching note is huge.
-- `session_start(brain)` — bootstrap pack: active brain + recent activity + core memory blocks.
+- `session_start(brain, agent?)` — bootstrap pack: active brain + recent activity + core memory blocks. Pass `agent=X` to scope it to X's own recent engrams + X's inbox instead of the brain-wide view.
 - `list_brains()` — registry dump.
 - `check_duplicate(content, threshold, brain)` — "would this be a dup if I saved it?" (prefer `remember(deduplicate=...)` for actual writes).
 - `core_memory_read(label, brain)` — read typed persona/project/user blocks.

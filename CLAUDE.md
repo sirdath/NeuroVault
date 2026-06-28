@@ -35,14 +35,16 @@ Markdown in `~/.neurovault/brains/<id>/vault/*.md` is **canonical**; `brain.db` 
 
 ## MCP tools
 
-The MCP server exposes **52 tools** via a data-driven registry, gated by a **tier** system so an agent only loads the slice it needs:
+The MCP server exposes **54 tools** via a data-driven registry, gated by a **tier** system so an agent only loads the slice it needs:
 
 - **`minimal`** (3): `recall`, `related`, `session_start`
 - **`lite`** (8, the default): minimal + `remember`, `status`, `list_brains`, `switch_brain`, `update`
-- **`standard`** (18): lite + `recall_chunks`, `temporal_recall`, `check_duplicate`, `core_memory_read/set/append/replace`, `delete_engrams`, `find_clutter`, `engram_history`
-- **`full`** (52): the whole surface — maintenance (`diagnose_brain`, `optimize_disk`, `reindex_embeddings`, `bulk_set_kind`/`bulk_add_tag`), graph editing (`add_link`/`remove_link`, `find_orphan_links`), contradictions (`find_contradictions`, `supersede_note`, `resolve_contradiction`), images (`list_images`, `remember_image`), compilation (`compile_prepare`/`compile_submit`), the drop-folder inbox, and the **graphify code tools** (`graphify`, `where_defined`, `whats_in_file`, `who_calls`, `blast_radius`, `fuse` — codebase → on-device knowledge graph).
+- **`standard`** (20): lite + `recall_chunks`, `temporal_recall`, `check_duplicate`, `core_memory_read/set/append/replace`, `delete_engrams`, `find_clutter`, `engram_history`, and the multi-agent coordination pair `handoff` (route a directed, inert message to another agent through the shared brain) / `agent_inbox` (read the open handoffs addressed to an agent)
+- **`full`** (54): the whole surface — maintenance (`diagnose_brain`, `optimize_disk`, `reindex_embeddings`, `bulk_set_kind`/`bulk_add_tag`), graph editing (`add_link`/`remove_link`, `find_orphan_links`), contradictions (`find_contradictions`, `supersede_note`, `resolve_contradiction`), images (`list_images`, `remember_image`), compilation (`compile_prepare`/`compile_submit`), the drop-folder inbox, and the **graphify code tools** (`graphify`, `where_defined`, `whats_in_file`, `who_calls`, `blast_radius`, `fuse` — codebase → on-device knowledge graph).
 
 Set the tier via the `NEUROVAULT_MCP_TIER` env var or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter to target a specific brain.
+
+`handoff` / `agent_inbox` give NeuroVault **multi-agent coordination — agents hand off work and read their own inbox through one shared, local, zero-LLM brain.** Handoffs are pull-based and inert (they reuse the append-only `todos.jsonl` queue; nothing auto-runs), and `session_start(agent=X)` is now optionally agent-scoped — it returns X's own recent engrams + X's inbox instead of the brain-wide view (omitting `agent` is unchanged). NeuroVault is a coordination substrate, **not** an orchestrator — it never runs or schedules agents.
 
 ## Development
 

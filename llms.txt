@@ -13,7 +13,7 @@ Repo: https://github.com/sirdath/NeuroVault
 ## API & MCP
 
 - [docs/api.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/docs/api.md): the loopback HTTP API on `127.0.0.1:8765` (recall, remember, status, graph, brains, …).
-- MCP server: `neurovault-server --mcp-only` (native Rust, built on the `rmcp` SDK; stdio JSON-RPC). It loads no model and opens no DB — it forwards tool calls over loopback HTTP to the running app. ~45 tools across tiers: `minimal` (3), `lite` (8, default), `standard` (18), `full` (45). Set the tier via `NEUROVAULT_MCP_TIER` or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter.
+- MCP server: `neurovault-server --mcp-only` (native Rust, built on the `rmcp` SDK; stdio JSON-RPC). It loads no model and opens no DB — it forwards tool calls over loopback HTTP to the running app. 54 tools across tiers: `minimal` (3), `lite` (8, default), `standard` (20), `full` (54). Set the tier via `NEUROVAULT_MCP_TIER` or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter.
 
 ## Build & operate
 
