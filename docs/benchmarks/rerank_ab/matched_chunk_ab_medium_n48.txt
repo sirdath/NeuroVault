@@ -1,0 +1,30 @@
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 48 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.4167     0.7917   +0.3750
+hit@10           0.7708     0.9375   +0.1667
+hit@5            0.5208     0.9375   +0.4167
+mrr              0.4789     0.8490   +0.3701
+ndcg@1           0.4167     0.7917   +0.3750
+ndcg@10          0.5226     0.8448   +0.3222
+ndcg@5           0.4290     0.8364   +0.4074
+precision@1      0.4167     0.7917   +0.3750
+precision@10     0.1146     0.1354   +0.0208
+precision@5      0.1500     0.2625   +0.1125
+recall@1         0.2708     0.5729   +0.3021
+recall@10        0.7500     0.9167   +0.1667
+recall@5         0.4792     0.8958   +0.4167
+
+per question type (recall@5):
+  knowledge-update             0.6111  (n=9)
+  multi-session                0.7000  (n=5)
+  single-session-assistant     0.7500  (n=4)
+  single-session-preference    0.5000  (n=6)
+  single-session-user          0.2500  (n=16)
+  temporal-reasoning           0.5000  (n=8)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 22383.2s total (466.32s/question) · query 192.5s total (4011 ms/question) · wall 22701.8s
+report written: /tmp/rerank_matched_chunk_ab.json
