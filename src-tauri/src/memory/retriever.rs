@@ -1611,11 +1611,27 @@ pub fn hybrid_retrieve(
             .iter()
             .take(limit)
             .map(|c| {
-                // Feed the reranker the title + first ~400 chars of
-                // content. Full content blows up tokenisation cost
-                // without adding signal beyond the first paragraph.
-                let head: String = c.content.chars().take(400).collect();
-                format!("{}\n{}", c.title, head)
+                // Feed the reranker the title + the MATCHED chunk, not the
+                // content head. The matched chunk is the passage that
+                // actually scored; for facts dropped as asides mid-session
+                // the head never contains them, so a head-window doc leaves
+                // the cross-encoder scoring blind (LongMemEval miss
+                // forensics 2026-07-02: 13/24 hit@5 misses were
+                // single-session-user asides buried past the head, invisible
+                // to the CE while distractor sessions led with the topic).
+                // Old head-400 behavior kept behind the
+                // `rerank_matched_chunk` ablation for paired A/B.
+                let body: String = if !is_ablated(opts, "rerank_matched_chunk") {
+                    match best_chunk_text.get(&c.engram_id) {
+                        Some(ch) if !ch.trim().is_empty() => {
+                            ch.trim().chars().take(400).collect()
+                        }
+                        _ => c.content.chars().take(400).collect(),
+                    }
+                } else {
+                    c.content.chars().take(400).collect()
+                };
+                format!("{}\n{}", c.title, body)
             })
             .collect();
         match reranker::rerank(effective_query, &docs) {
