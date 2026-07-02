@@ -527,6 +527,32 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     });
     let after_abs = questions.len();
 
+    // --only <ids|@file>: restrict the run to specific question ids
+    // (comma-separated inline, or @file with newline/comma-separated ids).
+    // Built for targeted re-runs of a miss set from a prior full run plus
+    // a control group, instead of paying for a full pass to test one change.
+    if let Some(only) = flag_value(args, "--only") {
+        let raw = if let Some(path) = only.strip_prefix('@') {
+            match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("longmemeval: --only @{path}: {e}");
+                    return 2;
+                }
+            }
+        } else {
+            only
+        };
+        let ids: std::collections::HashSet<String> = raw
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !ids.is_empty() {
+            questions.retain(|q| ids.contains(&q.question_id));
+        }
+    }
+
     // The dataset file is ordered by question type, so a head-truncation
     // would benchmark a single type. ALWAYS interleave types round-robin
     // (deterministic, no RNG) into one stable global order, then slice
