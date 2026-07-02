@@ -63,6 +63,39 @@ cd src-tauri && taskpolicy -c utility caffeinate -is ./target/release/nv-bench l
 Success = misses convert at hit@5 with controls flat. Expected: also a broad
 hit@1 lift (85 misses at @1 today; the CE finally sees the evidence text).
 
+## RESULT (A/B completed 2026-07-02, 48q, medium mode, 6.3h)
+
+The fix wins decisively on this slice. Every metric up, none regressed.
+
+| metric | baseline (head-400) | +matched-chunk | delta |
+|---|---|---|---|
+| hit@1 | 0.4167 | **0.7917** | +0.3750 |
+| hit@5 | 0.5208 | **0.9375** | +0.4167 |
+| hit@10 | 0.7708 | 0.9375 | +0.1667 |
+| recall@5 | 0.4792 | 0.8958 | +0.4167 |
+| MRR | 0.4789 | 0.8490 | +0.3701 |
+| nDCG@5 | 0.4290 | 0.8364 | +0.4074 |
+
+In counts on the 48q slice: **hit@5 25 -> 45 (+20 questions), hit@1 20 -> 38
+(+18)**. The reranker, once it can see the matched chunk, converts 20 of the
+23 hit@5 misses and the buried-aside failure mode largely closes.
+
+### Honest scope (do NOT change the published number on this alone)
+This slice is ENRICHED for the exact failure (24 misses + 6 partials + 18
+controls), so these deltas are the effect size on the hard cases, NOT the
+full-470 delta. The 18 sampled controls held (no visible regression), but 18
+is a thin sample of the ~360 full-set passing questions; a broad regression on
+untested passers can't be ruled out from this slice. Raw output preserved in
+`rerank_ab/matched_chunk_ab_medium_n48.txt` (the JSON persisted only the
+baseline pass; treatment per-question is a harness gap to fix).
+
+**Gate before updating the site's 94%:** one full-470 run with the fix as
+default vs the stored `longmemeval-rerank-fusion-result.json` baseline,
+confirming no regression on currently-passing questions. Extrapolation IF it
+holds: full-set hit@5 could move up from 0.9375 toward the high 0.9x and hit@1
+up from 0.779 by a few points, but that number is unverified until the full
+run.
+
 ## Next levers if this lands (in order)
 
 1. **Level-4 single-sentence chunks** for multi-topic content: the 3-sentence
