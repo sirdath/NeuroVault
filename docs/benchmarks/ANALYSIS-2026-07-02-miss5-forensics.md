@@ -96,6 +96,41 @@ holds: full-set hit@5 could move up from 0.9375 toward the high 0.9x and hit@1
 up from 0.779 by a few points, but that number is unverified until the full
 run.
 
+## FULL-470 CONFIRMATION (2026-07-04) — it lands
+
+Ran the isolated A/B on the ENTIRE answerable LongMemEval-S set (470q),
+max CPU, 5 checkpointed chunks of 94. Every metric improved; the trend
+held at every checkpoint (94 -> 188 -> 282 -> 376 -> 470, all-positive,
+never reversed after the chunk-1 small-sample hit@1 dip).
+
+| metric | baseline (no matched-chunk) | +matched-chunk | delta |
+|---|---|---|---|
+| hit@1 | 0.7830 | 0.8468 | +0.0638 |
+| hit@5 | 0.9362 | **0.9745** | +0.0383 |
+| hit@10 | 0.9724 | 0.9851 | +0.0127 |
+| recall@5 | 0.8860 | 0.9383 | +0.0523 |
+| MRR | 0.8522 | 0.9021 | +0.0499 |
+
+**Confirmed headline: hit@5 = 97.45% on the full 470.** The matched-chunk
+fix alone drives hit@5 from ~93.6 to ~97.5 (+3.8pp) and hit@1 from ~78.3
+to ~84.7 (+6.4pp), no top-1 tax. The earlier chunk-1 -3.2pp hit@1 dip was
+pure small-sample noise. Raw per-chunk A/B blocks + baseline JSONs in
+`rerank_ab/full470_matched_chunk_ab_chunks.log` and `full_ab_chunk_*.json`.
+
+### Honest framing for any public use of 97%
+- This is **retrieval recall@5** (right memory in top-5), NOT end-to-end QA
+  accuracy. NeuroVault is retrieval-only; it has no answer stage. Never
+  compare this 97% against competitors' end-to-end accuracy (Mem0 ~94 J,
+  EverMemOS 83, Zep 71) — different metric, apples-to-oranges.
+- On recall@5 specifically, ~97% is frontier-tier but NOT uniquely #1:
+  Relay publicly reports ~97% recall@5 on the same S-variant (and a 92.2%
+  end-to-end we lack). So the defensible claim is "frontier-level retrieval,
+  100% on-device" — not "beats everyone."
+- Methodology parity TODO before leaning on the number competitively: a
+  standalone BGE-v2-m3 reportedly gets ~81% recall@5 vs our 97%; confirm
+  our session-level gold + cleaned-S scoring matches the leaderboard's
+  before claiming parity with Relay et al.
+
 ## Next levers if this lands (in order)
 
 1. **Level-4 single-sentence chunks** for multi-topic content: the 3-sentence

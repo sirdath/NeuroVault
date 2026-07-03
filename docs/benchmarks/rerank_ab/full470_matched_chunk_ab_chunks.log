@@ -1,0 +1,725 @@
+===== CHUNK offset=0 limit=94 start 21:35:37 =====
+longmemeval: 500 in file → 470 kept; running 94 (94 answerable + 0 abstention)
+config: [custom] k=[1, 5, 10] rerank=true recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/94] 07741c45 (knowledge-update) r@5=1.00  (49 sessions, 258.3s)
+[2/94] 21d02d0d (multi-session) r@5=1.00  (47 sessions, 245.7s)
+[3/94] 778164c6 (single-session-assistant) r@5=1.00  (50 sessions, 250.1s)
+[4/94] 0a34ad58 (single-session-preference) r@5=1.00  (42 sessions, 204.2s)
+[5/94] a82c026e (single-session-user) r@5=1.00  (47 sessions, 231.7s)
+[6/94] 8c18457d (temporal-reasoning) r@5=1.00  (41 sessions, 218.2s)
+[7/94] 89941a94 (knowledge-update) r@5=1.00  (46 sessions, 235.0s)
+[8/94] efc3f7c2 (multi-session) r@5=1.00  (48 sessions, 249.4s)
+[9/94] 65240037 (single-session-assistant) r@5=1.00  (51 sessions, 292.6s)
+[10/94] 1c0ddc50 (single-session-preference) r@5=1.00  (51 sessions, 316.9s)
+[11/94] 3d86fd0a (single-session-user) r@5=1.00  (55 sessions, 355.6s)
+[12/94] gpt4_fe651585 (temporal-reasoning) r@5=0.50  (48 sessions, 286.0s)
+[13/94] 0977f2af (knowledge-update) r@5=1.00  (44 sessions, 204.4s)
+[14/94] e56a43b9 (multi-session) r@5=1.00  (45 sessions, 197.7s)
+[15/94] 1de5cff2 (single-session-assistant) r@5=1.00  (45 sessions, 195.8s)
+[16/94] 07b6f563 (single-session-preference) r@5=1.00  (52 sessions, 183.5s)
+[17/94] 36580ce8 (single-session-user) r@5=1.00  (55 sessions, 186.2s)
+[18/94] gpt4_c27434e8 (temporal-reasoning) r@5=1.00  (51 sessions, 185.9s)
+[19/94] 26bdc477 (knowledge-update) r@5=1.00  (48 sessions, 180.1s)
+[20/94] 87f22b4a (multi-session) r@5=1.00  (47 sessions, 179.5s)
+[21/94] e48988bc (single-session-assistant) r@5=1.00  (50 sessions, 182.8s)
+[22/94] 1d4e3b97 (single-session-preference) r@5=1.00  (45 sessions, 185.5s)
+[23/94] c14c00dd (single-session-user) r@5=1.00  (51 sessions, 226.7s)
+[24/94] gpt4_5438fa52 (temporal-reasoning) r@5=1.00  (50 sessions, 210.9s)
+[25/94] c6853660 (knowledge-update) r@5=1.00  (46 sessions, 212.5s)
+[26/94] 8e91e7d9 (multi-session) r@5=1.00  (47 sessions, 214.6s)
+[27/94] c7cf7dfd (single-session-assistant) r@5=1.00  (51 sessions, 204.0s)
+[28/94] b0479f84 (single-session-preference) r@5=1.00  (48 sessions, 173.1s)
+[29/94] f4f1d8a4 (single-session-user) r@5=0.00  (52 sessions, 179.8s)
+[30/94] gpt4_213fd887 (temporal-reasoning) r@5=1.00  (45 sessions, 171.5s)
+[31/94] 5c40ec5b (knowledge-update) r@5=0.50  (51 sessions, 179.1s)
+[32/94] 37f165cf (multi-session) r@5=1.00  (45 sessions, 174.5s)
+[33/94] eaca4986 (single-session-assistant) r@5=1.00  (47 sessions, 174.4s)
+[34/94] a89d7624 (single-session-preference) r@5=1.00  (49 sessions, 177.0s)
+[35/94] faba32e5 (single-session-user) r@5=1.00  (46 sessions, 179.2s)
+[36/94] gpt4_2f584639 (temporal-reasoning) r@5=1.00  (45 sessions, 185.6s)
+[37/94] 42ec0761 (knowledge-update) r@5=1.00  (48 sessions, 188.8s)
+[38/94] a346bb18 (multi-session) r@5=1.00  (49 sessions, 223.3s)
+[39/94] c8f1aeed (single-session-assistant) r@5=1.00  (50 sessions, 213.0s)
+[40/94] b6025781 (single-session-preference) r@5=1.00  (47 sessions, 205.0s)
+[41/94] 1faac195 (single-session-user) r@5=1.00  (45 sessions, 198.9s)
+[42/94] gpt4_1a1dc16d (temporal-reasoning) r@5=1.00  (46 sessions, 202.3s)
+[43/94] ba61f0b9 (knowledge-update) r@5=1.00  (45 sessions, 215.1s)
+[44/94] 8cf4d046 (multi-session) r@5=1.00  (45 sessions, 170.3s)
+[45/94] 16c90bf4 (single-session-assistant) r@5=1.00  (55 sessions, 172.6s)
+[46/94] fca70973 (single-session-preference) r@5=1.00  (45 sessions, 170.1s)
+[47/94] 29f2956b (single-session-user) r@5=1.00  (47 sessions, 173.4s)
+[48/94] gpt4_0a05b494 (temporal-reasoning) r@5=0.50  (45 sessions, 171.9s)
+[49/94] dad224aa (knowledge-update) r@5=1.00  (48 sessions, 176.4s)
+[50/94] 078150f1 (multi-session) r@5=1.00  (46 sessions, 176.3s)
+[51/94] 28bcfaac (single-session-assistant) r@5=1.00  (50 sessions, 172.7s)
+[52/94] 1da05512 (single-session-preference) r@5=1.00  (47 sessions, 180.3s)
+[53/94] 4100d0a0 (single-session-user) r@5=1.00  (50 sessions, 174.8s)
+[54/94] gpt4_78cf46a3 (temporal-reasoning) r@5=1.00  (49 sessions, 177.5s)
+[55/94] 10e09553 (knowledge-update) r@5=1.00  (45 sessions, 176.1s)
+[56/94] f0e564bc (multi-session) r@5=1.00  (50 sessions, 171.3s)
+[57/94] ac031881 (single-session-assistant) r@5=1.00  (47 sessions, 179.0s)
+[58/94] d6233ab6 (single-session-preference) r@5=0.00  (44 sessions, 169.0s)
+[59/94] c19f7a0b (single-session-user) r@5=1.00  (46 sessions, 179.3s)
+[60/94] 6613b389 (temporal-reasoning) r@5=1.00  (41 sessions, 170.3s)
+[61/94] 9bbe84a2 (knowledge-update) r@5=1.00  (48 sessions, 177.3s)
+[62/94] a08a253f (multi-session) r@5=1.00  (53 sessions, 174.7s)
+[63/94] b759caee (single-session-assistant) r@5=1.00  (53 sessions, 179.3s)
+[64/94] 75f70248 (single-session-preference) r@5=1.00  (42 sessions, 170.2s)
+[65/94] 311778f1 (single-session-user) r@5=1.00  (52 sessions, 168.8s)
+[66/94] gpt4_2f56ae70 (temporal-reasoning) r@5=1.00  (45 sessions, 169.2s)
+[67/94] 3ba21379 (knowledge-update) r@5=1.00  (44 sessions, 170.7s)
+[68/94] 55241a1f (multi-session) r@5=1.00  (49 sessions, 178.2s)
+[69/94] 561fabcd (single-session-assistant) r@5=1.00  (49 sessions, 182.3s)
+[70/94] 505af2f5 (single-session-preference) r@5=1.00  (53 sessions, 180.9s)
+[71/94] 8e9d538c (single-session-user) r@5=1.00  (48 sessions, 181.0s)
+[72/94] b29f3365 (temporal-reasoning) r@5=1.00  (50 sessions, 176.5s)
+[73/94] 06db6396 (knowledge-update) r@5=1.00  (51 sessions, 176.4s)
+[74/94] a3332713 (multi-session) r@5=1.00  (42 sessions, 172.1s)
+[75/94] 4baee567 (single-session-assistant) r@5=0.00  (49 sessions, 175.5s)
+[76/94] 95228167 (single-session-preference) r@5=1.00  (49 sessions, 175.2s)
+[77/94] 86f00804 (single-session-user) r@5=1.00  (43 sessions, 193.6s)
+[78/94] gpt4_93f6379c (temporal-reasoning) r@5=1.00  (42 sessions, 175.0s)
+[79/94] c7dc5443 (knowledge-update) r@5=0.50  (46 sessions, 177.8s)
+[80/94] c18a7dc8 (multi-session) r@5=0.50  (49 sessions, 175.0s)
+[81/94] 4388e9dd (single-session-assistant) r@5=1.00  (43 sessions, 167.1s)
+[82/94] 57f827a0 (single-session-preference) r@5=1.00  (51 sessions, 208.9s)
+[83/94] 76d63226 (single-session-user) r@5=1.00  (48 sessions, 178.7s)
+[84/94] gpt4_4cd9eba1 (temporal-reasoning) r@5=1.00  (45 sessions, 192.2s)
+[85/94] a2f3aa27 (knowledge-update) r@5=1.00  (44 sessions, 200.9s)
+[86/94] 157a136e (multi-session) r@5=1.00  (47 sessions, 189.9s)
+[87/94] 41275add (single-session-assistant) r@5=1.00  (53 sessions, 197.3s)
+[88/94] d24813b1 (single-session-preference) r@5=0.00  (44 sessions, 202.4s)
+[89/94] 8a137a7f (single-session-user) r@5=1.00  (51 sessions, 193.8s)
+[90/94] gpt4_88806d6e (temporal-reasoning) r@5=1.00  (49 sessions, 190.2s)
+[91/94] cf22b7bf (knowledge-update) r@5=1.00  (55 sessions, 208.9s)
+[92/94] d6062bb9 (multi-session) r@5=1.00  (50 sessions, 212.5s)
+[93/94] 5809eb10 (single-session-assistant) r@5=1.00  (52 sessions, 260.5s)
+[94/94] 38146c39 (single-session-preference) r@5=1.00  (46 sessions, 179.9s)
+
+━━ nv-bench longmemeval — 94 questions (94 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [custom] hybrid (vec+bm25+graph, RRF) + cross-encoder rerank, recency-ablated (reproducible)
+hit@1        0.8298
+hit@10       0.9681
+hit@5        0.9574
+mrr          0.8780
+ndcg@1       0.8298
+ndcg@10      0.8807
+ndcg@5       0.8660
+precision@1  0.8298
+precision@10 0.1500
+precision@5  0.2872
+recall@1     0.5957
+recall@10    0.9681
+recall@5     0.9309
+
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 94 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.8298     0.7979   -0.0319
+hit@10           0.9681     0.9894   +0.0213
+hit@5            0.9574     0.9681   +0.0106
+mrr              0.8780     0.8746   -0.0034
+ndcg@1           0.8298     0.7979   -0.0319
+ndcg@10          0.8807     0.8925   +0.0119
+ndcg@5           0.8660     0.8802   +0.0142
+precision@1      0.8298     0.7979   -0.0319
+precision@10     0.1500     0.1521   +0.0021
+precision@5      0.2872     0.2936   +0.0064
+recall@1         0.5957     0.5603   -0.0355
+recall@10        0.9681     0.9894   +0.0213
+recall@5         0.9309     0.9557   +0.0248
+
+per question type (recall@5):
+  knowledge-update             0.9375  (n=16)
+  multi-session                0.9688  (n=16)
+  single-session-assistant     0.9375  (n=16)
+  single-session-preference    0.8750  (n=16)
+  single-session-user          0.9333  (n=15)
+  temporal-reasoning           0.9333  (n=15)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 18171.7s total (193.32s/question) · query 132.1s total (1406 ms/question) · wall 18409.4s
+report written: /tmp/full_ab_chunk_0.json
+===== CHUNK offset=0 DONE 02:42:27 =====
+===== CHUNK offset=94 limit=94 start 02:42:27 =====
+longmemeval: 500 in file → 470 kept; running 94 (94 answerable + 0 abstention)
+config: [custom] k=[1, 5, 10] rerank=true recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/94] 545bd2b5 (single-session-user) r@5=0.00  (44 sessions, 159.6s)
+[2/94] gpt4_cd90e484 (temporal-reasoning) r@5=1.00  (52 sessions, 172.4s)
+[3/94] 7401057b (knowledge-update) r@5=1.00  (47 sessions, 162.8s)
+[4/94] 09ba9854 (multi-session) r@5=1.00  (44 sessions, 158.2s)
+[5/94] 8b9d4367 (single-session-assistant) r@5=1.00  (53 sessions, 165.7s)
+[6/94] 09d032c9 (single-session-preference) r@5=1.00  (43 sessions, 159.0s)
+[7/94] 4fd1909e (single-session-user) r@5=1.00  (55 sessions, 176.9s)
+[8/94] gpt4_d31cdae3 (temporal-reasoning) r@5=1.00  (50 sessions, 171.5s)
+[9/94] 69fee5aa (knowledge-update) r@5=1.00  (49 sessions, 171.9s)
+[10/94] 099778bb (multi-session) r@5=1.00  (46 sessions, 169.0s)
+[11/94] a40e080f (single-session-assistant) r@5=1.00  (48 sessions, 185.6s)
+[12/94] 1a1907b4 (single-session-preference) r@5=1.00  (48 sessions, 165.6s)
+[13/94] 19b5f2b3 (single-session-user) r@5=1.00  (43 sessions, 165.8s)
+[14/94] a3045048 (temporal-reasoning) r@5=1.00  (53 sessions, 170.2s)
+[15/94] dfde3500 (knowledge-update) r@5=0.50  (47 sessions, 161.6s)
+[16/94] bc149d6b (multi-session) r@5=1.00  (46 sessions, 179.0s)
+[17/94] 7a8d0b71 (single-session-assistant) r@5=1.00  (45 sessions, 184.7s)
+[18/94] 6b7dfb22 (single-session-preference) r@5=1.00  (45 sessions, 181.6s)
+[19/94] b320f3f8 (single-session-user) r@5=1.00  (46 sessions, 175.8s)
+[20/94] 993da5e2 (temporal-reasoning) r@5=1.00  (49 sessions, 164.9s)
+[21/94] cc5ded98 (knowledge-update) r@5=1.00  (53 sessions, 164.8s)
+[22/94] 73d42213 (multi-session) r@5=0.50  (49 sessions, 168.0s)
+[23/94] fca762bc (single-session-assistant) r@5=1.00  (42 sessions, 168.2s)
+[24/94] 06f04340 (single-session-preference) r@5=1.00  (55 sessions, 166.7s)
+[25/94] 001be529 (single-session-user) r@5=0.00  (51 sessions, 165.2s)
+[26/94] d01c6aa8 (temporal-reasoning) r@5=1.00  (42 sessions, 167.4s)
+[27/94] f685340e (knowledge-update) r@5=1.00  (41 sessions, 177.9s)
+[28/94] ef9cf60a (multi-session) r@5=1.00  (54 sessions, 199.2s)
+[29/94] 352ab8bd (single-session-assistant) r@5=1.00  (49 sessions, 192.2s)
+[30/94] 54026fce (single-session-preference) r@5=1.00  (49 sessions, 198.5s)
+[31/94] ccb36322 (single-session-user) r@5=1.00  (46 sessions, 239.2s)
+[32/94] gpt4_7de946e7 (temporal-reasoning) r@5=1.00  (49 sessions, 310.4s)
+[33/94] 0ddfec37 (knowledge-update) r@5=1.00  (50 sessions, 310.9s)
+[34/94] 60159905 (multi-session) r@5=1.00  (44 sessions, 308.5s)
+[35/94] e982271f (single-session-assistant) r@5=1.00  (54 sessions, 316.7s)
+[36/94] caf03d32 (single-session-preference) r@5=1.00  (51 sessions, 331.3s)
+[37/94] bc8a6e93 (single-session-user) r@5=1.00  (48 sessions, 330.2s)
+[38/94] gpt4_d9af6064 (temporal-reasoning) r@5=1.00  (51 sessions, 334.2s)
+[39/94] e66b632c (knowledge-update) r@5=1.00  (47 sessions, 324.6s)
+[40/94] 61f8c8f8 (multi-session) r@5=1.00  (48 sessions, 328.2s)
+[41/94] 3e321797 (single-session-assistant) r@5=1.00  (50 sessions, 352.0s)
+[42/94] afdc33df (single-session-preference) r@5=1.00  (46 sessions, 325.5s)
+[43/94] e01b8e2f (single-session-user) r@5=1.00  (53 sessions, 357.9s)
+[44/94] gpt4_8c8961ae (temporal-reasoning) r@5=1.00  (50 sessions, 314.7s)
+[45/94] 50635ada (knowledge-update) r@5=1.00  (48 sessions, 327.2s)
+[46/94] ba358f49 (multi-session) r@5=0.50  (41 sessions, 318.6s)
+[47/94] 51b23612 (single-session-assistant) r@5=1.00  (47 sessions, 327.9s)
+[48/94] 195a1a1b (single-session-preference) r@5=0.00  (46 sessions, 322.7s)
+[49/94] 15745da0 (single-session-user) r@5=1.00  (47 sessions, 326.9s)
+[50/94] cc6d1ec1 (temporal-reasoning) r@5=1.00  (46 sessions, 326.5s)
+[51/94] affe2881 (knowledge-update) r@5=1.00  (44 sessions, 330.1s)
+[52/94] bb7c3b45 (multi-session) r@5=1.00  (47 sessions, 337.4s)
+[53/94] e3fc4d6e (single-session-assistant) r@5=1.00  (53 sessions, 345.1s)
+[54/94] 32260d93 (single-session-preference) r@5=1.00  (46 sessions, 324.6s)
+[55/94] ec81a493 (single-session-user) r@5=0.00  (51 sessions, 334.5s)
+[56/94] gpt4_9a159967 (temporal-reasoning) r@5=1.00  (46 sessions, 331.0s)
+[57/94] eace081b (knowledge-update) r@5=1.00  (47 sessions, 335.0s)
+[58/94] 67e0d0f2 (multi-session) r@5=1.00  (52 sessions, 350.6s)
+[59/94] d596882b (single-session-assistant) r@5=1.00  (44 sessions, 332.1s)
+[60/94] 35a27287 (single-session-preference) r@5=1.00  (51 sessions, 340.3s)
+[61/94] 577d4d32 (single-session-user) r@5=0.00  (46 sessions, 325.5s)
+[62/94] gpt4_b4a80587 (temporal-reasoning) r@5=1.00  (47 sessions, 331.6s)
+[63/94] 5831f84d (knowledge-update) r@5=1.00  (40 sessions, 333.4s)
+[64/94] 0ea62687 (multi-session) r@5=1.00  (43 sessions, 323.4s)
+[65/94] e8a79c70 (single-session-assistant) r@5=1.00  (44 sessions, 331.5s)
+[66/94] 0edc2aef (single-session-preference) r@5=1.00  (46 sessions, 332.0s)
+[67/94] 86b68151 (single-session-user) r@5=0.00  (47 sessions, 326.5s)
+[68/94] dcfa8644 (temporal-reasoning) r@5=1.00  (46 sessions, 335.5s)
+[69/94] 59524333 (knowledge-update) r@5=0.50  (44 sessions, 334.7s)
+[70/94] 1192316e (multi-session) r@5=1.00  (42 sessions, 332.2s)
+[71/94] 6222b6eb (single-session-assistant) r@5=1.00  (46 sessions, 343.2s)
+[72/94] 75832dbd (single-session-preference) r@5=0.00  (48 sessions, 338.3s)
+[73/94] 3f1e9474 (single-session-user) r@5=1.00  (52 sessions, 333.5s)
+[74/94] gpt4_2c50253f (temporal-reasoning) r@5=1.00  (56 sessions, 380.4s)
+[75/94] 603deb26 (knowledge-update) r@5=1.00  (48 sessions, 344.4s)
+[76/94] 6c49646a (multi-session) r@5=1.00  (43 sessions, 317.8s)
+[77/94] 1568498a (single-session-assistant) r@5=1.00  (47 sessions, 328.9s)
+[78/94] 06878be2 (single-session-preference) r@5=1.00  (48 sessions, 347.2s)
+[79/94] 60d45044 (single-session-user) r@5=1.00  (51 sessions, 360.3s)
+[80/94] c9f37c46 (temporal-reasoning) r@5=1.00  (50 sessions, 349.7s)
+[81/94] 7e974930 (knowledge-update) r@5=1.00  (47 sessions, 338.4s)
+[82/94] 1c549ce4 (multi-session) r@5=1.00  (45 sessions, 335.9s)
+[83/94] 1b9b7252 (single-session-assistant) r@5=1.00  (46 sessions, 328.7s)
+[84/94] 8a2466db (single-session-preference) r@5=1.00  (50 sessions, 358.4s)
+[85/94] 8550ddae (single-session-user) r@5=1.00  (42 sessions, 330.8s)
+[86/94] e4e14d04 (temporal-reasoning) r@5=1.00  (45 sessions, 344.4s)
+[87/94] 4b24c848 (knowledge-update) r@5=1.00  (51 sessions, 351.0s)
+[88/94] 3fe836c9 (multi-session) r@5=1.00  (45 sessions, 339.3s)
+[89/94] 3249768e (single-session-assistant) r@5=1.00  (47 sessions, 343.8s)
+[90/94] caf9ead2 (single-session-user) r@5=1.00  (43 sessions, 363.0s)
+[91/94] gpt4_483dd43c (temporal-reasoning) r@5=1.00  (52 sessions, 367.6s)
+[92/94] 0e4e4c46 (knowledge-update) r@5=1.00  (49 sessions, 358.5s)
+[93/94] 92a0aa75 (multi-session) r@5=1.00  (42 sessions, 346.8s)
+[94/94] 8752c811 (single-session-assistant) r@5=1.00  (56 sessions, 364.0s)
+
+━━ nv-bench longmemeval — 94 questions (94 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [custom] hybrid (vec+bm25+graph, RRF) + cross-encoder rerank, recency-ablated (reproducible)
+hit@1        0.7447
+hit@10       0.9468
+hit@5        0.9255
+mrr          0.8216
+ndcg@1       0.7447
+ndcg@10      0.8355
+ndcg@5       0.8245
+precision@1  0.7447
+precision@10 0.1447
+precision@5  0.2809
+recall@1     0.5195
+recall@10    0.9362
+recall@5     0.9043
+
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 94 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.7447     0.8085   +0.0638
+hit@10           0.9468     0.9787   +0.0319
+hit@5            0.9255     0.9681   +0.0426
+mrr              0.8216     0.8721   +0.0505
+ndcg@1           0.7447     0.8085   +0.0638
+ndcg@10          0.8355     0.8854   +0.0499
+ndcg@5           0.8245     0.8779   +0.0535
+precision@1      0.7447     0.8085   +0.0638
+precision@10     0.1447     0.1500   +0.0053
+precision@5      0.2809     0.2936   +0.0128
+recall@1         0.5195     0.5621   +0.0426
+recall@10        0.9362     0.9787   +0.0426
+recall@5         0.9043     0.9574   +0.0532
+
+per question type (recall@5):
+  knowledge-update             0.9375  (n=16)
+  multi-session                0.9375  (n=16)
+  single-session-assistant     1.0000  (n=16)
+  single-session-preference    0.8571  (n=14)
+  single-session-user          0.6875  (n=16)
+  temporal-reasoning           1.0000  (n=16)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 26242.3s total (279.17s/question) · query 190.3s total (2024 ms/question) · wall 26586.3s
+report written: /tmp/full_ab_chunk_94.json
+===== CHUNK offset=94 DONE 10:05:35 =====
+===== CHUNK offset=188 limit=94 start 10:05:35 =====
+longmemeval: 500 in file → 470 kept; running 94 (94 answerable + 0 abstention)
+config: [custom] k=[1, 5, 10] rerank=true recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/94] 25e5aa4f (single-session-user) r@5=1.00  (45 sessions, 367.2s)
+[2/94] c8090214 (temporal-reasoning) r@5=1.00  (47 sessions, 337.9s)
+[3/94] 22d2cb42 (knowledge-update) r@5=1.00  (48 sessions, 347.4s)
+[4/94] a96c20ee (multi-session) r@5=1.00  (51 sessions, 364.5s)
+[5/94] 70b3e69b (single-session-assistant) r@5=1.00  (48 sessions, 354.5s)
+[6/94] d52b4f67 (single-session-user) r@5=1.00  (52 sessions, 366.1s)
+[7/94] gpt4_4edbafa2 (temporal-reasoning) r@5=1.00  (41 sessions, 324.5s)
+[8/94] b01defab (knowledge-update) r@5=1.00  (50 sessions, 315.9s)
+[9/94] 0100672e (multi-session) r@5=1.00  (49 sessions, 306.8s)
+[10/94] 2bf43736 (single-session-assistant) r@5=1.00  (44 sessions, 275.2s)
+[11/94] b86304ba (single-session-user) r@5=1.00  (41 sessions, 272.4s)
+[12/94] b9cfe692 (temporal-reasoning) r@5=1.00  (48 sessions, 287.9s)
+[13/94] 8fb83627 (knowledge-update) r@5=0.50  (44 sessions, 294.9s)
+[14/94] 8979f9ec (multi-session) r@5=1.00  (43 sessions, 289.1s)
+[15/94] 71a3fd6b (single-session-assistant) r@5=1.00  (44 sessions, 184.5s)
+[16/94] 37d43f65 (single-session-user) r@5=1.00  (49 sessions, 190.5s)
+[17/94] 982b5123 (temporal-reasoning) r@5=1.00  (47 sessions, 175.3s)
+[18/94] ed4ddc30 (knowledge-update) r@5=0.50  (46 sessions, 164.4s)
+[19/94] 77eafa52 (multi-session) r@5=1.00  (51 sessions, 174.3s)
+[20/94] 8aef76bc (single-session-assistant) r@5=1.00  (48 sessions, 177.6s)
+[21/94] a06e4cfe (single-session-user) r@5=0.00  (53 sessions, 171.9s)
+[22/94] gpt4_65aabe59 (temporal-reasoning) r@5=1.00  (42 sessions, 164.9s)
+[23/94] 1cea1afa (knowledge-update) r@5=1.00  (49 sessions, 164.8s)
+[24/94] 720133ac (multi-session) r@5=1.00  (47 sessions, 176.6s)
+[25/94] 8464fc84 (single-session-assistant) r@5=0.00  (45 sessions, 195.3s)
+[26/94] 853b0a1d (single-session-user) r@5=1.00  (52 sessions, 169.5s)
+[27/94] gpt4_2d58bcd6 (temporal-reasoning) r@5=1.00  (46 sessions, 165.0s)
+[28/94] e61a7584 (knowledge-update) r@5=1.00  (50 sessions, 171.7s)
+[29/94] 27016adc (multi-session) r@5=1.00  (45 sessions, 164.9s)
+[30/94] 1d4da289 (single-session-assistant) r@5=1.00  (55 sessions, 172.4s)
+[31/94] 0862e8bf (single-session-user) r@5=1.00  (50 sessions, 163.2s)
+[32/94] gpt4_93159ced (temporal-reasoning) r@5=1.00  (42 sessions, 162.3s)
+[33/94] 7a87bd0c (knowledge-update) r@5=1.00  (48 sessions, 175.2s)
+[34/94] 91b15a6e (multi-session) r@5=1.00  (49 sessions, 184.2s)
+[35/94] 8cf51dda (single-session-assistant) r@5=1.00  (46 sessions, 181.7s)
+[36/94] 95bcc1c8 (single-session-user) r@5=1.00  (46 sessions, 197.3s)
+[37/94] a3838d2b (temporal-reasoning) r@5=0.83  (47 sessions, 170.3s)
+[38/94] db467c8c (knowledge-update) r@5=1.00  (48 sessions, 183.3s)
+[39/94] 3fdac837 (multi-session) r@5=1.00  (44 sessions, 165.0s)
+[40/94] 58470ed2 (single-session-assistant) r@5=1.00  (50 sessions, 174.4s)
+[41/94] 21436231 (single-session-user) r@5=1.00  (50 sessions, 178.1s)
+[42/94] gpt4_70e84552 (temporal-reasoning) r@5=1.00  (48 sessions, 176.0s)
+[43/94] 18bc8abd (knowledge-update) r@5=1.00  (44 sessions, 158.2s)
+[44/94] 9ee3ecd6 (multi-session) r@5=1.00  (50 sessions, 175.9s)
+[45/94] 488d3006 (single-session-assistant) r@5=1.00  (47 sessions, 201.6s)
+[46/94] 75499fd8 (single-session-user) r@5=1.00  (52 sessions, 191.7s)
+[47/94] gpt4_6ed717ea (temporal-reasoning) r@5=1.00  (46 sessions, 176.4s)
+[48/94] 2133c1b5 (knowledge-update) r@5=0.50  (51 sessions, 177.4s)
+[49/94] a1cc6108 (multi-session) r@5=1.00  (43 sessions, 169.9s)
+[50/94] 18dcd5a5 (single-session-assistant) r@5=1.00  (50 sessions, 174.3s)
+[51/94] 6b168ec8 (single-session-user) r@5=1.00  (50 sessions, 172.9s)
+[52/94] f0853d11 (temporal-reasoning) r@5=1.00  (46 sessions, 166.6s)
+[53/94] 6a27ffc2 (knowledge-update) r@5=1.00  (51 sessions, 169.6s)
+[54/94] 5025383b (multi-session) r@5=0.00  (46 sessions, 164.4s)
+[55/94] dc439ea3 (single-session-assistant) r@5=1.00  (47 sessions, 169.9s)
+[56/94] 8ebdbe50 (single-session-user) r@5=1.00  (48 sessions, 175.8s)
+[57/94] gpt4_0b2f1d21 (temporal-reasoning) r@5=1.00  (53 sessions, 170.9s)
+[58/94] 01493427 (knowledge-update) r@5=1.00  (47 sessions, 172.0s)
+[59/94] ef66a6e5 (multi-session) r@5=0.50  (45 sessions, 167.5s)
+[60/94] cc539528 (single-session-assistant) r@5=1.00  (48 sessions, 174.8s)
+[61/94] c8c3f81d (single-session-user) r@5=1.00  (52 sessions, 176.5s)
+[62/94] gpt4_5dcc0aab (temporal-reasoning) r@5=0.80  (50 sessions, 174.7s)
+[63/94] c4ea545c (knowledge-update) r@5=1.00  (46 sessions, 168.7s)
+[64/94] 4bc144e2 (multi-session) r@5=1.00  (48 sessions, 171.6s)
+[65/94] fea54f57 (single-session-assistant) r@5=1.00  (50 sessions, 185.9s)
+[66/94] dccbc061 (single-session-user) r@5=1.00  (49 sessions, 179.5s)
+[67/94] bbf86515 (temporal-reasoning) r@5=1.00  (45 sessions, 175.7s)
+[68/94] 72e3ee87 (knowledge-update) r@5=0.50  (51 sessions, 171.8s)
+[69/94] 4adc0475 (multi-session) r@5=1.00  (45 sessions, 164.4s)
+[70/94] 0e5e2d1a (single-session-assistant) r@5=1.00  (46 sessions, 170.3s)
+[71/94] af8d2e46 (single-session-user) r@5=1.00  (50 sessions, 169.6s)
+[72/94] 2a1811e2 (temporal-reasoning) r@5=1.00  (46 sessions, 165.5s)
+[73/94] 618f13b2 (knowledge-update) r@5=1.00  (49 sessions, 167.8s)
+[74/94] e25c3b8d (multi-session) r@5=1.00  (48 sessions, 173.2s)
+[75/94] f523d9fe (single-session-assistant) r@5=1.00  (50 sessions, 170.7s)
+[76/94] ad7109d1 (single-session-user) r@5=1.00  (44 sessions, 163.4s)
+[77/94] gpt4_385a5000 (temporal-reasoning) r@5=0.50  (51 sessions, 177.3s)
+[78/94] e493bb7c (knowledge-update) r@5=1.00  (51 sessions, 174.1s)
+[79/94] 681a1674 (multi-session) r@5=1.00  (49 sessions, 176.7s)
+[80/94] ceb54acb (single-session-assistant) r@5=1.00  (50 sessions, 181.1s)
+[81/94] 66f24dbb (single-session-user) r@5=1.00  (50 sessions, 171.0s)
+[82/94] 2c63a862 (temporal-reasoning) r@5=1.00  (54 sessions, 183.5s)
+[83/94] 6071bd76 (knowledge-update) r@5=1.00  (46 sessions, 164.9s)
+[84/94] 60036106 (multi-session) r@5=1.00  (44 sessions, 166.2s)
+[85/94] 1903aded (single-session-assistant) r@5=1.00  (47 sessions, 163.3s)
+[86/94] 94f70d80 (single-session-user) r@5=0.00  (49 sessions, 160.5s)
+[87/94] 08f4fc43 (temporal-reasoning) r@5=1.00  (47 sessions, 164.3s)
+[88/94] 5a4f22c0 (knowledge-update) r@5=0.50  (49 sessions, 175.8s)
+[89/94] 3c1045c8 (multi-session) r@5=1.00  (52 sessions, 164.7s)
+[90/94] 7e00a6cb (single-session-assistant) r@5=1.00  (62 sessions, 182.7s)
+[91/94] 726462e0 (single-session-user) r@5=0.00  (48 sessions, 169.1s)
+[92/94] 0bb5a684 (temporal-reasoning) r@5=1.00  (42 sessions, 166.3s)
+[93/94] 45dc21b6 (knowledge-update) r@5=0.50  (49 sessions, 177.4s)
+[94/94] a4996e51 (multi-session) r@5=0.50  (48 sessions, 174.0s)
+
+━━ nv-bench longmemeval — 94 questions (94 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [custom] hybrid (vec+bm25+graph, RRF) + cross-encoder rerank, recency-ablated (reproducible)
+hit@1        0.8191
+hit@10       0.9681
+hit@5        0.9468
+mrr          0.8830
+ndcg@1       0.8191
+ndcg@10      0.8760
+ndcg@5       0.8531
+precision@1  0.8191
+precision@10 0.1628
+precision@5  0.3021
+recall@1     0.5340
+recall@10    0.9521
+recall@5     0.8950
+
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 94 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.8191     0.9149   +0.0957
+hit@10           0.9681     1.0000   +0.0319
+hit@5            0.9468     0.9894   +0.0426
+mrr              0.8830     0.9459   +0.0629
+ndcg@1           0.8191     0.9149   +0.0957
+ndcg@10          0.8760     0.9443   +0.0683
+ndcg@5           0.8531     0.9299   +0.0768
+precision@1      0.8191     0.9149   +0.0957
+precision@10     0.1628     0.1691   +0.0064
+precision@5      0.3021     0.3213   +0.0191
+recall@1         0.5340     0.6298   +0.0957
+recall@10        0.9521     1.0000   +0.0479
+recall@5         0.8950     0.9642   +0.0691
+
+per question type (recall@5):
+  knowledge-update             0.8421  (n=19)
+  multi-session                0.8947  (n=19)
+  single-session-assistant     0.9444  (n=18)
+  single-session-user          0.8421  (n=19)
+  temporal-reasoning           0.9544  (n=19)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 18130.5s total (192.88s/question) · query 131.5s total (1399 ms/question) · wall 18371.1s
+report written: /tmp/full_ab_chunk_188.json
+===== CHUNK offset=188 DONE 15:11:46 =====
+===== CHUNK offset=282 limit=94 start 15:11:46 =====
+longmemeval: 500 in file → 470 kept; running 94 (94 answerable + 0 abstention)
+config: [custom] k=[1, 5, 10] rerank=true recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/94] 6ae235be (single-session-assistant) r@5=1.00  (48 sessions, 168.0s)
+[2/94] 3b6f954b (single-session-user) r@5=0.00  (50 sessions, 165.7s)
+[3/94] gpt4_2312f94c (temporal-reasoning) r@5=1.00  (45 sessions, 172.1s)
+[4/94] b6019101 (knowledge-update) r@5=0.50  (49 sessions, 163.2s)
+[5/94] 6456829e (multi-session) r@5=1.00  (47 sessions, 165.7s)
+[6/94] 4c36ccef (single-session-assistant) r@5=1.00  (49 sessions, 210.9s)
+[7/94] c960da58 (single-session-user) r@5=1.00  (46 sessions, 236.7s)
+[8/94] gpt4_76048e76 (temporal-reasoning) r@5=1.00  (44 sessions, 228.5s)
+[9/94] 2698e78f (knowledge-update) r@5=0.50  (48 sessions, 233.6s)
+[10/94] f35224e0 (multi-session) r@5=1.00  (53 sessions, 181.0s)
+[11/94] e9327a54 (single-session-assistant) r@5=1.00  (50 sessions, 172.8s)
+[12/94] 7527f7e2 (single-session-user) r@5=0.00  (45 sessions, 176.3s)
+[13/94] gpt4_2487a7cb (temporal-reasoning) r@5=1.00  (47 sessions, 181.1s)
+[14/94] 41698283 (knowledge-update) r@5=1.00  (45 sessions, 167.7s)
+[15/94] 7405e8b1 (multi-session) r@5=1.00  (48 sessions, 167.6s)
+[16/94] 89527b6b (single-session-assistant) r@5=1.00  (45 sessions, 172.3s)
+[17/94] 5d3d2817 (single-session-user) r@5=1.00  (53 sessions, 173.8s)
+[18/94] gpt4_2655b836 (temporal-reasoning) r@5=1.00  (45 sessions, 165.4s)
+[19/94] f9e8c073 (knowledge-update) r@5=1.00  (53 sessions, 169.2s)
+[20/94] d905b33f (multi-session) r@5=1.00  (48 sessions, 173.1s)
+[21/94] c4f10528 (single-session-assistant) r@5=1.00  (44 sessions, 177.2s)
+[22/94] f8c5f88b (single-session-user) r@5=1.00  (46 sessions, 176.9s)
+[23/94] gpt4_68e94288 (temporal-reasoning) r@5=0.50  (44 sessions, 174.5s)
+[24/94] 08e075c7 (knowledge-update) r@5=0.00  (45 sessions, 168.7s)
+[25/94] 51c32626 (multi-session) r@5=1.00  (51 sessions, 180.2s)
+[26/94] 7161e7e2 (single-session-assistant) r@5=1.00  (48 sessions, 171.1s)
+[27/94] 58ef2f1c (single-session-user) r@5=1.00  (50 sessions, 180.5s)
+[28/94] gpt4_b5700ca0 (temporal-reasoning) r@5=1.00  (50 sessions, 171.5s)
+[29/94] 0f05491a (knowledge-update) r@5=0.00  (45 sessions, 168.3s)
+[30/94] e6041065 (multi-session) r@5=1.00  (45 sessions, 168.2s)
+[31/94] 6f9b354f (single-session-user) r@5=1.00  (50 sessions, 167.7s)
+[32/94] gpt4_8279ba03 (temporal-reasoning) r@5=1.00  (43 sessions, 164.7s)
+[33/94] 4d6b87c8 (knowledge-update) r@5=1.00  (52 sessions, 193.0s)
+[34/94] 1f2b8d4f (multi-session) r@5=1.00  (51 sessions, 186.1s)
+[35/94] 6ade9755 (single-session-user) r@5=1.00  (51 sessions, 181.0s)
+[36/94] 6e984302 (temporal-reasoning) r@5=0.00  (43 sessions, 167.9s)
+[37/94] 031748ae (knowledge-update) r@5=1.00  (46 sessions, 174.6s)
+[38/94] 9aaed6a3 (multi-session) r@5=1.00  (51 sessions, 176.8s)
+[39/94] c5e8278d (single-session-user) r@5=1.00  (44 sessions, 171.5s)
+[40/94] 0bc8ad93 (temporal-reasoning) r@5=1.00  (47 sessions, 164.3s)
+[41/94] 184da446 (knowledge-update) r@5=1.00  (42 sessions, 192.2s)
+[42/94] 85fa3a3f (multi-session) r@5=1.00  (47 sessions, 227.7s)
+[43/94] 1e043500 (single-session-user) r@5=1.00  (50 sessions, 188.2s)
+[44/94] 4dfccbf8 (temporal-reasoning) r@5=0.00  (43 sessions, 159.6s)
+[45/94] a1eacc2a (knowledge-update) r@5=1.00  (44 sessions, 163.1s)
+[46/94] 4f54b7c9 (multi-session) r@5=1.00  (45 sessions, 155.6s)
+[47/94] 58bf7951 (single-session-user) r@5=0.00  (57 sessions, 174.7s)
+[48/94] eac54add (temporal-reasoning) r@5=0.00  (43 sessions, 170.3s)
+[49/94] 07741c44 (knowledge-update) r@5=1.00  (50 sessions, 169.2s)
+[50/94] a11281a2 (multi-session) r@5=1.00  (50 sessions, 170.3s)
+[51/94] 51a45a95 (single-session-user) r@5=0.00  (50 sessions, 170.0s)
+[52/94] 9a707b82 (temporal-reasoning) r@5=1.00  (53 sessions, 172.3s)
+[53/94] 9ea5eabc (knowledge-update) r@5=1.00  (53 sessions, 174.9s)
+[54/94] cc06de0d (multi-session) r@5=1.00  (42 sessions, 176.7s)
+[55/94] 118b2229 (single-session-user) r@5=1.00  (45 sessions, 165.2s)
+[56/94] gpt4_fa19884d (temporal-reasoning) r@5=1.00  (50 sessions, 175.8s)
+[57/94] ce6d2d27 (knowledge-update) r@5=1.00  (51 sessions, 179.9s)
+[58/94] 2311e44b (multi-session) r@5=1.00  (50 sessions, 184.4s)
+[59/94] e47becba (single-session-user) r@5=1.00  (53 sessions, 182.7s)
+[60/94] gpt4_468eb064 (temporal-reasoning) r@5=1.00  (48 sessions, 169.5s)
+[61/94] 89941a93 (knowledge-update) r@5=1.00  (51 sessions, 210.2s)
+[62/94] d3ab962e (multi-session) r@5=1.00  (49 sessions, 219.4s)
+[63/94] gpt4_4929293b (temporal-reasoning) r@5=0.00  (49 sessions, 210.4s)
+[64/94] 71315a70 (knowledge-update) r@5=1.00  (53 sessions, 226.5s)
+[65/94] 81507db6 (multi-session) r@5=0.80  (50 sessions, 221.2s)
+[66/94] gpt4_e414231f (temporal-reasoning) r@5=1.00  (46 sessions, 222.3s)
+[67/94] d7c942c3 (knowledge-update) r@5=0.50  (49 sessions, 217.7s)
+[68/94] gpt4_2f91af09 (multi-session) r@5=1.00  (53 sessions, 216.6s)
+[69/94] gpt4_59149c78 (temporal-reasoning) r@5=0.50  (51 sessions, 226.0s)
+[70/94] 945e3d21 (knowledge-update) r@5=0.00  (48 sessions, 222.8s)
+[71/94] gpt4_372c3eed (multi-session) r@5=0.67  (45 sessions, 213.7s)
+[72/94] gpt4_f420262d (temporal-reasoning) r@5=1.00  (43 sessions, 219.1s)
+[73/94] 852ce960 (knowledge-update) r@5=1.00  (39 sessions, 196.4s)
+[74/94] bf659f65 (multi-session) r@5=1.00  (52 sessions, 215.1s)
+[75/94] gpt4_1e4a8aec (temporal-reasoning) r@5=0.50  (50 sessions, 222.3s)
+[76/94] 830ce83f (knowledge-update) r@5=1.00  (47 sessions, 218.9s)
+[77/94] c2ac3c61 (multi-session) r@5=1.00  (53 sessions, 225.5s)
+[78/94] gpt4_d6585ce9 (temporal-reasoning) r@5=0.80  (42 sessions, 210.3s)
+[79/94] 6aeb4375 (knowledge-update) r@5=1.00  (47 sessions, 217.3s)
+[80/94] 1a8a66a6 (multi-session) r@5=0.50  (51 sessions, 223.8s)
+[81/94] b46e15ee (temporal-reasoning) r@5=1.00  (42 sessions, 207.4s)
+[82/94] 6a1eabeb (knowledge-update) r@5=0.50  (40 sessions, 218.9s)
+[83/94] 2b8f3739 (multi-session) r@5=1.00  (47 sessions, 219.2s)
+[84/94] 71017277 (temporal-reasoning) r@5=1.00  (51 sessions, 221.0s)
+[85/94] e3038f8c (multi-session) r@5=0.50  (45 sessions, 212.0s)
+[86/94] gpt4_e061b84g (temporal-reasoning) r@5=0.67  (58 sessions, 232.2s)
+[87/94] 10d9b85a (multi-session) r@5=0.50  (44 sessions, 217.2s)
+[88/94] 2ebe6c92 (temporal-reasoning) r@5=1.00  (48 sessions, 217.3s)
+[89/94] edced276 (multi-session) r@5=1.00  (46 sessions, 221.7s)
+[90/94] gpt4_7bc6cf22 (temporal-reasoning) r@5=1.00  (48 sessions, 227.4s)
+[91/94] gpt4_731e37d7 (multi-session) r@5=1.00  (48 sessions, 225.1s)
+[92/94] gpt4_7ca326fa (temporal-reasoning) r@5=1.00  (54 sessions, 225.5s)
+[93/94] gpt4_e05b82a6 (multi-session) r@5=1.00  (46 sessions, 221.6s)
+[94/94] gpt4_e414231e (temporal-reasoning) r@5=1.00  (46 sessions, 205.9s)
+
+━━ nv-bench longmemeval — 94 questions (94 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [custom] hybrid (vec+bm25+graph, RRF) + cross-encoder rerank, recency-ablated (reproducible)
+hit@1        0.6702
+hit@10       0.9894
+hit@5        0.8830
+mrr          0.7719
+ndcg@1       0.6702
+ndcg@10      0.7937
+ndcg@5       0.7398
+precision@1  0.6702
+precision@10 0.1926
+precision@5  0.3319
+recall@1     0.3663
+recall@10    0.9566
+recall@5     0.8184
+
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 94 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.6702     0.8298   +0.1596
+hit@10           0.9894     0.9574   -0.0319
+hit@5            0.8830     0.9574   +0.0745
+mrr              0.7719     0.8874   +0.1155
+ndcg@1           0.6702     0.8298   +0.1596
+ndcg@10          0.7937     0.8739   +0.0803
+ndcg@5           0.7398     0.8552   +0.1154
+precision@1      0.6702     0.8298   +0.1596
+precision@10     0.1926     0.1926   +0.0000
+precision@5      0.3319     0.3617   +0.0298
+recall@1         0.3663     0.4807   +0.1144
+recall@10        0.9566     0.9433   -0.0133
+recall@5         0.8184     0.9018   +0.0833
+
+per question type (recall@5):
+  knowledge-update             0.7619  (n=21)
+  multi-session                0.9218  (n=26)
+  single-session-assistant     1.0000  (n=6)
+  single-session-user          0.7143  (n=14)
+  temporal-reasoning           0.7765  (n=27)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 17854.8s total (189.94s/question) · query 123.3s total (1312 ms/question) · wall 18080.3s
+report written: /tmp/full_ab_chunk_282.json
+===== CHUNK offset=282 DONE 20:13:07 =====
+===== CHUNK offset=376 limit=94 start 20:13:07 =====
+longmemeval: 500 in file → 470 kept; running 94 (94 answerable + 0 abstention)
+config: [custom] k=[1, 5, 10] rerank=true recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/94] gpt4_ab202e7f (multi-session) r@5=0.80  (46 sessions, 175.5s)
+[2/94] gpt4_68e94287 (temporal-reasoning) r@5=1.00  (50 sessions, 171.5s)
+[3/94] 5a7937c8 (multi-session) r@5=1.00  (42 sessions, 155.7s)
+[4/94] gpt4_b0863698 (temporal-reasoning) r@5=1.00  (42 sessions, 162.3s)
+[5/94] d851d5ba (multi-session) r@5=1.00  (46 sessions, 161.0s)
+[6/94] gpt4_85da3956 (temporal-reasoning) r@5=1.00  (53 sessions, 164.3s)
+[7/94] a9f6b44c (multi-session) r@5=1.00  (45 sessions, 168.7s)
+[8/94] gpt4_a2d1d1f6 (temporal-reasoning) r@5=1.00  (44 sessions, 170.6s)
+[9/94] gpt4_194be4b3 (multi-session) r@5=0.80  (44 sessions, 171.5s)
+[10/94] gpt4_7ddcf75f (temporal-reasoning) r@5=1.00  (47 sessions, 176.9s)
+[11/94] 60472f9c (multi-session) r@5=1.00  (45 sessions, 163.5s)
+[12/94] eac54adc (temporal-reasoning) r@5=1.00  (46 sessions, 179.5s)
+[13/94] 129d1232 (multi-session) r@5=0.67  (48 sessions, 173.9s)
+[14/94] gpt4_af6db32f (temporal-reasoning) r@5=1.00  (42 sessions, 177.5s)
+[15/94] 9d25d4e0 (multi-session) r@5=1.00  (44 sessions, 174.8s)
+[16/94] gpt4_98f46fc6 (temporal-reasoning) r@5=1.00  (49 sessions, 174.3s)
+[17/94] 60bf93ed (multi-session) r@5=0.50  (51 sessions, 184.6s)
+[18/94] 5e1b23de (temporal-reasoning) r@5=1.00  (45 sessions, 169.1s)
+[19/94] 2788b940 (multi-session) r@5=0.75  (47 sessions, 179.3s)
+[20/94] gpt4_21adecb5 (temporal-reasoning) r@5=1.00  (52 sessions, 176.7s)
+[21/94] eeda8a6d (multi-session) r@5=1.00  (49 sessions, 182.4s)
+[22/94] bcbe585f (temporal-reasoning) r@5=1.00  (48 sessions, 177.4s)
+[23/94] gpt4_31ff4165 (multi-session) r@5=0.80  (42 sessions, 168.0s)
+[24/94] gpt4_74aed68e (temporal-reasoning) r@5=1.00  (45 sessions, 178.4s)
+[25/94] b3c15d39 (multi-session) r@5=1.00  (51 sessions, 175.7s)
+[26/94] gpt4_8e165409 (temporal-reasoning) r@5=0.50  (47 sessions, 171.0s)
+[27/94] 00ca467f (multi-session) r@5=1.00  (47 sessions, 177.3s)
+[28/94] gpt4_f420262c (temporal-reasoning) r@5=1.00  (47 sessions, 176.4s)
+[29/94] gpt4_d12ceb0e (multi-session) r@5=1.00  (45 sessions, 171.0s)
+[30/94] 8077ef71 (temporal-reasoning) r@5=1.00  (47 sessions, 178.5s)
+[31/94] 2ce6a0f2 (multi-session) r@5=1.00  (47 sessions, 170.4s)
+[32/94] 6e984301 (temporal-reasoning) r@5=1.00  (50 sessions, 178.8s)
+[33/94] 2318644b (multi-session) r@5=1.00  (41 sessions, 165.1s)
+[34/94] gpt4_ec93e27f (temporal-reasoning) r@5=1.00  (47 sessions, 174.2s)
+[35/94] gpt4_2ba83207 (multi-session) r@5=1.00  (53 sessions, 180.6s)
+[36/94] gpt4_4ef30696 (temporal-reasoning) r@5=1.00  (49 sessions, 175.6s)
+[37/94] gpt4_5501fe77 (multi-session) r@5=1.00  (45 sessions, 172.4s)
+[38/94] gpt4_d6585ce8 (temporal-reasoning) r@5=1.00  (50 sessions, 175.6s)
+[39/94] 7024f17c (multi-session) r@5=1.00  (47 sessions, 171.8s)
+[40/94] 370a8ff4 (temporal-reasoning) r@5=1.00  (46 sessions, 170.5s)
+[41/94] d682f1a2 (multi-session) r@5=0.67  (47 sessions, 174.9s)
+[42/94] gpt4_e061b84f (temporal-reasoning) r@5=0.67  (46 sessions, 173.8s)
+[43/94] gpt4_7fce9456 (multi-session) r@5=0.80  (44 sessions, 170.7s)
+[44/94] 2ebe6c90 (temporal-reasoning) r@5=1.00  (43 sessions, 164.6s)
+[45/94] d23cf73b (multi-session) r@5=1.00  (51 sessions, 179.8s)
+[46/94] gpt4_45189cb4 (temporal-reasoning) r@5=1.00  (45 sessions, 168.9s)
+[47/94] 80ec1f4f (multi-session) r@5=1.00  (46 sessions, 173.2s)
+[48/94] gpt4_61e13b3c (temporal-reasoning) r@5=1.00  (48 sessions, 179.1s)
+[49/94] 88432d0a (multi-session) r@5=0.50  (45 sessions, 167.2s)
+[50/94] 4dfccbf7 (temporal-reasoning) r@5=0.00  (47 sessions, 174.1s)
+[51/94] gpt4_15e38248 (multi-session) r@5=0.75  (46 sessions, 166.4s)
+[52/94] gpt4_4fc4f797 (temporal-reasoning) r@5=1.00  (45 sessions, 175.9s)
+[53/94] 2e6d26dc (multi-session) r@5=1.00  (54 sessions, 171.1s)
+[54/94] gpt4_1e4a8aeb (temporal-reasoning) r@5=1.00  (48 sessions, 173.3s)
+[55/94] gpt4_2f8be40d (multi-session) r@5=1.00  (46 sessions, 166.8s)
+[56/94] gpt4_7abb270c (temporal-reasoning) r@5=0.83  (48 sessions, 156.9s)
+[57/94] 28dc39ac (multi-session) r@5=1.00  (38 sessions, 155.8s)
+[58/94] gpt4_468eb063 (temporal-reasoning) r@5=1.00  (44 sessions, 166.5s)
+[59/94] 36b9f61e (multi-session) r@5=1.00  (47 sessions, 166.4s)
+[60/94] gpt4_7a0daae1 (temporal-reasoning) r@5=1.00  (61 sessions, 182.5s)
+[61/94] 46a3abf7 (multi-session) r@5=1.00  (50 sessions, 177.8s)
+[62/94] gpt4_1916e0ea (temporal-reasoning) r@5=0.50  (56 sessions, 176.9s)
+[63/94] 6cb6f249 (multi-session) r@5=1.00  (41 sessions, 164.3s)
+[64/94] gpt4_a1b77f9c (temporal-reasoning) r@5=0.83  (49 sessions, 172.1s)
+[65/94] gpt4_a56e767c (multi-session) r@5=1.00  (48 sessions, 173.6s)
+[66/94] gpt4_18c2b244 (temporal-reasoning) r@5=1.00  (44 sessions, 162.7s)
+[67/94] c4a1ceb8 (multi-session) r@5=1.00  (49 sessions, 166.5s)
+[68/94] gpt4_8279ba02 (temporal-reasoning) r@5=1.00  (47 sessions, 166.1s)
+[69/94] dd2973ad (multi-session) r@5=0.50  (49 sessions, 167.0s)
+[70/94] gpt4_6dc9b45b (temporal-reasoning) r@5=1.00  (48 sessions, 162.2s)
+[71/94] gpt4_f2262a51 (multi-session) r@5=0.33  (45 sessions, 164.2s)
+[72/94] gpt4_7f6b06db (temporal-reasoning) r@5=0.67  (52 sessions, 171.3s)
+[73/94] aae3761f (multi-session) r@5=1.00  (47 sessions, 170.2s)
+[74/94] gpt4_1d80365e (temporal-reasoning) r@5=1.00  (51 sessions, 168.6s)
+[75/94] gpt4_d84a3211 (multi-session) r@5=0.75  (48 sessions, 172.3s)
+[76/94] 0db4c65d (temporal-reasoning) r@5=1.00  (44 sessions, 169.4s)
+[77/94] 3a704032 (multi-session) r@5=1.00  (48 sessions, 171.2s)
+[78/94] gpt4_e072b769 (temporal-reasoning) r@5=1.00  (45 sessions, 162.0s)
+[79/94] e831120c (multi-session) r@5=1.00  (47 sessions, 169.6s)
+[80/94] gpt4_1d4ab0c9 (temporal-reasoning) r@5=1.00  (53 sessions, 173.7s)
+[81/94] b5ef892d (multi-session) r@5=1.00  (52 sessions, 167.1s)
+[82/94] 9a707b81 (temporal-reasoning) r@5=0.50  (54 sessions, 182.8s)
+[83/94] gpt4_59c863d7 (multi-session) r@5=0.75  (47 sessions, 159.3s)
+[84/94] gpt4_b5700ca9 (temporal-reasoning) r@5=0.00  (52 sessions, 168.1s)
+[85/94] 6d550036 (multi-session) r@5=0.50  (47 sessions, 159.3s)
+[86/94] gpt4_4929293a (temporal-reasoning) r@5=1.00  (44 sessions, 153.7s)
+[87/94] 0a995998 (multi-session) r@5=1.00  (44 sessions, 159.2s)
+[88/94] af082822 (temporal-reasoning) r@5=0.00  (43 sessions, 166.3s)
+[89/94] 0bc8ad92 (temporal-reasoning) r@5=1.00  (49 sessions, 165.7s)
+[90/94] gpt4_fa19884c (temporal-reasoning) r@5=1.00  (46 sessions, 179.5s)
+[91/94] b46e15ed (temporal-reasoning) r@5=0.50  (46 sessions, 171.4s)
+[92/94] 71017276 (temporal-reasoning) r@5=1.00  (49 sessions, 168.3s)
+[93/94] gpt4_f49edff3 (temporal-reasoning) r@5=1.00  (47 sessions, 165.7s)
+[94/94] gpt4_59149c77 (temporal-reasoning) r@5=1.00  (48 sessions, 158.2s)
+
+━━ nv-bench longmemeval — 94 questions (94 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [custom] hybrid (vec+bm25+graph, RRF) + cross-encoder rerank, recency-ablated (reproducible)
+hit@1        0.8511
+hit@10       0.9894
+hit@5        0.9681
+mrr          0.9066
+ndcg@1       0.8511
+ndcg@10      0.8873
+ndcg@5       0.8576
+precision@1  0.8511
+precision@10 0.2585
+precision@5  0.4745
+recall@1     0.3739
+recall@10    0.9523
+recall@5     0.8816
+
+━━ A/B: ablate 'rerank_matched_chunk' isolated (same 94 questions) ━━
+metric         baseline +rerank_matched_chunk     delta
+hit@1            0.8511     0.8830   +0.0319
+hit@10           0.9894     1.0000   +0.0106
+hit@5            0.9681     0.9894   +0.0213
+mrr              0.9066     0.9306   +0.0239
+ndcg@1           0.8511     0.8830   +0.0319
+ndcg@10          0.8873     0.9175   +0.0302
+ndcg@5           0.8576     0.8845   +0.0269
+precision@1      0.8511     0.8830   +0.0319
+precision@10     0.2585     0.2638   +0.0053
+precision@5      0.4745     0.4745   -0.0000
+recall@1         0.3739     0.4121   +0.0381
+recall@10        0.9523     0.9819   +0.0296
+recall@5         0.8816     0.9124   +0.0309
+
+per question type (recall@5):
+  multi-session                0.8833  (n=44)
+  temporal-reasoning           0.8800  (n=50)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 15832.7s total (168.43s/question) · query 111.5s total (1186 ms/question) · wall 16037.3s
+report written: /tmp/full_ab_chunk_376.json
+===== CHUNK offset=376 DONE 00:40:25 =====
+ALLCHUNKSDONE 00:40:25
