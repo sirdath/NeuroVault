@@ -99,28 +99,43 @@ product, ask which of these it is.
 
 ### Results
 
+Measured on the full **470-question** answerable set (LongMemEval-S cleaned;
+the 30 `_abs` abstention questions are excluded — you cannot score "was the
+right memory retrieved" on a question that has no gold memory). Recency and
+title boosts ablated for byte-reproducibility (see the note below).
+
 | Config | hit@5 ("R@5") | hit@10 | recall@5 | recall@10 | ndcg@5 | mrr | questions |
 |---|---|---|---|---|---|---|---|
 | Plumbing check (oracle, gold-only haystacks) | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 5 |
-| Stratified preliminary (2 per type) | 1.000 | 1.000 | 1.000 | 1.000 | 0.861 | 0.819 | 12 |
-| **Stratified run** | **0.910** | **0.970** | 0.858 | 0.960 | 0.767 | 0.778 | **100** |
-| Full run — *pending* | — | — | — | — | — | — | 470 |
+| Stratified preliminary, engine-only (2 per type) | 1.000 | 1.000 | 1.000 | 1.000 | 0.861 | 0.819 | 12 |
+| Stratified preliminary, engine-only | 0.910 | 0.970 | 0.858 | 0.960 | 0.767 | 0.778 | 100 |
+| **Full run — engine-only (no reranker)** | 0.9362 | 0.9724 | 0.8860 | 0.9531 | 0.8282 | 0.8522 | **470** |
+| **Full run — reranker ON (shipped default)** | **0.9745** | **0.9851** | **0.9383** | **0.9787** | **0.8855** | **0.9021** | **470** |
 
-Per-type recall@5 at n=100: single-session-user 0.938 · temporal-reasoning
-0.896 · single-session-assistant 0.882 · knowledge-update 0.853 ·
-multi-session 0.824 · single-session-preference 0.765.
+The **shipped default reranks** — a cross-encoder second stage; Settings has a
+toggle to disable it for a lighter, faster app. Its contribution is isolated in
+a paired A/B on the *same* ingested brains: **hit@5 0.9362 → 0.9745 (+3.8pp)**,
+every metric up. Raw per-chunk output is committed in
+[`rerank_ab/full470_matched_chunk_ab_chunks.log`](rerank_ab/), and the full-470
+aggregate above is reproduced by `python3 docs/benchmarks/merge_chunked_ab.py`;
+the failure-mode forensics and the smaller-slice A/B are in
+[`ANALYSIS-2026-07-02-miss5-forensics.md`](ANALYSIS-2026-07-02-miss5-forensics.md).
+The n=5/12/100 rows are earlier engine-only preliminaries, superseded by the
+full 470. **The site / main-README headline of 97.45% is the reranker-ON hit@5
+above.** This is retrieval recall, not end-to-end QA accuracy.
 
-Query latency: **118 ms/question** over ~50-session (~120k-token) haystacks,
-fully local, 384-dim embeddings. For scale: agentmemory publishes 0.952
-hit@5 with no chunking and 512-char embeds; gbrain publishes 0.976 using
-OpenAI's 3072-dim cloud embeddings (their own vector-only ablation: 0.974 —
-on this task, embedder capacity dominates pipeline design). We publish the
-local number we actually ship, both metrics, and every per-question receipt.
+Where the residual misses concentrate: single-session-user *asides* and
+knowledge-update chains (see the forensics doc for the per-question receipts).
 
-*(This table is updated from `nv-bench` output; the JSON report with
-per-question receipts is committed alongside. The 12-question slice is
-deliberately labelled preliminary — small n — and will be superseded by the
-100- and 500-question runs.)*
+Query latency: **~120 ms/question** engine-only over ~50-session (~120k-token)
+haystacks, fully local, 384-dim embeddings; the reranker adds ~50–100 ms and a
+~1 GB on-device model. For honest scale: agentmemory publishes 0.952 hit@5
+(**0.951 on the clean 470** — see the comparison table below), fully local but
+embedding only the first 512 chars of each session; gbrain publishes 0.976
+using OpenAI's 3072-dim **cloud** embeddings (their own vector-only ablation:
+0.974). Our reranked **local** number (0.9745) edges agentmemory and approaches
+gbrain's cloud number while staying 100% on-device. We publish both metrics and
+every per-question receipt.
 
 One more methodology note, learned the hard way and worth stating plainly:
 **title boosts are ablated in the bench config** along with recency.
