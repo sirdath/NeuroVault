@@ -126,7 +126,7 @@ pub fn extract_facts(content: &str) -> Vec<Fact> {
             // Trim a trailing connective the greedy value class may
             // have eaten ("£550 and" → "£550").
             let value = normalise(val_m.as_str())
-                .trim_end_matches(|c: char| c == ',' || c == ':' || c == '/')
+                .trim_end_matches([',', ':', '/'])
                 .trim()
                 .to_string();
             if subject.len() < MIN_SUBJECT_CHARS

@@ -66,7 +66,7 @@ pub fn record(entry: &AuditEntry) {
 fn record_inner(entry: &AuditEntry) -> std::io::Result<()> {
     let line = match serde_json::to_string(entry) {
         Ok(s) => s,
-        Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+        Err(e) => return Err(std::io::Error::other(e)),
     };
 
     // Mutex serialises concurrent writes. The append happens under

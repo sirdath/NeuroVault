@@ -159,8 +159,7 @@ pub fn get_related(
     // non-empty (otherwise there's no seed to expand from).
     if hops >= 2 && !out.is_empty() {
         let seeds: Vec<String> = out.iter().map(|h| h.engram_id.clone()).collect();
-        let placeholders = std::iter::repeat("?")
-            .take(seeds.len())
+        let placeholders = std::iter::repeat_n("?", seeds.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

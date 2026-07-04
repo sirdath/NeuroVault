@@ -1,7 +1,8 @@
 //! Data-driven MCP tool registry.
 //!
-//! The full 45-tool surface is ported 1:1 from the Python
-//! `server/mcp_proxy.py` and lives in `tools.json` (embedded via
+//! The full 54-tool surface (46 ported 1:1 from the Python
+//! `server/mcp_proxy.py`, plus graphify + agent-coordination) lives in
+//! `tools.json` (embedded via
 //! `include_str!`) so it can be audited as data rather than code. Each
 //! tool is either a generic forward (a single HTTP method + path +
 //! query/body mapping) or a `special` handled by hand in `forward.rs`.
@@ -100,7 +101,7 @@ pub fn load_tools() -> Vec<ToolDef> {
 // --- Tiers ---------------------------------------------------------------
 //
 // Mirrors mcp_proxy.py's TIER_* sets exactly. Default is `lite` (changed
-// upstream 2026-05-16 from `full`): shipping all 45 tools to every agent
+// upstream 2026-05-16 from `full`): shipping all 54 tools to every agent
 // inflates the system prompt and dilutes attention on the load-bearing
 // memory tools. `full` opts back into the entire surface.
 

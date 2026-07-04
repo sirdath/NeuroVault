@@ -424,8 +424,8 @@ fn required_scope_for(method: &axum::http::Method, path: &str) -> Option<Scope> 
     // Read scope — GET endpoints + the one POST that's a query
     // (check_duplicate returns whether content matches existing
     // engrams; reads no permanent state).
-    if method == Method::GET {
-        if matches!(
+    if method == Method::GET
+        && matches!(
             path,
             "/v1/status"
                 | "/v1/recall"
@@ -450,7 +450,6 @@ fn required_scope_for(method: &axum::http::Method, path: &str) -> Option<Scope> 
         ) {
             return Some(Scope::Read);
         }
-    }
     if method == Method::POST && path == "/v1/check_duplicate" {
         return Some(Scope::Read);
     }

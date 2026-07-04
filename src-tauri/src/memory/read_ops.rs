@@ -479,7 +479,7 @@ fn count_markdown(root: &Path) -> (i64, u64, u64) {
             newest = newest.max(m);
             continue;
         }
-        if path.extension().map_or(false, |e| e == "md") {
+        if path.extension().is_some_and(|e| e == "md") {
             if let Ok(meta) = fs::metadata(&path) {
                 bytes += meta.len();
                 count += 1;

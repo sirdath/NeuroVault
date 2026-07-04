@@ -456,7 +456,7 @@ fn line_of(node: Node) -> usize {
 /// Last identifier segment of a (possibly qualified) callee:
 /// `Foo::bar` → `bar`, `self.run` → `run`, `go` → `go`.
 fn last_segment(s: &str) -> String {
-    s.rsplit(|c| c == ':' || c == '.')
+    s.rsplit([':', '.'])
         .next()
         .unwrap_or(s)
         .trim()

@@ -79,8 +79,7 @@ pub fn spread_neighbors(
         .collect();
     let already: HashSet<String> = candidates.iter().map(|c| c.engram_id.clone()).collect();
 
-    let placeholders = std::iter::repeat("?")
-        .take(seed_ids.len())
+    let placeholders = std::iter::repeat_n("?", seed_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(

@@ -98,7 +98,7 @@ fn truncate_at_word(s: &str, max_chars: usize) -> String {
         Some(idx) => &cut[..idx],
         None => &cut,
     };
-    let trimmed = cut.trim_end_matches(|c: char| c == ',' || c == ';' || c == ':');
+    let trimmed = cut.trim_end_matches([',', ';', ':']);
     format!("{}…", trimmed).trim().to_string()
 }
 

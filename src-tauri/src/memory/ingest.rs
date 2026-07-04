@@ -884,7 +884,7 @@ fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<u32
         }
         let resolved_type = link_type.clone().unwrap_or_else(|| "manual".to_string());
         if let Some(ref lt) = link_type {
-            if !LINK_TYPES.iter().any(|k| *k == lt.as_str()) {
+            if !LINK_TYPES.contains(&lt.as_str()) {
                 eprintln!(
                     "[ingest] unknown wikilink type '{}' in [[{}|{}]] (engram {}). \
                      Storing as-is; add to LINK_TYPES to suppress.",
@@ -1216,7 +1216,7 @@ pub fn find_conflicts(db: &BrainDb, limit: usize) -> Result<Vec<ConflictPair>> {
                 .map(|(a, b)| (*a as f64) * (*b as f64))
                 .sum::<f64>()
                 .clamp(-1.0, 1.0);
-            if cos >= FLOOR && cos < CEIL {
+            if (FLOOR..CEIL).contains(&cos) {
                 pairs.push(ConflictPair {
                     a_id: notes[i].0.clone(),
                     a_title: notes[i].1.clone(),

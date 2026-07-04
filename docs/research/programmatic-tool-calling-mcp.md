@@ -215,7 +215,7 @@ poorly. *(Finding 18 — medium, codebase-grounded inference.)*
 NeuroVault already solves tool-definition bloat by **shrinking the upfront
 surface** (lite = 8 tools). PTC solves the *same* problem by **lazy, on-demand
 discovery behind one `execute` tool**. They're two answers to one question. For
-NeuroVault's **modest 45-tool surface**, the absolute upfront saving from PTC is
+NeuroVault's **modest 54-tool surface**, the absolute upfront saving from PTC is
 *far smaller* than Anthropic's thousands-of-tools scenario — and the tier ladder
 already captures most of it. A code-mode layer could even make the
 minimal/lite/standard ladder *less necessary* — but only if the model is good at

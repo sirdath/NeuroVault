@@ -80,7 +80,7 @@ pub fn rerank(query: &str, documents: &[String]) -> Result<Vec<f32>> {
     let mut by_idx: Vec<f32> = vec![0.0; documents.len()];
     for r in results {
         if r.index < by_idx.len() {
-            by_idx[r.index] = r.score as f32;
+            by_idx[r.index] = r.score;
         }
     }
     Ok(by_idx)

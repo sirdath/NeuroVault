@@ -519,7 +519,7 @@ fn title_embeddings(titles: &[String]) -> Result<Vec<Vec<f32>>> {
         let texts: Vec<String> = novel.iter().map(|(_, t)| t.clone()).collect();
         let fresh = embedder::encode_batch(&texts)?;
         let mut c = TITLE_CACHE.lock();
-        for ((i, t), vec) in novel.into_iter().zip(fresh.into_iter()) {
+        for ((i, t), vec) in novel.into_iter().zip(fresh) {
             out[i] = Some(vec.clone());
             c.map.insert(t.clone(), vec);
             c.order.push(t);
@@ -758,8 +758,7 @@ fn resolve_chunk_engrams(db: &BrainDb, chunk_ids: &[String]) -> Result<HashMap<S
     if chunk_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(chunk_ids.len())
+    let placeholders = std::iter::repeat_n("?", chunk_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!("SELECT id, engram_id FROM chunks WHERE id IN ({})", placeholders);
@@ -989,8 +988,7 @@ pub fn hybrid_retrieve(
     {
         let top_bm: Vec<String> = chunk_ids.iter().take(candidate_pool).cloned().collect();
         if !top_bm.is_empty() {
-            let placeholders = std::iter::repeat("?")
-                .take(top_bm.len())
+            let placeholders = std::iter::repeat_n("?", top_bm.len())
                 .collect::<Vec<_>>()
                 .join(",");
             // Resolve matched-chunk content in a tight scope so the lock /
@@ -1072,8 +1070,7 @@ pub fn hybrid_retrieve(
         for (eid, title, filename) in engrams_meta.iter() {
             let slug = filename
                 .replace(".md", "")
-                .replace('-', " ")
-                .replace('_', " ");
+                .replace(['-', '_'], " ");
             let mut title_tokens: HashSet<String> = HashSet::new();
             for src in [title.as_str(), slug.as_str()] {
                 for tok in bm25_tokenize(src) {
@@ -1718,7 +1715,7 @@ pub fn hybrid_retrieve(
         let cand_titles: Vec<String> = candidates.iter().map(|c| c.title.clone()).collect();
         let mut title_emb_norm: HashMap<String, Vec<f32>> = HashMap::new();
         if let Ok(embs) = title_embeddings(&cand_titles) {
-            for (c, mut e) in candidates.iter().zip(embs.into_iter()) {
+            for (c, mut e) in candidates.iter().zip(embs) {
                 if e.len() == EMBEDDING_DIM && normalize_inplace(&mut e) {
                     title_emb_norm.insert(c.engram_id.clone(), e);
                 }
@@ -2114,8 +2111,7 @@ fn compute_superseded_fraction(
     if eids.is_empty() {
         return Ok(HashMap::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(eids.len())
+    let placeholders = std::iter::repeat_n("?", eids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = if as_of.is_some() {
