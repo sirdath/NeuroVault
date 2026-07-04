@@ -303,13 +303,13 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Recall (with reranker) | ~133 ms median |
 | Full vault ingest (25 notes) | ~4 s cold start |
 
-**Retrieval quality** — measured on the full **470-question [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark** (long multi-session histories, facts that get updated and contradicted, temporal reasoning), using NeuroVault's real `recall()` path with **100% on-device** embeddings:
+**Retrieval quality** — measured on the full **470-question [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark** (long multi-session histories, facts that get updated and contradicted, temporal reasoning), using NeuroVault's real `recall()` path (cross-encoder reranker on, the default) with **100% on-device** embeddings:
 
 | hit@5 | hit@10 | recall@5 | MRR | hit@1 |
 |-------|--------|----------|-----|-------|
-| **93.8%** | **98.1%** | **0.861** | **0.838** | **0.762** |
+| **97.5%** | **98.5%** | **0.938** | **0.902** | **0.847** |
 
-> The right memory lands in the **top 5 results 94% of the time**, in the top 10 **98%** — running entirely on your machine, no cloud, no API keys. Reproducible end-to-end: full harness + a per-question receipt for every answer in [`docs/benchmarks/`](docs/benchmarks/). (A smaller 30-query hand-curated set, [`eval/run_eval.py`](eval/run_eval.py), is also kept for catching day-to-day ranking regressions.)
+> The right memory lands in the **top 5 results 97% of the time**, in the top 10 **99%** — running entirely on your machine, no cloud, no API keys. This is retrieval recall (was the right memory retrieved), not end-to-end QA accuracy. Reproducible: full harness + a per-question receipt in [`docs/benchmarks/`](docs/benchmarks/), plus the isolated reranker A/B in [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
 
 **Cost** — running locally, embeddings and retrieval cost effectively nothing (your own machine, no per-call API), versus hosted memory services that bill monthly. 100% local and open source.
 

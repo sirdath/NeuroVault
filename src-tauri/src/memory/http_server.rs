@@ -166,6 +166,7 @@ fn router() -> Router {
         .route("/api/temporal_recall", get(temporal_recall))
         .route("/api/optimize_disk", post(optimize_disk))
         .route("/api/mcp_tier", get(mcp_tier_get).put(mcp_tier_set))
+        .route("/api/rerank", get(rerank_get).put(rerank_set))
         // API key management — loopback-mounted ONLY. The gateway
         // does NOT mount these (deliberate: external clients must
         // not manage their own keys).

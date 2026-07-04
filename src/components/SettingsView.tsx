@@ -317,6 +317,7 @@ export function SettingsView() {
         <McpSection />
         <ClaudeCodeMcpSection />
         <MCPTierSection />
+        <RerankSection />
         <APIGatewaySection />
         <APIAccessSection />
 
@@ -935,6 +936,99 @@ function MCPTierSection() {
           : savedAt
           ? <>Saved. Restart Claude Code / Desktop for the new tier to take effect.</>
           : <>The MCP server reads <span className="font-mono">~/.neurovault/mcp_tier.txt</span> at startup.</>}
+      </p>
+    </Section>
+  );
+}
+
+/**
+ *  Recall reranking — the cross-encoder second stage. ON by default
+ *  (lifts LongMemEval hit@5 ~94% -> ~97%); a toggle writes
+ *  ~/.neurovault/rerank.txt = "off" for a lighter, faster app at a
+ *  small recall cost. Backend reads it as the default for the recall
+ *  path's `rerank` param.
+ */
+function RerankSection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/rerank`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!cancelled && typeof j?.enabled === "boolean") setEnabled(j.enabled);
+      } catch {
+        /* sidecar offline — handled by global status pill */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const onToggle = useCallback(async () => {
+    if (enabled === null || saving) return;
+    const next = !enabled;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch(`${SERVER_URL}/api/rerank`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error ?? `HTTP ${r.status}`);
+      }
+      const j = await r.json();
+      setEnabled(!!j.enabled);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [enabled, saving]);
+
+  const on = enabled === true;
+  return (
+    <Section title="Recall Reranking">
+      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+        A cross-encoder re-scores the top candidates so the most relevant memory ranks first. It lifts retrieval quality (LongMemEval hit@5 from ~94% to ~97%) at the cost of loading a ~1&nbsp;GB model and adding roughly 50-100&nbsp;ms per recall.
+      </p>
+      <button
+        onClick={onToggle}
+        disabled={saving || enabled === null}
+        className="w-full text-left rounded-lg p-3 transition-colors disabled:opacity-50 flex items-center justify-between gap-3"
+        style={{
+          background: on ? "var(--nv-surface-2, var(--nv-surface))" : "var(--nv-bg)",
+          border: on ? "1px solid var(--nv-accent)" : "1px solid var(--nv-border)",
+        }}
+        aria-pressed={on}
+      >
+        <div>
+          <span className="text-[13px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+            Reranking {enabled === null ? "…" : on ? "On" : "Off"}
+          </span>
+          <p className="text-[11.5px] leading-snug font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-muted)" }}>
+            {on
+              ? "Best recall accuracy. Recommended."
+              : "Lighter and faster, with a very small decrease in recall accuracy."}
+          </p>
+        </div>
+        <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-2 py-1 rounded shrink-0" style={{
+          background: on ? "var(--nv-accent)" : "var(--nv-surface)",
+          color: on ? "var(--nv-bg)" : "var(--nv-text-dim)",
+        }}>
+          {enabled === null ? "…" : on ? "On" : "Off"}
+        </span>
+      </button>
+      <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+        {error
+          ? <span style={{ color: "var(--nv-negative, #ef4444)" }}>Couldn't save: {error}</span>
+          : <>Turning reranking off trades a very small drop in recall for a lighter, faster app. Persisted to <span className="font-mono">~/.neurovault/rerank.txt</span>.</>}
       </p>
     </Section>
   );

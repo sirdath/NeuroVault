@@ -1248,7 +1248,7 @@ pub async fn recall(
             vec!["observation".to_string()]
         },
         as_of: q.as_of.clone(),
-        use_reranker: q.rerank.unwrap_or(false),
+        use_reranker: q.rerank.unwrap_or(rerank_enabled()),
         ablate: ablate_list,
     };
     let query_str = q.q.clone();
@@ -1576,7 +1576,7 @@ pub async fn recall_across_brains(
             vec!["observation".to_string()]
         },
         as_of: None,
-        use_reranker: q.rerank.unwrap_or(false),
+        use_reranker: q.rerank.unwrap_or(rerank_enabled()),
         ablate: Vec::new(),
     };
     let query_str = q.q.clone();
@@ -4154,6 +4154,54 @@ pub async fn mcp_tier_set(
     std::fs::write(&path, &trimmed)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("write tier: {e}")))?;
     Ok(Json(McpTierResponse { tier: trimmed }))
+}
+
+// ---------------------------------------------------------------------------
+// Reranker default — ~/.neurovault/rerank.txt. The cross-encoder reranker
+// lifts LongMemEval hit@5 from ~94% (retrieval only) to ~97%, but it loads a
+// ~1 GB model and adds ~50-100 ms per recall. ON by default; the Settings
+// toggle writes "off" for a lighter, faster app at a small recall cost. Read
+// as the default for the recall path's `rerank` param (an explicit per-call
+// `rerank` still wins).
+// ---------------------------------------------------------------------------
+
+pub fn rerank_pref_path() -> std::path::PathBuf {
+    super::paths::nv_home().join("rerank.txt")
+}
+
+/// Default reranker state for recall. ON unless the user wrote "off".
+pub fn rerank_enabled() -> bool {
+    match std::fs::read_to_string(rerank_pref_path()) {
+        Ok(s) => !matches!(s.trim().to_lowercase().as_str(), "off" | "false" | "0"),
+        Err(_) => true,
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct RerankResponse {
+    enabled: bool,
+}
+
+#[derive(serde::Deserialize)]
+pub struct RerankBody {
+    enabled: bool,
+}
+
+pub async fn rerank_get(_s: State<ServerState>) -> Result<Json<RerankResponse>, ApiError> {
+    Ok(Json(RerankResponse { enabled: rerank_enabled() }))
+}
+
+pub async fn rerank_set(
+    _s: State<ServerState>,
+    Json(body): Json<RerankBody>,
+) -> Result<Json<RerankResponse>, ApiError> {
+    let path = rerank_pref_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, if body.enabled { "on" } else { "off" })
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("write rerank: {e}")))?;
+    Ok(Json(RerankResponse { enabled: body.enabled }))
 }
 
 // ---------------------------------------------------------------------------
