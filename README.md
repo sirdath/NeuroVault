@@ -307,7 +307,7 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 
 | hit@5 | hit@10 | recall@5 | MRR | hit@1 |
 |-------|--------|----------|-----|-------|
-| **97.5%** | **98.5%** | **0.938** | **0.902** | **0.847** |
+| **97.45%** | **98.5%** | **0.938** | **0.902** | **0.847** |
 
 > The right memory lands in the **top 5 results 97% of the time**, in the top 10 **99%** — running entirely on your machine, no cloud, no API keys. This is retrieval recall (was the right memory retrieved), not end-to-end QA accuracy. Reproducible: full harness + a per-question receipt in [`docs/benchmarks/`](docs/benchmarks/), plus the isolated reranker A/B in [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
 
