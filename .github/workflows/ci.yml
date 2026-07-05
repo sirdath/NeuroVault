@@ -23,8 +23,8 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-  rust-check:
-    name: Rust Check
+  rust:
+    name: Rust fmt + clippy + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,24 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Cargo check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Format check
         working-directory: src-tauri
-        run: cargo check
+        run: cargo fmt --check
+
+      # The tree is clippy-clean as of 2026-07-05; keep it that way.
+      # --no-default-features matches the headless test/build config used
+      # everywhere else (no Tauri GUI linkage needed for the check).
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --no-default-features
