@@ -82,7 +82,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 
 - **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your brain: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your agent can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. Your source never leaves the machine.
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
-- **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, optional cross-encoder rerank. In-process Rust.
+- **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
 - **Drop-folder ingest** — drag any file onto the window; your connected agent reads it and turns it into a clean, indexed note. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
 - **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them.
@@ -171,7 +171,7 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 **Multiple brains** — separate memory spaces, each with its own vault, database, and graph. Switch instantly via the dropdown or MCP.
 
-**Hybrid retrieval** — three signals merged via Reciprocal Rank Fusion: semantic vector similarity (50%), BM25 keywords (30%), knowledge-graph traversal (20%). Optional cross-encoder reranking for maximum precision.
+**Hybrid retrieval** — three signals merged via Reciprocal Rank Fusion: semantic vector similarity (50%), BM25 keywords (30%), knowledge-graph traversal (20%). A cross-encoder reranker runs by default for extra precision (toggle off in Settings).
 
 **Memory strength** — Ebbinghaus forgetting curve with access reinforcement. Frequently retrieved memories stay strong; unused ones fade.
 
@@ -231,7 +231,7 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **54 tools*
 
 | Tool | What it does |
 |------|-------------|
-| `recall(q, mode, limit, rerank?)` | Hybrid search — semantic + BM25 + graph via RRF, optional rerank. PageRank prior in Analytics mode. |
+| `recall(q, mode, limit, rerank?)` | Hybrid search — semantic + BM25 + graph via RRF, rerank on by default. PageRank prior in Analytics mode. |
 | `recall_chunks(q, limit)` | Same retrieval, returns matching paragraphs instead of whole notes. Cheaper. |
 | `related(engram_id, hops, link_types?)` | Direct graph neighbours of an engram. ~50× cheaper than a fresh recall. |
 | `remember(content, title?, dedupe?)` | Save a memory (chunk + embed + entities + graph link). |

@@ -102,7 +102,7 @@ curl -H "Authorization: Bearer nvk_..." \
 | `brain` | active | Brain to query. Subject to your key's allowlist. |
 | `mode` | preview | `titles` (~20 tok/hit), `preview` (~100 tok/hit), `full` (~400 tok/hit). |
 | `spread_hops` | 0 | Graph spread — adds 1-hop neighbours of high-rank engrams to the result set. 0 = pure retrieval. |
-| `rerank` | false | Run the cross-encoder reranker on top-20 candidates. ~+6pp hit@1 at ~700ms instead of ~25ms. |
+| `rerank` | on | Cross-encoder rerank of the top-20 candidates, on by default (pass `rerank=false` to skip, or disable globally in Settings / `~/.neurovault/rerank.txt`). Adds ~50-100 ms. |
 
 **Response:** array of `{ engram_id, title, content, score, strength, state }`.
 

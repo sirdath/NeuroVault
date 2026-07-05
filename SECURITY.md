@@ -13,10 +13,10 @@ the bug is critical.
 
 | Version | Supported |
 |---|---|
-| 0.1.x (current) | ✅ |
-| < 0.1 (pre-release) | ❌ — upgrade to 0.1.x |
+| 0.5.x (current) | ✅ |
+| < 0.5 (pre-release) | ❌ — upgrade to 0.5.x |
 
-Once 0.2 ships, 0.1.x gets a 30-day security-fix window before EOL.
+Once 0.6 ships, 0.5.x gets a 30-day security-fix window before EOL.
 
 ## What counts as a vulnerability
 
@@ -70,7 +70,7 @@ a public issue for anything that might expose real users.
 
 ## Response SLA
 
-At the current project maturity (v0.1.x, single-maintainer):
+At the current project maturity (v0.5.x, single-maintainer):
 
 - **Acknowledgement**: within 72 hours of a report. Usually much faster.
 - **Severity triage**: within 7 days.
@@ -106,13 +106,14 @@ we'll prioritize the fix regardless and appreciate your patience.
   components are rejected.
 - `execute_js` runs under the user's own Node.js — same trust boundary
   as the MCP server itself. No elevated capabilities added.
-- PyInstaller sidecar strips `torch` and `sentence-transformers` to
-  reduce the dependency surface; cross-encoder reranking degrades
-  gracefully when the dep is absent.
+- The cross-encoder reranker is a bundled on-device ONNX model
+  (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
+  the app and no network call. Recall falls back to the fusion ranker if
+  the model can't load.
 
 ## Things we know we don't do yet
 
-- **No Windows/macOS code signing** on 0.1.x builds — users see
+- **No Windows/macOS code signing** on 0.5.x builds — users see
   SmartScreen / Gatekeeper warnings. Signing is in the public-release
   plan ([T3.1 / T3.2](README.md)).
 - **No vault encryption at rest** — documented in

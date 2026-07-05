@@ -7,9 +7,10 @@
 >
 > This document is kept for two reasons:
 >
-> 1. Users who want to run the **advanced-feature helpers** (compile,
->    PDF ingest, code-graph, Zotero) can still build the Python sidecar
->    and have NeuroVault spawn it on demand via `run_python_job`.
+> 1. Users who want to run the **advanced-feature helpers** (PDF
+>    ingest, Zotero) can still build the Python sidecar and have
+>    NeuroVault spawn it on demand via `run_python_job`. (Code-graph
+>    and compile are native Rust now, not part of this sidecar.)
 > 2. Historical reference for the original v0.0.x architecture.
 
 NeuroVault originally shipped as a Tauri desktop app that talked to a
@@ -19,9 +20,9 @@ Windows/macOS/Linux executable and bundled into the Tauri installer as a
 **sidecar**.
 
 The sidecar binary is **not checked into git** — it's ~275 MB on Windows
-because of torch + sentence-transformers. See
-[`server/neurovault_server.spec`](../server/neurovault_server.spec) for the
-PyInstaller build config.
+because of torch + sentence-transformers. (The PyInstaller
+`neurovault_server.spec` was removed when `server/` was trimmed for the
+open-source release; this document is retained for historical reference.)
 
 ## Build locally (Windows)
 

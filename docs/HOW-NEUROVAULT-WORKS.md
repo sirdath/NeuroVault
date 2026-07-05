@@ -35,8 +35,8 @@
 - Download: **~24 MB** (macOS DMG) / **~26 MB** (Windows installer); ~50 MB installed. A fraction of an Electron app's 150 MB+.
 - Idle RAM: **~35 MB** (was 500 MB – 3 GB with the old Python sidecar).
 - Cold start: **<500 ms** to interactive.
-- Recall latency: **20-50 ms** median for the default pipeline, **~680 ms** when the optional cross-encoder reranker is enabled.
-- Quality (internal eval set, 30 queries): **86.67% hit@1 / MRR 0.867** default, **93.33% hit@1 / MRR 0.933** with reranker.
+- Recall latency: **~20-50 ms** median engine-only; the cross-encoder reranker (on by default) adds **~50-100 ms**.
+- Quality (internal eval set, 30 queries): **86.67% hit@1 / MRR 0.867** engine-only, **93.33% hit@1 / MRR 0.933** with the reranker (the shipped default).
 
 ---
 
@@ -247,10 +247,10 @@ hybrid_retrieve_throttled(db, query, opts)
     │         - exp(-λ × age_days) multiplier, λ per intent
     │         - 50% supersede-penalty per superseded-fact fraction
     │
-    ├── 13. OPTIONAL — cross-encoder rerank if use_reranker=true:
-    │         - BGE-reranker-base on top-20 (title + first 400 chars)
+    ├── 13. cross-encoder rerank when use_reranker (ON by default):
+    │         - BGE-reranker-base on top-20 (title + the matched chunk)
     │         - sigmoid(logit) blended 30/70 with existing RRF score
-    │         - +~650 ms latency, +~7 pts hit@1 (93% vs 86%)
+    │         - +~50-100 ms latency, +~7 pts hit@1 (93% vs 86%)
     │
     └── 14. Final score:
            base = rerank_score × 0.75 + strength × 0.15
@@ -268,7 +268,7 @@ hybrid_retrieve_throttled(db, query, opts)
 | `query_expansion` | **+3.3 points** (noise, now removed) |
 | `title_semantic` alone | -7 points hit@3 (helps on near-misses) |
 | `recency`, `supersede`, `entity_graph`, `insight_boost` | flat on this set (kept for edge cases) |
-| +reranker | **+6.7 points hit@1**, 30× latency (opt-in per call) |
+| +reranker | **+6.7 points hit@1**, ~+50-100 ms (on by default; opt out per call) |
 
 ---
 
@@ -324,7 +324,7 @@ Several features exist specifically so agents don't spam or misuse the memory:
 - **Session cache** (`recall_cache.rs`): identical queries within 60s return the cached result in ~1 ms. Invalidated on any write via brain-level epoch bump. Bounded at 100 entries per brain (~500 KB max RAM).
 - **Query operators**: parsed at the retriever entry point, turn into SQL filters BEFORE scoring runs — reducing the candidate pool by up to 90%. One call does the work of several filter+recall round-trips.
 - **Dedupe on write**: `remember(content, deduplicate=0.92)` runs a single KNN+cosine check before ingest; on match, returns the matched engram id without running the full chunk/embed/link pipeline.
-- **Reranker opt-in**: `rerank=true` on recall adds the cross-encoder second stage. Agents are taught (via tool docstring + server instructions) to use it only when top-1 precision actually matters.
+- **Reranker on by default**: the cross-encoder second stage runs on recall unless disabled per call (`rerank=false`) or globally (Settings toggle / `~/.neurovault/rerank.txt`). It adds ~50-100 ms for a top-precision lift.
 
 ### MCP protocol choices
 
@@ -483,10 +483,10 @@ Every one of these was a real choice between alternatives. Written so a future m
 - Title boosts are the single biggest contributor — 30 points hit@1 (per April 2026 eval matrix).
 - **Decision bonus + query expansion removed in 2026-04-23** — eval showed both were net-negative.
 
-### Cross-encoder reranker (BGE-reranker-base) as opt-in, not default
-- Pushes hit@1 from 87% to 93% but adds ~650 ms latency.
-- Most agent calls are quick context checks where 93% vs 87% doesn't matter.
-- Agents are explicitly taught when to flip `rerank=true` via tool docstring.
+### Cross-encoder reranker (BGE-reranker-base) on by default
+- Adds ~50-100 ms for a solid precision lift (LongMemEval hit@5 0.9362 → 0.9745), so it now runs by default.
+- A Settings toggle (and `~/.neurovault/rerank.txt`) turns it off for a lighter, faster app; agents can also pass `rerank=false` per call.
+- Feeds the reranker the title + the matched chunk, not the note's first 400 chars, which is where most of that lift came from.
 
 ### MCP stdio proxy forwarding to loopback HTTP, not stdio-native Rust server
 - The proxy is ~30 MB Python (stdlib only). Claude Code spawns it per session.
@@ -516,7 +516,7 @@ Every one of these was a real choice between alternatives. Written so a future m
 - At ~30k notes: graph view starts stuttering in `react-force-graph-2d`. Migrate to `cosmograph.gl` (WebGL GPU-sim).
 
 **Retrieval quality gaps** (from 2026-04-23 eval):
-- Queries with vocabulary that doesn't appear in note content or title (e.g. "force-directed visualisation" when the note is "Neural Graph View"). The reranker fixes these but costs 650 ms.
+- Queries with vocabulary that doesn't appear in note content or title (e.g. "force-directed visualisation" when the note is "Neural Graph View"). The reranker fixes these at ~50-100 ms (now on by default).
 - Multi-hop reasoning ("find notes that connect X and Y without mentioning both"). The spread-activation helps but isn't as strong as LightRAG's LLM-built graph.
 
 **Things to measure before investing engineering effort:**
@@ -571,7 +571,7 @@ The places a future maintainer will actually be reading/editing:
 
 **MCP proxy (`server/`):**
 - `src-tauri/src/bin/neurovault-server.rs` + `src-tauri/src/memory/mcp/` — the native Rust MCP server and its data-driven tool registry. (`server/mcp_proxy.py` is the archived Python predecessor.)
-- `neurovault_server/` — Python codebase kept for advanced features (compile, pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
+- `neurovault_server/` — Python codebase kept for advanced ingest helpers (pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
 
 **Eval (`eval/`):**
 - `testset.jsonl` — 30 hand-curated queries with expected title matches.

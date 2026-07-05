@@ -10,6 +10,48 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Multi-agent coordination: `handoff` + `agent_inbox`.** Agents route a
+  directed, inert message to another agent through the shared local brain, then
+  read the open handoffs addressed to them. Pull-based and zero-LLM: they reuse
+  the append-only `todos.jsonl` queue, so nothing auto-runs. `session_start`
+  now accepts an optional `agent` argument that scopes the wake-up to that
+  agent's own recent engrams and inbox instead of the brain-wide view. Both
+  tools land in the `standard` tier; the MCP surface is now **54 tools**.
+- **Confidence on every recall hit.** Each hit carries a `confidence` value
+  (0-1): how much to trust the fact, distinct from the relevance `score`. It is
+  structural and zero-LLM (derived from provenance and kind), so agents can
+  weigh facts, especially ones written by other agents.
+- **Settings toggle + `~/.neurovault/rerank.txt` preference for the reranker.**
+  A one-click switch and a plain-text preference file turn the cross-encoder
+  reranker off for a lighter, faster app, or back on.
+- **`nv-bench` gains `--compare-ablate`, `--only <ids|@file>`, and `--offset`**
+  for isolated A/B ablations, targeted question subsets, and sharded runs.
+
+### Changed
+- **The cross-encoder reranker (BAAI/bge-reranker-base) is now ON by default
+  for recall.** It lazy-loads a ~1 GB on-device model and adds ~50-100 ms per
+  recall in exchange for a measurable precision lift; disable it per call
+  (`rerank=false`) or globally (Settings toggle or `rerank.txt`). Fully local,
+  no network call.
+- **Release-readiness housekeeping for the open-source launch.** The Rust tree
+  is now `rustfmt`-clean (CI will enforce fmt + clippy + tests), and the public
+  docs, metadata, and licensing were reconciled.
+
+### Fixed
+- **Reranker now sees the matched chunk.** The cross-encoder scored each note's
+  title and first 400 chars rather than the passage retrieval actually matched,
+  so it re-ranked partly blind. Feeding it the matched chunk lifts the full
+  470-question LongMemEval retrieval score **hit@5 0.9362 → 0.9745**
+  (reranker-on vs engine-only, a paired A/B on the same ingested brains), every
+  metric up (hit@10 0.9851, recall@5 0.9383, MRR 0.9021). Forensics and the
+  per-question receipts:
+  [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
+
+---
+
 ## [0.5.2] — 2026-06-09
 
 ### Added
