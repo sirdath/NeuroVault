@@ -1,5 +1,11 @@
 # @neurovault/mcp
 
+> **Status: not yet on npm.** This package is built and CI-verified but its
+> first publish (tag `npm-v*`) has not shipped, so the install commands below
+> will 404 until it does. Until then, use the
+> [desktop app](https://github.com/sirdath/NeuroVault/releases/latest) (bundles
+> the same MCP server) or build from source.
+
 **NeuroVault as a headless [MCP](https://modelcontextprotocol.io) server** — local-first AI memory for your coding agents. Install once; Claude Code, Cursor, and Codex all share **one memory you own** (plain markdown files, on-device embeddings, no cloud).
 
 No desktop app required. The NeuroVault desktop app adds a notes editor and a live knowledge-graph view on top of this same engine — but the memory works headless.

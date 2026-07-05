@@ -24,9 +24,8 @@ We treat these as security bugs and will prioritize them:
 
 - **Arbitrary file read or write** via the MCP API or Tauri command surface
   (e.g. a crafted `filename` argument that escapes the vault directory).
-- **Remote code execution** via any means — including via the
-  `execute_js` MCP tool if a sandbox escape is found, or via deserializing
-  untrusted data.
+- **Remote code execution** via any means — e.g. via deserializing
+  untrusted data or a crafted note/tool argument reaching a shell.
 - **Privilege escalation** from within the Tauri app (e.g. spawning the
   sidecar with elevated args the user didn't authorize).
 - **Network exposure regressions** — anything that makes the server
@@ -44,10 +43,10 @@ We treat these as security bugs and will prioritize them:
   API keys — the trust boundary is the filesystem they control.
 - A supply-chain issue in an upstream dependency unless NeuroVault
   specifically enables the exploit path.
-- `execute_js` running arbitrary code when invoked by an authorized
-  local agent — this is the feature, not the bug. The server refuses
-  requests from off-loopback by default; sandboxing is a roadmap item
-  ([T3.5 encryption + sandbox research](README.md)).
+- A connected local agent acting on what it recalls — agents run under
+  their own runtime and permissions; NeuroVault executes no
+  agent-supplied code. The server refuses requests from off-loopback
+  by default.
 - Missing features that other memory apps have (2FA for brains,
   per-note ACLs, etc.) unless the absence causes a privacy regression.
 
@@ -104,8 +103,9 @@ we'll prioritize the fix regardless and appreciate your patience.
   be redirected to an arbitrary executable by injection.
 - Filename validation on rename/move: absolute paths and `..`
   components are rejected.
-- `execute_js` runs under the user's own Node.js — same trust boundary
-  as the MCP server itself. No elevated capabilities added.
+- NeuroVault executes no agent-supplied code. The optional Python
+  helpers (PDF / Zotero ingest) run as short-lived local subprocesses
+  with the app's own privileges, spawned only on explicit user action.
 - The cross-encoder reranker is a bundled on-device ONNX model
   (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
   the app and no network call. Recall falls back to the fusion ranker if
@@ -114,11 +114,11 @@ we'll prioritize the fix regardless and appreciate your patience.
 ## Things we know we don't do yet
 
 - **No Windows/macOS code signing** on 0.5.x builds — users see
-  SmartScreen / Gatekeeper warnings. Signing is in the public-release
-  plan ([T3.1 / T3.2](README.md)).
+  SmartScreen / Gatekeeper warnings. Signing and notarization are next
+  on the release plan (an Apple Developer account is in progress).
 - **No vault encryption at rest** — documented in
-  [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest).
-  Roadmapped as [T3.5](README.md).
+  [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
+  on the research roadmap.
 - **No automated dependency vulnerability scanning** in CI — planned
   as a pre-release item.
 

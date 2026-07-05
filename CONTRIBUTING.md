@@ -77,7 +77,7 @@ npx tauri dev          # or: make dev
 - Vite HMR handles frontend code (instant).
 - Tauri recompiles + restarts the Rust layer on save (a few seconds).
 
-First run downloads the embedding model (BGE-small-en-v1.5, ~90 MB) to
+First run downloads the embedding model (BGE-small-en-v1.5, ~130 MB) to
 `~/.neurovault/.fastembed_cache/` — once, then cached.
 
 ## Tests
@@ -115,8 +115,10 @@ scratch:
 1. Fork, branch off `main`. Please don't PR from `main` itself.
 2. Keep the diff small. A 200-line PR gets merged; a 2000-line PR gets a
    redesign request. Split if scope grew.
-3. Tests pass (Rust + tsc + build). CI runs `cargo check`/test, `tsc`, and the
-   full Tauri build on the release targets — a red build blocks merge.
+3. Tests pass (Rust + tsc). PR CI runs `cargo fmt --check`, `clippy`
+   (warnings are errors), `cargo test --no-default-features`, and `tsc`
+   — a red check blocks merge. The full multi-platform Tauri build runs
+   on release tags, not on PRs.
 4. Fill out the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
 5. If your change is user-visible, add an `Added / Changed / Fixed` line to
    `CHANGELOG.md`. The release pipeline extracts it into the GitHub Release notes.

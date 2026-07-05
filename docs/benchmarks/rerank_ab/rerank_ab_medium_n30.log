@@ -1,6 +1,6 @@
 === rerank A/B start ===
-vec0:    /Users/dath/Documents/Dath Serious Projects /NeuroVault/src-tauri/resources/vec0.dylib
-bin:     /Users/dath/Documents/Dath Serious Projects /NeuroVault/src-tauri/target/release/nv-bench
+vec0:    <repo>/src-tauri/resources/vec0.dylib
+bin:     <repo>/src-tauri/target/release/nv-bench
 dataset: /tmp/longmemeval/longmemeval_s_cleaned.json
 out:     /tmp/rerank_ab.json
 ========================

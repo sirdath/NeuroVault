@@ -115,9 +115,11 @@ title boosts ablated for byte-reproducibility (see the note below).
 The **shipped default reranks** — a cross-encoder second stage; Settings has a
 toggle to disable it for a lighter, faster app. Its contribution is isolated in
 a paired A/B on the *same* ingested brains: **hit@5 0.9362 → 0.9745 (+3.8pp)**,
-every metric up. Raw per-chunk output is committed in
-[`rerank_ab/full470_matched_chunk_ab_chunks.log`](rerank_ab/), and the full-470
-aggregate above is reproduced by `python3 docs/benchmarks/merge_chunked_ab.py`;
+every metric up. The reranker-ON aggregate is committed as
+[`longmemeval-470q-rerank.json`](longmemeval-470q-rerank.json) (the engine-only
+receipts are [`longmemeval-470q.json`](longmemeval-470q.json)); raw per-chunk
+output is in [`rerank_ab/full470_matched_chunk_ab_chunks.log`](rerank_ab/), and
+the aggregate is reproduced by `python3 docs/benchmarks/merge_chunked_ab.py`;
 the failure-mode forensics and the smaller-slice A/B are in
 [`ANALYSIS-2026-07-02-miss5-forensics.md`](ANALYSIS-2026-07-02-miss5-forensics.md).
 The n=5/12/100 rows are earlier engine-only preliminaries, superseded by the

@@ -1,5 +1,5 @@
 === rerank A/B (fusion) start 19:55:48 ===
-bin:     /Users/dath/Documents/Dath Serious Projects /NeuroVault/src-tauri/target/release/nv-bench
+bin:     <repo>/src-tauri/target/release/nv-bench
 out:     /tmp/rerank_ab_fusion.json
 ================================================
 longmemeval: 500 in file → 470 kept; running 30 (30 answerable + 0 abstention)

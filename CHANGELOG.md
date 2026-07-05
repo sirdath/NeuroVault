@@ -580,7 +580,12 @@ click away without the full window.
   clear deprecation note now that the sidecar isn't required for
   normal use.
 
-## [Unreleased]
+## [0.1.x development log — Python-sidecar era] — 2026-04 (historical)
+
+> Kept for the record. Several tools listed below (`remember_batch`,
+> `recall_and_read`, `tool_menu`, `execute_js`, the todo tools) were
+> retired in the 0.4.0 native-Rust port and are not part of the
+> current 54-tool surface.
 
 ### Added — agent ergonomics
 - `session_start(agent_id?, since?)` MCP tool + `GET /api/session_start` — one-call
@@ -720,13 +725,12 @@ click away without the full window.
 
 ---
 
-## [0.1.0] — TBD
+## [0.1.0] — never tagged (superseded by 0.1.2)
 
-Initial public release. Tauri desktop app + Python MCP server + SQLite (with
-sqlite-vec) knowledge graph. Draft release notes will be assembled from the
-Unreleased section above when this version is tagged.
+The initial cut: Tauri desktop app + Python MCP server + SQLite (with
+sqlite-vec) knowledge graph. Its changes shipped with the 0.1.2 tag.
 
 ---
 
-[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.5.2...HEAD
 [0.1.0]: https://github.com/sirdath/NeuroVault/releases/tag/v0.1.0

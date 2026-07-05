@@ -85,7 +85,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
 - **Drop-folder ingest** — drag any file onto the window; your connected agent reads it and turns it into a clean, indexed note. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
-- **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them.
+- **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them. (Optional Claude Code hook; the one feature that uses a tiny Python script.)
 - **Multiple brains** — separate vaults/databases per project; switch via the dropdown or `Ctrl+K`.
 - **Per-folder brains** — drop a `.neurovault` file in a project directory to scope that folder's agent memory to its own brain (opt-in).
 - **Agent auto-start** — your MCP agent starts the memory backend for you on first use; no need to open the app first.
@@ -221,7 +221,7 @@ npx tauri build
 
 **First run downloads** (once, then cached — instant after that):
 
-- the embedding model **BGE-small-en-v1.5** (~90 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
+- the embedding model **BGE-small-en-v1.5** (~130 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
 
 The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. On Intel macOS, run `npx tauri build` on an Intel Mac to get a native `.dmg`.
 

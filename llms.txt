@@ -26,7 +26,7 @@ Repo: https://github.com/sirdath/NeuroVault
 
 - [PRIVACY.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/PRIVACY.md): no telemetry, no account, no cloud sync, loopback-only HTTP, no API keys. The only outbound call by default is the one-time embedding-model download.
 - [SECURITY.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/SECURITY.md): security policy + disclosure.
-- [THIRD_PARTY_NOTICES.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/THIRD_PARTY_NOTICES.md): MIT license + dependency notices.
+- [THIRD-PARTY-NOTICES.md](https://raw.githubusercontent.com/sirdath/NeuroVault/main/THIRD-PARTY-NOTICES.md): MIT license + dependency notices.
 
 ## Graphify (codebase → knowledge graph)
 

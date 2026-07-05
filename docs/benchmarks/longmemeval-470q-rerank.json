@@ -1,0 +1,47 @@
+{
+ "benchmark": "LongMemEval-S (cleaned), answerable set",
+ "questions": 470,
+ "config": {
+  "label": "shipped default: hybrid RRF + cross-encoder reranker ON (matched-chunk docs)",
+  "reranker": "BAAI/bge-reranker-base, on by default",
+  "recency": "ablated (reproducible)",
+  "title_boosts": "ablated",
+  "note": "question-weighted aggregate of the 5 chunked compare-ablate runs; baseline column = same pipeline with rerank_matched_chunk ablated"
+ },
+ "means": {
+  "hit@1": 0.8468,
+  "hit@10": 0.9851,
+  "hit@5": 0.9745,
+  "mrr": 0.9021,
+  "ndcg@1": 0.8468,
+  "ndcg@10": 0.9027,
+  "ndcg@5": 0.8855,
+  "precision@1": 0.8468,
+  "precision@10": 0.1855,
+  "precision@5": 0.3489,
+  "recall@1": 0.529,
+  "recall@10": 0.9787,
+  "recall@5": 0.9383
+ },
+ "baseline_means_no_matched_chunk": {
+  "hit@1": 0.783,
+  "hit@10": 0.9724,
+  "hit@5": 0.9362,
+  "mrr": 0.8522,
+  "ndcg@1": 0.783,
+  "ndcg@10": 0.8546,
+  "ndcg@5": 0.8282,
+  "precision@1": 0.783,
+  "precision@10": 0.1817,
+  "precision@5": 0.3353,
+  "recall@1": 0.4779,
+  "recall@10": 0.9531,
+  "recall@5": 0.886
+ },
+ "provenance": {
+  "raw_log": "rerank_ab/full470_matched_chunk_ab_chunks.log",
+  "reproduce": "python3 docs/benchmarks/merge_chunked_ab.py",
+  "per_chunk_baseline_receipts": "rerank_ab/full_ab_chunk_{0,94,188,282,376}.json",
+  "analysis": "ANALYSIS-2026-07-02-miss5-forensics.md"
+ }
+}

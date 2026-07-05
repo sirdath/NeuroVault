@@ -231,7 +231,7 @@ jobs:
 
             - **macOS** ("damaged, move to trash"): right-click the .app,
               choose Open, click Open Anyway. Or run
-              `xattr -cr /Applications/NeuroVault.app` once.
+              `xattr -dr com.apple.quarantine /Applications/NeuroVault.app` once.
             - **Windows SmartScreen**: click "More info", then "Run anyway".
 
             Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md
