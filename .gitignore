@@ -76,3 +76,6 @@ demo-video/
 
 # Local benchmarking scratch — not part of the app.
 bench/
+
+# Orchestration scratch state (model-supermaxxing runs)
+.supermax/

@@ -1,0 +1,4 @@
+# One-time mechanical reformats (git blame --ignore-revs-file aware).
+# GitHub respects this file automatically for blame views.
+# style: rustfmt the entire tree (pre-launch)
+09f30d4e2d948bd283b1c2e470e79c4d009ed9d3

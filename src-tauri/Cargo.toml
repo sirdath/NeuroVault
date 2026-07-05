@@ -1,8 +1,11 @@
 [package]
 name = "neurovault"
 version = "0.5.2"
-description = "AI-native memory system for Claude"
-authors = ["you"]
+description = "Local-first, AI-native memory for Claude and other LLM agents: markdown-canonical vault, hybrid retrieval, native MCP server"
+authors = ["NeuroVault contributors"]
+license = "MIT"
+repository = "https://github.com/sirdath/NeuroVault"
+keywords = ["mcp", "memory", "ai", "local-first", "tauri"]
 edition = "2021"
 # Two binary targets exist in this crate:
 #   - `neurovault`         the Tauri desktop app (src/main.rs)
