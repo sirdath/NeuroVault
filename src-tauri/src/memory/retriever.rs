@@ -209,6 +209,8 @@ fn is_ablated(opts: &RecallOpts, feature: &str) -> bool {
 /// Filter candidates in-memory after their engram row is fetched.
 /// Cheap struct checks for everything except `entity:`, which uses a
 /// pre-built allow-set keyed on engram id (O(1) lookup).
+// One parameter per engram column tested in place; a params struct would only relay the same fields.
+#[allow(clippy::too_many_arguments)]
 fn passes_filters(
     filters: &QueryFilters,
     kind: &str,
@@ -876,6 +878,21 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
 
 // ---- Main entry ----------------------------------------------------------
 
+/// One engram row fetched during candidate building:
+/// `(id, title, content, strength, state, updated_at, created_at, kind, filename, agent_id)`.
+type EngramRow = (
+    String,
+    String,
+    String,
+    f64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
 /// Run `hybrid_retrieve` end-to-end. Equivalent to Python's
 /// `retriever.hybrid_retrieve`, minus the cross-encoder reranker
 /// branch. BM25 is ensured to be built before the first query fires.
@@ -1405,18 +1422,7 @@ pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<V
         Vec::with_capacity(candidate_pool.min(sorted_candidates.len()));
     for (eid, rrf) in sorted_candidates.into_iter().take(candidate_pool) {
         let conn = db.lock();
-        let row: Option<(
-            String,
-            String,
-            String,
-            f64,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-        )> = conn
+        let row: Option<EngramRow> = conn
             .query_row(
                 "SELECT id, title, content, strength, state,
                         COALESCE(updated_at, ''), COALESCE(created_at, ''),
@@ -1872,8 +1878,8 @@ fn apply_mmr(candidates: &mut Vec<Candidate>, title_emb: &HashMap<String, Vec<f3
         }
     }
     // Unselected tail keeps original (final-score) order.
-    for i in 0..n {
-        if !chosen[i] {
+    for (i, &is_chosen) in chosen.iter().enumerate() {
+        if !is_chosen {
             order.push(i);
         }
     }

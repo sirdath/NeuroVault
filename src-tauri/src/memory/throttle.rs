@@ -120,15 +120,16 @@ pub fn tick(brain_id: &str, requested_top_k: usize) -> ThrottleDecision {
 mod tests {
     use super::*;
 
-    fn reset() {
-        windows().lock().clear();
-    }
+    // No shared reset(): the window map is process-global and tests run
+    // in parallel, so clearing it from one test can wipe another's
+    // in-progress state (observed as a rare hard_range_returns_one
+    // flake). Each test uses its own brain id instead — the map key IS
+    // the isolation.
 
     #[test]
     fn first_calls_pass_through() {
-        reset();
         for _ in 0..3 {
-            let d = tick("brain-a", 10);
+            let d = tick("throttle-test-pass", 10);
             assert_eq!(d.max_results, 10);
             assert!(d.hint.is_none());
         }
@@ -136,33 +137,30 @@ mod tests {
 
     #[test]
     fn mid_range_halves_top_k() {
-        reset();
         for _ in 0..4 {
-            tick("brain-b", 10);
+            tick("throttle-test-mid", 10);
         }
-        let d = tick("brain-b", 10);
+        let d = tick("throttle-test-mid", 10);
         assert_eq!(d.max_results, 5);
         assert!(d.hint.is_some());
     }
 
     #[test]
     fn hard_range_returns_one() {
-        reset();
         for _ in 0..8 {
-            tick("brain-c", 10);
+            tick("throttle-test-hard", 10);
         }
-        let d = tick("brain-c", 10);
+        let d = tick("throttle-test-hard", 10);
         assert_eq!(d.max_results, 1);
         assert!(d.hint.as_ref().unwrap().contains("hard-throttled"));
     }
 
     #[test]
     fn different_brains_have_independent_windows() {
-        reset();
         for _ in 0..9 {
-            tick("brain-x", 10);
+            tick("throttle-test-indep-x", 10);
         }
-        let d = tick("brain-y", 10);
+        let d = tick("throttle-test-indep-y", 10);
         assert_eq!(d.max_results, 10);
         assert!(d.hint.is_none());
     }

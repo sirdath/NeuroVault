@@ -10,7 +10,7 @@
 //! - `document`: title + first 2000 chars (single chunk).
 //! - `paragraph`: 2-paragraph sliding window, min 15 words, 1200-char cap.
 //! - `sentence`: 3-sentence sliding window (i-1..=i+1), min 6 words,
-//!    500-char cap.
+//!   500-char cap.
 //!
 //! The embed text is what goes through the model; the content text is
 //! what's stored for display + BM25.

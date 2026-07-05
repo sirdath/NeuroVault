@@ -33,7 +33,7 @@ pub struct CoreBlock {
 
 /// List all core-memory blocks for a brain. Used by `session_start`
 /// + `core_memory_read(label=None)`. Returns empty vec when no
-/// blocks have been seeded yet.
+///   blocks have been seeded yet.
 pub fn list_blocks(brain_id: &str) -> Result<Vec<CoreBlock>> {
     let db = open_brain(brain_id)?;
     let conn = db.lock();

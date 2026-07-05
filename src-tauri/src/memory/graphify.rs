@@ -795,14 +795,15 @@ pub fn who_calls(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(Strin
     rows.collect()
 }
 
+/// One impacted symbol from a blast-radius walk:
+/// `(symbol_name, defining_file, defining_line)`.
+type BlastRadiusRow = (String, Option<String>, Option<i64>);
+
 /// Transitive callers of a symbol — the **blast radius** of changing it. Walks
 /// the `function_calls` graph upward (callee → caller) with a recursive CTE;
 /// `UNION` dedups so cycles terminate. Returns each impacted symbol with the
 /// file/line it's defined in (when known), ordered by name.
-pub fn blast_radius(
-    conn: &Connection,
-    symbol: &str,
-) -> rusqlite::Result<Vec<(String, Option<String>, Option<i64>)>> {
+pub fn blast_radius(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<BlastRadiusRow>> {
     let mut stmt = conn.prepare(
         "WITH RECURSIVE impact(name) AS (
              SELECT DISTINCT caller_name FROM function_calls

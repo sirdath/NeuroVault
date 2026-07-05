@@ -231,9 +231,9 @@ pub fn recent(brain_id: &str, limit: usize) -> Result<Vec<AuditEntry>> {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<AuditEntry>(line) {
-            Ok(e) => out.push(e),
-            Err(_) => {} // skip corrupt rows silently
+        // Skip corrupt rows silently.
+        if let Ok(e) = serde_json::from_str::<AuditEntry>(line) {
+            out.push(e);
         }
         if out.len() >= limit {
             break;

@@ -35,8 +35,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use neurovault_lib::memory::{db, ingest, retriever};
 use neurovault_lib::memory::retriever::RecallOpts;
+use neurovault_lib::memory::{db, ingest, retriever};
 
 /// Fixed corpus. Each tuple is (filename, markdown). Content is written
 /// so each query below has exactly one obviously-correct answer that a
@@ -224,7 +224,10 @@ fn fixture() -> Vec<(&'static str, &'static str)> {
 fn probes() -> Vec<(&'static str, &'static str)> {
     vec![
         ("what shampoo do I use", "shampoo"),
-        ("what went wrong with the new car after its first service", "car-service"),
+        (
+            "what went wrong with the new car after its first service",
+            "car-service",
+        ),
         ("which vector database did we choose", "db-decision"),
         ("who runs the weekly engineering sync", "team"),
         ("how many H&M tops do I own now", "hmtops"),
@@ -264,8 +267,7 @@ const PREFERENCE_FIXTURE: (&str, &str) = (
 #[test]
 fn recall_ranks_known_facts_top1_recency_ablated() {
     // --- isolation: unique temp NEUROVAULT_HOME ---
-    let home: PathBuf = std::env::temp_dir()
-        .join(format!("nv-itest-{}", std::process::id()));
+    let home: PathBuf = std::env::temp_dir().join(format!("nv-itest-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("mk temp home");
     std::env::set_var("NEUROVAULT_HOME", &home);
@@ -417,7 +419,10 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
         failures.push(format!(
             "imp#1 A/B: extraction ON did NOT surface a `Preference:` \
              engram in top-3 for '{ab_query}'; got {:?}",
-            on_top3.iter().map(|(t, _)| first_line(t)).collect::<Vec<_>>()
+            on_top3
+                .iter()
+                .map(|(t, _)| first_line(t))
+                .collect::<Vec<_>>()
         ));
     }
     if off_top3.iter().any(|(t, c)| is_pref_engram(t, c)) {
@@ -473,7 +478,8 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
         failures.push(
             "imp#2 A/B: boost OFF already had the proper-noun answer in \
              top-3 — the probe doesn't isolate the boost (not load-bearing \
-             evidence); strengthen the distractor".to_string(),
+             evidence); strengthen the distractor"
+                .to_string(),
         );
     }
 
@@ -508,8 +514,7 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
             .unwrap_or_else(|e| panic!("numeric A/B recall failed: {e}"));
         let find = |needle: &str| {
             hits.iter().position(|h| {
-                h.title.to_lowercase().contains(needle)
-                    || h.content.to_lowercase().contains(needle)
+                h.title.to_lowercase().contains(needle) || h.content.to_lowercase().contains(needle)
             })
         };
         // "2023"/"2024" appear only in the respective note's body.
@@ -584,7 +589,8 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
         failures.push(
             "imp#5 A/B: MMR OFF already had the distinct fact in top-3 — \
              the near-dup cluster isn't crowding it, so this probe \
-             doesn't isolate MMR (not load-bearing evidence)".to_string(),
+             doesn't isolate MMR (not load-bearing evidence)"
+                .to_string(),
         );
     }
 
@@ -691,7 +697,8 @@ fn recall_ranks_known_facts_top1_recency_ablated() {
         failures.push(
             "imp#6 A/B: chunk_window OFF already returned the buried detail \
              — the probe doesn't isolate the fix (detail is not actually \
-             past the head window)".to_string(),
+             past the head window)"
+                .to_string(),
         );
     }
 

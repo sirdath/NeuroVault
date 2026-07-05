@@ -4914,7 +4914,7 @@ pub async fn compilations_get(
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e: MemoryError| match &e {
-        MemoryError::Database(db_err) if matches!(db_err, rusqlite::Error::QueryReturnedNoRows) => {
+        MemoryError::Database(rusqlite::Error::QueryReturnedNoRows) => {
             ApiError(StatusCode::NOT_FOUND, "compilation not found".into())
         }
         _ => ApiError::from(e),

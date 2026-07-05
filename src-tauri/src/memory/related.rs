@@ -81,6 +81,8 @@ pub struct RelatedHit {
 /// by link type (if supplied), minimum similarity, and excluded
 /// kinds. Result is sorted by `(hop_distance ASC, similarity DESC)`
 /// so 1-hop strong neighbours come first.
+// min/max chain kept: clamp() differs on NaN and these scores can be NaN-adjacent.
+#[allow(clippy::manual_clamp)]
 pub fn get_related(db: &BrainDb, engram_id: &str, opts: &RelatedOpts) -> Result<Vec<RelatedHit>> {
     let hops = opts.hops.min(MAX_HOPS).max(1);
     let limit = opts.limit.min(MAX_LIMIT).max(1);

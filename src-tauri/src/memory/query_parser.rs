@@ -268,9 +268,11 @@ mod tests {
 
     #[test]
     fn filter_sql_builds_and_chain() {
-        let mut f = QueryFilters::default();
-        f.kind = Some("insight".to_string());
-        f.folder = Some("projects".to_string());
+        let f = QueryFilters {
+            kind: Some("insight".to_string()),
+            folder: Some("projects".to_string()),
+            ..Default::default()
+        };
         let (sql, params) = filter_sql(&f);
         assert!(sql.starts_with(" AND "));
         assert!(sql.contains("kind"));

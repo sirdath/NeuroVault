@@ -14,7 +14,7 @@
 //! single-digit seconds.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 use neurovault_lib::memory::{db, http_server};
 
@@ -26,7 +26,7 @@ fn base() -> String {
 
 /// Write the fixture repo: cross-file Rust calls, a Python chain, a TS
 /// file, and a node_modules decoy that must be skipped.
-fn write_fixture_repo(root: &PathBuf) {
+fn write_fixture_repo(root: &Path) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("web")).unwrap();
     fs::create_dir_all(root.join("node_modules")).unwrap();
@@ -143,7 +143,10 @@ async fn graphify_end_to_end_over_http() {
         .iter()
         .map(|s| s["name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"Engine") && names.contains(&"build"), "{resp}");
+    assert!(
+        names.contains(&"Engine") && names.contains(&"build"),
+        "{resp}"
+    );
     let build = resp["symbols"]
         .as_array()
         .unwrap()
@@ -175,7 +178,10 @@ async fn graphify_end_to_end_over_http() {
         .json()
         .await
         .unwrap();
-    assert!(resp["links"].as_u64().unwrap() >= 1, "fuse should link the ADR: {resp}");
+    assert!(
+        resp["links"].as_u64().unwrap() >= 1,
+        "fuse should link the ADR: {resp}"
+    );
 
     // ---- 7. the graph the UI renders ----------------------------------------
     let resp: serde_json::Value = client
@@ -189,7 +195,12 @@ async fn graphify_end_to_end_over_http() {
     let nodes = resp["nodes"].as_array().unwrap();
     let code_nodes: Vec<&serde_json::Value> =
         nodes.iter().filter(|n| n["kind"] == "code").collect();
-    assert_eq!(code_nodes.len(), 4, "4 code files as graph nodes: {}", nodes.len());
+    assert_eq!(
+        code_nodes.len(),
+        4,
+        "4 code files as graph nodes: {}",
+        nodes.len()
+    );
     assert!(
         code_nodes.iter().any(|n| n["title"] == "src/engine.rs"),
         "code node titled by repo-relative path"

@@ -102,45 +102,44 @@ impl ServerHandler for NeuroVaultMcp {
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
         let tools = self.visible_tools();
         async move {
-            let mut result = ListToolsResult::default();
-            result.tools = tools;
-            Ok(result)
+            Ok(ListToolsResult {
+                tools,
+                ..Default::default()
+            })
         }
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
-        async move {
-            let name = request.name.to_string();
-            let def = self.tools.iter().find(|t| t.name == name);
-            let def = match def {
-                Some(t) if self.is_allowed(&t.name) => t,
-                Some(_) => {
-                    return Err(McpError::invalid_params(
-                        format!(
-                            "tool '{name}' exists but is not enabled in the '{}' tier",
-                            self.tier_name
-                        ),
-                        None,
-                    ));
-                }
-                None => {
-                    return Err(McpError::invalid_params(
-                        format!("unknown tool '{name}'"),
-                        None,
-                    ));
-                }
-            };
+    ) -> Result<CallToolResult, McpError> {
+        let name = request.name.to_string();
+        let def = self.tools.iter().find(|t| t.name == name);
+        let def = match def {
+            Some(t) if self.is_allowed(&t.name) => t,
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "tool '{name}' exists but is not enabled in the '{}' tier",
+                        self.tier_name
+                    ),
+                    None,
+                ));
+            }
+            None => {
+                return Err(McpError::invalid_params(
+                    format!("unknown tool '{name}'"),
+                    None,
+                ));
+            }
+        };
 
-            let args = request.arguments.clone().unwrap_or_default();
-            let value = self.forwarder.call(def, &args).await;
-            // FastMCP serializes a dict return as JSON text content; match that.
-            let text = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-            Ok(CallToolResult::success(vec![Content::text(text)]))
-        }
+        let args = request.arguments.clone().unwrap_or_default();
+        let value = self.forwarder.call(def, &args).await;
+        // FastMCP serializes a dict return as JSON text content; match that.
+        let text = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
 

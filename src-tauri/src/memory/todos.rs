@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn inbox_filter_handoffs_only_and_addressing() {
-        let all = vec![
+        let all = [
             todo("h1", "claude-code", Some("feature-request")), // handoff to claude-code
             todo("h2", "", Some("anomaly")),                    // broadcast handoff
             todo("p1", "claude-code", None),                    // plain todo (no kind)

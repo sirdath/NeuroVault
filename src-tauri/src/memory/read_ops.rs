@@ -135,10 +135,13 @@ pub fn resolve_brain_id(explicit: Option<&str>) -> Result<String> {
     Ok(active.to_string())
 }
 
+/// One brains-registry row: `(id, name, description?, vault_path?, is_active)`.
+type RegistryEntry = (String, String, Option<String>, Option<String>, bool);
+
 /// Load the full registry as a list of `(id, name, description?, vault_path?, is_active)`.
 /// Pure filesystem read — no DB access. Used by `list_brains_with_stats`
 /// which then looks up stats per-brain.
-fn registry_entries() -> Result<Vec<(String, String, Option<String>, Option<String>, bool)>> {
+fn registry_entries() -> Result<Vec<RegistryEntry>> {
     let Ok(data) = fs::read_to_string(registry_path()) else {
         return Ok(Vec::new());
     };

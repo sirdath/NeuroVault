@@ -198,7 +198,7 @@ fn recall_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
 /// Strict any-evidence hit: 1.0 if ANY gold session is in the top-k.
 fn hit_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
     let top: Vec<&String> = ranked.iter().take(k).collect();
-    if gold.iter().any(|g| top.iter().any(|t| *t == g)) {
+    if gold.iter().any(|g| top.contains(&g)) {
         1.0
     } else {
         0.0
@@ -857,8 +857,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         // REMOVED from ablate (the NEW default) into sums_b, so the
         // sums(baseline, flag ablated) vs sums_b(treatment, flag active) delta
         // isolates the feature on identical candidates. delta≈0 ⇒ bench-neutral.
-        if compare_ablate.is_some() && !is_abs {
-            let flag = compare_ablate.as_ref().unwrap();
+        if let (Some(flag), false) = (compare_ablate.as_ref(), is_abs) {
             let ablate_b: Vec<String> =
                 opts.ablate.iter().filter(|a| *a != flag).cloned().collect();
             let opts_b = RecallOpts {
