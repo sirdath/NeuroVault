@@ -1,0 +1,81 @@
+=== rerank A/B start ===
+vec0:    /Users/dath/Documents/Dath Serious Projects /NeuroVault/src-tauri/resources/vec0.dylib
+bin:     /Users/dath/Documents/Dath Serious Projects /NeuroVault/src-tauri/target/release/nv-bench
+dataset: /tmp/longmemeval/longmemeval_s_cleaned.json
+out:     /tmp/rerank_ab.json
+========================
+longmemeval: 500 in file → 470 kept; running 30 (30 answerable + 0 abstention)
+config: [engine-only] k=[1, 5, 10] rerank=false recency=ablated (reproducible) title_boosts=ablated extra_ablate=[]
+[1/30] 07741c45 (knowledge-update) r@5=1.00  (49 sessions, 265.5s)
+[2/30] 21d02d0d (multi-session) r@5=1.00  (47 sessions, 373.1s)
+[3/30] 778164c6 (single-session-assistant) r@5=1.00  (50 sessions, 357.7s)
+[4/30] 0a34ad58 (single-session-preference) r@5=1.00  (42 sessions, 350.1s)
+[5/30] a82c026e (single-session-user) r@5=1.00  (47 sessions, 322.2s)
+[6/30] 8c18457d (temporal-reasoning) r@5=1.00  (41 sessions, 311.9s)
+[7/30] 89941a94 (knowledge-update) r@5=1.00  (46 sessions, 341.9s)
+[8/30] efc3f7c2 (multi-session) r@5=1.00  (48 sessions, 430.1s)
+[9/30] 65240037 (single-session-assistant) r@5=1.00  (51 sessions, 412.3s)
+[10/30] 1c0ddc50 (single-session-preference) r@5=1.00  (51 sessions, 407.8s)
+[11/30] 3d86fd0a (single-session-user) r@5=1.00  (55 sessions, 433.6s)
+[12/30] gpt4_fe651585 (temporal-reasoning) r@5=1.00  (48 sessions, 379.7s)
+[13/30] 0977f2af (knowledge-update) r@5=0.50  (44 sessions, 371.7s)
+[14/30] e56a43b9 (multi-session) r@5=1.00  (45 sessions, 364.6s)
+[15/30] 1de5cff2 (single-session-assistant) r@5=1.00  (45 sessions, 409.3s)
+[16/30] 07b6f563 (single-session-preference) r@5=1.00  (52 sessions, 404.7s)
+[17/30] 36580ce8 (single-session-user) r@5=1.00  (55 sessions, 427.7s)
+[18/30] gpt4_c27434e8 (temporal-reasoning) r@5=1.00  (51 sessions, 426.4s)
+[19/30] 26bdc477 (knowledge-update) r@5=1.00  (48 sessions, 364.7s)
+[20/30] 87f22b4a (multi-session) r@5=1.00  (47 sessions, 379.2s)
+[21/30] e48988bc (single-session-assistant) r@5=0.00  (50 sessions, 383.1s)
+[22/30] 1d4e3b97 (single-session-preference) r@5=1.00  (45 sessions, 364.6s)
+[23/30] c14c00dd (single-session-user) r@5=1.00  (51 sessions, 400.6s)
+[24/30] gpt4_5438fa52 (temporal-reasoning) r@5=1.00  (50 sessions, 404.7s)
+[25/30] c6853660 (knowledge-update) r@5=1.00  (46 sessions, 407.5s)
+[26/30] 8e91e7d9 (multi-session) r@5=0.50  (47 sessions, 408.1s)
+[27/30] c7cf7dfd (single-session-assistant) r@5=1.00  (51 sessions, 419.9s)
+[28/30] b0479f84 (single-session-preference) r@5=1.00  (48 sessions, 411.9s)
+[29/30] f4f1d8a4 (single-session-user) r@5=0.00  (52 sessions, 423.2s)
+[30/30] gpt4_213fd887 (temporal-reasoning) r@5=1.00  (45 sessions, 401.3s)
+
+━━ nv-bench longmemeval — 30 questions (30 answerable + 0 abstention) ━━
+dataset:      /tmp/longmemeval/longmemeval_s_cleaned.json
+config:       [engine-only] hybrid (vec+bm25+graph, RRF), recency-ablated (reproducible)
+hit@1        0.7000
+hit@10       0.9667
+hit@5        0.9333
+mrr          0.8103
+ndcg@1       0.7000
+ndcg@10      0.8227
+ndcg@5       0.8047
+recall@1     0.4833
+recall@10    0.9500
+recall@5     0.9000
+
+━━ A/B: reranker isolated (same 30 questions, recency ablated) ━━
+metric         baseline    +rerank     delta
+hit@1            0.7000     0.8333   +0.1333
+hit@10           0.9667     0.9333   -0.0333
+hit@5            0.9333     0.9333   +0.0000
+mrr              0.8103     0.8722   +0.0619
+ndcg@1           0.7000     0.8333   +0.1333
+ndcg@10          0.8227     0.8519   +0.0293
+ndcg@5           0.8047     0.8458   +0.0410
+recall@1         0.4833     0.6167   +0.1333
+recall@10        0.9500     0.9000   -0.0500
+recall@5         0.9000     0.8833   -0.0167
+
+per question type (recall@5):
+  knowledge-update             0.9000  (n=5)
+  multi-session                0.9000  (n=5)
+  single-session-assistant     0.8000  (n=5)
+  single-session-preference    1.0000  (n=5)
+  single-session-user          0.8000  (n=5)
+  temporal-reasoning           1.0000  (n=5)
+
+━━ abstention (retrieval-confidence gate) ━━
+  N/A (slice has no _abs questions — include abstention questions, i.e.
+       run without --no-abstention, to measure this dimension)
+
+timing: ingest 11476.2s total (382.54s/question) · query 9.8s total (327 ms/question) · wall 11559.5s
+report written: /tmp/rerank_ab.json
+=== rerank A/B exit status: 0 ===
