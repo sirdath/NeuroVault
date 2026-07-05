@@ -221,7 +221,12 @@ impl Forwarder {
 
     /// `recall`: GET /api/recall normally; if `additional_queries` has any
     /// non-blank entry, POST /api/recall/multi instead (brain→brain_id,
-    /// bools as raw JSON, mode/agent_id dropped, extras capped at 4).
+    /// bools as raw JSON, mode dropped, extras capped at 4).
+    ///
+    /// `rerank` and `include_observations` are forwarded ONLY when the
+    /// agent set them: sending a hardcoded fallback here would override
+    /// the server-side defaults (notably the reranker preference at
+    /// ~/.neurovault/rerank.txt, ON by default) for every MCP call.
     async fn special_recall(&self, args: &Map<String, Value>) -> Value {
         let query = args.get("query").cloned().unwrap_or(Value::Null);
         let extras: Vec<Value> = args
@@ -237,16 +242,21 @@ impl Forwarder {
 
         if !extras.is_empty() {
             let extras4: Vec<Value> = extras.into_iter().take(4).collect();
-            let body = json!({
+            let mut body = json!({
                 "q": query,
                 "additional_queries": extras4,
                 "limit": args.get("limit").cloned().unwrap_or(json!(20)),
                 "brain_id": args.get("brain").cloned().unwrap_or(Value::Null),
-                "include_observations": args.get("include_observations").cloned().unwrap_or(json!(false)),
-                "rerank": args.get("rerank").cloned().unwrap_or(json!(false)),
                 "spread_hops": args.get("spread_hops").cloned().unwrap_or(json!(0)),
                 "as_of": args.get("as_of").cloned().unwrap_or(Value::Null),
             });
+            for k in ["include_observations", "rerank"] {
+                if let Some(v) = args.get(k) {
+                    if !v.is_null() {
+                        body[k] = v.clone();
+                    }
+                }
+            }
             return self.send("POST", "/api/recall/multi", body).await;
         }
 
@@ -255,15 +265,13 @@ impl Forwarder {
         push_if_present(&mut q, "mode", args.get("mode"), Transform::None);
         push_if_present(&mut q, "limit", args.get("limit"), Transform::None);
         push_if_truthy_none(&mut q, "brain", args.get("brain"));
-        push_if_truthy_none(&mut q, "agent_id", args.get("agent_id"));
-        q.push((
-            "include_observations".into(),
-            bool_str(args.get("include_observations").unwrap_or(&json!(false))),
-        ));
-        q.push((
-            "rerank".into(),
-            bool_str(args.get("rerank").unwrap_or(&json!(false))),
-        ));
+        push_if_present(
+            &mut q,
+            "include_observations",
+            args.get("include_observations"),
+            Transform::LowerBool,
+        );
+        push_if_present(&mut q, "rerank", args.get("rerank"), Transform::LowerBool);
         push_if_present(
             &mut q,
             "spread_hops",

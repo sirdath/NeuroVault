@@ -1233,8 +1233,10 @@ pub struct RecallQuery {
     /// the full pipeline.
     #[serde(default)]
     ablate: Option<String>,
-    /// Enable cross-encoder reranker on top-20. Adds ~50-100 ms
-    /// per call; improves top-1 precision. Off by default.
+    /// Cross-encoder reranker override for this call. Adds ~50-100 ms;
+    /// improves top-rank precision. When absent, the app preference
+    /// applies (`rerank_enabled()`: ON unless toggled off in Settings,
+    /// persisted at ~/.neurovault/rerank.txt).
     #[serde(default)]
     rerank: Option<bool>,
 }

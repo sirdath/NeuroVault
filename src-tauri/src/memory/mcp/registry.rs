@@ -219,6 +219,98 @@ mod tests {
         assert_eq!(allowed_for_tier("bogus").unwrap().len(), 8);
     }
 
+    /// Every argument an agent can pass must explain itself: a schema
+    /// property without a description is a parameter the agent has to
+    /// guess at. This locked in the 2026-07-05 docs pass (19 gaps fixed).
+    #[test]
+    fn every_param_has_a_description() {
+        for t in load_tools() {
+            if let Some(props) = t.input_schema.get("properties").and_then(|v| v.as_object()) {
+                for (pname, p) in props {
+                    let desc = p.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    assert!(
+                        !desc.trim().is_empty(),
+                        "{}.{} has no description",
+                        t.name,
+                        pname
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every tool must carry at least one annotation hint (read_only /
+    /// destructive / idempotent / open_world) — MCP clients use these
+    /// for permission UX.
+    #[test]
+    fn every_tool_has_annotations() {
+        for t in load_tools() {
+            let a = &t.annotations;
+            assert!(
+                a.read_only.is_some()
+                    || a.destructive.is_some()
+                    || a.idempotent.is_some()
+                    || a.open_world.is_some(),
+                "{} has no annotation hints",
+                t.name
+            );
+        }
+    }
+
+    /// The SERVER owns the reranker default (Settings toggle +
+    /// ~/.neurovault/rerank.txt). A schema-level `default` on a rerank
+    /// param gets injected by apply_defaults and silently overrides the
+    /// user's preference on every MCP call — the exact bug fixed
+    /// 2026-07-05. Never reintroduce it.
+    #[test]
+    fn rerank_params_have_no_schema_default() {
+        for t in load_tools() {
+            if let Some(props) = t.input_schema.get("properties").and_then(|v| v.as_object()) {
+                if let Some(p) = props.get("rerank") {
+                    assert!(
+                        p.get("default").is_none(),
+                        "{}.rerank declares a schema default; the server preference must win",
+                        t.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every param mapping must reference a real schema property, so a
+    /// schema rename can't silently orphan the forwarding. `<computed>`
+    /// and `<constant:...>` markers are special-cased in forward.rs.
+    #[test]
+    fn param_mappings_reference_schema_properties() {
+        for t in load_tools() {
+            let props: HashSet<String> = t
+                .input_schema
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            for spec in t.call.query.iter().chain(t.call.body.iter()) {
+                if spec.from.starts_with('<') {
+                    continue;
+                }
+                assert!(
+                    props.contains(&spec.from),
+                    "{} maps arg '{}' that is not in its input schema",
+                    t.name,
+                    spec.from
+                );
+            }
+            for pp in &t.call.path_params {
+                assert!(
+                    props.contains(pp),
+                    "{} path param '{}' is not in its input schema",
+                    t.name,
+                    pp
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_tier_tool_exists_in_registry() {
         let names: HashSet<String> = load_tools().into_iter().map(|t| t.name).collect();
