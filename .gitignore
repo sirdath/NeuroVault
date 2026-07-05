@@ -79,3 +79,9 @@ bench/
 
 # Orchestration scratch state (model-supermaxxing runs)
 .supermax/
+
+# Benchmark scratch: chunked-run partials and per-chunk scratch dirs.
+# Cited evidence files (results + A/B logs) are tracked explicitly.
+docs/benchmarks/chunks*/
+docs/benchmarks/*.partial.jsonl
+docs/benchmarks/longmemeval-production-A-partial.json
