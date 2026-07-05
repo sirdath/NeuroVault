@@ -43,9 +43,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use neurovault_lib::memory::api_gateway::{
-    self, start_gateway, GatewayConfig,
-};
+use neurovault_lib::memory::api_gateway::{self, start_gateway, GatewayConfig};
 use neurovault_lib::memory::api_keys::{self, Scope};
 use tokio::signal;
 

@@ -138,7 +138,9 @@ async fn ensure_backend(base: &str) {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    eprintln!("[neurovault-mcp] auto-started backend not healthy within 30s (may still be loading)");
+    eprintln!(
+        "[neurovault-mcp] auto-started backend not healthy within 30s (may still be loading)"
+    );
 }
 
 /// Spawn `neurovault-server` (HTTP backend) fully detached so it outlives this
@@ -153,7 +155,11 @@ fn spawn_backend_detached(exe: &std::path::Path, port: Option<u16>) -> std::io::
 
     let log_path = nv_home().join("autostart.log");
     let _ = std::fs::create_dir_all(nv_home());
-    match std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         Ok(f) => {
             let err = f.try_clone();
             cmd.stdout(Stdio::from(f));
@@ -192,7 +198,11 @@ fn spawn_backend_detached(exe: &std::path::Path, port: Option<u16>) -> std::io::
 
 /// Parse the port from a base URL like `http://127.0.0.1:8765` → `8765`.
 fn port_from_base(base: &str) -> Option<u16> {
-    base.trim_end_matches('/').rsplit(':').next()?.parse::<u16>().ok()
+    base.trim_end_matches('/')
+        .rsplit(':')
+        .next()?
+        .parse::<u16>()
+        .ok()
 }
 
 /// Resolve the opt-in per-folder brain *name* (not yet the id). Order:

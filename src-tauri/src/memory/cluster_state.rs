@@ -18,12 +18,12 @@
 //! short and infrequent (push on graph change, read on /api/clusters
 //! or skill invocation), so contention isn't a concern at our scale.
 
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use once_cell::sync::Lazy;
 
 use super::paths::brain_dir;
 
@@ -53,8 +53,7 @@ struct PerBrain {
     summaries: Vec<ClusterSummary>,
 }
 
-static STATE: Lazy<Mutex<HashMap<BrainId, PerBrain>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static STATE: Lazy<Mutex<HashMap<BrainId, PerBrain>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Replace a brain's cluster summaries. Frontend pushes this every
 /// time Louvain runs (Analytics enabled, graph data changed, etc).
@@ -69,7 +68,9 @@ pub fn set_summaries(brain_id: &str, summaries: Vec<ClusterSummary>) {
 /// or the frontend hasn't pushed yet.
 pub fn get_summaries(brain_id: &str) -> Vec<ClusterSummary> {
     let g = STATE.lock();
-    g.get(brain_id).map(|s| s.summaries.clone()).unwrap_or_default()
+    g.get(brain_id)
+        .map(|s| s.summaries.clone())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

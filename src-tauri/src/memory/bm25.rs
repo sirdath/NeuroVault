@@ -42,19 +42,16 @@ const BM25_EPSILON: f64 = 0.25;
 /// `STOPWORDS` set so tokenisation is identical on both sides.
 static STOPWORDS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "shall", "can", "need", "dare", "ought",
-        "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-        "as", "into", "through", "during", "before", "after", "above", "below",
-        "between", "out", "off", "over", "under", "again", "further", "then",
-        "once", "here", "there", "when", "where", "why", "how", "all", "each",
-        "every", "both", "few", "more", "most", "other", "some", "such", "no",
-        "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-        "and", "but", "or", "if", "while", "because", "until", "although",
-        "this", "that", "these", "those", "it", "its", "i", "me", "my",
-        "we", "our", "you", "your", "he", "him", "his", "she", "her",
-        "they", "them", "their", "what", "which", "who", "whom",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+        "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+        "as", "into", "through", "during", "before", "after", "above", "below", "between", "out",
+        "off", "over", "under", "again", "further", "then", "once", "here", "there", "when",
+        "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
+        "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+        "and", "but", "or", "if", "while", "because", "until", "although", "this", "that", "these",
+        "those", "it", "its", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
+        "she", "her", "they", "them", "their", "what", "which", "who", "whom",
     ]
     .iter()
     .copied()
@@ -63,12 +60,10 @@ static STOPWORDS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
 
 /// Pre-tokenisation sweep that strips markdown punctuation. Matches
 /// `re.sub(r'[#*`\[\](){}|>~_]', ' ', …)` in the Python tokeniser.
-static MD_PUNCT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[#*`\[\](){}|>~_]").unwrap());
+static MD_PUNCT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[#*`\[\](){}|>~_]").unwrap());
 /// Token regex: alphanum runs, optionally joined by single `-` (for
 /// `sqlite-vec`, `rank-bm25`, etc.). Matches Python exactly.
-static TOKEN_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[a-z0-9]+(?:-[a-z0-9]+)*").unwrap());
+static TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[a-z0-9]+(?:-[a-z0-9]+)*").unwrap());
 
 /// Tokenise a single string the way Python does. Returns lowercase
 /// tokens with stopwords + 1-char tokens dropped.
@@ -303,8 +298,7 @@ impl Bm25Index {
 /// brain with BM25 loaded but no open DB handle still gets its index
 /// reused across reopens.
 fn cache() -> &'static parking_lot::RwLock<HashMap<String, Arc<Bm25Index>>> {
-    static CACHE: OnceCell<parking_lot::RwLock<HashMap<String, Arc<Bm25Index>>>> =
-        OnceCell::new();
+    static CACHE: OnceCell<parking_lot::RwLock<HashMap<String, Arc<Bm25Index>>>> = OnceCell::new();
     CACHE.get_or_init(|| parking_lot::RwLock::new(HashMap::new()))
 }
 

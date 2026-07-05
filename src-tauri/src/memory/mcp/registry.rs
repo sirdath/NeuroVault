@@ -106,7 +106,13 @@ pub fn load_tools() -> Vec<ToolDef> {
 // memory tools. `full` opts back into the entire surface.
 
 const TIER_MINIMAL: &[&str] = &["recall", "related", "session_start"];
-const TIER_LITE_ADD: &[&str] = &["remember", "status", "list_brains", "switch_brain", "update"];
+const TIER_LITE_ADD: &[&str] = &[
+    "remember",
+    "status",
+    "list_brains",
+    "switch_brain",
+    "update",
+];
 const TIER_STANDARD_ADD: &[&str] = &[
     "recall_chunks",
     "temporal_recall",
@@ -188,7 +194,11 @@ mod tests {
         let mut seen = HashSet::new();
         for t in &tools {
             assert!(seen.insert(t.name.clone()), "duplicate tool: {}", t.name);
-            assert!(!t.description.is_empty(), "{} has empty description", t.name);
+            assert!(
+                !t.description.is_empty(),
+                "{} has empty description",
+                t.name
+            );
             let m = t.call.method.to_uppercase();
             assert!(
                 matches!(m.as_str(), "GET" | "POST" | "PUT" | "DELETE"),
@@ -214,7 +224,10 @@ mod tests {
         let names: HashSet<String> = load_tools().into_iter().map(|t| t.name).collect();
         for tier in ["minimal", "lite", "standard"] {
             for t in allowed_for_tier(tier).unwrap() {
-                assert!(names.contains(&t), "tier {tier} references unknown tool {t}");
+                assert!(
+                    names.contains(&t),
+                    "tier {tier} references unknown tool {t}"
+                );
             }
         }
     }

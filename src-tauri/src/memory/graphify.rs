@@ -199,8 +199,16 @@ pub fn graphify_repo(root: &Path) -> Vec<ParsedFile> {
     // Vendored / build output not always in .gitignore. Hidden dirs (.git,
     // .venv, .next, …) are already skipped by the walker's default.
     const SKIP_DIRS: &[&str] = &[
-        "node_modules", "target", "dist", "build", "out", "vendor", "venv",
-        "__pycache__", "coverage", ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "out",
+        "vendor",
+        "venv",
+        "__pycache__",
+        "coverage",
+        ".git",
     ];
     // Parsing a 2 MB minified bundle is pure noise; 512 KB clears any
     // hand-written source with room to spare.
@@ -220,7 +228,11 @@ pub fn graphify_repo(root: &Path) -> Vec<ParsedFile> {
         }) {
             continue;
         }
-        if entry.metadata().map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
+        if entry
+            .metadata()
+            .map(|m| m.len() > MAX_BYTES)
+            .unwrap_or(false)
+        {
             continue;
         }
         let rel = p
@@ -262,7 +274,10 @@ struct LangProfile {
 
 impl LangProfile {
     fn symbol_kind(&self, k: &str) -> Option<SymbolKind> {
-        self.symbols.iter().find(|(n, _)| *n == k).map(|(_, sk)| *sk)
+        self.symbols
+            .iter()
+            .find(|(n, _)| *n == k)
+            .map(|(_, sk)| *sk)
     }
     fn is_fn_def(&self, k: &str) -> bool {
         self.fn_defs.contains(&k)
@@ -417,7 +432,10 @@ fn walk(node: Node, src: &str, pf: &mut ParsedFile, current_fn: Option<String>, 
             }
             let path = path.trim().trim_end_matches(';').trim().to_string();
             if !path.is_empty() {
-                pf.imports.push(Import { path, line: line_of(node) });
+                pf.imports.push(Import {
+                    path,
+                    line: line_of(node),
+                });
             }
         }
     }
@@ -456,11 +474,7 @@ fn line_of(node: Node) -> usize {
 /// Last identifier segment of a (possibly qualified) callee:
 /// `Foo::bar` → `bar`, `self.run` → `run`, `go` → `go`.
 fn last_segment(s: &str) -> String {
-    s.rsplit([':', '.'])
-        .next()
-        .unwrap_or(s)
-        .trim()
-        .to_string()
+    s.rsplit([':', '.']).next().unwrap_or(s).trim().to_string()
 }
 
 /// The declaration's first line — up to the first `{` or newline — collapsed to
@@ -520,7 +534,9 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
     // THIS code, then count what remains.
     let _ = prune_unresolved_calls(&conn);
     stats.calls = conn
-        .query_row("SELECT COUNT(*) FROM function_calls", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM function_calls", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .unwrap_or(0) as usize;
     // Second pass: resolve each surviving call to the file that DEFINES the
     // callee and write file→file 'calls' edges into engram_links — this connects
@@ -620,7 +636,11 @@ fn compute_code_edges(conn: &Connection) -> rusqlite::Result<usize> {
     )?;
     let pairs: Vec<(String, String, i64)> = stmt
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
@@ -695,7 +715,9 @@ pub fn fuse_notes_to_code(conn: &Connection) -> rusqlite::Result<usize> {
             if !seen.insert(name) {
                 continue; // one link per (note, symbol), even if mentioned twice
             }
-            let Some(files) = defs.get(name) else { continue };
+            let Some(files) = defs.get(name) else {
+                continue;
+            };
             for code_id in files {
                 if code_id == note_id {
                     continue;
@@ -726,7 +748,9 @@ pub fn where_defined(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(S
           WHERE v.name = ?1 AND r.ref_type = 'define'
           ORDER BY r.filepath, r.line_number",
     )?;
-    let rows = stmt.query_map([symbol], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let rows = stmt.query_map([symbol], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
     rows.collect()
 }
 
@@ -762,7 +786,11 @@ pub fn who_calls(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<(Strin
           ORDER BY filepath, line_number",
     )?;
     let rows = stmt.query_map([symbol], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
     })?;
     rows.collect()
 }
@@ -899,7 +927,8 @@ function compute(r: number): number { return r * r; }
 
     #[test]
     fn java_symbols_calls() {
-        let src = "class A {\n  int build() { return helper(); }\n  int helper() { return 1; }\n}\n";
+        let src =
+            "class A {\n  int build() { return helper(); }\n  int helper() { return 1; }\n}\n";
         let pf = parse_source("A.java", src).expect("java parses");
         assert_eq!(pf.language, Lang::Java);
         let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
@@ -912,7 +941,8 @@ function compute(r: number): number { return r * r; }
 
     #[test]
     fn csharp_symbols_calls() {
-        let src = "class A {\n  int Build() { return Helper(); }\n  int Helper() { return 1; }\n}\n";
+        let src =
+            "class A {\n  int Build() { return Helper(); }\n  int Helper() { return 1; }\n}\n";
         let pf = parse_source("A.cs", src).expect("c# parses");
         assert_eq!(pf.language, Lang::CSharp);
         let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
@@ -925,7 +955,8 @@ function compute(r: number): number { return r * r; }
 
     #[test]
     fn ruby_symbols_calls() {
-        let src = "class A\n  def build\n    helper(1)\n  end\n  def helper(n)\n    n\n  end\nend\n";
+        let src =
+            "class A\n  def build\n    helper(1)\n  end\n  def helper(n)\n    n\n  end\nend\n";
         let pf = parse_source("a.rb", src).expect("ruby parses");
         assert_eq!(pf.language, Lang::Ruby);
         let names: Vec<&str> = pf.symbols.iter().map(|s| s.name.as_str()).collect();
@@ -1002,7 +1033,10 @@ function compute(r: number): number { return r * r; }
         assert!(build_sig.contains("fn build"), "signature: {build_sig}");
         // passing just the basename still resolves the file (suffix match)
         let by_base = whats_in_file(&conn, "engine.rs").unwrap();
-        assert!(by_base.iter().any(|(n, _, _)| n == "build"), "basename should match");
+        assert!(
+            by_base.iter().any(|(n, _, _)| n == "build"),
+            "basename should match"
+        );
 
         // idempotent: a second run must not duplicate the definition
         write_parsed_file(&conn, &pf).unwrap();
@@ -1032,7 +1066,10 @@ function compute(r: number): number { return r * r; }
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "a.rs and b.rs should be linked via a 'calls' edge");
+        assert_eq!(
+            count, 1,
+            "a.rs and b.rs should be linked via a 'calls' edge"
+        );
     }
 
     #[test]
@@ -1062,8 +1099,8 @@ function compute(r: number): number { return r * r; }
     #[test]
     fn graphify_repo_skips_vendor_and_parses_source() {
         use std::fs;
-        let dir = std::env::temp_dir()
-            .join(format!("nv_graphify_{}_{}", std::process::id(), line!()));
+        let dir =
+            std::env::temp_dir().join(format!("nv_graphify_{}_{}", std::process::id(), line!()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::create_dir_all(dir.join("node_modules")).unwrap();
@@ -1095,7 +1132,10 @@ function compute(r: number): number { return r * r; }
         )
         .unwrap();
 
-        assert!(fuse_notes_to_code(&conn).unwrap() >= 1, "expected a note→code link");
+        assert!(
+            fuse_notes_to_code(&conn).unwrap() >= 1,
+            "expected a note→code link"
+        );
         let code_id = format!("code-{}", short_hash("billing.rs"));
         let linked: i64 = conn
             .query_row(
@@ -1105,7 +1145,10 @@ function compute(r: number): number { return r * r; }
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(linked, 1, "note-1 should link to billing.rs via 'references'");
+        assert_eq!(
+            linked, 1,
+            "note-1 should link to billing.rs via 'references'"
+        );
 
         // A bare prose mention (no backticks) must NOT manufacture a link.
         conn.execute(
@@ -1143,7 +1186,11 @@ function compute(r: number): number { return r * r; }
             total_calls
         );
 
-        assert!(files.len() >= 20, "expected many files, got {}", files.len());
+        assert!(
+            files.len() >= 20,
+            "expected many files, got {}",
+            files.len()
+        );
         assert!(total_syms >= 100, "expected many symbols, got {total_syms}");
 
         let me = files
@@ -1157,7 +1204,12 @@ function compute(r: number): number { return r * r; }
         }
         eprintln!("graphify.rs calls (first 10):");
         for c in me.calls.iter().take(10) {
-            eprintln!("  {} -> {} @{}", c.caller.as_deref().unwrap_or("<mod>"), c.callee, c.line);
+            eprintln!(
+                "  {} -> {} @{}",
+                c.caller.as_deref().unwrap_or("<mod>"),
+                c.callee,
+                c.line
+            );
         }
         assert!(names.contains(&"parse_source"));
         assert!(names.contains(&"graphify_repo"));
@@ -1192,7 +1244,10 @@ function compute(r: number): number { return r * r; }
         );
 
         assert!(!defs.is_empty(), "parse_source should be defined somewhere");
-        assert!(kept < raw, "prune should drop stdlib noise ({kept} vs {raw})");
+        assert!(
+            kept < raw,
+            "prune should drop stdlib noise ({kept} vs {raw})"
+        );
         assert!(
             who_calls(&conn, "Some").unwrap().is_empty(),
             "Some is a constructor, not a codebase fn — must be pruned"

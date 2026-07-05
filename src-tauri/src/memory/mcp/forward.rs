@@ -67,7 +67,11 @@ pub async fn backend_version(base: &str) -> Option<String> {
         .timeout(Duration::from_secs(2))
         .build()
         .ok()?;
-    let resp = client.get(format!("{base}/api/version")).send().await.ok()?;
+    let resp = client
+        .get(format!("{base}/api/version"))
+        .send()
+        .await
+        .ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -139,7 +143,11 @@ impl Forwarder {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        Self { client, base, session_brain }
+        Self {
+            client,
+            base,
+            session_brain,
+        }
     }
 
     /// Forward one tool call. Always returns a JSON `Value` — backend
@@ -170,7 +178,9 @@ impl Forwarder {
             Some("engram_history") => self.special_engram_history(&a).await,
             Some("core_memory_read") => self.special_core_memory_read(&a).await,
             // The extractor used the kebab form "compile-submit"; accept both.
-            Some("compile-submit") | Some("compile_submit") => self.special_compile_submit(&a).await,
+            Some("compile-submit") | Some("compile_submit") => {
+                self.special_compile_submit(&a).await
+            }
             _ => self.generic(&tool.call, &a).await,
         }
     }
@@ -183,7 +193,8 @@ impl Forwarder {
         if method == "GET" {
             self.get(&path, build_query(&spec.query, args)).await
         } else {
-            self.send(&method, &path, build_body(&spec.body, args)).await
+            self.send(&method, &path, build_body(&spec.body, args))
+                .await
         }
     }
 
@@ -249,8 +260,16 @@ impl Forwarder {
             "include_observations".into(),
             bool_str(args.get("include_observations").unwrap_or(&json!(false))),
         ));
-        q.push(("rerank".into(), bool_str(args.get("rerank").unwrap_or(&json!(false)))));
-        push_if_present(&mut q, "spread_hops", args.get("spread_hops"), Transform::None);
+        q.push((
+            "rerank".into(),
+            bool_str(args.get("rerank").unwrap_or(&json!(false))),
+        ));
+        push_if_present(
+            &mut q,
+            "spread_hops",
+            args.get("spread_hops"),
+            Transform::None,
+        );
         push_if_truthy_none(&mut q, "as_of", args.get("as_of"));
         self.get("/api/recall", q).await
     }
@@ -272,7 +291,11 @@ impl Forwarder {
             .rsplit_once('.')
             .map(|(s, _)| s.to_string())
             .unwrap_or_else(|| basename.clone());
-        let display_title = if title.is_empty() { stem } else { title.to_string() };
+        let display_title = if title.is_empty() {
+            stem
+        } else {
+            title.to_string()
+        };
         let content = format!("![{}]({})\n\n{}", display_title, image_path, caption);
         let brain = args.get("brain").cloned().unwrap_or(Value::Null);
 
@@ -336,7 +359,10 @@ impl Forwarder {
             }
             _ => {
                 let path = format!("/api/engrams/{}/versions", pct_encode(&engram_id));
-                let mut q = vec![("limit".into(), plain_string(args.get("limit").unwrap_or(&json!(50))))];
+                let mut q = vec![(
+                    "limit".into(),
+                    plain_string(args.get("limit").unwrap_or(&json!(50))),
+                )];
                 push_if_truthy_none(&mut q, "brain", brain);
                 self.get(&path, q).await
             }
@@ -352,8 +378,15 @@ impl Forwarder {
                 q.push(("brain".into(), plain_string(b)));
             }
         }
-        match args.get("label").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-            Some(label) => self.get(&format!("/api/core_memory/{}", pct_encode(label)), q).await,
+        match args
+            .get("label")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            Some(label) => {
+                self.get(&format!("/api/core_memory/{}", pct_encode(label)), q)
+                    .await
+            }
             None => self.get("/api/core_memory", q).await,
         }
     }
@@ -366,7 +399,10 @@ impl Forwarder {
             _ => json!([]),
         };
         let mut m = Map::new();
-        m.insert("topic".into(), args.get("topic").cloned().unwrap_or(Value::Null));
+        m.insert(
+            "topic".into(),
+            args.get("topic").cloned().unwrap_or(Value::Null),
+        );
         m.insert(
             "wiki_markdown".into(),
             args.get("wiki_markdown").cloned().unwrap_or(Value::Null),
@@ -381,7 +417,8 @@ impl Forwarder {
                 m.insert("brain".into(), b.clone());
             }
         }
-        self.send("POST", "/api/compilations/submit", Value::Object(m)).await
+        self.send("POST", "/api/compilations/submit", Value::Object(m))
+            .await
     }
 }
 
@@ -512,7 +549,10 @@ fn bool_str(v: &Value) -> String {
 }
 
 fn str_arg(args: &Map<String, Value>, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Python truthiness: null / false / 0 / "" / [] / {} are falsy.
@@ -568,7 +608,10 @@ mod tests {
     use super::*;
 
     fn args(pairs: &[(&str, Value)]) -> Map<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -592,23 +635,60 @@ mod tests {
     #[test]
     fn get_query_drops_null_and_lowercases_bools() {
         let specs = vec![
-            ParamSpec { param: "q".into(), from: "query".into(), transform: "none".into(), omit: "never".into() },
-            ParamSpec { param: "brain".into(), from: "brain".into(), transform: "none".into(), omit: "if_none".into() },
-            ParamSpec { param: "rerank".into(), from: "rerank".into(), transform: "lower_bool".into(), omit: "never".into() },
+            ParamSpec {
+                param: "q".into(),
+                from: "query".into(),
+                transform: "none".into(),
+                omit: "never".into(),
+            },
+            ParamSpec {
+                param: "brain".into(),
+                from: "brain".into(),
+                transform: "none".into(),
+                omit: "if_none".into(),
+            },
+            ParamSpec {
+                param: "rerank".into(),
+                from: "rerank".into(),
+                transform: "lower_bool".into(),
+                omit: "never".into(),
+            },
         ];
-        let a = args(&[("query", json!("auth")), ("brain", Value::Null), ("rerank", json!(true))]);
+        let a = args(&[
+            ("query", json!("auth")),
+            ("brain", Value::Null),
+            ("rerank", json!(true)),
+        ]);
         let q = build_query(&specs, &a);
         assert!(q.contains(&("q".into(), "auth".into())));
         assert!(q.contains(&("rerank".into(), "true".into())));
-        assert!(!q.iter().any(|(k, _)| k == "brain"), "null brain must be dropped");
+        assert!(
+            !q.iter().any(|(k, _)| k == "brain"),
+            "null brain must be dropped"
+        );
     }
 
     #[test]
     fn body_respects_omit_and_keeps_native_types() {
         let specs = vec![
-            ParamSpec { param: "content".into(), from: "content".into(), transform: "none".into(), omit: "never".into() },
-            ParamSpec { param: "title".into(), from: "title".into(), transform: "none".into(), omit: "if_falsy".into() },
-            ParamSpec { param: "deduplicate".into(), from: "deduplicate".into(), transform: "none".into(), omit: "if_none".into() },
+            ParamSpec {
+                param: "content".into(),
+                from: "content".into(),
+                transform: "none".into(),
+                omit: "never".into(),
+            },
+            ParamSpec {
+                param: "title".into(),
+                from: "title".into(),
+                transform: "none".into(),
+                omit: "if_falsy".into(),
+            },
+            ParamSpec {
+                param: "deduplicate".into(),
+                from: "deduplicate".into(),
+                transform: "none".into(),
+                omit: "if_none".into(),
+            },
         ];
         let a = args(&[
             ("content", json!("hello")),
@@ -617,7 +697,10 @@ mod tests {
         ]);
         let body = build_body(&specs, &a);
         assert_eq!(body.get("content").unwrap(), &json!("hello"));
-        assert!(body.get("title").is_none(), "empty title must be dropped (if_falsy)");
+        assert!(
+            body.get("title").is_none(),
+            "empty title must be dropped (if_falsy)"
+        );
         assert_eq!(body.get("deduplicate").unwrap(), &json!(0.92));
     }
 

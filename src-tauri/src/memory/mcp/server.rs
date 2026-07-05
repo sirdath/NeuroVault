@@ -66,7 +66,11 @@ fn to_rmcp_tool(def: &ToolDef) -> Tool {
     tool.title = def.title.clone();
 
     let a = &def.annotations;
-    if a.read_only.is_some() || a.destructive.is_some() || a.idempotent.is_some() || a.open_world.is_some() {
+    if a.read_only.is_some()
+        || a.destructive.is_some()
+        || a.idempotent.is_some()
+        || a.open_world.is_some()
+    {
         tool.annotations = Some(ToolAnnotations::from_raw(
             def.title.clone(),
             a.read_only,
@@ -124,7 +128,10 @@ impl ServerHandler for NeuroVaultMcp {
                     ));
                 }
                 None => {
-                    return Err(McpError::invalid_params(format!("unknown tool '{name}'"), None));
+                    return Err(McpError::invalid_params(
+                        format!("unknown tool '{name}'"),
+                        None,
+                    ));
                 }
             };
 
@@ -167,6 +174,10 @@ mod tests {
         let s = NeuroVaultMcp::new(None);
         let info = s.get_info();
         assert!(info.capabilities.tools.is_some());
-        assert!(info.instructions.as_deref().unwrap_or("").contains("NeuroVault is a persistent"));
+        assert!(info
+            .instructions
+            .as_deref()
+            .unwrap_or("")
+            .contains("NeuroVault is a persistent"));
     }
 }

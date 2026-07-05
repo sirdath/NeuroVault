@@ -47,10 +47,10 @@ use super::bm25::{self, Bm25Index};
 use super::db::{BrainDb, EMBEDDING_DIM};
 use super::embedder;
 use super::entities::extract_entities_locally;
+use super::pagerank_state;
 use super::query_parser::{self, QueryFilters};
 use super::recall_cache;
 use super::reranker;
-use super::pagerank_state;
 use super::rrf::rrf_score;
 use super::spread::{spread_neighbors, SpreadOpts};
 use super::throttle;
@@ -220,23 +220,35 @@ fn passes_filters(
     entity_allow: Option<&std::collections::HashSet<String>>,
 ) -> bool {
     if let Some(k) = &filters.kind {
-        if kind != k { return false; }
+        if kind != k {
+            return false;
+        }
     }
     if let Some(s) = &filters.state {
-        if state != s { return false; }
+        if state != s {
+            return false;
+        }
     }
     if let Some(f) = &filters.folder {
         let prefix = format!("{}/", f);
-        if !filename.starts_with(&prefix) { return false; }
+        if !filename.starts_with(&prefix) {
+            return false;
+        }
     }
     if let Some(a) = &filters.after {
-        if created_at.is_empty() || created_at < a.as_str() { return false; }
+        if created_at.is_empty() || created_at < a.as_str() {
+            return false;
+        }
     }
     if let Some(b) = &filters.before {
-        if created_at.is_empty() || created_at >= b.as_str() { return false; }
+        if created_at.is_empty() || created_at >= b.as_str() {
+            return false;
+        }
     }
     if let Some(ag) = &filters.agent {
-        if agent_id != ag { return false; }
+        if agent_id != ag {
+            return false;
+        }
     }
     if filters.entity.is_some() {
         match entity_allow {
@@ -276,11 +288,7 @@ static QUESTION_WORDS: &[&str] = &[
 
 fn classify_query(query: &str) -> &'static str {
     let words: Vec<&str> = query.split_whitespace().collect();
-    let head: Vec<String> = words
-        .iter()
-        .take(3)
-        .map(|w| w.to_lowercase())
-        .collect();
+    let head: Vec<String> = words.iter().take(3).map(|w| w.to_lowercase()).collect();
     let has_qword = head.iter().any(|w| QUESTION_WORDS.contains(&w.as_str()));
     if words.len() <= 4 && !has_qword {
         return "keyword";
@@ -339,14 +347,23 @@ fn fuse_cross_encoder(mags: &[f64], ce: &[f32], w_hybrid: f64, w_ce: f64) -> Vec
     }
     // CE rank = position in CE-logit-descending order, per candidate.
     let mut ce_order: Vec<usize> = (0..w).collect();
-    ce_order.sort_by(|&a, &b| ce[b].partial_cmp(&ce[a]).unwrap_or(std::cmp::Ordering::Equal));
+    ce_order.sort_by(|&a, &b| {
+        ce[b]
+            .partial_cmp(&ce[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut ce_rank = vec![0usize; w];
     for (r, &i) in ce_order.iter().enumerate() {
         ce_rank[i] = r;
     }
     // Fused reciprocal-rank score: hybrid rank is the index, CE rank above.
     let mut fused: Vec<(usize, f64)> = (0..w)
-        .map(|i| (i, w_hybrid * rrf_score(i + 1) + w_ce * rrf_score(ce_rank[i] + 1)))
+        .map(|i| {
+            (
+                i,
+                w_hybrid * rrf_score(i + 1) + w_ce * rrf_score(ce_rank[i] + 1),
+            )
+        })
         .collect();
     fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     // The window's magnitudes, largest first, to remap onto the fused order.
@@ -434,9 +451,7 @@ fn age_days(updated_at: &str) -> f64 {
             "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond]"
         ),
         // "2026-04-22 18:03:45"
-        time::macros::format_description!(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ),
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
         // "2026-04-22T18:03:45.123"
         time::macros::format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond]"
@@ -534,25 +549,20 @@ fn title_embeddings(titles: &[String]) -> Result<Vec<Vec<f32>>> {
 
 // ---- BM25 token helpers (mirror of memory::bm25 tokenise) -----------------
 
-static MD_PUNCT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[#*`\[\](){}|>~_]").unwrap());
-static TOKEN_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"[a-z0-9]+(?:-[a-z0-9]+)*").unwrap());
+static MD_PUNCT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[#*`\[\](){}|>~_]").unwrap());
+static TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[a-z0-9]+(?:-[a-z0-9]+)*").unwrap());
 static BM25_STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "shall", "can", "need", "dare", "ought",
-        "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-        "as", "into", "through", "during", "before", "after", "above", "below",
-        "between", "out", "off", "over", "under", "again", "further", "then",
-        "once", "here", "there", "when", "where", "why", "how", "all", "each",
-        "every", "both", "few", "more", "most", "other", "some", "such", "no",
-        "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-        "and", "but", "or", "if", "while", "because", "until", "although",
-        "this", "that", "these", "those", "it", "its", "i", "me", "my",
-        "we", "our", "you", "your", "he", "him", "his", "she", "her",
-        "they", "them", "their", "what", "which", "who", "whom",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+        "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+        "as", "into", "through", "during", "before", "after", "above", "below", "between", "out",
+        "off", "over", "under", "again", "further", "then", "once", "here", "there", "when",
+        "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
+        "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+        "and", "but", "or", "if", "while", "because", "until", "although", "this", "that", "these",
+        "those", "it", "its", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
+        "she", "her", "they", "them", "their", "what", "which", "who", "whom",
     ]
     .iter()
     .copied()
@@ -566,8 +576,7 @@ static BM25_STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
 /// narrow + low-risk context. Longer suffixes are checked first.
 fn light_stem(t: &str) -> String {
     for suf in [
-        "ations", "ation", "ings", "ing", "ers", "er", "ors", "or", "ions",
-        "ion", "ed", "es", "s",
+        "ations", "ation", "ings", "ing", "ers", "er", "ors", "or", "ions", "ion", "ed", "es", "s",
     ] {
         if t.len() > suf.len() + 2 && t.ends_with(suf) {
             return t[..t.len() - suf.len()].to_string();
@@ -594,13 +603,10 @@ fn bm25_tokenize(text: &str) -> Vec<String> {
 // the salient terms so a separate, conservative boost can reward exact
 // entity/phrase hits. Detection keys on *linguistic structure*
 // (capitalisation, quotes) only — never on bench question text.
-static QUOTED_DQ_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new("\"([^\"]{2,60})\"").unwrap());
-static QUOTED_SQ_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"'([^']{2,60})'").unwrap());
+static QUOTED_DQ_RE: Lazy<Regex> = Lazy::new(|| Regex::new("\"([^\"]{2,60})\"").unwrap());
+static QUOTED_SQ_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"'([^']{2,60})'").unwrap());
 // Capitalised word, >=3 chars (Upper + >=2 lower): "Sarah", "Postgres".
-static CAP_WORD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\p{Lu}\p{Ll}{2,}$").unwrap());
+static CAP_WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\p{Lu}\p{Ll}{2,}$").unwrap());
 // Internal-caps token: a lowercase letter immediately followed by an
 // uppercase one ("PostgreSQL", "NeuroVault"). Normal prose words are
 // never camel-cased, so these are proper nouns even sentence-initially.
@@ -651,8 +657,7 @@ fn extract_salient(query: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut sentence_start = true;
     for raw in query.split_whitespace() {
         let word = raw.trim_matches(|c: char| !c.is_alphanumeric());
-        let ends_sentence =
-            raw.ends_with('.') || raw.ends_with('?') || raw.ends_with('!');
+        let ends_sentence = raw.ends_with('.') || raw.ends_with('?') || raw.ends_with('!');
         if word.is_empty() {
             if ends_sentence {
                 sentence_start = true;
@@ -665,10 +670,7 @@ fn extract_salient(query: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
         // Internal-caps tokens count even sentence-initially; a plain
         // Capitalised word at sentence start is ambiguous → skip it.
         let candidate = internal || (cap && !sentence_start);
-        if candidate
-            && lc.chars().count() >= 3
-            && !BM25_STOPWORDS.contains(lc.as_str())
-        {
+        if candidate && lc.chars().count() >= 3 && !BM25_STOPWORDS.contains(lc.as_str()) {
             nouns.push(lc);
         }
         sentence_start = ends_sentence;
@@ -676,8 +678,10 @@ fn extract_salient(query: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     nouns.sort();
     nouns.dedup();
 
-    let mut numerics: Vec<String> =
-        NUM_RE.find_iter(query).map(|m| m.as_str().to_string()).collect();
+    let mut numerics: Vec<String> = NUM_RE
+        .find_iter(query)
+        .map(|m| m.as_str().to_string())
+        .collect();
     numerics.sort();
     numerics.dedup();
 
@@ -761,7 +765,10 @@ fn resolve_chunk_engrams(db: &BrainDb, chunk_ids: &[String]) -> Result<HashMap<S
     let placeholders = std::iter::repeat_n("?", chunk_ids.len())
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!("SELECT id, engram_id FROM chunks WHERE id IN ({})", placeholders);
+    let sql = format!(
+        "SELECT id, engram_id FROM chunks WHERE id IN ({})",
+        placeholders
+    );
     let conn = db.lock();
     let mut stmt = conn.prepare(&sql)?;
     let bind: Vec<rusqlite::types::Value> = chunk_ids
@@ -872,11 +879,7 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
 /// Run `hybrid_retrieve` end-to-end. Equivalent to Python's
 /// `retriever.hybrid_retrieve`, minus the cross-encoder reranker
 /// branch. BM25 is ensured to be built before the first query fires.
-pub fn hybrid_retrieve(
-    db: &BrainDb,
-    query: &str,
-    opts: &RecallOpts,
-) -> Result<Vec<RecallHit>> {
+pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<Vec<RecallHit>> {
     let exclude_set: HashSet<String> = opts.exclude_kinds.iter().cloned().collect();
     // Pull any `kind:`, `folder:`, `after:` … operators out of the
     // query before embedding. The remaining free text is what goes
@@ -884,7 +887,11 @@ pub fn hybrid_retrieve(
     // candidates at materialisation time so we don't waste scoring
     // budget on rows that'll be filtered out anyway.
     let (filters, free_text) = query_parser::parse(query);
-    let effective_query = if free_text.is_empty() { query } else { free_text.as_str() };
+    let effective_query = if free_text.is_empty() {
+        query
+    } else {
+        free_text.as_str()
+    };
     // Entity filter needs a one-time lookup of "which engrams mention
     // this entity" so the per-candidate check stays O(1).
     let entity_allow = match &filters.entity {
@@ -917,9 +924,21 @@ pub fn hybrid_retrieve(
     // (so latency comparisons are fair) but contributes nothing to the
     // fused score. Zeroing the weight is cleaner than skipping the
     // signal because it leaves the code path intact.
-    let w_sem = if is_ablated(opts, "semantic") { 0.0 } else { w_sem_base };
-    let w_bm25 = if is_ablated(opts, "bm25") { 0.0 } else { w_bm25_base };
-    let w_graph = if is_ablated(opts, "entity_graph") { 0.0 } else { w_graph_base };
+    let w_sem = if is_ablated(opts, "semantic") {
+        0.0
+    } else {
+        w_sem_base
+    };
+    let w_bm25 = if is_ablated(opts, "bm25") {
+        0.0
+    } else {
+        w_bm25_base
+    };
+    let w_graph = if is_ablated(opts, "entity_graph") {
+        0.0
+    } else {
+        w_graph_base
+    };
 
     // Query expansion (synonym injection) was removed 2026-04-23 as
     // net-negative in the eval matrix. The retrieval query is the
@@ -1011,9 +1030,7 @@ pub fn hybrid_retrieve(
                 map
             };
             for cid in &top_bm {
-                if let (Some(eid), Some(ct)) =
-                    (chunk_to_engram.get(cid), id_content.get(cid))
-                {
+                if let (Some(eid), Some(ct)) = (chunk_to_engram.get(cid), id_content.get(cid)) {
                     if !ct.trim().is_empty() {
                         best_chunk_text
                             .entry(eid.clone())
@@ -1068,9 +1085,7 @@ pub fn hybrid_retrieve(
         // token overlap — NO model inference — so it stays whole-vault:
         // find-by-title keeps working for every engram at negligible cost.
         for (eid, title, filename) in engrams_meta.iter() {
-            let slug = filename
-                .replace(".md", "")
-                .replace(['-', '_'], " ");
+            let slug = filename.replace(".md", "").replace(['-', '_'], " ");
             let mut title_tokens: HashSet<String> = HashSet::new();
             for src in [title.as_str(), slug.as_str()] {
                 for tok in bm25_tokenize(src) {
@@ -1196,9 +1211,7 @@ pub fn hybrid_retrieve(
                     continue;
                 };
                 let hay = format!("{title}\n{content}").to_lowercase();
-                if !quoted.is_empty()
-                    && quoted.iter().any(|p| hay.contains(p.as_str()))
-                {
+                if !quoted.is_empty() && quoted.iter().any(|p| hay.contains(p.as_str())) {
                     *score += 0.20;
                 }
                 if !proper_nouns.is_empty() || !numerics.is_empty() {
@@ -1303,8 +1316,7 @@ pub fn hybrid_retrieve(
                 // This is what makes "who OWNS x" prefer the owner fact
                 // over a co-subject "signals" fact (owns~owner via
                 // light_stem). 0 = subject-only match.
-                let subj_stems: HashSet<String> =
-                    stoks.iter().map(|t| light_stem(t)).collect();
+                let subj_stems: HashSet<String> = stoks.iter().map(|t| light_stem(t)).collect();
                 let mut av_stems: HashSet<String> = HashSet::new();
                 for tok in bm25_tokenize(&f.attribute)
                     .into_iter()
@@ -1389,10 +1401,22 @@ pub fn hybrid_retrieve(
     // `agent_id` are fetched on the same row so the Tier-A operator
     // filters (folder:, agent:) can be tested without a follow-up
     // query.
-    let mut candidates: Vec<Candidate> = Vec::with_capacity(candidate_pool.min(sorted_candidates.len()));
+    let mut candidates: Vec<Candidate> =
+        Vec::with_capacity(candidate_pool.min(sorted_candidates.len()));
     for (eid, rrf) in sorted_candidates.into_iter().take(candidate_pool) {
         let conn = db.lock();
-        let row: Option<(String, String, String, f64, String, String, String, String, String, String)> = conn
+        let row: Option<(
+            String,
+            String,
+            String,
+            f64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        )> = conn
             .query_row(
                 "SELECT id, title, content, strength, state,
                         COALESCE(updated_at, ''), COALESCE(created_at, ''),
@@ -1417,7 +1441,19 @@ pub fn hybrid_retrieve(
             )
             .ok();
         drop(conn);
-        let Some((id, title, content, strength, state, updated_at, created_at, kind, filename, agent_id)) = row else {
+        let Some((
+            id,
+            title,
+            content,
+            strength,
+            state,
+            updated_at,
+            created_at,
+            kind,
+            filename,
+            agent_id,
+        )) = row
+        else {
             continue;
         };
         if state == "dormant" {
@@ -1562,7 +1598,10 @@ pub fn hybrid_retrieve(
             continue;
         }
 
-        let frac = superseded_fraction.get(&c.engram_id).copied().unwrap_or(0.0);
+        let frac = superseded_fraction
+            .get(&c.engram_id)
+            .copied()
+            .unwrap_or(0.0);
         if frac > 0.0 {
             c.recency_factor *= 1.0 - 0.5 * frac;
         }
@@ -1600,8 +1639,7 @@ pub fn hybrid_retrieve(
     // machine; fails safe toward no-rerank per adaptive-retrieval
     // guidance (Adaptive-RAG 2403.14403, DAT 2503.23013).
     let rerank_by_shape = classify_query(effective_query) == "keyword";
-    let do_rerank = (opts.use_reranker || rerank_by_shape)
-        && !is_ablated(opts, "reranker");
+    let do_rerank = (opts.use_reranker || rerank_by_shape) && !is_ablated(opts, "reranker");
     if do_rerank && candidates.len() > 1 {
         let limit = candidates.len().min(20);
         let docs: Vec<String> = candidates
@@ -1620,9 +1658,7 @@ pub fn hybrid_retrieve(
                 // `rerank_matched_chunk` ablation for paired A/B.
                 let body: String = if !is_ablated(opts, "rerank_matched_chunk") {
                     match best_chunk_text.get(&c.engram_id) {
-                        Some(ch) if !ch.trim().is_empty() => {
-                            ch.trim().chars().take(400).collect()
-                        }
+                        Some(ch) if !ch.trim().is_empty() => ch.trim().chars().take(400).collect(),
                         _ => c.content.chars().take(400).collect(),
                     }
                 } else {
@@ -1656,10 +1692,12 @@ pub fn hybrid_retrieve(
     let insight_off = is_ablated(opts, "insight_boost");
     for c in candidates.iter_mut() {
         let base = c.rerank_score * 0.75 + c.strength * 0.15;
-        let kind_bonus = if !insight_off && c.kind == "insight" { INSIGHT_BOOST } else { 0.0 };
-        c.final_score = round4(
-            base * c.recency_factor + c.decision_bonus + kind_bonus,
-        );
+        let kind_bonus = if !insight_off && c.kind == "insight" {
+            INSIGHT_BOOST
+        } else {
+            0.0
+        };
+        c.final_score = round4(base * c.recency_factor + c.decision_bonus + kind_bonus);
     }
 
     // --- Temporal disambiguation (knowledge-update fix) ---
@@ -1772,11 +1810,7 @@ pub fn hybrid_retrieve(
 ///
 /// O(keep·n) cosine ops over EMBEDDING_DIM; with pools of 30-60 and
 /// keep≤10 that is a few hundred dot products — sub-millisecond.
-fn apply_mmr(
-    candidates: &mut Vec<Candidate>,
-    title_emb: &HashMap<String, Vec<f32>>,
-    keep: usize,
-) {
+fn apply_mmr(candidates: &mut Vec<Candidate>, title_emb: &HashMap<String, Vec<f32>>, keep: usize) {
     let n = candidates.len();
     if n <= 1 || keep == 0 {
         return;
@@ -1868,10 +1902,8 @@ fn apply_temporal_disambiguation(candidates: &mut [Candidate]) {
     const PENALTY: f64 = 0.05;
     const JACCARD_THRESHOLD: f64 = 0.35;
     // Pre-tokenize titles once (lowercase + alphanumeric word split).
-    let token_sets: Vec<std::collections::HashSet<String>> = candidates
-        .iter()
-        .map(|c| title_tokens(&c.title))
-        .collect();
+    let token_sets: Vec<std::collections::HashSet<String>> =
+        candidates.iter().map(|c| title_tokens(&c.title)).collect();
 
     let n = candidates.len();
     let mut penalties = vec![0.0_f64; n];
@@ -1933,11 +1965,46 @@ fn title_tokens(title: &str) -> std::collections::HashSet<String> {
 }
 
 const STOP_TOKENS: &[&str] = &[
-    "the", "and", "for", "you", "your", "with", "that", "this", "from",
-    "are", "was", "were", "have", "has", "had", "will", "would", "could",
-    "what", "when", "where", "which", "who", "how", "why", "but", "not",
-    "all", "any", "some", "more", "less", "than", "into", "out", "about",
-    "session", "turn", "user", "assistant",
+    "the",
+    "and",
+    "for",
+    "you",
+    "your",
+    "with",
+    "that",
+    "this",
+    "from",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "had",
+    "will",
+    "would",
+    "could",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "how",
+    "why",
+    "but",
+    "not",
+    "all",
+    "any",
+    "some",
+    "more",
+    "less",
+    "than",
+    "into",
+    "out",
+    "about",
+    "session",
+    "turn",
+    "user",
+    "assistant",
 ];
 
 fn jaccard_similarity(
@@ -2014,9 +2081,17 @@ pub fn hybrid_retrieve_throttled(
         effective_opts.spread_hops,
         effective_opts.exclude_kinds.join(","),
         effective_opts.as_of.as_deref().unwrap_or(""),
-        if effective_opts.use_reranker { "1" } else { "0" },
+        if effective_opts.use_reranker {
+            "1"
+        } else {
+            "0"
+        },
         {
-            let mut v: Vec<String> = effective_opts.ablate.iter().map(|s| s.to_lowercase()).collect();
+            let mut v: Vec<String> = effective_opts
+                .ablate
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect();
             v.sort();
             v.join(",")
         },
@@ -2253,4 +2328,3 @@ mod fusion_tests {
         );
     }
 }
-

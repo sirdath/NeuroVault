@@ -156,7 +156,10 @@ pub fn diagnose(db: &BrainDb) -> Result<DiagnosticReport> {
     let id_set: HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
 
     let dormant = rows.iter().filter(|(_, st, _)| st == "dormant").count() as i64;
-    let unfiled = rows.iter().filter(|(_, _, fname)| folder_of(fname).is_empty()).count() as i64;
+    let unfiled = rows
+        .iter()
+        .filter(|(_, _, fname)| folder_of(fname).is_empty())
+        .count() as i64;
 
     // Links among the note set (ignore endpoints outside it).
     let mut stmt = conn.prepare("SELECT from_engram, to_engram FROM engram_links")?;
@@ -258,7 +261,12 @@ pub fn diagnose(db: &BrainDb) -> Result<DiagnosticReport> {
                 if orphans == 1 { "" } else { "s" }
             ),
             count: orphans,
-            severity: if frac(orphans) > 0.2 { "high" } else { "medium" }.into(),
+            severity: if frac(orphans) > 0.2 {
+                "high"
+            } else {
+                "medium"
+            }
+            .into(),
         });
     }
     if dormant > 0 {

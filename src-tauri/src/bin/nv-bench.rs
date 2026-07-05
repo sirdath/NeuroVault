@@ -35,8 +35,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use neurovault_lib::memory::{db, graphify, ingest, retriever};
 use neurovault_lib::memory::retriever::RecallOpts;
+use neurovault_lib::memory::{db, graphify, ingest, retriever};
 
 const HELP: &str = "\
 nv-bench: reproducible NeuroVault benchmarks (local, no API keys).
@@ -140,8 +140,11 @@ fn cmd_graphify(args: &[String]) -> i32 {
         eprintln!("graphify: not a directory: {}", repo.display());
         return 2;
     }
-    let label = flag_value(args, "--label")
-        .unwrap_or_else(|| repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    let label = flag_value(args, "--label").unwrap_or_else(|| {
+        repo.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
 
     let home = isolated_home("graphify");
     let brain = db::open_brain("bench").expect("open bench brain");
@@ -166,7 +169,10 @@ fn cmd_graphify(args: &[String]) -> i32 {
     println!("calls (intra):   {}", stats.calls);
     println!("graph edges:     {}", stats.edges);
     println!("parse time:      {:.2}s", parse_time.as_secs_f64());
-    println!("parse+index:     {secs:.2}s  ({:.0} files/s)", parsed_files as f64 / secs.max(0.001));
+    println!(
+        "parse+index:     {secs:.2}s  ({:.0} files/s)",
+        parsed_files as f64 / secs.max(0.001)
+    );
     println!("index size:      {:.1} MB", db_bytes as f64 / 1_048_576.0);
     println!("(on-device tree-sitter + SQLite; the repo was only read)");
 
@@ -236,7 +242,9 @@ fn ndcg_at_k(ranked: &[String], gold: &[String], k: usize) -> f64 {
         }
     }
     let ideal_hits = gold.len().min(k);
-    let idcg: f64 = (0..ideal_hits).map(|i| 1.0 / ((i as f64 + 2.0).log2())).sum();
+    let idcg: f64 = (0..ideal_hits)
+        .map(|i| 1.0 / ((i as f64 + 2.0).log2()))
+        .sum();
     if idcg == 0.0 {
         0.0
     } else {
@@ -320,10 +328,18 @@ fn abstention_curve(samples: &[(f64, bool)]) -> AbstentionReport {
     if n_abs == 0 || n_ans == 0 {
         return AbstentionReport::na();
     }
-    let ans_mean =
-        samples.iter().filter(|(_, a)| !*a).map(|(s, _)| *s).sum::<f64>() / n_ans as f64;
-    let abs_mean =
-        samples.iter().filter(|(_, a)| *a).map(|(s, _)| *s).sum::<f64>() / n_abs as f64;
+    let ans_mean = samples
+        .iter()
+        .filter(|(_, a)| !*a)
+        .map(|(s, _)| *s)
+        .sum::<f64>()
+        / n_ans as f64;
+    let abs_mean = samples
+        .iter()
+        .filter(|(_, a)| *a)
+        .map(|(s, _)| *s)
+        .sum::<f64>()
+        / n_abs as f64;
 
     let mut scores: Vec<f64> = samples.iter().map(|(s, _)| *s).collect();
     scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -351,8 +367,16 @@ fn abstention_curve(samples: &[(f64, bool)]) -> AbstentionReport {
         let sens = tp as f64 / (tp + fn_).max(1) as f64;
         let spec = tn as f64 / (tn + fp).max(1) as f64;
         let bal = 0.5 * (sens + spec);
-        let prec = if tp + fp == 0 { 0.0 } else { tp as f64 / (tp + fp) as f64 };
-        let f1 = if prec + sens == 0.0 { 0.0 } else { 2.0 * prec * sens / (prec + sens) };
+        let prec = if tp + fp == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fp) as f64
+        };
+        let f1 = if prec + sens == 0.0 {
+            0.0
+        } else {
+            2.0 * prec * sens / (prec + sens)
+        };
         let acc = (tp + tn) as f64 / samples.len() as f64;
         curve.push((tau, prec, sens, bal, f1, acc));
         let better = match best {
@@ -420,9 +444,15 @@ fn parse_dataset(path: &str) -> Result<Vec<LmeQuestion>, String> {
             })
             .unwrap_or_default();
 
-        let ids = q["haystack_session_ids"].as_array().cloned().unwrap_or_default();
+        let ids = q["haystack_session_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let dates = q["haystack_dates"].as_array().cloned().unwrap_or_default();
-        let sessions_json = q["haystack_sessions"].as_array().cloned().unwrap_or_default();
+        let sessions_json = q["haystack_sessions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let mut sessions = Vec::with_capacity(sessions_json.len());
         for (i, sess) in sessions_json.iter().enumerate() {
             let sid = ids
@@ -455,7 +485,13 @@ fn parse_dataset(path: &str) -> Result<Vec<LmeQuestion>, String> {
             }
             sessions.push((sid, md));
         }
-        out.push(LmeQuestion { question_id, question_type, question, sessions, gold });
+        out.push(LmeQuestion {
+            question_id,
+            question_type,
+            question,
+            sessions,
+            gold,
+        });
     }
     Ok(out)
 }
@@ -599,7 +635,10 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     // only; answerable questions feed the gold-retrieval metrics. Means must
     // divide by n_scoreable, NOT the full slice, or abstention questions would
     // dilute hit@k / recall@k.
-    let n_abs_q = questions.iter().filter(|q| q.question_id.ends_with("_abs")).count();
+    let n_abs_q = questions
+        .iter()
+        .filter(|q| q.question_id.ends_with("_abs"))
+        .count();
     let n_scoreable = questions.len() - n_abs_q;
 
     // A self-describing config label so every report file is unambiguous about
@@ -622,7 +661,11 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     eprintln!(
         "config: [{config_label}] k={ks:?} rerank={rerank} recency={} \
          title_boosts={} extra_ablate={extra_ablate:?}",
-        if keep_recency { "production (wall-clock)" } else { "ablated (reproducible)" },
+        if keep_recency {
+            "production (wall-clock)"
+        } else {
+            "ablated (reproducible)"
+        },
         if keep_title_boosts { "on" } else { "ablated" },
     );
 
@@ -632,7 +675,7 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     // Aggregates: metric -> sum, plus per-question-type breakdown.
     let mut sums: HashMap<String, f64> = HashMap::new();
     let mut type_sums: HashMap<String, (f64, usize)> = HashMap::new(); // r@5 only
-    // --compare-rerank: the rerank-ON aggregate, scored on the SAME questions.
+                                                                       // --compare-rerank: the rerank-ON aggregate, scored on the SAME questions.
     let mut sums_b: HashMap<String, f64> = HashMap::new();
     let mut per_question: Vec<serde_json::Value> = Vec::new();
     // (top_score, is_abs) per question — the retrieval-confidence gate input.
@@ -719,7 +762,11 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             .filter(|h| h.engram_id != retriever::THROTTLE_HINT_ID)
             .map(|h| h.score)
             .fold(f64::NEG_INFINITY, f64::max);
-        let top_score = if top_score.is_finite() { top_score } else { 0.0 };
+        let top_score = if top_score.is_finite() {
+            top_score
+        } else {
+            0.0
+        };
         abstain_samples.push((top_score, is_abs));
 
         // engram_id -> session id via the stored filename (sess-<id>.md).
@@ -749,7 +796,8 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
         if !is_abs {
             for &k in &ks {
                 *sums.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked, &q.gold, k);
-                *sums.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked, &q.gold, k);
+                *sums.entry(format!("precision@{k}")).or_default() +=
+                    precision_at_k(&ranked, &q.gold, k);
                 *sums.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked, &q.gold, k);
                 *sums.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked, &q.gold, k);
             }
@@ -772,7 +820,8 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                 use_reranker: true,
                 ablate: opts.ablate.clone(),
             };
-            let hits_b = retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
+            let hits_b =
+                retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
             let ranked_b: Vec<String> = {
                 let conn = brain.lock();
                 hits_b
@@ -794,8 +843,10 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                     .collect()
             };
             for &k in &ks {
-                *sums_b.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked_b, &q.gold, k);
-                *sums_b.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("recall@{k}")).or_default() +=
+                    recall_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("precision@{k}")).or_default() +=
+                    precision_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked_b, &q.gold, k);
             }
@@ -818,7 +869,8 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                 use_reranker: opts.use_reranker,
                 ablate: ablate_b,
             };
-            let hits_b = retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
+            let hits_b =
+                retriever::hybrid_retrieve(&brain, &q.question, &opts_b).unwrap_or_default();
             let ranked_b: Vec<String> = {
                 let conn = brain.lock();
                 hits_b
@@ -840,8 +892,10 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
                     .collect()
             };
             for &k in &ks {
-                *sums_b.entry(format!("recall@{k}")).or_default() += recall_at_k(&ranked_b, &q.gold, k);
-                *sums_b.entry(format!("precision@{k}")).or_default() += precision_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("recall@{k}")).or_default() +=
+                    recall_at_k(&ranked_b, &q.gold, k);
+                *sums_b.entry(format!("precision@{k}")).or_default() +=
+                    precision_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("hit@{k}")).or_default() += hit_at_k(&ranked_b, &q.gold, k);
                 *sums_b.entry(format!("ndcg@{k}")).or_default() += ndcg_at_k(&ranked_b, &q.gold, k);
             }
@@ -914,8 +968,16 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     println!("dataset:      {dataset}");
     println!(
         "config:       [{config_label}] hybrid (vec+bm25+graph, RRF){}{}",
-        if rerank { " + cross-encoder rerank" } else { "" },
-        if keep_recency { ", production recency" } else { ", recency-ablated (reproducible)" },
+        if rerank {
+            " + cross-encoder rerank"
+        } else {
+            ""
+        },
+        if keep_recency {
+            ", production recency"
+        } else {
+            ", recency-ablated (reproducible)"
+        },
     );
     let mut keys: Vec<&String> = sums.keys().collect();
     keys.sort();
@@ -933,7 +995,10 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
             (format!("ablate '{f}' isolated"), format!("+{f}"))
         };
         println!("\n━━ A/B: {label} (same {n_scoreable} questions) ━━");
-        println!("{:<12} {:>10} {:>10} {:>9}", "metric", "baseline", col, "delta");
+        println!(
+            "{:<12} {:>10} {:>10} {:>9}",
+            "metric", "baseline", col, "delta"
+        );
         for k in keys.iter() {
             let a = sums[*k] / nf_score;
             let b = sums_b.get(*k).copied().unwrap_or(0.0) / nf_score;
@@ -953,14 +1018,15 @@ fn cmd_longmemeval(args: &[String]) -> i32 {
     let abs_report = abstention_curve(&abstain_samples);
     println!("\n━━ abstention (retrieval-confidence gate) ━━");
     if !abs_report.available {
-        println!(
-            "  N/A (slice has no _abs questions — include abstention questions, i.e."
-        );
+        println!("  N/A (slice has no _abs questions — include abstention questions, i.e.");
         println!("       run without --no-abstention, to measure this dimension)");
     } else {
         println!("  τ* (argmax balanced acc):  {:.4}", abs_report.tau_star);
         println!("  Abstention@τ* (accuracy):  {:.4}", abs_report.accuracy);
-        println!("  balanced accuracy:         {:.4}", abs_report.balanced_acc);
+        println!(
+            "  balanced accuracy:         {:.4}",
+            abs_report.balanced_acc
+        );
         println!(
             "  precision / recall / F1:   {:.4} / {:.4} / {:.4}",
             abs_report.precision, abs_report.recall, abs_report.f1
@@ -1105,7 +1171,8 @@ fn cmd_probe(args: &[String]) -> i32 {
     }
     let engrams: i64 = {
         let conn = brain.lock();
-        conn.query_row("SELECT COUNT(*) FROM engrams", [], |r| r.get(0)).unwrap_or(-1)
+        conn.query_row("SELECT COUNT(*) FROM engrams", [], |r| r.get(0))
+            .unwrap_or(-1)
     };
     eprintln!("probe: home={} engrams={engrams}", home.display());
     println!("\nQ: {}", q.question);
@@ -1115,11 +1182,27 @@ fn cmd_probe(args: &[String]) -> i32 {
     let configs: Vec<(&str, Vec<&str>, bool)> = vec![
         ("full (prod-ish)", vec!["recency"], false),
         ("no-mmr", vec!["recency", "mmr"], false),
-        ("semantic only", vec!["recency", "bm25", "entity_graph"], false),
-        ("bm25 only", vec!["recency", "semantic", "entity_graph"], false),
+        (
+            "semantic only",
+            vec!["recency", "bm25", "entity_graph"],
+            false,
+        ),
+        (
+            "bm25 only",
+            vec!["recency", "semantic", "entity_graph"],
+            false,
+        ),
         ("no-graph", vec!["recency", "entity_graph"], false),
-        ("bench (no-title)", vec!["recency", "title_semantic", "title_keyword"], false),
-        ("bench + no-mmr", vec!["recency", "title_semantic", "title_keyword", "mmr"], false),
+        (
+            "bench (no-title)",
+            vec!["recency", "title_semantic", "title_keyword"],
+            false,
+        ),
+        (
+            "bench + no-mmr",
+            vec!["recency", "title_semantic", "title_keyword", "mmr"],
+            false,
+        ),
         ("full + rerank", vec!["recency"], true),
     ];
     // Match the longmemeval runner's top_k so probe ranks reproduce bench

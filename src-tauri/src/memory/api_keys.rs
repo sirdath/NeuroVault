@@ -167,8 +167,7 @@ impl AuthedKey {
     /// Check whether this key may target `brain_id`. Empty allowlist
     /// = all brains. Non-empty = explicit permission required.
     pub fn may_use_brain(&self, brain_id: &str) -> bool {
-        self.brain_allowlist.is_empty()
-            || self.brain_allowlist.iter().any(|b| b == brain_id)
+        self.brain_allowlist.is_empty() || self.brain_allowlist.iter().any(|b| b == brain_id)
     }
 }
 
@@ -352,11 +351,7 @@ pub fn mint_key(label: &str, scope: Scope, brain_allowlist: Vec<String>) -> Resu
 /// High-level create: mint, append to in-memory store, persist,
 /// return the minted key. The plaintext is in the returned struct
 /// and nowhere on disk.
-pub fn create_key(
-    label: &str,
-    scope: Scope,
-    brain_allowlist: Vec<String>,
-) -> Result<MintedKey> {
+pub fn create_key(label: &str, scope: Scope, brain_allowlist: Vec<String>) -> Result<MintedKey> {
     let minted = mint_key(label, scope, brain_allowlist)?;
     {
         let mut guard = cache().write().expect("api_keys cache poisoned");

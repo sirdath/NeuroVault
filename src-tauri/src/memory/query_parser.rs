@@ -41,8 +41,8 @@ pub struct QueryFilters {
     pub folder: Option<String>,
     pub state: Option<String>,
     pub entity: Option<String>,
-    pub after: Option<String>,   // ISO date 'YYYY-MM-DD'
-    pub before: Option<String>,  // ISO date 'YYYY-MM-DD'
+    pub after: Option<String>,  // ISO date 'YYYY-MM-DD'
+    pub before: Option<String>, // ISO date 'YYYY-MM-DD'
     pub agent: Option<String>,
 }
 

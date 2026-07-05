@@ -162,8 +162,14 @@ fn registry_entries() -> Result<Vec<(String, String, Option<String>, Option<Stri
             .and_then(|v| v.as_str())
             .unwrap_or(&id)
             .to_string();
-        let description = b.get("description").and_then(|v| v.as_str()).map(String::from);
-        let vault_path = b.get("vault_path").and_then(|v| v.as_str()).map(String::from);
+        let description = b
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let vault_path = b
+            .get("vault_path")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let is_active = id == active;
         out.push((id, name, description, vault_path, is_active));
     }
@@ -316,7 +322,9 @@ fn row_value_to_json(row: &rusqlite::Row, idx: usize) -> Result<serde_json::Valu
             serde_json::Value::String(std::str::from_utf8(b).unwrap_or("").to_string())
         }
         ValueRef::Blob(b) => serde_json::Value::Array(
-            b.iter().map(|byte| serde_json::Value::Number((*byte).into())).collect(),
+            b.iter()
+                .map(|byte| serde_json::Value::Number((*byte).into()))
+                .collect(),
         ),
     })
 }

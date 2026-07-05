@@ -57,13 +57,19 @@ fn strip_chrome(text: &str) -> String {
         .replace_all(&t, |caps: &regex::Captures| {
             caps.get(2)
                 .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
+                .unwrap_or_else(|| {
+                    caps.get(1)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default()
+                })
         })
         .into_owned();
     // Markdown links: keep display text only.
     let t = MDLINK_RE
         .replace_all(&t, |caps: &regex::Captures| {
-            caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()
+            caps.get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default()
         })
         .into_owned();
     // Bold / italic — keep the word, drop the markers.

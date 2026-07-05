@@ -313,7 +313,10 @@ mod tests {
 
     #[test]
     fn embed_text_is_title_prefixed() {
-        let c = hierarchical_chunk("# MyTitle\n\nFirst sentence here. Second one follows.", "e1");
+        let c = hierarchical_chunk(
+            "# MyTitle\n\nFirst sentence here. Second one follows.",
+            "e1",
+        );
         for chunk in &c {
             assert!(chunk.embed_text.starts_with("MyTitle: "));
         }

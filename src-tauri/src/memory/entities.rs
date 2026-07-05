@@ -45,23 +45,67 @@ pub struct EntityRelation {
 /// lookup is O(1).
 static TECH_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "python", "rust", "javascript", "typescript", "react", "tauri", "sqlite",
-        "fastapi", "flask", "django", "node", "npm", "cargo", "git", "github",
-        "docker", "kubernetes", "aws", "gcp", "azure", "linux", "windows", "macos",
-        "postgresql", "mongodb", "redis", "neo4j", "chromadb", "pinecone",
-        "pytorch", "tensorflow", "scikit-learn", "numpy", "pandas",
-        "openai", "anthropic", "claude", "gpt", "llm", "mcp", "rag",
-        "html", "css", "tailwind", "vite", "webpack", "eslint",
-        "fastmcp", "sentence-transformers", "sqlite-vec", "watchdog",
-        "codemirror", "zustand", "framer-motion",
+        "python",
+        "rust",
+        "javascript",
+        "typescript",
+        "react",
+        "tauri",
+        "sqlite",
+        "fastapi",
+        "flask",
+        "django",
+        "node",
+        "npm",
+        "cargo",
+        "git",
+        "github",
+        "docker",
+        "kubernetes",
+        "aws",
+        "gcp",
+        "azure",
+        "linux",
+        "windows",
+        "macos",
+        "postgresql",
+        "mongodb",
+        "redis",
+        "neo4j",
+        "chromadb",
+        "pinecone",
+        "pytorch",
+        "tensorflow",
+        "scikit-learn",
+        "numpy",
+        "pandas",
+        "openai",
+        "anthropic",
+        "claude",
+        "gpt",
+        "llm",
+        "mcp",
+        "rag",
+        "html",
+        "css",
+        "tailwind",
+        "vite",
+        "webpack",
+        "eslint",
+        "fastmcp",
+        "sentence-transformers",
+        "sqlite-vec",
+        "watchdog",
+        "codemirror",
+        "zustand",
+        "framer-motion",
     ]
     .iter()
     .copied()
     .collect()
 });
 
-static HEADING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^#{1,3}\s+(.+)$").unwrap());
+static HEADING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^#{1,3}\s+(.+)$").unwrap());
 static WIKILINK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
 static BACKTICK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"`([^`]+)`").unwrap());
 static TITLECASE_RE: Lazy<Regex> =
@@ -83,18 +127,19 @@ pub fn extract_entities_locally(content: &str) -> Vec<ExtractedEntity> {
     let mut entities: Vec<ExtractedEntity> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    let add = |name: &str, etype: &str, list: &mut Vec<ExtractedEntity>, seen: &mut HashSet<String>| {
-        let key = name.trim().to_lowercase();
-        if key.is_empty() || seen.contains(&key) || key.chars().count() <= 1 {
-            return;
-        }
-        seen.insert(key);
-        list.push(ExtractedEntity {
-            name: name.trim().to_string(),
-            entity_type: etype.to_string(),
-            relations: Vec::new(),
-        });
-    };
+    let add =
+        |name: &str, etype: &str, list: &mut Vec<ExtractedEntity>, seen: &mut HashSet<String>| {
+            let key = name.trim().to_lowercase();
+            if key.is_empty() || seen.contains(&key) || key.chars().count() <= 1 {
+                return;
+            }
+            seen.insert(key);
+            list.push(ExtractedEntity {
+                name: name.trim().to_string(),
+                entity_type: etype.to_string(),
+                relations: Vec::new(),
+            });
+        };
 
     // 1. Headings → concept.
     for caps in HEADING_RE.captures_iter(content) {
@@ -236,8 +281,8 @@ pub fn store_entities(
                 continue;
             }
             let target_key = target_name.to_lowercase();
-            let target_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, target_key.as_bytes())
-                .to_string();
+            let target_id =
+                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, target_key.as_bytes()).to_string();
             conn.execute(
                 "INSERT OR IGNORE INTO entities (id, name, entity_type, mention_count)
                  VALUES (?1, ?2, 'concept', 1)",
@@ -260,14 +305,20 @@ mod tests {
     #[test]
     fn extract_headings_as_concepts() {
         let ents = extract_entities_locally("# Main Idea\n\nSome body.\n\n## Sub Topic\n");
-        assert!(ents.iter().any(|e| e.name == "Main Idea" && e.entity_type == "concept"));
-        assert!(ents.iter().any(|e| e.name == "Sub Topic" && e.entity_type == "concept"));
+        assert!(ents
+            .iter()
+            .any(|e| e.name == "Main Idea" && e.entity_type == "concept"));
+        assert!(ents
+            .iter()
+            .any(|e| e.name == "Sub Topic" && e.entity_type == "concept"));
     }
 
     #[test]
     fn extract_backticks_as_technology() {
         let ents = extract_entities_locally("Use `fastembed` to embed and `sqlite-vec` to store.");
-        assert!(ents.iter().any(|e| e.entity_type == "technology" && e.name == "fastembed"));
+        assert!(ents
+            .iter()
+            .any(|e| e.entity_type == "technology" && e.name == "fastembed"));
     }
 
     #[test]

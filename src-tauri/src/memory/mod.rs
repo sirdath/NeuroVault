@@ -41,31 +41,31 @@ pub mod db;
 pub mod diagnostic;
 pub mod embedder;
 pub mod entities;
-pub mod handlers;
 pub mod facts;
 pub mod graphify;
+pub mod handlers;
 pub mod http_server;
 pub mod inbox;
 pub mod ingest;
 pub mod mcp;
 pub mod migrations;
 pub mod pagerank_state;
-pub mod preference;
-pub mod todos;
 pub mod paths;
 pub mod port_recovery;
+pub mod preference;
 pub mod query_parser;
 pub mod read_ops;
 pub mod recall_cache;
 pub mod related;
-pub mod source_mirror;
 pub mod reranker;
 pub mod retriever;
 pub mod rrf;
+pub mod source_mirror;
 pub mod spread;
 pub mod sqlite_vec;
 pub mod summaries;
 pub mod throttle;
+pub mod todos;
 pub mod tool_audit;
 pub mod types;
 pub mod watcher;
@@ -85,9 +85,11 @@ pub use read_ops::{
     FullNote, NoteListRow,
 };
 pub use related::{get_related, get_related_checked, RelatedHit, RelatedOpts};
-pub use retriever::{hybrid_retrieve, hybrid_retrieve_throttled, RecallHit, RecallOpts, THROTTLE_HINT_ID};
-pub use summaries::{generate_summaries, generate_summaries_default};
+pub use retriever::{
+    hybrid_retrieve, hybrid_retrieve_throttled, RecallHit, RecallOpts, THROTTLE_HINT_ID,
+};
 pub use source_mirror::{sync as source_sync, SourceStatus, SyncReport};
+pub use summaries::{generate_summaries, generate_summaries_default};
 pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result, SourceFolder};
 pub use write_ops::{
     create_note, delete_note, save_note, set_source_folders, supersede_note, BrainContext,

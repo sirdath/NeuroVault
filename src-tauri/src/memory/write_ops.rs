@@ -208,11 +208,11 @@ pub fn supersede_note(
     }
     let conn = db.lock();
     let count = |id: &str| -> Result<i64> {
-        Ok(conn.query_row(
-            "SELECT COUNT(*) FROM engrams WHERE id = ?1",
-            [id],
-            |r| r.get(0),
-        )?)
+        Ok(
+            conn.query_row("SELECT COUNT(*) FROM engrams WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })?,
+        )
     };
     if count(new_id)? == 0 {
         return Err(MemoryError::EngramNotFound(new_id.to_string()));

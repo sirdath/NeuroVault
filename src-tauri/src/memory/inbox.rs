@@ -103,9 +103,14 @@ fn safe_name(name: &str) -> Result<String> {
         || trimmed.contains('/')
         || trimmed.contains('\\')
         || trimmed.contains("..")
-        || Path::new(trimmed).file_name().map(|f| f != trimmed).unwrap_or(true)
+        || Path::new(trimmed)
+            .file_name()
+            .map(|f| f != trimmed)
+            .unwrap_or(true)
     {
-        return Err(MemoryError::Other(format!("invalid inbox file name: {name:?}")));
+        return Err(MemoryError::Other(format!(
+            "invalid inbox file name: {name:?}"
+        )));
     }
     Ok(trimmed.to_string())
 }

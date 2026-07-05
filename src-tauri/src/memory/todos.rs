@@ -65,8 +65,12 @@ pub struct Todo {
     pub source_engram: Option<String>,
 }
 
-fn default_priority() -> String { "normal".to_string() }
-fn default_status() -> String { "open".to_string() }
+fn default_priority() -> String {
+    "normal".to_string()
+}
+fn default_status() -> String {
+    "open".to_string()
+}
 
 fn todos_path(brain_id: &str) -> std::path::PathBuf {
     brain_dir(brain_id).join("todos.jsonl")
@@ -74,12 +78,14 @@ fn todos_path(brain_id: &str) -> std::path::PathBuf {
 
 fn now_iso() -> String {
     let now = std::time::SystemTime::now();
-    let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     // Cheap RFC-3339-ish; the Python side reads with `datetime.fromisoformat`
     // which accepts this shape. Falls back to `.now()` if rare clock skew.
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64).unwrap_or_else(|_| {
-        time::OffsetDateTime::now_utc()
-    });
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64)
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     dt.format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| dt.to_string())
 }
@@ -114,7 +120,9 @@ pub fn list_todos(brain_id: &str, status_filter: Option<&str>) -> Result<Vec<Tod
             continue;
         }
         match serde_json::from_str::<Todo>(trimmed) {
-            Ok(t) => { latest.insert(t.id.clone(), t); }
+            Ok(t) => {
+                latest.insert(t.id.clone(), t);
+            }
             Err(_) => { /* skip corrupt line */ }
         }
     }
@@ -126,9 +134,7 @@ pub fn list_todos(brain_id: &str, status_filter: Option<&str>) -> Result<Vec<Tod
         })
         .collect();
     // Newest first. Status order: open > claimed > done > cancelled.
-    out.sort_by(|a, b| {
-        b.created_at.cmp(&a.created_at)
-    });
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(out)
 }
 
@@ -319,13 +325,15 @@ mod tests {
     fn inbox_filter_handoffs_only_and_addressing() {
         let all = vec![
             todo("h1", "claude-code", Some("feature-request")), // handoff to claude-code
-            todo("h2", "", Some("anomaly")),                     // broadcast handoff
-            todo("p1", "claude-code", None),                     // plain todo (no kind)
-            todo("h3", "other-agent", Some("churn-risk")),       // handoff to someone else
+            todo("h2", "", Some("anomaly")),                    // broadcast handoff
+            todo("p1", "claude-code", None),                    // plain todo (no kind)
+            todo("h3", "other-agent", Some("churn-risk")),      // handoff to someone else
         ];
         let keep = |agent: &str, handoffs_only: bool| {
             all.iter()
-                .filter(|t| (!handoffs_only || t.kind.is_some()) && agent_match_hits(&t.agent_match, agent))
+                .filter(|t| {
+                    (!handoffs_only || t.kind.is_some()) && agent_match_hits(&t.agent_match, agent)
+                })
                 .map(|t| t.id.clone())
                 .collect::<Vec<_>>()
         };

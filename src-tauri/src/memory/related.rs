@@ -81,11 +81,7 @@ pub struct RelatedHit {
 /// by link type (if supplied), minimum similarity, and excluded
 /// kinds. Result is sorted by `(hop_distance ASC, similarity DESC)`
 /// so 1-hop strong neighbours come first.
-pub fn get_related(
-    db: &BrainDb,
-    engram_id: &str,
-    opts: &RelatedOpts,
-) -> Result<Vec<RelatedHit>> {
+pub fn get_related(db: &BrainDb, engram_id: &str, opts: &RelatedOpts) -> Result<Vec<RelatedHit>> {
     let hops = opts.hops.min(MAX_HOPS).max(1);
     let limit = opts.limit.min(MAX_LIMIT).max(1);
     let min_sim = opts.min_similarity.max(0.0).min(1.0);
@@ -115,18 +111,24 @@ pub fn get_related(
          ORDER BY l.similarity DESC",
     )?;
     let hop1_rows: Vec<(String, String, f64, String, String)> = stmt_hop1
-        .query_map(params_from_iter([
-            rusqlite::types::Value::Text(engram_id.to_string()),
-            rusqlite::types::Value::Real(min_sim),
-        ].iter()), |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, f64>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-            ))
-        })?
+        .query_map(
+            params_from_iter(
+                [
+                    rusqlite::types::Value::Text(engram_id.to_string()),
+                    rusqlite::types::Value::Real(min_sim),
+                ]
+                .iter(),
+            ),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(stmt_hop1);
 
@@ -222,9 +224,11 @@ pub fn get_related(
     // Sort: (hop ASC, similarity DESC) gives 1-hop strong first,
     // then 2-hop strong. Truncate.
     out.sort_by(|a, b| {
-        a.hop_distance
-            .cmp(&b.hop_distance)
-            .then_with(|| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal))
+        a.hop_distance.cmp(&b.hop_distance).then_with(|| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     });
     out.truncate(limit);
     Ok(out)
@@ -245,11 +249,9 @@ pub fn get_related_checked(
     {
         let conn = db.lock();
         let exists: Option<String> = conn
-            .query_row(
-                "SELECT id FROM engrams WHERE id = ?1",
-                [engram_id],
-                |r| r.get(0),
-            )
+            .query_row("SELECT id FROM engrams WHERE id = ?1", [engram_id], |r| {
+                r.get(0)
+            })
             .ok();
         if exists.is_none() {
             return Err(MemoryError::EngramNotFound(engram_id.to_string()));

@@ -98,8 +98,12 @@ pub struct GatewayConfig {
     pub port: u16,
 }
 
-fn default_bind_kind() -> String { "loopback".to_string() }
-fn default_gateway_port() -> u16 { DEFAULT_GATEWAY_PORT }
+fn default_bind_kind() -> String {
+    "loopback".to_string()
+}
+fn default_gateway_port() -> u16 {
+    DEFAULT_GATEWAY_PORT
+}
 
 impl Default for GatewayConfig {
     fn default() -> Self {
@@ -194,7 +198,10 @@ pub async fn start_gateway(cfg: GatewayConfig) -> Result<GatewayHandle, String> 
             .await;
     });
 
-    eprintln!("[api_gateway] listening on {} (bearer auth required)", bound);
+    eprintln!(
+        "[api_gateway] listening on {} (bearer auth required)",
+        bound
+    );
     Ok(GatewayHandle {
         addr: bound,
         shutdown: Some(tx),
@@ -218,12 +225,21 @@ fn router() -> Router {
         // applied below.
         .route("/v1/recall", get(handlers::recall))
         .route("/v1/recall/chunks", get(handlers::recall_chunks))
-        .route("/v1/recall_across_brains", get(handlers::recall_across_brains))
+        .route(
+            "/v1/recall_across_brains",
+            get(handlers::recall_across_brains),
+        )
         .route("/v1/related/:engram_id", get(handlers::related))
         .route("/v1/notes", get(handlers::notes_list))
         .route("/v1/notes/:engram_id", get(handlers::notes_detail))
-        .route("/v1/notes/:engram_id/versions", get(handlers::engram_versions_list))
-        .route("/v1/notes/:engram_id/versions/:version", get(handlers::engram_version_get))
+        .route(
+            "/v1/notes/:engram_id/versions",
+            get(handlers::engram_versions_list),
+        )
+        .route(
+            "/v1/notes/:engram_id/versions/:version",
+            get(handlers::engram_version_get),
+        )
         .route("/v1/temporal_recall", get(handlers::temporal_recall))
         .route("/v1/contradictions", get(handlers::contradictions_list))
         .route("/v1/orphan_links", get(handlers::orphan_links))
@@ -247,21 +263,36 @@ fn router() -> Router {
         .route("/v1/engrams/delete", post(handlers::engrams_delete))
         .route("/v1/engrams/bulk_set_kind", post(handlers::bulk_set_kind))
         .route("/v1/engrams/bulk_add_tag", post(handlers::bulk_add_tag))
-        .route("/v1/contradictions/:id/resolve", post(handlers::contradictions_resolve))
+        .route(
+            "/v1/contradictions/:id/resolve",
+            post(handlers::contradictions_resolve),
+        )
         .route("/v1/links", post(handlers::links_add))
         .route("/v1/links", axum::routing::delete(handlers::links_remove))
         .route("/v1/import_folder", post(handlers::import_folder))
         .route("/v1/update", post(handlers::update_brain))
-        .route("/v1/core_memory/:label", axum::routing::put(handlers::core_memory_set))
-        .route("/v1/core_memory/:label/append", post(handlers::core_memory_append))
-        .route("/v1/core_memory/:label/replace", post(handlers::core_memory_replace))
+        .route(
+            "/v1/core_memory/:label",
+            axum::routing::put(handlers::core_memory_set),
+        )
+        .route(
+            "/v1/core_memory/:label/append",
+            post(handlers::core_memory_append),
+        )
+        .route(
+            "/v1/core_memory/:label/replace",
+            post(handlers::core_memory_replace),
+        )
         // Phase 6 — ADMIN endpoints. Highest blast radius — VACUUM
         // the DB, rebuild every embedding, create or switch brains.
         // Scope: admin (which implies write + read).
         .route("/v1/optimize_disk", post(handlers::optimize_disk))
         .route("/v1/reindex_embeddings", post(handlers::reindex_embeddings))
         .route("/v1/brains", post(handlers::brains_create))
-        .route("/v1/brains/:brain_id/activate", post(handlers::brains_activate))
+        .route(
+            "/v1/brains/:brain_id/activate",
+            post(handlers::brains_activate),
+        )
         // Layer order, innermost → outermost (axum runs them in
         // reverse-add order, so the last `.layer` is the OUTERMOST):
         //   handler → scope_check → brain_allowlist → auth → audit
@@ -302,15 +333,17 @@ async fn auth_middleware(mut req: Request, next: Next) -> Response {
     let bearer = match req.headers().get(axum::http::header::AUTHORIZATION) {
         Some(v) => match v.to_str() {
             Ok(s) => s,
-            Err(_) => return unauthorized("malformed_authorization", "Authorization header is not valid UTF-8"),
+            Err(_) => {
+                return unauthorized(
+                    "malformed_authorization",
+                    "Authorization header is not valid UTF-8",
+                )
+            }
         },
         None => return unauthorized("missing_authorization", "Authorization header required"),
     };
     let Some(token) = bearer.strip_prefix("Bearer ") else {
-        return unauthorized(
-            "invalid_scheme",
-            "Authorization scheme must be Bearer",
-        );
+        return unauthorized("invalid_scheme", "Authorization scheme must be Bearer");
     };
     let Some(key) = api_keys::authenticate(token.trim()) else {
         return unauthorized("invalid_key", "API key not recognised or revoked");
@@ -447,9 +480,10 @@ fn required_scope_for(method: &axum::http::Method, path: &str) -> Option<Scope> 
                 | "/v1/changes"
                 | "/v1/core_memory"
                 | "/v1/core_memory/:label"
-        ) {
-            return Some(Scope::Read);
-        }
+        )
+    {
+        return Some(Scope::Read);
+    }
     if method == Method::POST && path == "/v1/check_duplicate" {
         return Some(Scope::Read);
     }
@@ -564,10 +598,7 @@ async fn brain_allowlist_middleware(req: Request, next: Next) -> Response {
     if !key.may_use_brain(&brain_id) {
         return forbidden(
             "brain_not_allowed",
-            &format!(
-                "this key's allowlist does not include brain {:?}",
-                brain_id,
-            ),
+            &format!("this key's allowlist does not include brain {:?}", brain_id,),
         );
     }
     next.run(req).await
@@ -649,10 +680,7 @@ struct AuthInfo {
     brain_allowlist: Vec<String>,
 }
 
-async fn v1_status(
-    _state: State<handlers::ServerState>,
-    req: Request,
-) -> Json<V1StatusResponse> {
+async fn v1_status(_state: State<handlers::ServerState>, req: Request) -> Json<V1StatusResponse> {
     // Auth middleware guarantees this is present.
     let key = req
         .extensions()

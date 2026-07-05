@@ -179,24 +179,29 @@ pub fn append(brain_id: &str, entry: &AuditEntry) -> Result<()> {
 
     let path = audit_path(brain_id);
     if let Err(e) = maybe_rotate(brain_id, &path) {
-        eprintln!("[tool_audit] rotate check failed for {}: {} (continuing)", brain_id, e);
+        eprintln!(
+            "[tool_audit] rotate check failed for {}: {} (continuing)",
+            brain_id, e
+        );
     }
 
-    match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(mut f) => {
             // One write per line keeps half-written records out of the
             // file. OS-level append is atomic for writes smaller than
             // PIPE_BUF; our lines are well under that.
             if let Err(e) = writeln!(f, "{}", line) {
-                eprintln!("[tool_audit] write failed for {}: {} (entry lost)", brain_id, e);
+                eprintln!(
+                    "[tool_audit] write failed for {}: {} (entry lost)",
+                    brain_id, e
+                );
             }
         }
         Err(e) => {
-            eprintln!("[tool_audit] open failed for {}: {} (entry lost)", brain_id, e);
+            eprintln!(
+                "[tool_audit] open failed for {}: {} (entry lost)",
+                brain_id, e
+            );
         }
     }
     Ok(())

@@ -78,13 +78,24 @@ fn candidate_paths() -> Vec<PathBuf> {
             // can't find vec0 and every brain-DB open fails. (These
             // paths simply don't exist on Windows/Linux, so they're a
             // harmless no-op there.)
-            out.push(dir.join("..").join("Resources").join("resources").join(&filename));
+            out.push(
+                dir.join("..")
+                    .join("Resources")
+                    .join("resources")
+                    .join(&filename),
+            );
             out.push(dir.join("..").join("Resources").join(&filename));
             // For `cargo run` + `tauri dev` the exe lives in
             // target/debug or target/release; the repo's bundled
             // copy sits at `src-tauri/resources/vec0.dll` which
             // resolves to this relative path.
-            out.push(dir.join("..").join("..").join("src-tauri").join("resources").join(&filename));
+            out.push(
+                dir.join("..")
+                    .join("..")
+                    .join("src-tauri")
+                    .join("resources")
+                    .join(&filename),
+            );
         }
     }
 

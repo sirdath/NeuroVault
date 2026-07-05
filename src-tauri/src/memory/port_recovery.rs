@@ -22,7 +22,9 @@
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
-    use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
+    use netstat2::{
+        get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState,
+    };
     use sysinfo::{Pid, System};
 
     /// Names we'll terminate. Match-prefix, case-insensitive — covers
@@ -129,6 +131,10 @@ mod tests {
         // nothing is listening here. find_listener_pids should
         // return Ok(vec![]).
         let pids = super::imp::find_listener_pids(1).unwrap_or_default();
-        assert!(pids.is_empty(), "expected port 1 to be unbound, got pids: {:?}", pids);
+        assert!(
+            pids.is_empty(),
+            "expected port 1 to be unbound, got pids: {:?}",
+            pids
+        );
     }
 }

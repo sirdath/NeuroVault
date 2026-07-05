@@ -111,15 +111,13 @@ fn split_sentences(content: &str) -> Vec<String> {
 /// this is purely the per-note extractor.
 pub fn extract_facts(content: &str) -> Vec<Fact> {
     let mut out: Vec<Fact> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     for sentence in split_sentences(content) {
         for re in PATTERNS.iter() {
             let Some(caps) = re.captures(&sentence) else {
                 continue;
             };
-            let (Some(subj_m), Some(val_m)) = (caps.name("subj"), caps.name("val"))
-            else {
+            let (Some(subj_m), Some(val_m)) = (caps.name("subj"), caps.name("val")) else {
                 continue;
             };
             let subject = normalise(subj_m.as_str());

@@ -117,8 +117,14 @@ fn router() -> Router {
             "/api/brains/:brain_id/sources",
             get(brain_sources_list).put(brain_sources_set),
         )
-        .route("/api/brains/:brain_id/sources/sync", post(brain_sources_sync))
-        .route("/api/brains/:brain_id/sources/preview", get(brain_sources_preview))
+        .route(
+            "/api/brains/:brain_id/sources/sync",
+            post(brain_sources_sync),
+        )
+        .route(
+            "/api/brains/:brain_id/sources/preview",
+            get(brain_sources_preview),
+        )
         .route("/api/observations", post(observations))
         .route("/api/audit/recent", get(audit_recent))
         .route("/api/notes", get(notes_list))
@@ -156,10 +162,19 @@ fn router() -> Router {
         .route("/api/engrams/delete", post(engrams_delete))
         .route("/api/engrams/bulk_set_kind", post(bulk_set_kind))
         .route("/api/engrams/bulk_add_tag", post(bulk_add_tag))
-        .route("/api/engrams/:engram_id/versions", get(engram_versions_list))
-        .route("/api/engrams/:engram_id/versions/:version", get(engram_version_get))
+        .route(
+            "/api/engrams/:engram_id/versions",
+            get(engram_versions_list),
+        )
+        .route(
+            "/api/engrams/:engram_id/versions/:version",
+            get(engram_version_get),
+        )
         .route("/api/contradictions", get(contradictions_list))
-        .route("/api/contradictions/:id/resolve", post(contradictions_resolve))
+        .route(
+            "/api/contradictions/:id/resolve",
+            post(contradictions_resolve),
+        )
         .route("/api/links", post(links_add))
         .route("/api/links", axum::routing::delete(links_remove))
         .route("/api/orphan_links", get(orphan_links))
@@ -189,7 +204,10 @@ fn router() -> Router {
         .route("/api/changes", get(changes_feed))
         .route("/api/core_memory", get(core_memory_list))
         .route("/api/core_memory/:label", get(core_memory_read))
-        .route("/api/core_memory/:label", axum::routing::put(core_memory_set))
+        .route(
+            "/api/core_memory/:label",
+            axum::routing::put(core_memory_set),
+        )
         .route("/api/core_memory/:label/append", post(core_memory_append))
         .route("/api/core_memory/:label/replace", post(core_memory_replace))
         .route("/api/todos", get(todos_list))

@@ -81,7 +81,7 @@ fn split_sentences(content: &str) -> Vec<String> {
     let cleaned: String = content
         .chars()
         .map(|c| match c {
-            '\n' | '\r' => '.', // line break ends a unit
+            '\n' | '\r' => '.',                          // line break ends a unit
             '#' | '*' | '`' | '>' | '-' if false => ' ', // (kept explicit; see below)
             _ => c,
         })

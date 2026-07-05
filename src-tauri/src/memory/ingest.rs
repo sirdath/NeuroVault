@@ -160,10 +160,10 @@ pub fn ingest_file(
 
     let content = std::fs::read_to_string(filepath)?;
     let filename = if let Some(root) = vault_root {
-        match filepath.canonicalize().and_then(|c| {
-            root.canonicalize()
-                .map(|r| (c, r))
-        }) {
+        match filepath
+            .canonicalize()
+            .and_then(|c| root.canonicalize().map(|r| (c, r)))
+        {
             Ok((c, r)) => c
                 .strip_prefix(&r)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -195,11 +195,7 @@ pub fn ingest_file(
 /// Keeps the same "skip if unchanged" fast path as the file-based
 /// version: if a row with the same filename + content_hash already
 /// exists, return `Ok(None)` without touching anything else.
-pub fn ingest_content(
-    filename: &str,
-    content: &str,
-    db: &Arc<BrainDb>,
-) -> Result<Option<String>> {
+pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Result<Option<String>> {
     let title = extract_title(content, filename);
     let new_hash = content_hash(content);
     let kind = infer_kind(filename);
@@ -240,7 +236,13 @@ pub fn ingest_content(
             .query_row(
                 "SELECT title, content, content_hash FROM engrams WHERE id = ?1",
                 [&engram_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
             )
             .ok();
         if let Some((prev_title, prev_content, prev_hash)) = prev {
@@ -398,11 +400,7 @@ pub fn ingest_content(
         .unwrap_or(false);
     if !facts_disabled && !filename.starts_with("pref-") {
         if let Err(e) = write_facts(db, &engram_id, content) {
-            eprintln!(
-                "[ingest] facts skipped for {}: {}",
-                &engram_id[..8],
-                e
-            );
+            eprintln!("[ingest] facts skipped for {}: {}", &engram_id[..8], e);
         }
     }
 
@@ -426,11 +424,7 @@ pub fn ingest_content(
 
     // 7. Wikilinks.
     if let Err(e) = process_wikilinks(db, &engram_id, content) {
-        eprintln!(
-            "[ingest] wikilinks skipped for {}: {}",
-            &engram_id[..8],
-            e
-        );
+        eprintln!("[ingest] wikilinks skipped for {}: {}", &engram_id[..8], e);
     }
 
     // 8. BM25 rebuild — debounced. Matches the 5s window Python uses.
@@ -462,12 +456,7 @@ fn delete_chunks(db: &BrainDb, engram_id: &str) -> Result<()> {
 
 /// Write L0/L1 summaries into the `summary_l0` + `summary_l1` columns.
 /// Empty strings become NULL to match Python's `l0 or None` pattern.
-fn write_summaries(
-    db: &BrainDb,
-    engram_id: &str,
-    content: &str,
-    title: &str,
-) -> Result<()> {
+fn write_summaries(db: &BrainDb, engram_id: &str, content: &str, title: &str) -> Result<()> {
     let (l0, l1) = generate_summaries_default(content, Some(title));
     let l0_val: Option<&str> = if l0.is_empty() { None } else { Some(&l0) };
     let l1_val: Option<&str> = if l1.is_empty() { None } else { Some(&l1) };
@@ -665,9 +654,7 @@ fn update_semantic_links(db: &BrainDb, engram_id: &str, content: &str) -> Result
     // benchmark) are unaffected — each doc ingests exactly once.
     if let Some(k) = semantic_topk() {
         if candidates.len() > k {
-            candidates.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             candidates.truncate(k);
         }
     }
@@ -799,7 +786,10 @@ fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<
     //    subfolder. Unique only — a basename shared across folders is ambiguous.
     let stem = target.strip_suffix(".md").unwrap_or(target).trim();
     if !stem.is_empty() {
-        let esc = stem.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let esc = stem
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         let exact_fname = format!("{stem}.md");
         let like_fname = format!("%/{esc}.md");
         if let Ok(mut stmt) = conn.prepare(
@@ -807,9 +797,9 @@ fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<
              WHERE state != 'dormant'
                AND (lower(filename) = ?1 OR lower(filename) LIKE ?2 ESCAPE '\\')",
         ) {
-            if let Ok(rows) =
-                stmt.query_map(params![&exact_fname, &like_fname], |r| r.get::<_, String>(0))
-            {
+            if let Ok(rows) = stmt.query_map(params![&exact_fname, &like_fname], |r| {
+                r.get::<_, String>(0)
+            }) {
                 let mut hit: Option<String> = None;
                 let mut ambiguous = false;
                 for id in rows.flatten() {
@@ -835,7 +825,10 @@ fn resolve_wikilink_target(conn: &rusqlite::Connection, target: &str) -> Option<
     }
     // SQL prefilter, then confirm the stripped base matches exactly in Rust.
     // Escape LIKE wildcards so a literal % or _ in a title can't widen it.
-    let esc = base.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let esc = base
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let like = format!("{esc} (%");
     let mut stmt = conn
         .prepare(
@@ -921,12 +914,10 @@ fn process_wikilinks(db: &BrainDb, engram_id: &str, content: &str) -> Result<u32
 pub fn rebuild_wikilinks(db: &BrainDb) -> Result<(u32, u32)> {
     let rows: Vec<(String, String)> = {
         let conn = db.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, content FROM engrams WHERE state != 'dormant' ORDER BY id",
-        )?;
-        let mapped = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM engrams WHERE state != 'dormant' ORDER BY id")?;
+        let mapped =
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         mapped.filter_map(std::result::Result::ok).collect()
     };
     let mut links = 0u32;
@@ -1048,8 +1039,7 @@ pub fn dedupe_check(
 ) -> Result<Option<(String, f64)>> {
     // Thin wrapper over `nearest_doc_match`: the top match only counts
     // as a dedupe hit if it clears the threshold.
-    Ok(nearest_doc_match(db, content, ignore_engram_id)?
-        .filter(|(_, sim)| *sim >= threshold))
+    Ok(nearest_doc_match(db, content, ignore_engram_id)?.filter(|(_, sim)| *sim >= threshold))
 }
 
 /// Find the single most-similar existing document to `content` and return
@@ -1350,8 +1340,7 @@ mod tests {
         );
         // A link that already carries the suffix still resolves exactly.
         assert_eq!(
-            resolve_wikilink_target(&conn, "finalize the run (produces locked dataset)")
-                .as_deref(),
+            resolve_wikilink_target(&conn, "finalize the run (produces locked dataset)").as_deref(),
             Some("e1")
         );
         // Ambiguous base title → no edge (never guess).
@@ -1386,8 +1375,7 @@ mod tests {
         );
         // Root-level file with spaces / parens / & in the name.
         assert_eq!(
-            resolve_wikilink_target(&conn, "01 — data foundation (dataset & cleaning)")
-                .as_deref(),
+            resolve_wikilink_target(&conn, "01 — data foundation (dataset & cleaning)").as_deref(),
             Some("e2")
         );
         // A `_` in the target is a literal, not a LIKE wildcard.

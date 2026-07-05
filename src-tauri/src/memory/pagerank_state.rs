@@ -21,9 +21,9 @@
 //! recompute on next graph load anyway). Per-brain because someone
 //! might switch brains and we don't want stale scores leaking.
 
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
 
 type BrainId = String;
 type EngramId = String;

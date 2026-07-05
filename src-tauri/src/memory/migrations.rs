@@ -202,10 +202,7 @@ pub fn migrate_add_expired_at(conn: &Connection) -> Result<()> {
     if column_exists(conn, "temporal_facts", "expired_at")? {
         return Ok(());
     }
-    conn.execute(
-        "ALTER TABLE temporal_facts ADD COLUMN expired_at TEXT",
-        [],
-    )?;
+    conn.execute("ALTER TABLE temporal_facts ADD COLUMN expired_at TEXT", [])?;
     Ok(())
 }
 

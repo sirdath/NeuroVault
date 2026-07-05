@@ -164,7 +164,10 @@ fn start_source_watchers(
     let folders = match super::read_ops::registry_source_folders(brain_id) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[watcher] could not read source_folders for {}: {}", brain_id, e);
+            eprintln!(
+                "[watcher] could not read source_folders for {}: {}",
+                brain_id, e
+            );
             return (Vec::new(), None);
         }
     };
@@ -192,12 +195,20 @@ fn start_source_watchers(
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[watcher] source notify init failed for {}: {}", root.display(), e);
+                eprintln!(
+                    "[watcher] source notify init failed for {}: {}",
+                    root.display(),
+                    e
+                );
                 continue;
             }
         };
         if let Err(e) = w.watch(root, RecursiveMode::Recursive) {
-            eprintln!("[watcher] source watch failed for {}: {}", root.display(), e);
+            eprintln!(
+                "[watcher] source watch failed for {}: {}",
+                root.display(),
+                e
+            );
             continue;
         }
         watchers.push(w);
@@ -402,10 +413,7 @@ fn is_markdown(p: &Path) -> bool {
 /// Skip editor temp files. VSCode writes `.md.tmp` then renames;
 /// Vim writes `4913` / `~` files; Obsidian writes `.obsidian` crud.
 fn is_temp_or_dotfile(p: &Path) -> bool {
-    let name = p
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     if name.starts_with('.') {
         return true;
     }
@@ -470,7 +478,10 @@ pub fn start_for_brain(brain_id: &str, vault_path: PathBuf) -> Result<()> {
         .name(format!("nv-src-sync-{}", brain_id))
         .spawn(move || {
             if let Err(e) = super::source_mirror::sync(&brain_owned) {
-                eprintln!("[watcher] initial source sync for {} failed: {}", brain_owned, e);
+                eprintln!(
+                    "[watcher] initial source sync for {} failed: {}",
+                    brain_owned, e
+                );
             }
         });
     Ok(())

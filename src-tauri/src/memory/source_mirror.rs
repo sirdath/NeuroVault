@@ -202,11 +202,38 @@ fn source_subdir(source_root_abs: &str) -> String {
 /// is case-insensitive so `Node_Modules` etc. are caught too.
 fn is_ignored_dir(name: &str) -> bool {
     const IGNORED: &[&str] = &[
-        "node_modules", ".git", ".svn", ".hg", "dist", "build", "target",
-        ".next", ".nuxt", "out", ".output", ".cache", ".turbo", ".parcel-cache",
-        "coverage", "vendor", "__pycache__", ".venv", "venv", "env",
-        "bower_components", ".idea", ".vscode", ".gradle", "pods", ".pytest_cache",
-        ".mypy_cache", ".tox", "obj", ".terraform", ".serverless", ".expo",
+        "node_modules",
+        ".git",
+        ".svn",
+        ".hg",
+        "dist",
+        "build",
+        "target",
+        ".next",
+        ".nuxt",
+        "out",
+        ".output",
+        ".cache",
+        ".turbo",
+        ".parcel-cache",
+        "coverage",
+        "vendor",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        "bower_components",
+        ".idea",
+        ".vscode",
+        ".gradle",
+        "pods",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".tox",
+        "obj",
+        ".terraform",
+        ".serverless",
+        ".expo",
     ];
     let lower = name.to_ascii_lowercase();
     IGNORED.iter().any(|d| *d == lower)
@@ -232,11 +259,21 @@ fn collect_md_files(root: &Path, out: &mut Vec<PathBuf>) {
         if ft.is_dir() {
             // Skip dependency/build/cache dirs so a source folder can't
             // flood the brain with vendored markdown.
-            if entry.file_name().to_str().map(is_ignored_dir).unwrap_or(false) {
+            if entry
+                .file_name()
+                .to_str()
+                .map(is_ignored_dir)
+                .unwrap_or(false)
+            {
                 continue;
             }
             collect_md_files(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("md")).unwrap_or(false) {
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false)
+        {
             // TODO: only *.md files are mirrored today. Other file types
             // (PDFs, images, code) are out of scope for the markdown
             // ingest pipeline; revisit if the inbox/raw flow grows to
@@ -258,7 +295,11 @@ fn vault_rel_for(source_root: &Path, source_root_abs: &str, file: &Path) -> Opti
     if rel_posix.is_empty() {
         return None;
     }
-    Some(format!("_source_files/{}/{}", source_subdir(source_root_abs), rel_posix))
+    Some(format!(
+        "_source_files/{}/{}",
+        source_subdir(source_root_abs),
+        rel_posix
+    ))
 }
 
 // ---- manifest IO ----------------------------------------------------------
@@ -309,7 +350,10 @@ pub fn source_status(brain_id: &str, folder_path: &str) -> SourceStatus {
             }
         }
     }
-    SourceStatus { file_count, last_synced }
+    SourceStatus {
+        file_count,
+        last_synced,
+    }
 }
 
 // ---- the mirror engine -----------------------------------------------------
@@ -399,9 +443,7 @@ fn mirror_one_file(
     // exact content already exists in the brain under another path (a prior
     // import), skip it rather than create a duplicate. An already-mirrored
     // file (in the manifest) keeps updating in place.
-    if !manifest.contains_key(&vault_rel)
-        && content_exists_elsewhere(ctx, &new_hash, &vault_rel)
-    {
+    if !manifest.contains_key(&vault_rel) && content_exists_elsewhere(ctx, &new_hash, &vault_rel) {
         return Ok(MirrorOutcome::SkippedDuplicate);
     }
 
@@ -443,7 +485,11 @@ fn mirror_one_file(
 /// Remove a previously-mirrored file: delete its engram (soft-delete +
 /// move vault file to trash) and drop the manifest entry. Used for both
 /// source deletions during `sync` and Remove/Rename watcher events.
-fn unmirror_one(ctx: &BrainContext, vault_rel: &str, manifest: &mut HashMap<String, ManifestEntry>) -> Result<bool> {
+fn unmirror_one(
+    ctx: &BrainContext,
+    vault_rel: &str,
+    manifest: &mut HashMap<String, ManifestEntry>,
+) -> Result<bool> {
     // delete_note is keyed by the vault-relative filename, which is
     // exactly our manifest key (and the `engrams.filename` value).
     match delete_note(ctx, vault_rel) {
@@ -488,8 +534,11 @@ pub fn sync(brain_id: &str) -> Result<SyncReport> {
 
     // In-memory manifest indexed by vault_rel_path for upsert/lookup.
     let loaded = load_manifest(brain_id);
-    let mut manifest: HashMap<String, ManifestEntry> =
-        loaded.entries.into_iter().map(|e| (e.vault_rel_path.clone(), e)).collect();
+    let mut manifest: HashMap<String, ManifestEntry> = loaded
+        .entries
+        .into_iter()
+        .map(|e| (e.vault_rel_path.clone(), e))
+        .collect();
 
     // Set of source roots that are currently enabled + valid. An entry
     // whose root is NOT in this set gets removed (folder disabled or
@@ -595,8 +644,11 @@ pub fn plan(brain_id: &str) -> Result<SyncPlan> {
     let vault = super::read_ops::resolve_vault_path(brain_id)?;
     let ctx = BrainContext::resolve(Some(brain_id), vault)?;
     let loaded = load_manifest(brain_id);
-    let manifest: HashMap<String, ManifestEntry> =
-        loaded.entries.into_iter().map(|e| (e.vault_rel_path.clone(), e)).collect();
+    let manifest: HashMap<String, ManifestEntry> = loaded
+        .entries
+        .into_iter()
+        .map(|e| (e.vault_rel_path.clone(), e))
+        .collect();
 
     let mut active_roots: Vec<String> = Vec::new();
     for folder in &folders {
@@ -614,9 +666,13 @@ pub fn plan(brain_id: &str) -> Result<SyncPlan> {
         let mut files: Vec<PathBuf> = Vec::new();
         collect_md_files(&root, &mut files);
         for file in &files {
-            let Ok(bytes) = std::fs::read(file) else { continue };
+            let Ok(bytes) = std::fs::read(file) else {
+                continue;
+            };
             let new_hash = hash_bytes(&bytes);
-            let Some(vault_rel) = vault_rel_for(&root, &root_abs, file) else { continue };
+            let Some(vault_rel) = vault_rel_for(&root, &root_abs, file) else {
+                continue;
+            };
             match manifest.get(&vault_rel) {
                 Some(existing) if existing.content_hash == new_hash => plan.unchanged += 1,
                 Some(_) => plan.to_update.push(file.display().to_string()),
@@ -682,8 +738,11 @@ pub fn handle_source_upsert(brain_id: &str, path: &Path) -> Result<()> {
     let ctx = BrainContext::resolve(Some(brain_id), vault)?;
 
     let loaded = load_manifest(brain_id);
-    let mut manifest: HashMap<String, ManifestEntry> =
-        loaded.entries.into_iter().map(|e| (e.vault_rel_path.clone(), e)).collect();
+    let mut manifest: HashMap<String, ManifestEntry> = loaded
+        .entries
+        .into_iter()
+        .map(|e| (e.vault_rel_path.clone(), e))
+        .collect();
 
     mirror_one_file(&ctx, &root, &root_abs, path, &mut manifest)?;
 
@@ -703,8 +762,11 @@ pub fn handle_source_remove(brain_id: &str, path: &Path) -> Result<()> {
     let ctx = BrainContext::resolve(Some(brain_id), vault)?;
 
     let loaded = load_manifest(brain_id);
-    let mut manifest: HashMap<String, ManifestEntry> =
-        loaded.entries.into_iter().map(|e| (e.vault_rel_path.clone(), e)).collect();
+    let mut manifest: HashMap<String, ManifestEntry> = loaded
+        .entries
+        .into_iter()
+        .map(|e| (e.vault_rel_path.clone(), e))
+        .collect();
 
     // Match by normalized absolute source path. notify may hand us the
     // path with different casing / separators than we stored, so compare

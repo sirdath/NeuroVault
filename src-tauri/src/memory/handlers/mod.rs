@@ -32,13 +32,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 
+use super::core_memory::{self, CoreBlock};
 use super::db::open_brain;
 use super::ingest;
 use super::read_ops::{
     brain_stats, get_graph, get_note, list_brains_with_stats, list_notes, resolve_brain_id,
     BrainStats, BrainSummary, FullNote, NoteListRow,
 };
-use super::core_memory::{self, CoreBlock};
 use super::related::{get_related_checked, RelatedHit, RelatedOpts};
 use super::retriever::{hybrid_retrieve_throttled, RecallHit, RecallOpts};
 use super::todos::{self, AddTodoArgs, Todo};
@@ -64,10 +64,9 @@ impl From<MemoryError> for ApiError {
             MemoryError::BrainNotFound(id) => {
                 ApiError(StatusCode::NOT_FOUND, format!("brain not found: {}", id))
             }
-            MemoryError::EngramNotFound(id) => ApiError(
-                StatusCode::NOT_FOUND,
-                format!("engram not found: {}", id),
-            ),
+            MemoryError::EngramNotFound(id) => {
+                ApiError(StatusCode::NOT_FOUND, format!("engram not found: {}", id))
+            }
             other => ApiError(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
         }
     }
@@ -477,7 +476,12 @@ pub async fn observations(
             .unwrap_or("unknown")
             .to_string();
         let short_session: String = session_id.chars().take(8).collect();
-        let short_uuid: String = uuid::Uuid::new_v4().simple().to_string().chars().take(6).collect();
+        let short_uuid: String = uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(6)
+            .collect();
         let filename = format!(
             "obs-{}-{}-{}.md",
             short_session,
@@ -508,10 +512,7 @@ pub async fn observations(
                 "UPDATE engrams SET kind = 'observation', agent_id = 'claude-code' WHERE id = ?1",
                 [&written.engram_id],
             ) {
-                eprintln!(
-                    "[observations] tag failed for {}: {}",
-                    written.engram_id, e
-                );
+                eprintln!("[observations] tag failed for {}: {}", written.engram_id, e);
             }
         }
 
@@ -519,13 +520,19 @@ pub async fn observations(
         // Activity panel. Args are kept small (just event + tool)
         // because the full payload can be large (file diffs, etc.).
         let mut audit_args = serde_json::Map::new();
-        audit_args.insert("event".to_string(), serde_json::Value::String(event.clone()));
+        audit_args.insert(
+            "event".to_string(),
+            serde_json::Value::String(event.clone()),
+        );
         if let Some(tool) = payload
             .get("tool_name")
             .or_else(|| payload.get("tool"))
             .and_then(|v| v.as_str())
         {
-            audit_args.insert("tool".to_string(), serde_json::Value::String(tool.to_string()));
+            audit_args.insert(
+                "tool".to_string(),
+                serde_json::Value::String(tool.to_string()),
+            );
         }
         let mut audit_entry = super::tool_audit::AuditEntry::new("observations")
             .with_args(serde_json::Value::Object(audit_args))
@@ -596,10 +603,7 @@ fn format_observation(
             )
         }
         "UserPromptSubmit" => {
-            let prompt_raw = payload
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let prompt_raw = payload.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
             let prompt = strip_private(prompt_raw);
             let short_prompt = short_summary(&prompt, 60);
             (
@@ -641,7 +645,10 @@ fn format_observation(
             )
         }
         "SessionEnd" => {
-            let summary_raw = payload.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            let summary_raw = payload
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let summary = strip_private(summary_raw);
             let mut body = format!(
                 "**Event:** SessionEnd\n**Session:** `{}`\n**Ended:** {}\n",
@@ -708,7 +715,11 @@ fn strip_private(text: &str) -> String {
 /// to `n` chars + an ellipsis. Char-aware so multibyte input doesn't
 /// panic at byte boundaries.
 fn short_summary(text: &str, n: usize) -> String {
-    let collapsed: String = text.trim().chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+    let collapsed: String = text
+        .trim()
+        .chars()
+        .map(|c| if c == '\n' { ' ' } else { c })
+        .collect();
     if collapsed.chars().count() <= n {
         return collapsed;
     }
@@ -860,7 +871,10 @@ pub async fn record_fact(
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(format!("{subject}\u{0}{attribute}\u{0}{value}").as_bytes());
-        let fid: String = format!("{:x}", hasher.finalize()).chars().take(16).collect();
+        let fid: String = format!("{:x}", hasher.finalize())
+            .chars()
+            .take(16)
+            .collect();
         let conn = db.lock();
         conn.execute(
             "UPDATE facts SET superseded_by = ?1 \
@@ -929,7 +943,10 @@ pub async fn facts_list(
                 .query_map(rusqlite::params![s], to_json)?
                 .filter_map(Result::ok)
                 .collect(),
-            None => stmt.query_map([], to_json)?.filter_map(Result::ok).collect(),
+            None => stmt
+                .query_map([], to_json)?
+                .filter_map(Result::ok)
+                .collect(),
         };
         Ok(serde_json::json!({"count": rows.len(), "facts": rows}))
     })
@@ -1259,17 +1276,16 @@ pub async fn recall(
 
     // Wrap the work so we can audit duration + result count.
     let started = std::time::Instant::now();
-    let (id, result) = tokio::task::spawn_blocking(
-        move || -> Result<(String, Vec<RecallHit>), MemoryError> {
+    let (id, result) =
+        tokio::task::spawn_blocking(move || -> Result<(String, Vec<RecallHit>), MemoryError> {
             let id = resolve_brain_id(brain_id.as_deref())?;
             let db = open_brain(&id)?;
             let hits = hybrid_retrieve_throttled(&db, &query_str, &opts)?;
             Ok((id, hits))
-        },
-    )
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
 
     // Best-effort audit — never blocks the response. Args carry just
     // the query string + limit so the activity panel can show a
@@ -1356,7 +1372,10 @@ pub async fn recall_multi(
     let mut queries: Vec<String> = Vec::with_capacity(5);
     let primary = body.q.trim().to_string();
     if primary.is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "empty primary query".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "empty primary query".into(),
+        ));
     }
     queries.push(primary.clone());
     for q in body.additional_queries.into_iter().take(4) {
@@ -1416,7 +1435,8 @@ pub async fn recall_multi(
         // how often the agent is escalating to multi-query.
         eprintln!(
             "[recall_multi] brain={} q_count={} primary={:?}",
-            id, queries.len(),
+            id,
+            queries.len(),
             queries.first().map(|s| &s[..s.len().min(60)]).unwrap_or("")
         );
 
@@ -1448,7 +1468,8 @@ pub async fn recall_multi(
         // magnitudes are comparable to the in-pipeline RRF.
         const K: f64 = 60.0;
         let mut rrf: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        let mut keep: std::collections::HashMap<String, RecallHit> = std::collections::HashMap::new();
+        let mut keep: std::collections::HashMap<String, RecallHit> =
+            std::collections::HashMap::new();
         for hits in &per_query_hits {
             for (rank0, h) in hits.iter().enumerate() {
                 if h.engram_id == super::retriever::THROTTLE_HINT_ID {
@@ -1589,8 +1610,10 @@ pub async fn recall_across_brains(
             // Filter to the requested subset, but preserve registry order
             // and use the registry's `name` so the response reads right
             // even if the caller passed bare ids.
-            let by_id: std::collections::HashMap<String, String> =
-                summaries.into_iter().map(|b| (b.id.clone(), b.name)).collect();
+            let by_id: std::collections::HashMap<String, String> = summaries
+                .into_iter()
+                .map(|b| (b.id.clone(), b.name))
+                .collect();
             scoped
                 .into_iter()
                 .filter_map(|id| by_id.get(&id).map(|n| (id.clone(), n.clone())))
@@ -1648,7 +1671,10 @@ pub async fn recall_across_brains(
         let mut score_by_brain: std::collections::HashMap<String, Vec<f64>> =
             std::collections::HashMap::new();
         for h in &all_hits {
-            score_by_brain.entry(h.brain_id.clone()).or_default().push(h.score);
+            score_by_brain
+                .entry(h.brain_id.clone())
+                .or_default()
+                .push(h.score);
         }
         let brain_stats: std::collections::HashMap<String, (f64, f64)> = score_by_brain
             .into_iter()
@@ -1672,7 +1698,9 @@ pub async fn recall_across_brains(
         // Sort by normalized score desc; partial_cmp is fine — z-scores are
         // finite. Unwrap_or keeps things sane in any degenerate case.
         all_hits.sort_by(|a, b| {
-            znorm(b).partial_cmp(&znorm(a)).unwrap_or(std::cmp::Ordering::Equal)
+            znorm(b)
+                .partial_cmp(&znorm(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         all_hits.truncate(top_k);
         let total = all_hits.len();
@@ -1859,7 +1887,11 @@ pub async fn remember(
                 let first = content.lines().next().unwrap_or("").trim();
                 let stripped = first.trim_start_matches('#').trim();
                 let truncated: String = stripped.chars().take(60).collect();
-                if truncated.is_empty() { "Untitled".to_string() } else { truncated }
+                if truncated.is_empty() {
+                    "Untitled".to_string()
+                } else {
+                    truncated
+                }
             });
         let seed = format!("# {}\n\n{}", title, content);
 
@@ -2188,8 +2220,8 @@ pub async fn update_brain(
         }
         let rows: Vec<(String, String)> = {
             let conn = db.lock();
-            let mut stmt = conn
-                .prepare("SELECT id, filename FROM engrams WHERE state != 'dormant'")?;
+            let mut stmt =
+                conn.prepare("SELECT id, filename FROM engrams WHERE state != 'dormant'")?;
             let mapped = stmt.query_map([], |r| {
                 let id: String = r.get(0)?;
                 let fname: String = r.get(1)?;
@@ -2565,7 +2597,9 @@ pub struct ListImagesResponse {
     images: Vec<ImageEntry>,
 }
 
-pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "tiff"];
+pub const IMAGE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "tiff",
+];
 
 pub fn collect_image_files(
     root: &std::path::Path,
@@ -2802,8 +2836,8 @@ pub async fn rebuild_wikilinks(
     body: Option<Json<RebuildWikilinksBody>>,
 ) -> Result<Json<RebuildWikilinksResult>, ApiError> {
     let body = body.map(|j| j.0).unwrap_or_default();
-    let result = tokio::task::spawn_blocking(
-        move || -> Result<RebuildWikilinksResult, MemoryError> {
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<RebuildWikilinksResult, MemoryError> {
             let started = std::time::Instant::now();
             let id = resolve_brain_id(body.brain.as_deref())?;
             let db = super::db::open_brain(&id)?;
@@ -2815,11 +2849,10 @@ pub async fn rebuild_wikilinks(
                 links_resolved,
                 elapsed_ms: started.elapsed().as_millis() as u64,
             })
-        },
-    )
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -2974,7 +3007,8 @@ pub async fn clutter_report(
             mapped.filter_map(std::result::Result::ok).collect()
         };
 
-        let total = stubs.len() + test_data.len() + forgotten_observations.len() + duplicate_titles.len();
+        let total =
+            stubs.len() + test_data.len() + forgotten_observations.len() + duplicate_titles.len();
         Ok(ClutterReport {
             brain_id: id,
             stubs,
@@ -3009,56 +3043,57 @@ pub async fn engrams_delete(
     _s: State<ServerState>,
     Json(body): Json<EngramsDeleteBody>,
 ) -> Result<Json<EngramsDeleteResult>, ApiError> {
-    let result = tokio::task::spawn_blocking(move || -> Result<EngramsDeleteResult, MemoryError> {
-        let id = resolve_brain_id(body.brain.as_deref())?;
-        let vault = super::read_ops::resolve_vault_path(&id)?;
-        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<EngramsDeleteResult, MemoryError> {
+            let id = resolve_brain_id(body.brain.as_deref())?;
+            let vault = super::read_ops::resolve_vault_path(&id)?;
+            let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
 
-        // Look up filename for each engram id, then call delete_note
-        // which also moves the markdown to trash/. The filename lookup
-        // and the delete are separate transactions; collecting the
-        // filenames first keeps the per-engram delete loop straight.
-        let mut filenames: Vec<(String, Option<String>)> = Vec::new();
-        {
-            let conn = ctx.db.lock();
-            for engram_id in &body.engram_ids {
-                let row: Option<String> = conn
-                    .query_row(
-                        "SELECT filename FROM engrams WHERE id = ?1",
-                        [engram_id],
-                        |r| r.get(0),
-                    )
-                    .ok();
-                filenames.push((engram_id.clone(), row));
+            // Look up filename for each engram id, then call delete_note
+            // which also moves the markdown to trash/. The filename lookup
+            // and the delete are separate transactions; collecting the
+            // filenames first keeps the per-engram delete loop straight.
+            let mut filenames: Vec<(String, Option<String>)> = Vec::new();
+            {
+                let conn = ctx.db.lock();
+                for engram_id in &body.engram_ids {
+                    let row: Option<String> = conn
+                        .query_row(
+                            "SELECT filename FROM engrams WHERE id = ?1",
+                            [engram_id],
+                            |r| r.get(0),
+                        )
+                        .ok();
+                    filenames.push((engram_id.clone(), row));
+                }
             }
-        }
 
-        let mut deleted = 0u32;
-        let mut not_found = 0u32;
-        let mut failed: Vec<String> = Vec::new();
-        for (engram_id, fname_opt) in filenames {
-            match fname_opt {
-                None => not_found += 1,
-                Some(fname) => match super::write_ops::delete_note(&ctx, &fname) {
-                    Ok(_) => deleted += 1,
-                    Err(e) => {
-                        eprintln!("[engrams_delete] {} ({}): {}", engram_id, fname, e);
-                        failed.push(engram_id);
-                    }
-                },
+            let mut deleted = 0u32;
+            let mut not_found = 0u32;
+            let mut failed: Vec<String> = Vec::new();
+            for (engram_id, fname_opt) in filenames {
+                match fname_opt {
+                    None => not_found += 1,
+                    Some(fname) => match super::write_ops::delete_note(&ctx, &fname) {
+                        Ok(_) => deleted += 1,
+                        Err(e) => {
+                            eprintln!("[engrams_delete] {} ({}): {}", engram_id, fname, e);
+                            failed.push(engram_id);
+                        }
+                    },
+                }
             }
-        }
 
-        Ok(EngramsDeleteResult {
-            brain_id: id,
-            deleted,
-            not_found,
-            failed,
+            Ok(EngramsDeleteResult {
+                brain_id: id,
+                deleted,
+                not_found,
+                failed,
+            })
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3098,7 +3133,16 @@ pub async fn bulk_set_kind(
     // Schema comment lists the canonical values. We don't reject
     // unknown ones at the SQL level (the column is plain TEXT) but
     // the API guards against typos.
-    const ALLOWED: &[&str] = &["note", "source", "quote", "draft", "question", "decision", "observation", "insight"];
+    const ALLOWED: &[&str] = &[
+        "note",
+        "source",
+        "quote",
+        "draft",
+        "question",
+        "decision",
+        "observation",
+        "insight",
+    ];
     let kind = body.kind.trim().to_lowercase();
     if !ALLOWED.contains(&kind.as_str()) {
         return Err(ApiError(
@@ -3107,7 +3151,10 @@ pub async fn bulk_set_kind(
         ));
     }
     if body.engram_ids.is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "engram_ids is empty".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "engram_ids is empty".into(),
+        ));
     }
 
     let result = tokio::task::spawn_blocking(move || -> Result<BulkUpdateResult, MemoryError> {
@@ -3120,7 +3167,9 @@ pub async fn bulk_set_kind(
         let mut not_found: Vec<String> = Vec::new();
         for eid in &body.engram_ids {
             let existing: Option<String> = conn
-                .query_row("SELECT kind FROM engrams WHERE id = ?1", [eid], |r| r.get(0))
+                .query_row("SELECT kind FROM engrams WHERE id = ?1", [eid], |r| {
+                    r.get(0)
+                })
                 .ok();
             match existing {
                 None => not_found.push(eid.clone()),
@@ -3130,13 +3179,20 @@ pub async fn bulk_set_kind(
                         "UPDATE engrams SET kind = ?1, updated_at = datetime('now') WHERE id = ?2",
                         rusqlite::params![kind, eid],
                     )?;
-                    if n > 0 { updated += 1; }
+                    if n > 0 {
+                        updated += 1;
+                    }
                 }
             }
         }
         drop(conn);
         super::recall_cache::invalidate_brain(&id);
-        Ok(BulkUpdateResult { brain_id: id, updated, unchanged, not_found })
+        Ok(BulkUpdateResult {
+            brain_id: id,
+            updated,
+            unchanged,
+            not_found,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -3161,7 +3217,10 @@ pub async fn bulk_add_tag(
         return Err(ApiError(StatusCode::BAD_REQUEST, "tag is empty".into()));
     }
     if body.engram_ids.is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "engram_ids is empty".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "engram_ids is empty".into(),
+        ));
     }
 
     let result = tokio::task::spawn_blocking(move || -> Result<BulkUpdateResult, MemoryError> {
@@ -3174,7 +3233,9 @@ pub async fn bulk_add_tag(
         let mut not_found: Vec<String> = Vec::new();
         for eid in &body.engram_ids {
             let existing: Option<Option<String>> = conn
-                .query_row("SELECT tags FROM engrams WHERE id = ?1", [eid], |r| r.get(0))
+                .query_row("SELECT tags FROM engrams WHERE id = ?1", [eid], |r| {
+                    r.get(0)
+                })
                 .ok();
             match existing {
                 None => not_found.push(eid.clone()),
@@ -3201,7 +3262,12 @@ pub async fn bulk_add_tag(
         }
         drop(conn);
         super::recall_cache::invalidate_brain(&id);
-        Ok(BulkUpdateResult { brain_id: id, updated, unchanged, not_found })
+        Ok(BulkUpdateResult {
+            brain_id: id,
+            updated,
+            unchanged,
+            not_found,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -3259,54 +3325,56 @@ pub async fn engram_versions_list(
     _s: State<ServerState>,
 ) -> Result<Json<EngramVersionsResponse>, ApiError> {
     let limit = q.limit.unwrap_or(50).min(500) as i64;
-    let result = tokio::task::spawn_blocking(move || -> Result<EngramVersionsResponse, MemoryError> {
-        let id = resolve_brain_id(q.brain.as_deref())?;
-        let db = open_brain(&id)?;
-        let conn = db.lock();
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<EngramVersionsResponse, MemoryError> {
+            let id = resolve_brain_id(q.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            let conn = db.lock();
 
-        let current: (String, String) = conn
-            .query_row(
-                "SELECT title, content_hash FROM engrams WHERE id = ?1",
-                [&engram_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .map_err(|_| MemoryError::EngramNotFound(engram_id.clone()))?;
+            let current: (String, String) = conn
+                .query_row(
+                    "SELECT title, content_hash FROM engrams WHERE id = ?1",
+                    [&engram_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .map_err(|_| MemoryError::EngramNotFound(engram_id.clone()))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT version, title, content, content_hash, created_at \
+            let mut stmt = conn.prepare(
+                "SELECT version, title, content, content_hash, created_at \
              FROM engram_versions \
              WHERE engram_id = ?1 \
              ORDER BY version DESC \
              LIMIT ?2",
-        )?;
-        let mapped = stmt.query_map(rusqlite::params![&engram_id, limit], |r| {
-            let content: String = r.get(2)?;
-            // Preview keeps the response cheap for long edit
-            // histories; callers fetch full content per-version.
-            let preview = content.chars().take(280).collect::<String>();
-            Ok(EngramVersionRow {
-                version: r.get(0)?,
-                title: r.get(1)?,
-                content_hash: r.get(3)?,
-                content_preview: preview,
-                content_bytes: content.len() as i64,
-                created_at: r.get(4)?,
+            )?;
+            let mapped = stmt.query_map(rusqlite::params![&engram_id, limit], |r| {
+                let content: String = r.get(2)?;
+                // Preview keeps the response cheap for long edit
+                // histories; callers fetch full content per-version.
+                let preview = content.chars().take(280).collect::<String>();
+                Ok(EngramVersionRow {
+                    version: r.get(0)?,
+                    title: r.get(1)?,
+                    content_hash: r.get(3)?,
+                    content_preview: preview,
+                    content_bytes: content.len() as i64,
+                    created_at: r.get(4)?,
+                })
+            })?;
+            let versions: Vec<EngramVersionRow> =
+                mapped.filter_map(std::result::Result::ok).collect();
+            let total = versions.len();
+            Ok(EngramVersionsResponse {
+                brain_id: id,
+                engram_id,
+                current_title: current.0,
+                current_content_hash: current.1,
+                total,
+                versions,
             })
-        })?;
-        let versions: Vec<EngramVersionRow> = mapped.filter_map(std::result::Result::ok).collect();
-        let total = versions.len();
-        Ok(EngramVersionsResponse {
-            brain_id: id,
-            engram_id,
-            current_title: current.0,
-            current_content_hash: current.1,
-            total,
-            versions,
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3326,32 +3394,45 @@ pub async fn engram_version_get(
     Query(q): Query<EngramVersionsQuery>,
     _s: State<ServerState>,
 ) -> Result<Json<EngramVersionDetail>, ApiError> {
-    let result = tokio::task::spawn_blocking(move || -> Result<EngramVersionDetail, MemoryError> {
-        let id = resolve_brain_id(q.brain.as_deref())?;
-        let db = open_brain(&id)?;
-        let conn = db.lock();
-        let row: (String, String, String, String) = conn
-            .query_row(
-                "SELECT title, content, content_hash, created_at \
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<EngramVersionDetail, MemoryError> {
+            let id = resolve_brain_id(q.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            let conn = db.lock();
+            let row: (String, String, String, String) = conn
+                .query_row(
+                    "SELECT title, content, content_hash, created_at \
                  FROM engram_versions \
                  WHERE engram_id = ?1 AND version = ?2",
-                rusqlite::params![&engram_id, version],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
-            )
-            .map_err(|_| MemoryError::Other(format!("version {} not found for engram {}", version, engram_id)))?;
-        Ok(EngramVersionDetail {
-            brain_id: id,
-            engram_id,
-            version,
-            title: row.0,
-            content: row.1,
-            content_hash: row.2,
-            created_at: row.3,
+                    rusqlite::params![&engram_id, version],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .map_err(|_| {
+                    MemoryError::Other(format!(
+                        "version {} not found for engram {}",
+                        version, engram_id
+                    ))
+                })?;
+            Ok(EngramVersionDetail {
+                brain_id: id,
+                engram_id,
+                version,
+                title: row.0,
+                content: row.1,
+                content_hash: row.2,
+                created_at: row.3,
+            })
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3404,18 +3485,19 @@ pub async fn contradictions_list(
     _s: State<ServerState>,
 ) -> Result<Json<ContradictionsResponse>, ApiError> {
     let limit = q.limit.unwrap_or(50).min(500) as i64;
-    let result = tokio::task::spawn_blocking(move || -> Result<ContradictionsResponse, MemoryError> {
-        let id = resolve_brain_id(q.brain.as_deref())?;
-        let db = open_brain(&id)?;
-        let conn = db.lock();
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<ContradictionsResponse, MemoryError> {
+            let id = resolve_brain_id(q.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            let conn = db.lock();
 
-        let where_clause = match q.resolved {
-            None => "",
-            Some(true) => " WHERE c.resolved = 1",
-            Some(false) => " WHERE c.resolved = 0",
-        };
-        let sql = format!(
-            "SELECT c.id, c.fact_a, c.fact_b, \
+            let where_clause = match q.resolved {
+                None => "",
+                Some(true) => " WHERE c.resolved = 1",
+                Some(false) => " WHERE c.resolved = 0",
+            };
+            let sql = format!(
+                "SELECT c.id, c.fact_a, c.fact_b, \
                     c.engram_a, ea.title, \
                     c.engram_b, eb.title, \
                     c.detected_at, c.resolved, c.resolution \
@@ -3425,34 +3507,35 @@ pub async fn contradictions_list(
              {} \
              ORDER BY c.detected_at DESC \
              LIMIT ?1",
-            where_clause,
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let mapped = stmt.query_map([limit], |r| {
-            Ok(ContradictionEntry {
-                id: r.get(0)?,
-                fact_a: r.get(1)?,
-                fact_b: r.get(2)?,
-                engram_a_id: r.get(3)?,
-                engram_a_title: r.get(4)?,
-                engram_b_id: r.get(5)?,
-                engram_b_title: r.get(6)?,
-                detected_at: r.get(7)?,
-                resolved: r.get::<_, i64>(8)? != 0,
-                resolution: r.get(9)?,
+                where_clause,
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mapped = stmt.query_map([limit], |r| {
+                Ok(ContradictionEntry {
+                    id: r.get(0)?,
+                    fact_a: r.get(1)?,
+                    fact_b: r.get(2)?,
+                    engram_a_id: r.get(3)?,
+                    engram_a_title: r.get(4)?,
+                    engram_b_id: r.get(5)?,
+                    engram_b_title: r.get(6)?,
+                    detected_at: r.get(7)?,
+                    resolved: r.get::<_, i64>(8)? != 0,
+                    resolution: r.get(9)?,
+                })
+            })?;
+            let contradictions: Vec<ContradictionEntry> =
+                mapped.filter_map(std::result::Result::ok).collect();
+            let total = contradictions.len();
+            Ok(ContradictionsResponse {
+                brain_id: id,
+                total,
+                contradictions,
             })
-        })?;
-        let contradictions: Vec<ContradictionEntry> = mapped.filter_map(std::result::Result::ok).collect();
-        let total = contradictions.len();
-        Ok(ContradictionsResponse {
-            brain_id: id,
-            total,
-            contradictions,
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3483,25 +3566,26 @@ pub async fn contradictions_resolve(
         resolution: None,
         brain: None,
     });
-    let result = tokio::task::spawn_blocking(move || -> Result<ContradictionResolveResult, MemoryError> {
-        let brain_id = resolve_brain_id(body.brain.as_deref())?;
-        let db = open_brain(&brain_id)?;
-        let conn = db.lock();
-        let updated = conn.execute(
-            "UPDATE contradictions SET resolved = 1, resolution = ?2 WHERE id = ?1",
-            rusqlite::params![&id, &body.resolution],
-        )?;
-        if updated == 0 {
-            return Err(MemoryError::Other(format!(
-                "contradiction {} not found",
-                id
-            )));
-        }
-        Ok(ContradictionResolveResult { id, resolved: true })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<ContradictionResolveResult, MemoryError> {
+            let brain_id = resolve_brain_id(body.brain.as_deref())?;
+            let db = open_brain(&brain_id)?;
+            let conn = db.lock();
+            let updated = conn.execute(
+                "UPDATE contradictions SET resolved = 1, resolution = ?2 WHERE id = ?1",
+                rusqlite::params![&id, &body.resolution],
+            )?;
+            if updated == 0 {
+                return Err(MemoryError::Other(format!(
+                    "contradiction {} not found",
+                    id
+                )));
+            }
+            Ok(ContradictionResolveResult { id, resolved: true })
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3568,18 +3652,16 @@ pub async fn links_add(
         // Validate both engrams exist before writing — INSERT OR
         // REPLACE without a ref check would silently create dangling
         // edges if the agent typo'd an id.
-        let exists_a: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM engrams WHERE id = ?1",
-                [&body.from_engram],
-                |r| r.get(0),
-            )?;
-        let exists_b: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM engrams WHERE id = ?1",
-                [&body.to_engram],
-                |r| r.get(0),
-            )?;
+        let exists_a: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM engrams WHERE id = ?1",
+            [&body.from_engram],
+            |r| r.get(0),
+        )?;
+        let exists_b: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM engrams WHERE id = ?1",
+            [&body.to_engram],
+            |r| r.get(0),
+        )?;
         if exists_a == 0 {
             return Err(MemoryError::EngramNotFound(body.from_engram.clone()));
         }
@@ -3845,88 +3927,92 @@ pub async fn temporal_recall(
     _s: State<ServerState>,
 ) -> Result<Json<TemporalRecallResponse>, ApiError> {
     let limit = q.limit.unwrap_or(50).min(500) as i64;
-    let result = tokio::task::spawn_blocking(move || -> Result<TemporalRecallResponse, MemoryError> {
-        let id = resolve_brain_id(q.brain.as_deref())?;
-        let db = open_brain(&id)?;
-        let conn = db.lock();
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<TemporalRecallResponse, MemoryError> {
+            let id = resolve_brain_id(q.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            let conn = db.lock();
 
-        let query_text = q.query.unwrap_or_default();
-        let like_pat = format!("%{}%", query_text);
-        let has_query = !query_text.is_empty();
-        let has_engram = q.engram_id.is_some();
+            let query_text = q.query.unwrap_or_default();
+            let like_pat = format!("%{}%", query_text);
+            let has_query = !query_text.is_empty();
+            let has_engram = q.engram_id.is_some();
 
-        // Two SQL shapes: time-travel vs. live. The bitemporal filter
-        // matches on validity AND system-time (`expired_at` either NULL
-        // or in the future relative to `as_of`). When the caller passes
-        // `include_superseded`, we drop both filters and return raw
-        // history.
-        let mut sql = String::from(
-            "SELECT t.id, t.engram_id, e.title, t.fact, t.valid_from, t.valid_until, \
+            // Two SQL shapes: time-travel vs. live. The bitemporal filter
+            // matches on validity AND system-time (`expired_at` either NULL
+            // or in the future relative to `as_of`). When the caller passes
+            // `include_superseded`, we drop both filters and return raw
+            // history.
+            let mut sql = String::from(
+                "SELECT t.id, t.engram_id, e.title, t.fact, t.valid_from, t.valid_until, \
                     t.is_current, t.superseded_by, t.expired_at \
              FROM temporal_facts t \
              JOIN engrams e ON e.id = t.engram_id \
              WHERE e.state != 'dormant'",
-        );
-        let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+            );
+            let mut binds: Vec<rusqlite::types::Value> = Vec::new();
 
-        if !q.include_superseded {
-            if let Some(ref cutoff) = q.as_of {
-                sql.push_str(
-                    " AND (t.valid_from IS NULL OR t.valid_from <= ?) \
+            if !q.include_superseded {
+                if let Some(ref cutoff) = q.as_of {
+                    sql.push_str(
+                        " AND (t.valid_from IS NULL OR t.valid_from <= ?) \
                        AND (t.valid_until IS NULL OR t.valid_until > ?) \
                        AND (t.expired_at IS NULL OR t.expired_at > ?)",
-                );
-                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
-                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
-                binds.push(rusqlite::types::Value::Text(cutoff.clone()));
-            } else {
-                sql.push_str(" AND t.is_current = 1 AND t.expired_at IS NULL");
+                    );
+                    binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+                    binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+                    binds.push(rusqlite::types::Value::Text(cutoff.clone()));
+                } else {
+                    sql.push_str(" AND t.is_current = 1 AND t.expired_at IS NULL");
+                }
             }
-        }
 
-        if has_query {
-            sql.push_str(" AND t.fact LIKE ? COLLATE NOCASE");
-            binds.push(rusqlite::types::Value::Text(like_pat));
-        }
-        if has_engram {
-            sql.push_str(" AND t.engram_id = ?");
-            binds.push(rusqlite::types::Value::Text(q.engram_id.clone().unwrap_or_default()));
-        }
+            if has_query {
+                sql.push_str(" AND t.fact LIKE ? COLLATE NOCASE");
+                binds.push(rusqlite::types::Value::Text(like_pat));
+            }
+            if has_engram {
+                sql.push_str(" AND t.engram_id = ?");
+                binds.push(rusqlite::types::Value::Text(
+                    q.engram_id.clone().unwrap_or_default(),
+                ));
+            }
 
-        // Most-recent first by valid_from; ties broken by id for
-        // stable pagination.
-        sql.push_str(" ORDER BY COALESCE(t.valid_from, '') DESC, t.id ASC LIMIT ?");
-        binds.push(rusqlite::types::Value::Integer(limit));
+            // Most-recent first by valid_from; ties broken by id for
+            // stable pagination.
+            sql.push_str(" ORDER BY COALESCE(t.valid_from, '') DESC, t.id ASC LIMIT ?");
+            binds.push(rusqlite::types::Value::Integer(limit));
 
-        let mut stmt = conn.prepare(&sql)?;
-        let mapped = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
-            let is_current_int: i64 = r.get(6)?;
-            Ok(TemporalFactEntry {
-                id: r.get(0)?,
-                engram_id: r.get(1)?,
-                engram_title: r.get(2)?,
-                fact: r.get(3)?,
-                valid_from: r.get(4)?,
-                valid_until: r.get(5)?,
-                is_current: is_current_int != 0,
-                superseded_by: r.get(7)?,
-                expired_at: r.get(8)?,
+            let mut stmt = conn.prepare(&sql)?;
+            let mapped = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
+                let is_current_int: i64 = r.get(6)?;
+                Ok(TemporalFactEntry {
+                    id: r.get(0)?,
+                    engram_id: r.get(1)?,
+                    engram_title: r.get(2)?,
+                    fact: r.get(3)?,
+                    valid_from: r.get(4)?,
+                    valid_until: r.get(5)?,
+                    is_current: is_current_int != 0,
+                    superseded_by: r.get(7)?,
+                    expired_at: r.get(8)?,
+                })
+            })?;
+            let facts: Vec<TemporalFactEntry> =
+                mapped.filter_map(std::result::Result::ok).collect();
+            let total = facts.len();
+            Ok(TemporalRecallResponse {
+                brain_id: id,
+                query: query_text,
+                as_of: q.as_of,
+                include_superseded: q.include_superseded,
+                total,
+                facts,
             })
-        })?;
-        let facts: Vec<TemporalFactEntry> = mapped.filter_map(std::result::Result::ok).collect();
-        let total = facts.len();
-        Ok(TemporalRecallResponse {
-            brain_id: id,
-            query: query_text,
-            as_of: q.as_of,
-            include_superseded: q.include_superseded,
-            total,
-            facts,
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -3968,7 +4054,9 @@ pub struct OptimizeDiskBody {
     vacuum: bool,
 }
 
-pub fn default_true() -> bool { true }
+pub fn default_true() -> bool {
+    true
+}
 
 #[derive(serde::Serialize)]
 pub struct DiskMeasurement {
@@ -4001,101 +4089,115 @@ pub async fn optimize_disk(
     _s: State<ServerState>,
     Json(body): Json<OptimizeDiskBody>,
 ) -> Result<Json<OptimizeDiskResponse>, ApiError> {
-    let result = tokio::task::spawn_blocking(move || -> Result<OptimizeDiskResponse, MemoryError> {
-        let id = resolve_brain_id(body.brain.as_deref())?;
-        let dir = super::paths::brain_dir(&id);
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<OptimizeDiskResponse, MemoryError> {
+            let id = resolve_brain_id(body.brain.as_deref())?;
+            let dir = super::paths::brain_dir(&id);
 
-        let measure = |conn: &rusqlite::Connection| -> Result<DiskMeasurement, MemoryError> {
-            let db_bytes = std::fs::metadata(dir.join("brain.db")).map(|m| m.len()).unwrap_or(0);
-            let wal_bytes = std::fs::metadata(dir.join("brain.db-wal")).map(|m| m.len()).unwrap_or(0);
-            let shm_bytes = std::fs::metadata(dir.join("brain.db-shm")).map(|m| m.len()).unwrap_or(0);
-            let free_pages: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap_or(0);
-            let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(4096);
-            Ok(DiskMeasurement {
-                db_bytes,
-                wal_bytes,
-                shm_bytes,
-                total_bytes: db_bytes + wal_bytes + shm_bytes,
-                free_pages,
-                page_size,
+            let measure = |conn: &rusqlite::Connection| -> Result<DiskMeasurement, MemoryError> {
+                let db_bytes = std::fs::metadata(dir.join("brain.db"))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let wal_bytes = std::fs::metadata(dir.join("brain.db-wal"))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let shm_bytes = std::fs::metadata(dir.join("brain.db-shm"))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let free_pages: i64 = conn
+                    .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+                    .unwrap_or(0);
+                let page_size: i64 = conn
+                    .query_row("PRAGMA page_size", [], |r| r.get(0))
+                    .unwrap_or(4096);
+                Ok(DiskMeasurement {
+                    db_bytes,
+                    wal_bytes,
+                    shm_bytes,
+                    total_bytes: db_bytes + wal_bytes + shm_bytes,
+                    free_pages,
+                    page_size,
+                })
+            };
+
+            let db = open_brain(&id)?;
+            let before = {
+                let conn = db.lock();
+                measure(&conn)?
+            };
+
+            // Step 1: hard-delete dormant rows. CASCADE FKs reap chunks /
+            // links / entity_mentions / contradictions / temporal_facts
+            // automatically. vec_chunks were already cleared at soft-
+            // delete time, so no orphan rows remain.
+            let mut purged: u32 = 0;
+            if body.purge_dormant {
+                let conn = db.lock();
+                // Returning rowcount from execute would conflate the
+                // engram delete with cascaded child deletes; query the
+                // count first so the response is meaningful.
+                let dormant: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM engrams WHERE state = 'dormant'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                conn.execute("DELETE FROM engrams WHERE state = 'dormant'", [])?;
+                purged = dormant as u32;
+            }
+
+            // Step 2: VACUUM first. Cannot run inside a transaction;
+            // execute_batch doesn't open one. Clearing the statement
+            // cache avoids any prepared-statement contention with the
+            // file rewrite.
+            //
+            // VACUUM has to come BEFORE the checkpoint because VACUUM
+            // itself writes the entire rebuilt DB through the WAL. If
+            // we checkpoint first and VACUUM second, the WAL ends up
+            // bigger than the DB. Inverting the order so checkpoint
+            // truncates VACUUM's WAL output too.
+            if body.vacuum {
+                let conn = db.lock();
+                conn.flush_prepared_statement_cache();
+                conn.execute_batch("VACUUM;")?;
+            }
+
+            // Step 3: WAL truncate. PASSIVE would just flush; TRUNCATE
+            // also shrinks the file back to zero bytes. Safe — we hold
+            // the only writer lock and there are no in-flight readers
+            // because the connection is mutex-guarded.
+            if body.wal_checkpoint {
+                let conn = db.lock();
+                conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+            }
+
+            let after = {
+                let conn = db.lock();
+                measure(&conn)?
+            };
+
+            // Invalidate the recall cache + bm25 index — purged dormants
+            // were already excluded from those, but a VACUUM reorders
+            // pages and we want fresh handles next call.
+            super::recall_cache::invalidate_brain(&id);
+            let _ = super::bm25::index_for(&id).flush(&db);
+
+            let reclaimed = before.total_bytes as i64 - after.total_bytes as i64;
+            Ok(OptimizeDiskResponse {
+                brain_id: id,
+                before,
+                after,
+                reclaimed_bytes: reclaimed,
+                purged_engrams: purged,
+                ran: OptimizeRan {
+                    purge_dormant: body.purge_dormant,
+                    wal_checkpoint: body.wal_checkpoint,
+                    vacuum: body.vacuum,
+                },
             })
-        };
-
-        let db = open_brain(&id)?;
-        let before = {
-            let conn = db.lock();
-            measure(&conn)?
-        };
-
-        // Step 1: hard-delete dormant rows. CASCADE FKs reap chunks /
-        // links / entity_mentions / contradictions / temporal_facts
-        // automatically. vec_chunks were already cleared at soft-
-        // delete time, so no orphan rows remain.
-        let mut purged: u32 = 0;
-        if body.purge_dormant {
-            let conn = db.lock();
-            // Returning rowcount from execute would conflate the
-            // engram delete with cascaded child deletes; query the
-            // count first so the response is meaningful.
-            let dormant: i64 = conn
-                .query_row("SELECT COUNT(*) FROM engrams WHERE state = 'dormant'", [], |r| r.get(0))?;
-            conn.execute("DELETE FROM engrams WHERE state = 'dormant'", [])?;
-            purged = dormant as u32;
-        }
-
-        // Step 2: VACUUM first. Cannot run inside a transaction;
-        // execute_batch doesn't open one. Clearing the statement
-        // cache avoids any prepared-statement contention with the
-        // file rewrite.
-        //
-        // VACUUM has to come BEFORE the checkpoint because VACUUM
-        // itself writes the entire rebuilt DB through the WAL. If
-        // we checkpoint first and VACUUM second, the WAL ends up
-        // bigger than the DB. Inverting the order so checkpoint
-        // truncates VACUUM's WAL output too.
-        if body.vacuum {
-            let conn = db.lock();
-            conn.flush_prepared_statement_cache();
-            conn.execute_batch("VACUUM;")?;
-        }
-
-        // Step 3: WAL truncate. PASSIVE would just flush; TRUNCATE
-        // also shrinks the file back to zero bytes. Safe — we hold
-        // the only writer lock and there are no in-flight readers
-        // because the connection is mutex-guarded.
-        if body.wal_checkpoint {
-            let conn = db.lock();
-            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-        }
-
-        let after = {
-            let conn = db.lock();
-            measure(&conn)?
-        };
-
-        // Invalidate the recall cache + bm25 index — purged dormants
-        // were already excluded from those, but a VACUUM reorders
-        // pages and we want fresh handles next call.
-        super::recall_cache::invalidate_brain(&id);
-        let _ = super::bm25::index_for(&id).flush(&db);
-
-        let reclaimed = before.total_bytes as i64 - after.total_bytes as i64;
-        Ok(OptimizeDiskResponse {
-            brain_id: id,
-            before,
-            after,
-            reclaimed_bytes: reclaimed,
-            purged_engrams: purged,
-            ran: OptimizeRan {
-                purge_dormant: body.purge_dormant,
-                wal_checkpoint: body.wal_checkpoint,
-                vacuum: body.vacuum,
-            },
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -4133,7 +4235,9 @@ pub async fn mcp_tier_get(_s: State<ServerState>) -> Result<Json<McpTierResponse
         "standard" => "standard",
         _ => "full",
     };
-    Ok(Json(McpTierResponse { tier: tier.to_string() }))
+    Ok(Json(McpTierResponse {
+        tier: tier.to_string(),
+    }))
 }
 
 pub async fn mcp_tier_set(
@@ -4144,15 +4248,22 @@ pub async fn mcp_tier_set(
     if !matches!(trimmed.as_str(), "lite" | "standard" | "full") {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            format!("tier must be 'lite' | 'standard' | 'full', got {:?}", body.tier),
+            format!(
+                "tier must be 'lite' | 'standard' | 'full', got {:?}",
+                body.tier
+            ),
         ));
     }
     let path = mcp_tier_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&path, &trimmed)
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("write tier: {e}")))?;
+    std::fs::write(&path, &trimmed).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write tier: {e}"),
+        )
+    })?;
     Ok(Json(McpTierResponse { tier: trimmed }))
 }
 
@@ -4188,7 +4299,9 @@ pub struct RerankBody {
 }
 
 pub async fn rerank_get(_s: State<ServerState>) -> Result<Json<RerankResponse>, ApiError> {
-    Ok(Json(RerankResponse { enabled: rerank_enabled() }))
+    Ok(Json(RerankResponse {
+        enabled: rerank_enabled(),
+    }))
 }
 
 pub async fn rerank_set(
@@ -4199,9 +4312,15 @@ pub async fn rerank_set(
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&path, if body.enabled { "on" } else { "off" })
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("write rerank: {e}")))?;
-    Ok(Json(RerankResponse { enabled: body.enabled }))
+    std::fs::write(&path, if body.enabled { "on" } else { "off" }).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write rerank: {e}"),
+        )
+    })?;
+    Ok(Json(RerankResponse {
+        enabled: body.enabled,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -4225,9 +4344,7 @@ pub struct ApiKeyListResponse {
     pub keys: Vec<super::api_keys::ApiKeyPublic>,
 }
 
-pub async fn api_keys_list(
-    _s: State<ServerState>,
-) -> Result<Json<ApiKeyListResponse>, ApiError> {
+pub async fn api_keys_list(_s: State<ServerState>) -> Result<Json<ApiKeyListResponse>, ApiError> {
     let store = super::api_keys::current();
     let keys = store
         .keys
@@ -4278,8 +4395,8 @@ pub async fn api_keys_create(
             ))
         }
     };
-    let minted = super::api_keys::create_key(label, scope, body.brain_allowlist)
-        .map_err(ApiError::from)?;
+    let minted =
+        super::api_keys::create_key(label, scope, body.brain_allowlist).map_err(ApiError::from)?;
     let key = super::api_keys::ApiKeyPublic::from(&minted.record);
     Ok(Json(ApiKeyCreateResponse {
         plaintext: minted.plaintext,
@@ -4514,7 +4631,10 @@ pub async fn compile_submit(
     Json(body): Json<CompileSubmitBody>,
 ) -> Result<Json<CompileSubmitResult>, ApiError> {
     if body.topic.trim().is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "topic is required".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "topic is required".into(),
+        ));
     }
     if body.wiki_markdown.trim().is_empty() {
         return Err(ApiError(
@@ -4522,49 +4642,50 @@ pub async fn compile_submit(
             "wiki_markdown is required".into(),
         ));
     }
-    let result = tokio::task::spawn_blocking(move || -> Result<CompileSubmitResult, MemoryError> {
-        let id = resolve_brain_id(body.brain.as_deref())?;
-        let vault = super::read_ops::resolve_vault_path(&id)?;
-        let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
-        let slug = slug::slugify(&body.topic);
-        let wiki_filename = format!("wiki/{}.md", slug);
-        // Look up the existing wiki engram (if any) to capture old
-        // content for the compilations row.
-        let old_content: Option<String> = {
-            let conn = ctx.db.lock();
-            conn.query_row(
-                "SELECT COALESCE(content, '') FROM engrams WHERE filename = ?1",
-                [&wiki_filename],
-                |r| r.get(0),
-            )
-            .ok()
-        };
-        // Write through the standard save_note path so the file lands
-        // on disk + the engram is re-ingested with correct chunks /
-        // embeddings / kind.
-        let write = super::write_ops::save_note(&ctx, &wiki_filename, &body.wiki_markdown)?;
-        // Mark the engram kind as wiki so it shows up correctly in
-        // the graph + retrieval.
-        {
-            let conn = ctx.db.lock();
-            conn.execute(
-                "UPDATE engrams SET kind = 'wiki' WHERE id = ?1",
-                [&write.engram_id],
-            )?;
-        }
-        // Persist a compilations row. Status depends on the
-        // auto_approve flag: pending (the default — user reviews in
-        // the Compile tab) or approved (auto-approved on submit).
-        let compilation_id = uuid::Uuid::new_v4().to_string();
-        let sources_json = serde_json::to_string(&body.source_engram_ids)
-            .map_err(MemoryError::Json)?;
-        let auto = body.auto_approve.unwrap_or(false);
-        let initial_status = if auto { "approved" } else { "pending" };
-        {
-            let conn = ctx.db.lock();
-            if auto {
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<CompileSubmitResult, MemoryError> {
+            let id = resolve_brain_id(body.brain.as_deref())?;
+            let vault = super::read_ops::resolve_vault_path(&id)?;
+            let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
+            let slug = slug::slugify(&body.topic);
+            let wiki_filename = format!("wiki/{}.md", slug);
+            // Look up the existing wiki engram (if any) to capture old
+            // content for the compilations row.
+            let old_content: Option<String> = {
+                let conn = ctx.db.lock();
+                conn.query_row(
+                    "SELECT COALESCE(content, '') FROM engrams WHERE filename = ?1",
+                    [&wiki_filename],
+                    |r| r.get(0),
+                )
+                .ok()
+            };
+            // Write through the standard save_note path so the file lands
+            // on disk + the engram is re-ingested with correct chunks /
+            // embeddings / kind.
+            let write = super::write_ops::save_note(&ctx, &wiki_filename, &body.wiki_markdown)?;
+            // Mark the engram kind as wiki so it shows up correctly in
+            // the graph + retrieval.
+            {
+                let conn = ctx.db.lock();
                 conn.execute(
-                    "INSERT INTO compilations \
+                    "UPDATE engrams SET kind = 'wiki' WHERE id = ?1",
+                    [&write.engram_id],
+                )?;
+            }
+            // Persist a compilations row. Status depends on the
+            // auto_approve flag: pending (the default — user reviews in
+            // the Compile tab) or approved (auto-approved on submit).
+            let compilation_id = uuid::Uuid::new_v4().to_string();
+            let sources_json =
+                serde_json::to_string(&body.source_engram_ids).map_err(MemoryError::Json)?;
+            let auto = body.auto_approve.unwrap_or(false);
+            let initial_status = if auto { "approved" } else { "pending" };
+            {
+                let conn = ctx.db.lock();
+                if auto {
+                    conn.execute(
+                        "INSERT INTO compilations \
                      (id, topic, wiki_engram_id, old_content, new_content, \
                       changelog_json, sources_json, model, input_tokens, \
                       output_tokens, status, created_at, reviewed_at, \
@@ -4574,45 +4695,45 @@ pub async fn compile_submit(
                       strftime('%Y-%m-%d %H:%M:%f', 'now'), \
                       strftime('%Y-%m-%d %H:%M:%f', 'now'), \
                       'auto-approved')",
-                    rusqlite::params![
-                        compilation_id,
-                        body.topic,
-                        write.engram_id,
-                        old_content,
-                        body.wiki_markdown,
-                        sources_json,
-                    ],
-                )?;
-            } else {
-                conn.execute(
-                    "INSERT INTO compilations \
+                        rusqlite::params![
+                            compilation_id,
+                            body.topic,
+                            write.engram_id,
+                            old_content,
+                            body.wiki_markdown,
+                            sources_json,
+                        ],
+                    )?;
+                } else {
+                    conn.execute(
+                        "INSERT INTO compilations \
                      (id, topic, wiki_engram_id, old_content, new_content, \
                       changelog_json, sources_json, model, input_tokens, \
                       output_tokens, status, created_at) \
                      VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'agent-driven', \
                       0, 0, 'pending', strftime('%Y-%m-%d %H:%M:%f', 'now'))",
-                    rusqlite::params![
-                        compilation_id,
-                        body.topic,
-                        write.engram_id,
-                        old_content,
-                        body.wiki_markdown,
-                        sources_json,
-                    ],
-                )?;
+                        rusqlite::params![
+                            compilation_id,
+                            body.topic,
+                            write.engram_id,
+                            old_content,
+                            body.wiki_markdown,
+                            sources_json,
+                        ],
+                    )?;
+                }
             }
-        }
-        Ok(CompileSubmitResult {
-            compilation_id,
-            wiki_engram_id: write.engram_id,
-            wiki_filename,
-            brain_id: id,
-            status: initial_status.to_string(),
+            Ok(CompileSubmitResult {
+                compilation_id,
+                wiki_engram_id: write.engram_id,
+                wiki_filename,
+                brain_id: id,
+                status: initial_status.to_string(),
+            })
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -4664,8 +4785,12 @@ pub struct CompilationsListQuery {
 }
 
 fn read_summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CompilationSummary> {
-    let changelog_json: String = r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "[]".into());
-    let sources_json: String = r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into());
+    let changelog_json: String = r
+        .get::<_, Option<String>>(8)?
+        .unwrap_or_else(|| "[]".into());
+    let sources_json: String = r
+        .get::<_, Option<String>>(9)?
+        .unwrap_or_else(|| "[]".into());
     let change_count = serde_json::from_str::<serde_json::Value>(&changelog_json)
         .ok()
         .and_then(|v| v.as_array().map(|a| a.len() as i64))
@@ -4692,35 +4817,36 @@ pub async fn compilations_list(
     Query(q): Query<CompilationsListQuery>,
     _s: State<ServerState>,
 ) -> Result<Json<Vec<CompilationSummary>>, ApiError> {
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<CompilationSummary>, MemoryError> {
-        let id = resolve_brain_id(None)?;
-        let db = open_brain(&id)?;
-        let conn = db.lock();
-        let limit = q.limit.unwrap_or(50).clamp(1, 500);
-        let rows: Vec<CompilationSummary> = if let Some(st) = q.status.as_deref() {
-            let mut stmt = conn.prepare(
-                "SELECT id, topic, status, model, input_tokens, output_tokens, \
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Vec<CompilationSummary>, MemoryError> {
+            let id = resolve_brain_id(None)?;
+            let db = open_brain(&id)?;
+            let conn = db.lock();
+            let limit = q.limit.unwrap_or(50).clamp(1, 500);
+            let rows: Vec<CompilationSummary> = if let Some(st) = q.status.as_deref() {
+                let mut stmt = conn.prepare(
+                    "SELECT id, topic, status, model, input_tokens, output_tokens, \
                  created_at, reviewed_at, changelog_json, sources_json \
                  FROM compilations WHERE status = ?1 \
                  ORDER BY created_at DESC LIMIT ?2",
-            )?;
-            let mapped = stmt.query_map(rusqlite::params![st, limit], read_summary_row)?;
-            mapped.filter_map(std::result::Result::ok).collect()
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT id, topic, status, model, input_tokens, output_tokens, \
+                )?;
+                let mapped = stmt.query_map(rusqlite::params![st, limit], read_summary_row)?;
+                mapped.filter_map(std::result::Result::ok).collect()
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT id, topic, status, model, input_tokens, output_tokens, \
                  created_at, reviewed_at, changelog_json, sources_json \
                  FROM compilations \
                  ORDER BY created_at DESC LIMIT ?1",
-            )?;
-            let mapped = stmt.query_map(rusqlite::params![limit], read_summary_row)?;
-            mapped.filter_map(std::result::Result::ok).collect()
-        };
-        Ok(rows)
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+                )?;
+                let mapped = stmt.query_map(rusqlite::params![limit], read_summary_row)?;
+                mapped.filter_map(std::result::Result::ok).collect()
+            };
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
     Ok(Json(result))
 }
 
@@ -4752,14 +4878,16 @@ pub async fn compilations_get(
              FROM compilations WHERE id = ?1",
         )?;
         stmt.query_row([&id], |r| {
-            let changelog_json: String =
-                r.get::<_, Option<String>>(8)?.unwrap_or_else(|| "[]".into());
-            let sources_json: String =
-                r.get::<_, Option<String>>(9)?.unwrap_or_else(|| "[]".into());
-            let changelog = serde_json::from_str(&changelog_json)
-                .unwrap_or(serde_json::Value::Array(vec![]));
-            let sources = serde_json::from_str(&sources_json)
-                .unwrap_or(serde_json::Value::Array(vec![]));
+            let changelog_json: String = r
+                .get::<_, Option<String>>(8)?
+                .unwrap_or_else(|| "[]".into());
+            let sources_json: String = r
+                .get::<_, Option<String>>(9)?
+                .unwrap_or_else(|| "[]".into());
+            let changelog =
+                serde_json::from_str(&changelog_json).unwrap_or(serde_json::Value::Array(vec![]));
+            let sources =
+                serde_json::from_str(&sources_json).unwrap_or(serde_json::Value::Array(vec![]));
             let change_count = changelog.as_array().map(|a| a.len() as i64).unwrap_or(0);
             let source_count = sources.as_array().map(|a| a.len() as i64).unwrap_or(0);
             Ok(CompilationDetail {
@@ -4825,7 +4953,10 @@ pub async fn compilations_approve(
         if n == 0 {
             return Err(MemoryError::Other(format!("compilation not found: {}", id)));
         }
-        Ok(ReviewResult { status: "approved".to_string(), id })
+        Ok(ReviewResult {
+            status: "approved".to_string(),
+            id,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -4872,7 +5003,10 @@ pub async fn compilations_reject(
         if n == 0 {
             return Err(MemoryError::Other(format!("compilation not found: {}", id)));
         }
-        Ok(ReviewResult { status: "rejected".to_string(), id })
+        Ok(ReviewResult {
+            status: "rejected".to_string(),
+            id,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -4952,7 +5086,10 @@ pub async fn clusters_list(
                 })
             })
             .collect();
-        Ok(ClusterListResponse { clusters, needs_analytics })
+        Ok(ClusterListResponse {
+            clusters,
+            needs_analytics,
+        })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -4982,25 +5119,27 @@ pub async fn clusters_set_names(
     let brain_id = body.brain_id.clone();
     let incoming_str = body.names;
 
-    let resp = tokio::task::spawn_blocking(move || -> Result<SetClusterNamesResponse, MemoryError> {
-        let id = resolve_brain_id(brain_id.as_deref())?;
-        let mut parsed: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-        let saved = incoming_str.len();
-        for (k, v) in incoming_str {
-            if let Ok(cid) = k.parse::<u32>() {
-                parsed.insert(cid, v);
+    let resp =
+        tokio::task::spawn_blocking(move || -> Result<SetClusterNamesResponse, MemoryError> {
+            let id = resolve_brain_id(brain_id.as_deref())?;
+            let mut parsed: std::collections::HashMap<u32, String> =
+                std::collections::HashMap::new();
+            let saved = incoming_str.len();
+            for (k, v) in incoming_str {
+                if let Ok(cid) = k.parse::<u32>() {
+                    parsed.insert(cid, v);
+                }
             }
-        }
-        let merged = super::cluster_state::merge_names(&id, parsed)
-            .map_err(MemoryError::Other)?;
-        Ok(SetClusterNamesResponse {
-            saved,
-            total_named: merged.len(),
+            let merged =
+                super::cluster_state::merge_names(&id, parsed).map_err(MemoryError::Other)?;
+            Ok(SetClusterNamesResponse {
+                saved,
+                total_named: merged.len(),
+            })
         })
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
 
     Ok(Json(resp))
 }
@@ -5067,7 +5206,10 @@ pub async fn brains_create(
 
         let mut final_id = id.clone();
         let mut n = 2;
-        while brains_arr.iter().any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&final_id)) {
+        while brains_arr
+            .iter()
+            .any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&final_id))
+        {
             final_id = format!("{}-{}", id, n);
             n += 1;
         }
@@ -5089,15 +5231,15 @@ pub async fn brains_create(
         brains_arr.push(entry);
 
         let tmp = registry_path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(&json).map_err(MemoryError::Json)?)
-            .map_err(MemoryError::Io)?;
+        fs::write(
+            &tmp,
+            serde_json::to_string_pretty(&json).map_err(MemoryError::Json)?,
+        )
+        .map_err(MemoryError::Io)?;
         std::fs::rename(&tmp, &registry_path).map_err(MemoryError::Io)?;
 
         let _db = open_brain(&final_id)?;
-        Ok(CreateBrainResponse {
-            id: final_id,
-            name,
-        })
+        Ok(CreateBrainResponse { id: final_id, name })
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -5116,7 +5258,9 @@ pub struct CheckDuplicateBody {
     brain: Option<String>,
 }
 
-fn default_dupe_threshold() -> f64 { 0.85 }
+fn default_dupe_threshold() -> f64 {
+    0.85
+}
 
 #[derive(Serialize)]
 pub struct CheckDuplicateResponse {
@@ -5130,8 +5274,8 @@ pub async fn check_duplicate(
     _s: State<ServerState>,
     Json(body): Json<CheckDuplicateBody>,
 ) -> Result<Json<CheckDuplicateResponse>, ApiError> {
-    let resp = tokio::task::spawn_blocking(
-        move || -> Result<CheckDuplicateResponse, MemoryError> {
+    let resp =
+        tokio::task::spawn_blocking(move || -> Result<CheckDuplicateResponse, MemoryError> {
             let id = resolve_brain_id(body.brain.as_deref())?;
             let db = open_brain(&id)?;
             let trimmed = body.content.trim();
@@ -5191,11 +5335,10 @@ pub async fn check_duplicate(
                     title: None,
                 }),
             }
-        },
-    )
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(ApiError::from)?;
 
     Ok(Json(resp))
 }
@@ -5218,7 +5361,9 @@ pub struct RecallChunksQuery {
     brain: Option<String>,
 }
 
-fn default_chunks_limit() -> usize { 10 }
+fn default_chunks_limit() -> usize {
+    10
+}
 
 #[derive(Serialize)]
 pub struct ChunkHit {
@@ -5281,7 +5426,9 @@ pub async fn recall_chunks(
         for hit in raw {
             if seen.insert(hit.engram_id.clone()) {
                 rows.push(hit);
-                if rows.len() >= limit { break; }
+                if rows.len() >= limit {
+                    break;
+                }
             }
         }
         Ok(RecallChunksResponse { hits: rows })
@@ -5404,7 +5551,9 @@ pub struct ChangesQuery {
     limit: usize,
 }
 
-fn default_changes_limit() -> usize { 50 }
+fn default_changes_limit() -> usize {
+    50
+}
 
 #[derive(Serialize)]
 pub struct ChangeRow {
@@ -5445,7 +5594,9 @@ pub async fn changes_feed(
                     kind: r.get(4)?,
                 })
             })?;
-            for row in it { rows.push(row?); }
+            for row in it {
+                rows.push(row?);
+            }
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, title, COALESCE(updated_at, ''), state, COALESCE(kind, '') \
@@ -5460,7 +5611,9 @@ pub async fn changes_feed(
                     kind: r.get(4)?,
                 })
             })?;
-            for row in it { rows.push(row?); }
+            for row in it {
+                rows.push(row?);
+            }
         }
         Ok(ChangesResponse { changes: rows })
     })
@@ -5609,16 +5762,19 @@ pub async fn todos_add(
 ) -> Result<Json<Todo>, ApiError> {
     let result = tokio::task::spawn_blocking(move || -> Result<Todo, MemoryError> {
         let id = resolve_brain_id(body.brain.as_deref())?;
-        todos::add_todo(&id, AddTodoArgs {
-            text: body.text,
-            agent_match: body.agent_match,
-            priority: body.priority,
-            created_by: body.created_by,
-            note: body.note,
-            kind: None,
-            payload: None,
-            source_engram: None,
-        })
+        todos::add_todo(
+            &id,
+            AddTodoArgs {
+                text: body.text,
+                agent_match: body.agent_match,
+                priority: body.priority,
+                created_by: body.created_by,
+                note: body.note,
+                kind: None,
+                payload: None,
+                source_engram: None,
+            },
+        )
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -5850,7 +6006,9 @@ pub async fn inbox_done(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let brain_id = resolve_brain_id(body.brain.as_deref())?;
     super::inbox::mark_done(&brain_id, &body.name)?;
-    Ok(Json(serde_json::json!({ "status": "ok", "name": body.name })))
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "name": body.name }),
+    ))
 }
 
 // ---------------------------------------------------------------------------

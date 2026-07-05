@@ -65,7 +65,9 @@ fn vault_dir() -> PathBuf {
                     if let Some(brains) = parsed.get("brains").and_then(|v| v.as_array()) {
                         for b in brains {
                             let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            if id != active_id { continue; }
+                            if id != active_id {
+                                continue;
+                            }
                             if let Some(ext) = b.get("vault_path").and_then(|v| v.as_str()) {
                                 let p = PathBuf::from(ext);
                                 if p.is_dir() {
@@ -107,9 +109,9 @@ fn vault_dir() -> PathBuf {
 fn seed_welcome_note(vault: &PathBuf) {
     let has_notes = fs::read_dir(vault)
         .map(|entries| {
-            entries.flatten().any(|e| {
-                e.path().extension().and_then(|x| x.to_str()) == Some("md")
-            })
+            entries
+                .flatten()
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
         })
         .unwrap_or(true); // if we can't read the dir, don't seed
     if has_notes {
@@ -231,7 +233,11 @@ fn list_brains_offline() -> Vec<BrainInfoOffline> {
         .iter()
         .filter_map(|b| {
             let id = b.get("id").and_then(|v| v.as_str())?.to_string();
-            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
+            let name = b
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&id)
+                .to_string();
             let description = b
                 .get("description")
                 .and_then(|v| v.as_str())
@@ -262,8 +268,8 @@ fn list_brains_offline() -> Vec<BrainInfoOffline> {
 #[tauri::command]
 fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
     let registry_path = nv_home().join("brains.json");
-    let data = fs::read_to_string(&registry_path)
-        .map_err(|e| format!("brains.json not readable: {e}"))?;
+    let data =
+        fs::read_to_string(&registry_path).map_err(|e| format!("brains.json not readable: {e}"))?;
     let mut parsed: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| format!("brains.json malformed: {e}"))?;
 
@@ -295,10 +301,7 @@ fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
     // external drive unmounted). We log and continue.
     memory::watcher::stop_all();
     if let Err(e) = memory::watcher::start_for_brain(&brain_id, vault_dir()) {
-        eprintln!(
-            "[neurovault] watcher start failed for {}: {}",
-            brain_id, e
-        );
+        eprintln!("[neurovault] watcher start failed for {}: {}", brain_id, e);
     }
 
     Ok(vault_dir().to_string_lossy().to_string())
@@ -316,7 +319,9 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
     // build the folder tree and the same string round-trips unchanged
     // through read_note / save_note.
     fn walk(dir: &std::path::Path, vault_root: &std::path::Path, out: &mut Vec<NoteMeta>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -329,7 +334,9 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .replace('\\', "/");
-                let Ok(metadata) = fs::metadata(&path) else { continue };
+                let Ok(metadata) = fs::metadata(&path) else {
+                    continue;
+                };
                 let modified = metadata
                     .modified()
                     .unwrap_or(SystemTime::UNIX_EPOCH)
@@ -339,7 +346,12 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
                 let size = metadata.len();
                 let content = fs::read_to_string(&path).unwrap_or_default();
                 let title = extract_title(&content, &rel);
-                out.push(NoteMeta { filename: rel, title, modified, size });
+                out.push(NoteMeta {
+                    filename: rel,
+                    title,
+                    modified,
+                    size,
+                });
             }
         }
     }
@@ -370,7 +382,8 @@ fn create_note(title: String) -> Result<String, String> {
     let id = &Uuid::new_v4().to_string()[..8];
     let filename = format!("{slug}-{id}.md");
     let content = format!("# {title}\n\n");
-    fs::write(vault.join(&filename), &content).map_err(|e| format!("Failed to create note: {e}"))?;
+    fs::write(vault.join(&filename), &content)
+        .map_err(|e| format!("Failed to create note: {e}"))?;
     Ok(filename)
 }
 
@@ -414,7 +427,11 @@ fn import_folder_as_vault(source: String, target_brain_id: String) -> Result<usi
     let home = dirs::home_dir().ok_or_else(|| "home dir not found".to_string())?;
     let nv_home = {
         let n = home.join(".neurovault");
-        if n.exists() { n } else { home.join(".engram") }
+        if n.exists() {
+            n
+        } else {
+            home.join(".engram")
+        }
     };
     let target_vault = nv_home.join("brains").join(&target_brain_id).join("vault");
     fs::create_dir_all(&target_vault)
@@ -429,7 +446,10 @@ fn import_folder_as_vault(source: String, target_brain_id: String) -> Result<usi
                 // Recurse but flatten into dst (no subdir nesting)
                 copy_md_files(&path, dst, count)?;
             } else if path.extension().and_then(|x| x.to_str()) == Some("md") {
-                let filename = path.file_name().and_then(|x| x.to_str()).unwrap_or("note.md");
+                let filename = path
+                    .file_name()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("note.md");
                 let target = dst.join(filename);
                 // If filename already exists, suffix with counter
                 let target = if target.exists() {
@@ -457,8 +477,8 @@ fn start_server(
     app: tauri::AppHandle,
     state: tauri::State<'_, ServerState>,
 ) -> Result<String, String> {
-    use tauri_plugin_shell::ShellExt;
     use std::env;
+    use tauri_plugin_shell::ShellExt;
 
     let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
     if guard.is_some() {
@@ -485,23 +505,17 @@ fn start_server(
         }
     }
 
-    let cmd = app
-        .shell()
-        .sidecar("neurovault-server")
-        .map_err(|e| {
-            eprintln!("[start_server] sidecar() returned Err: {e}");
-            format!("sidecar binary not found: {e}")
-        })?;
+    let cmd = app.shell().sidecar("neurovault-server").map_err(|e| {
+        eprintln!("[start_server] sidecar() returned Err: {e}");
+        format!("sidecar binary not found: {e}")
+    })?;
 
     eprintln!("[start_server] sidecar command built, spawning with --http-only");
 
-    let (_rx, child) = cmd
-        .args(["--http-only"])
-        .spawn()
-        .map_err(|e| {
-            eprintln!("[start_server] spawn() failed: {e}");
-            format!("failed to spawn: {e}")
-        })?;
+    let (_rx, child) = cmd.args(["--http-only"]).spawn().map_err(|e| {
+        eprintln!("[start_server] spawn() failed: {e}");
+        format!("failed to spawn: {e}")
+    })?;
 
     let pid = child.pid();
     eprintln!("[start_server] spawned successfully, pid={pid}");
@@ -552,15 +566,19 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| {
-            v.get("brains").and_then(|a| a.as_array()).and_then(|brains| {
-                brains.iter().find_map(|b| {
-                    if b.get("id").and_then(|x| x.as_str()) == Some(&brain_id) {
-                        b.get("vault_path").and_then(|x| x.as_str()).map(PathBuf::from)
-                    } else {
-                        None
-                    }
+            v.get("brains")
+                .and_then(|a| a.as_array())
+                .and_then(|brains| {
+                    brains.iter().find_map(|b| {
+                        if b.get("id").and_then(|x| x.as_str()) == Some(&brain_id) {
+                            b.get("vault_path")
+                                .and_then(|x| x.as_str())
+                                .map(PathBuf::from)
+                        } else {
+                            None
+                        }
+                    })
                 })
-            })
         });
 
     let file = fs::File::create(&dest_path).map_err(|e| format!("create zip: {e}"))?;
@@ -582,17 +600,23 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
     ) -> Result<(), String> {
         let mut stack: Vec<PathBuf> = vec![src_root.to_path_buf()];
         while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_symlink() { continue; }
+                if ft.is_symlink() {
+                    continue;
+                }
                 if ft.is_dir() {
                     stack.push(path);
                     continue;
                 }
                 if ft.is_file() {
-                    let Ok(rel) = path.strip_prefix(src_root) else { continue };
+                    let Ok(rel) = path.strip_prefix(src_root) else {
+                        continue;
+                    };
                     let name = format!(
                         "{}/{}",
                         zip_prefix.trim_end_matches('/'),
@@ -605,7 +629,9 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
                         Err(_) => continue,
                     };
                     let mut buf = Vec::new();
-                    if f.read_to_end(&mut buf).is_err() { continue; }
+                    if f.read_to_end(&mut buf).is_err() {
+                        continue;
+                    }
                     zip.write_all(&buf).map_err(|e| format!("zip write: {e}"))?;
                     *count += 1;
                 }
@@ -640,11 +666,18 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
 #[tauri::command]
 fn mcp_sidecar_path() -> String {
     use std::env;
-    let exe_dir = match env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+    let exe_dir = match env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
         Some(d) => d,
         None => return String::new(),
     };
-    let suffix = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let suffix = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let candidates = [
         format!("neurovault-server{suffix}"),
         #[cfg(target_os = "windows")]
@@ -683,7 +716,9 @@ fn mcp_config_path() -> String {
             .join("Claude")
             .join("claude_desktop_config.json")
     } else {
-        home.join(".config").join("Claude").join("claude_desktop_config.json")
+        home.join(".config")
+            .join("Claude")
+            .join("claude_desktop_config.json")
     };
     p.display().to_string()
 }
@@ -882,7 +917,11 @@ fn set_minitab_collapsed(app: tauri::AppHandle, collapsed: bool) -> Result<(), S
     use tauri::Manager;
     if let Some(w) = app.get_webview_window("minitab") {
         // Logical sizes — keep in sync with the React layout in Minitab.tsx.
-        let (lw, lh) = if collapsed { (60.0, 60.0) } else { (248.0, 132.0) };
+        let (lw, lh) = if collapsed {
+            (60.0, 60.0)
+        } else {
+            (248.0, 132.0)
+        };
         w.set_size(tauri::LogicalSize::new(lw, lh))
             .map_err(|e| format!("resize minitab: {e}"))?;
         // Position from the *target* logical size rather than outer_size(),
@@ -960,12 +999,17 @@ struct BrainStorageStats {
 #[tauri::command]
 fn brain_storage_stats() -> Result<BrainStorageStats, String> {
     let vault = vault_dir();
-    let brain_root = vault.parent().map(|p| p.to_path_buf()).unwrap_or(vault.clone());
+    let brain_root = vault
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or(vault.clone());
 
     let mut note_count: u64 = 0;
     let mut markdown_bytes: u64 = 0;
     fn walk(dir: &std::path::Path, count: &mut u64, bytes: &mut u64) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -1017,8 +1061,7 @@ fn brain_storage_stats() -> Result<BrainStorageStats, String> {
 fn nv_list_notes(
     brain_id: Option<String>,
 ) -> std::result::Result<Vec<memory::NoteListRow>, String> {
-    let (_id, db) =
-        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let (_id, db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
     memory::list_notes(&db).map_err(|e| e.to_string())
 }
 
@@ -1030,8 +1073,7 @@ fn nv_get_note(
     engram_id: String,
     brain_id: Option<String>,
 ) -> std::result::Result<memory::FullNote, String> {
-    let (_id, db) =
-        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let (_id, db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
     memory::get_note(&db, &engram_id).map_err(|e| e.to_string())
 }
 
@@ -1064,8 +1106,7 @@ fn nv_get_graph(
     min_similarity: Option<f64>,
     exclude_types: Option<Vec<String>>,
 ) -> std::result::Result<memory::types::GraphData, String> {
-    let (_id, db) =
-        memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    let (_id, db) = memory::brain_from_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
     memory::get_graph(
         &db,
         include_observations.unwrap_or(false),
@@ -1341,9 +1382,8 @@ fn nv_get_related(
 /// already running.
 #[tauri::command]
 fn nv_start_vault_watcher(brain_id: Option<String>) -> std::result::Result<String, String> {
-    let id = brain_id.unwrap_or_else(|| {
-        memory::read_ops::resolve_brain_id(None).unwrap_or_default()
-    });
+    let id =
+        brain_id.unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
     if id.is_empty() {
         return Err("no active brain to watch".to_string());
     }
@@ -1355,9 +1395,8 @@ fn nv_start_vault_watcher(brain_id: Option<String>) -> std::result::Result<Strin
 /// Stop the per-brain vault watcher. Idempotent.
 #[tauri::command]
 fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), String> {
-    let id = brain_id.unwrap_or_else(|| {
-        memory::read_ops::resolve_brain_id(None).unwrap_or_default()
-    });
+    let id =
+        brain_id.unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
     if id.is_empty() {
         return Ok(());
     }
@@ -1382,14 +1421,13 @@ fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), St
 pub fn run() {
     use tauri::Emitter;
     use tauri::Manager;
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
 
     // CmdOrCtrl+Shift+Space — opens the QuickCapture overlay even when the
     // window isn't focused. Matches Bear/Drafts/Raycast muscle memory.
-    let quick_capture = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::SHIFT),
-        Code::Space,
-    );
+    let quick_capture = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
 
     tauri::Builder::default()
         // Single-instance guard with deep-link forwarding: when a
