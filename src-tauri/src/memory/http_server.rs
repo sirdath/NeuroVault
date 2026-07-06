@@ -84,9 +84,12 @@ pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
         Err(e) => return Err(format!("could not bind {}: {}", addr, e)),
     };
 
-    // The employee scheduler rides the server's runtime: started once,
-    // no-ops unless the user enables the Curator in Settings/panel.
-    super::employee::start_scheduler();
+    // The AI Employees feature is excluded from the public base build, so its
+    // background scheduler is NOT started here (nothing wakes employees). The
+    // employee module + loopback routes stay compiled but inert. Re-enable
+    // this alongside the employee UI (App.tsx EMPLOYEES_ENABLED) for a future
+    // build.
+    // super::employee::start_scheduler();
 
     let (tx, rx) = oneshot::channel::<()>();
     let join = tokio::spawn(async move {

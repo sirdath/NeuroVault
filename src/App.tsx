@@ -28,6 +28,12 @@ import { fetchStatus, fetchHealth } from "./lib/api";
 
 type View = "editor" | "graph" | "employee";
 
+// The AI Employees feature is excluded from the public base build. Flip this
+// to true (and re-declare the employee-manager window in tauri.conf.json +
+// start the scheduler in http_server.rs) to enable it for a future build.
+// The employee code stays in the repo, just inert in the base build.
+const EMPLOYEES_ENABLED = false;
+
 /** Shown in place of the graph when Performance mode is "off". Keeps the
  *  graph nav button discoverable (the user can still click into the graph
  *  view) while spending zero CPU on the simulation — a one-click re-enable
@@ -474,12 +480,6 @@ export default function App() {
         action: () => setView("graph"),
       },
       {
-        id: "view-employee",
-        title: "Switch to Curator",
-        category: "View",
-        action: () => setView("employee"),
-      },
-      {
         id: "toggle-view",
         title: "Cycle views",
         category: "View",
@@ -578,7 +578,7 @@ export default function App() {
       if (ctrl && !e.shiftKey && !e.altKey) {
         if (e.key === "1") { e.preventDefault(); setView("editor"); return; }
         if (e.key === "2") { e.preventDefault(); setView("graph"); return; }
-        if (e.key === "3") { e.preventDefault(); setView("employee"); return; }
+        if (EMPLOYEES_ENABLED && e.key === "3") { e.preventDefault(); setView("employee"); return; }
       }
       if (ctrl && e.key === "/") {
         e.preventDefault();
@@ -781,6 +781,7 @@ export default function App() {
               </svg>
             }
           />
+          {EMPLOYEES_ENABLED && (
           <TabButton
             active={view === "employee"}
             onClick={() => setView("employee")}
@@ -797,6 +798,7 @@ export default function App() {
               </svg>
             }
           />
+          )}
           </div>
         </div>
 
@@ -873,7 +875,7 @@ export default function App() {
             ) : (
               <NeuralGraph onOpenNote={() => setView("editor")} />
             ))}
-          {view === "employee" && <EmployeePanel />}
+          {EMPLOYEES_ENABLED && view === "employee" && <EmployeePanel />}
         </div>
       </div>
 
