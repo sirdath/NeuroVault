@@ -250,6 +250,10 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **54 tools*
 
 ## Architecture
 
+**[Full technical reference map](docs/reference.html)** — the whole system on one page: topology, the hybrid retrieval core, ingest, storage, the 54-tool MCP surface, and why every path is on-device (no external model calls, no paid path).
+
+[![NeuroVault technical reference](docs/reference.png)](docs/reference.html)
+
 ```
 +-------------------------------------------------+
 |  Tauri 2 desktop app (React 19 + TypeScript)    |

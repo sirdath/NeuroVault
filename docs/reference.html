@@ -1,0 +1,677 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuroVault - Technical Reference</title>
+<style>
+  :root{
+    --paper:#f4f3ef; --paper2:#eeece6;
+    --panel:#ffffff; --panel-soft:#fbfaf8;
+    --ink:#191b21; --ink-2:#40444e; --ink-3:#6c7280;
+    --line:#d7d9e0; --line-2:#e7e8ed;
+    --violet:#8b5cf6; --violet-d:#7c3aed; --violet-ink:#5b21b6; --violet-bg:#f5f3ff;
+    --blue:#60a5fa; --blue-d:#3b82f6; --blue-ink:#1e40af; --blue-bg:#eff6ff;
+    --local:#10b981; --local-d:#059669; --local-ink:#047857; --local-bg:#ecfdf5; --local-line:#a7f3d0;
+    --ember:#f97316; --ember-ink:#9a3412; --ember-bg:#fff7ed; --ember-line:#fed7aa;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:
+      radial-gradient(circle, rgba(24,27,33,.055) 1px, transparent 1.4px),
+      linear-gradient(0deg, rgba(24,27,33,.028) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(24,27,33,.028) 1px, transparent 1px);
+    background-size:22px 22px, 110px 110px, 110px 110px;
+    background-position:0 0, 0 0, 0 0;
+    color:var(--ink);
+    font-family:var(--sans);
+    overflow-x:auto;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .poster{
+    position:relative;
+    width:1880px;
+    margin:0 auto;
+    padding:34px 30px 46px;
+  }
+
+  /* corner registration / crop marks */
+  .crop{position:absolute;width:22px;height:22px;opacity:.5;pointer-events:none}
+  .crop.tl{top:10px;left:10px;border-top:1.5px solid var(--ink-3);border-left:1.5px solid var(--ink-3)}
+  .crop.tr{top:10px;right:10px;border-top:1.5px solid var(--ink-3);border-right:1.5px solid var(--ink-3)}
+  .crop.bl{bottom:10px;left:10px;border-bottom:1.5px solid var(--ink-3);border-left:1.5px solid var(--ink-3)}
+  .crop.br{bottom:10px;right:10px;border-bottom:1.5px solid var(--ink-3);border-right:1.5px solid var(--ink-3)}
+
+  /* ---------- title bar ---------- */
+  .titlebar{
+    display:flex;align-items:stretch;gap:0;
+    border:1.5px solid var(--ink);
+    border-radius:12px;
+    background:linear-gradient(180deg,#ffffff,#fbfaf8);
+    overflow:hidden;
+    box-shadow:0 22px 44px -36px rgba(16,18,25,.5);
+  }
+  .tb-accent{width:8px;background:linear-gradient(180deg,var(--violet),var(--blue))}
+  .tb-main{flex:1;display:flex;align-items:center;gap:20px;padding:16px 22px}
+  .tb-logo{flex:none}
+  .tb-title h1{
+    margin:0;font-family:var(--mono);font-weight:800;letter-spacing:.14em;
+    font-size:30px;line-height:1;color:var(--ink);
+  }
+  .tb-title h1 .accent{color:var(--violet-d)}
+  .tb-title .sub{
+    margin-top:7px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;
+    color:var(--ink-3);text-transform:uppercase;
+  }
+  .tb-title .tag{
+    margin-top:9px;font-family:var(--sans);font-size:13.5px;color:var(--ink-2);
+    max-width:560px;
+  }
+  .tb-title .tag b{color:var(--violet-d);font-weight:700}
+  .tb-meta{
+    margin-left:auto;display:flex;flex-direction:column;gap:9px;align-items:flex-end;
+    padding-left:20px;text-align:right;
+  }
+  .tb-meta .repo{
+    font-family:var(--mono);font-size:12px;color:var(--ink-2);
+    background:var(--panel-soft);border:1px solid var(--line);border-radius:6px;
+    padding:6px 10px;letter-spacing:.02em;
+  }
+  .tb-meta .repo b{color:var(--violet-d)}
+  .tb-meta .meta-line{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);letter-spacing:.05em;text-transform:uppercase}
+
+  /* legend strip */
+  .legend{
+    display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px;
+    margin-top:14px;padding:12px 18px;
+    border:1px solid var(--line);border-radius:10px;background:var(--panel);
+  }
+  .legend .lg-title{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--ink-3);text-transform:uppercase;margin-right:4px}
+  .lg{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+  .sw{width:15px;height:15px;border-radius:4px;border:1.5px solid}
+  .sw.proc{background:var(--violet-bg);border-color:var(--violet)}
+  .sw.data{background:var(--blue-bg);border-color:var(--blue)}
+  .sw.local{background:var(--local-bg);border-color:var(--local)}
+  .sw.ext{background:var(--ember-bg);border-color:var(--ember)}
+  .lg .arrow{font-size:15px;color:var(--violet-d);line-height:1}
+  .legend .spacer{flex:1}
+  .legend .local-note{
+    font-family:var(--mono);font-size:11px;font-weight:700;color:var(--local-ink);
+    background:var(--local-bg);border:1px solid var(--local-line);border-radius:999px;
+    padding:6px 12px;letter-spacing:.03em;
+  }
+
+  /* ---------- panels ---------- */
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:11px;
+    padding:20px;
+    display:flex;flex-direction:column;
+    position:relative;
+    box-shadow:0 1px 0 rgba(16,18,25,.02), 0 26px 46px -40px rgba(16,18,25,.4);
+  }
+  .shead{display:flex;align-items:center;gap:11px;margin-bottom:15px}
+  .snum{
+    font-family:var(--mono);font-weight:800;font-size:12px;line-height:1;color:#fff;
+    background:var(--violet-d);padding:7px 8px;border-radius:5px;letter-spacing:.04em;
+  }
+  .shead h2{margin:0;font-family:var(--mono);font-weight:800;font-size:14px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink)}
+  .srule{flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+  .stag{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+  .full{margin-top:16px}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;margin-top:18px}
+  .s02{grid-column:span 7} .s03{grid-column:span 5}
+  .s04{grid-column:span 4} .s05{grid-column:span 5} .s06{grid-column:span 3}
+  .s07{grid-column:span 7} .s08{grid-column:span 5}
+
+  /* ---------- section 01 topology stage ---------- */
+  .stage{position:relative;width:1760px;height:468px;margin:0 auto}
+  .wires{position:absolute;left:0;top:0}
+  .node{
+    position:absolute;background:var(--panel);border:1px solid var(--line);
+    border-radius:9px;padding:11px 13px;box-sizing:border-box;z-index:2;
+    box-shadow:0 1px 0 rgba(16,18,25,.03), 0 12px 26px -20px rgba(16,18,25,.32);
+  }
+  .node.app{border:1.6px solid var(--violet);background:linear-gradient(180deg,#fdfcff,#ffffff)}
+  .node.mcp{border:1.4px solid #c4b5fd}
+  .node.agents{border:1.4px dashed #c2c6d0;background:var(--panel-soft)}
+  .node.storage{border:1.4px solid #bcd7fd}
+  .nhdr{display:flex;align-items:center;gap:8px}
+  .nhdr .nt{font-family:var(--mono);font-weight:800;font-size:12.5px;color:var(--ink);letter-spacing:.01em}
+  .pill{font-family:var(--mono);font-weight:700;font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;
+    padding:3px 6px;border-radius:4px;white-space:nowrap}
+  .pill.p{background:var(--violet-d);color:#fff}
+  .pill.d{background:var(--blue-bg);color:var(--blue-ink);border:1px solid #bcd7fd}
+  .nsub{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-top:3px;letter-spacing:.01em}
+  ul.nlist{margin:9px 0 0;padding:0;list-style:none;display:grid;gap:4px}
+  ul.nlist li{font-family:var(--mono);font-size:10.5px;line-height:1.35;color:var(--ink-2);padding-left:13px;position:relative}
+  ul.nlist li::before{content:"\25B8";position:absolute;left:0;top:1px;color:var(--violet);font-size:8px}
+  ul.nlist li b{color:var(--ink);font-weight:700}
+  .subbox{border:1px solid var(--line-2);border-radius:7px;padding:9px 11px;background:var(--panel-soft)}
+  .subbox+.subbox{margin-top:9px}
+  .subhdr{display:flex;align-items:center;gap:8px}
+  .subhdr .st{font-family:var(--mono);font-weight:700;font-size:11px;color:var(--ink)}
+
+  .tag-local{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-weight:700;
+    font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--local-ink);
+    background:var(--local-bg);border:1px solid var(--local-line);border-radius:999px;padding:3px 7px}
+  .tag-local::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--local)}
+  .tag-canon{font-family:var(--mono);font-weight:700;font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--violet-ink);background:var(--violet-bg);border:1px solid #ddd6fe;border-radius:999px;padding:3px 7px}
+  .tag-rebuild{font-family:var(--mono);font-weight:700;font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--blue-ink);background:var(--blue-bg);border:1px solid #bcd7fd;border-radius:999px;padding:3px 7px}
+
+  .wl{position:absolute;transform:translate(-50%,-50%);z-index:5;white-space:nowrap;
+    font-family:var(--mono);font-weight:600;font-size:9px;letter-spacing:.02em;color:var(--ink-2);
+    background:var(--paper);border:1px solid var(--line-2);border-radius:5px;padding:3px 6px}
+  .wl.blue{color:var(--blue-ink);border-color:#cfe2fd;background:#f2f7ff}
+
+  /* ---------- generic flow bits ---------- */
+  .fbox{border:1px solid var(--line);border-radius:8px;background:var(--panel-soft);padding:9px 12px}
+  .fbox.strong{background:linear-gradient(180deg,#fdfcff,#fff);border-color:#d8ccfb}
+  .fbox .ft{font-family:var(--mono);font-weight:700;font-size:11.5px;color:var(--ink)}
+  .fbox .fd{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-top:3px;line-height:1.4}
+  .frow{display:flex;align-items:center;gap:8px}
+  .frow .grow{flex:1}
+  .vconn{position:relative;height:24px;display:flex;align-items:center;justify-content:center}
+  .vconn::before{content:"";position:absolute;top:0;bottom:6px;width:0;border-left:1.6px solid #bcbfc9}
+  .vconn::after{content:"\25BC";position:absolute;bottom:-1px;font-size:9px;color:#bcbfc9;line-height:1}
+  .vconn .cap{position:absolute;left:calc(50% + 12px);white-space:nowrap;font-family:var(--mono);
+    font-size:9px;font-weight:600;color:var(--ink-3);background:var(--panel);padding:0 5px}
+  .parallel{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+  .retr{border:1px solid var(--line);border-radius:8px;background:var(--panel-soft);padding:8px 9px;display:flex;flex-direction:column;gap:6px}
+  .retr .rlab{font-family:var(--mono);font-weight:700;font-size:10px;color:var(--ink)}
+  .retr .rsub{font-family:var(--mono);font-size:9px;color:var(--ink-3);line-height:1.35}
+  .retr .rlab .k{color:var(--violet-d)}
+
+  /* stat callout */
+  .statbox{border:1.4px solid var(--local-line);border-radius:10px;background:linear-gradient(180deg,#f0fdf7,#ffffff);
+    padding:16px;display:flex;flex-direction:column;gap:4px;text-align:center}
+  .statbox .big{font-family:var(--mono);font-weight:800;font-size:44px;line-height:1;color:var(--local-d);letter-spacing:-.01em}
+  .statbox .metric{font-family:var(--mono);font-weight:700;font-size:12px;color:var(--ink);letter-spacing:.04em}
+  .statbox .src{font-family:var(--mono);font-size:10px;color:var(--ink-3);line-height:1.5;margin-top:4px}
+  .noteline{font-family:var(--mono);font-size:10px;color:var(--ink-2);line-height:1.55}
+  .noteline .k{color:var(--violet-d);font-weight:700}
+
+  /* chips */
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-weight:600;
+    font-size:10.5px;padding:6px 9px;border-radius:6px;border:1px solid}
+  .chip.tool{color:var(--violet-ink);background:var(--violet-bg);border-color:#ddd6fe}
+  .chip.local{color:var(--local-ink);background:var(--local-bg);border-color:var(--local-line)}
+  .chip.local::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--local)}
+  .chip.ext{color:var(--ember-ink);background:var(--ember-bg);border-color:var(--ember-line)}
+  .chip.ext::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ember)}
+  .chip.none{color:var(--ink-3);background:var(--panel-soft);border-color:var(--line);text-decoration:line-through}
+
+  /* storage list */
+  .kv{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10.5px}
+  .kv td{padding:6px 6px;border-bottom:1px solid var(--line-2);vertical-align:top;color:var(--ink-2);line-height:1.4}
+  .kv tr:last-child td{border-bottom:none}
+  .kv td.k{font-weight:700;color:var(--violet-ink);white-space:nowrap;width:118px}
+
+  /* mcp table */
+  .ttable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+  .ttable th{text-align:left;font-weight:700;color:var(--ink-3);font-size:9.5px;letter-spacing:.06em;
+    text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .ttable td{padding:8px;border-bottom:1px solid var(--line-2);color:var(--ink-2);vertical-align:top;line-height:1.45}
+  .ttable tr:last-child td{border-bottom:none}
+  .ttable td.tier{font-weight:800;color:var(--ink)}
+  .ttable td.cnt{font-weight:800;color:var(--violet-d);white-space:nowrap}
+  .ttable tr.default{background:var(--violet-bg)}
+  .ttable tr.full td{color:var(--ink)}
+  .badge-def{font-family:var(--mono);font-size:8px;font-weight:700;color:#fff;background:var(--violet-d);
+    padding:2px 5px;border-radius:4px;letter-spacing:.05em;margin-left:6px;text-transform:uppercase;vertical-align:middle}
+
+  /* brains */
+  .brainroot{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+  .braintree{margin-top:8px;display:flex;flex-direction:column;gap:7px}
+  .braincard{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel-soft);padding:8px 10px}
+  .braincard.active{border-color:var(--violet);background:linear-gradient(180deg,#fdfcff,#fff)}
+  .braincard .bn{font-family:var(--mono);font-weight:700;font-size:11px;color:var(--ink)}
+  .braincard .bparts{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-3)}
+  .braincard .adot{width:7px;height:7px;border-radius:50%;background:var(--violet-d)}
+  .braincard .adot.off{background:var(--line)}
+
+  /* all-local centerpiece */
+  .s07{}
+  .localhero{border:1.6px solid var(--local-line);border-radius:11px;
+    background:linear-gradient(180deg,#effdf5,#ffffff);padding:18px;display:grid;
+    grid-template-columns:0.85fr 1.15fr;gap:18px;align-items:stretch}
+  .lh-left{display:flex;flex-direction:column;justify-content:center;gap:10px}
+  .lh-left .pct{font-family:var(--mono);font-weight:800;font-size:52px;line-height:.95;color:var(--local-d)}
+  .lh-left .pct small{display:block;font-size:15px;letter-spacing:.14em;color:var(--local-ink);margin-top:6px}
+  .lh-left p{margin:0;font-family:var(--sans);font-size:12.5px;line-height:1.55;color:var(--ink-2)}
+  .lh-left p b{color:var(--local-ink)}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .cmpcol{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:11px;display:flex;flex-direction:column;gap:9px}
+  .cmpcol.nv{border-color:var(--local-line);background:linear-gradient(180deg,#f4fef8,#fff)}
+  .cmpcol h4{margin:0;font-family:var(--mono);font-size:10.5px;font-weight:800;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--ink)}
+  .lane{border-radius:7px;padding:8px;border:1px dashed var(--line)}
+  .lane .lane-h{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--ink-3);margin-bottom:7px}
+  .lane.paid{border-color:var(--ember-line);background:#fffaf5}
+  .lane.paid.empty{border-color:var(--local-line);background:var(--local-bg)}
+  .cmpcol .foot{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);line-height:1.45;margin-top:auto}
+  .cmpcol.nv .foot{color:var(--local-ink);font-weight:600}
+  .localnote{margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--local-ink);
+    background:var(--local-bg);border:1px solid var(--local-line);border-radius:8px;padding:10px 12px;line-height:1.5}
+  .localnote b{color:var(--local-d)}
+
+  /* boot steps */
+  .steps{display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:12px;position:relative;padding-bottom:12px}
+  .step:last-child{padding-bottom:0}
+  .step .sidx{flex:none;width:26px;height:26px;border-radius:6px;background:var(--violet-d);color:#fff;
+    font-family:var(--mono);font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;z-index:2}
+  .step .sline{position:absolute;left:13px;top:26px;bottom:0;width:0;border-left:1.5px dashed #c9ccd5}
+  .step:last-child .sline{display:none}
+  .step .sbody{padding-top:3px}
+  .step .stitle{font-family:var(--mono);font-weight:700;font-size:11.5px;color:var(--ink);line-height:1.35}
+  .step .stitle code{background:var(--panel-soft);border:1px solid var(--line-2);border-radius:4px;padding:1px 5px;color:var(--violet-d)}
+  .step .sdesc{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);margin-top:2px}
+  .bootnote{margin-top:14px;display:flex;gap:9px;align-items:flex-start;
+    font-family:var(--mono);font-size:10px;color:var(--ink-2);line-height:1.5;
+    border-top:1px dashed var(--line);padding-top:12px}
+  .bootnote .ic{flex:none;color:var(--violet-d);font-weight:800}
+  .bootnote code{background:var(--panel-soft);border:1px solid var(--line-2);border-radius:4px;padding:1px 5px;color:var(--violet-d)}
+
+  .foot-strip{margin-top:22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    border-top:1.5px solid var(--ink);padding-top:14px;
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-3);letter-spacing:.03em}
+  .foot-strip b{color:var(--ink-2)}
+  .foot-strip .dot{color:var(--violet)}
+</style>
+
+<div class="poster">
+  <div class="crop tl"></div><div class="crop tr"></div><div class="crop bl"></div><div class="crop br"></div>
+
+  <!-- ===================== TITLE BAR ===================== -->
+  <div class="titlebar">
+    <div class="tb-accent"></div>
+    <div class="tb-main">
+      <div class="tb-logo">
+        <svg width="52" height="52" viewBox="0 0 52 52" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="lg" x1="0" y1="0" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#60a5fa"/>
+            </linearGradient>
+          </defs>
+          <rect x="1.5" y="1.5" width="49" height="49" rx="12" fill="#fbfaf8" stroke="url(#lg)" stroke-width="2"/>
+          <path d="M13 15 L27 11 L39 20 L31 33 L16 37 L11 25 Z" stroke="url(#lg)" stroke-width="1.4" fill="none" opacity=".55"/>
+          <line x1="13" y1="15" x2="31" y2="33" stroke="url(#lg)" stroke-width="1.4"/>
+          <line x1="27" y1="11" x2="16" y2="37" stroke="url(#lg)" stroke-width="1.4"/>
+          <line x1="39" y1="20" x2="16" y2="37" stroke="url(#lg)" stroke-width="1.4"/>
+          <circle cx="13" cy="15" r="3.4" fill="#8b5cf6"/>
+          <circle cx="27" cy="11" r="3" fill="#7c3aed"/>
+          <circle cx="39" cy="20" r="3.4" fill="#60a5fa"/>
+          <circle cx="31" cy="33" r="3" fill="#8b5cf6"/>
+          <circle cx="16" cy="37" r="3.4" fill="#60a5fa"/>
+        </svg>
+      </div>
+      <div class="tb-title">
+        <h1>NEURO<span class="accent">VAULT</span> <span style="font-weight:400;letter-spacing:.1em;font-size:15px;color:var(--ink-3)">technical reference</span></h1>
+        <div class="sub">local-first &middot; open-source &middot; AI-native memory for Claude and other LLMs</div>
+        <div class="tag"><b>Claude forgets you after every conversation. NeuroVault doesn't.</b></div>
+      </div>
+      <div class="tb-meta">
+        <div class="repo">github.com/<b>sirdath</b>/NeuroVault</div>
+        <div class="local-note-wrap"><span class="meta-line">rev. architecture map &middot; v1</span></div>
+        <div class="meta-line" style="color:var(--local-ink)">LOCAL = on-device (everything)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== LEGEND ===================== -->
+  <div class="legend">
+    <span class="lg-title">Legend</span>
+    <span class="lg"><span class="sw proc"></span>PROCESS</span>
+    <span class="lg"><span class="sw data"></span>DATA / STORAGE</span>
+    <span class="lg"><span class="sw local"></span>LOCAL / on-device</span>
+    <span class="lg"><span class="sw ext"></span>external / paid (avoided)</span>
+    <span class="lg"><span class="arrow">&#8594;</span>data flow</span>
+    <span class="lg" style="color:var(--blue-ink)"><span class="arrow" style="color:var(--blue-d)">&#8594;</span>watch / re-index</span>
+    <span class="spacer"></span>
+    <span class="local-note">NO external model calls &middot; NO paid path &middot; 100% on-device</span>
+  </div>
+
+  <!-- ===================== 01 SYSTEM TOPOLOGY ===================== -->
+  <div class="panel full">
+    <div class="shead"><span class="snum">01</span><h2>System Topology</h2><span class="srule"></span><span class="stag">3 processes &middot; markdown canonical &middot; loopback only</span></div>
+    <div class="stage">
+      <svg class="wires" width="1760" height="468" viewBox="0 0 1760 468" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="ah" markerWidth="10" markerHeight="10" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,4 L0,8 L2.6,4 Z" fill="#7c3aed"/>
+          </marker>
+          <marker id="ahn" markerWidth="10" markerHeight="10" refX="7.4" refY="4" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,4 L0,8 L2.6,4 Z" fill="#6c7280"/>
+          </marker>
+          <marker id="ahb" markerWidth="10" markerHeight="10" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,4 L0,8 L2.6,4 Z" fill="#3b82f6"/>
+          </marker>
+        </defs>
+        <!-- agents -> mcp -->
+        <path d="M230,285 L294,285" stroke="#7c3aed" stroke-width="1.7" marker-end="url(#ah)"/>
+        <!-- mcp -> app -->
+        <path d="M600,285 L670,285" stroke="#7c3aed" stroke-width="1.7" marker-end="url(#ah)"/>
+        <!-- app <-> storage (read/write) -->
+        <path d="M1240,285 L1326,285" stroke="#6c7280" stroke-width="1.7" marker-start="url(#ahn)" marker-end="url(#ahn)"/>
+        <!-- notify watcher: storage vault -> backend -->
+        <path d="M1440,150 L1440,56 L1150,56 L1150,124" stroke="#3b82f6" stroke-width="1.6" stroke-dasharray="5 4" stroke-linejoin="round" marker-end="url(#ahb)"/>
+        <!-- port dots -->
+        <circle cx="230" cy="285" r="3" fill="#7c3aed"/><circle cx="300" cy="285" r="3" fill="#7c3aed"/>
+        <circle cx="600" cy="285" r="3" fill="#7c3aed"/><circle cx="676" cy="285" r="3" fill="#7c3aed"/>
+        <circle cx="1236" cy="285" r="3" fill="#6c7280"/><circle cx="1330" cy="285" r="3" fill="#6c7280"/>
+        <circle cx="1440" cy="150" r="3" fill="#3b82f6"/>
+      </svg>
+
+      <!-- AGENTS  (process 3) -->
+      <div class="node agents" style="left:16px;top:200px;width:214px;height:170px">
+        <div class="nhdr"><span class="nt">AGENTS</span><span class="pill p">PROC 3</span></div>
+        <div class="nsub">MCP clients &middot; spawn over stdio</div>
+        <ul class="nlist">
+          <li>Claude Code</li>
+          <li>Claude Desktop</li>
+          <li>Cursor</li>
+          <li>Codex</li>
+        </ul>
+      </div>
+
+      <!-- MCP SERVER  (process 2) -->
+      <div class="node mcp" style="left:300px;top:199px;width:300px;height:172px">
+        <div class="nhdr"><span class="nt">neurovault-server --mcp-only</span><span class="pill p">PROC 2</span></div>
+        <div class="nsub">native Rust &middot; rmcp SDK &middot; stdio JSON-RPC</div>
+        <ul class="nlist">
+          <li>spawned <b>per session</b> by the agent</li>
+          <li>loads <b>NO model</b> &middot; opens <b>NO DB</b></li>
+          <li>forwards every tool call &#8594; :8765</li>
+          <li>bundled next to the app binary</li>
+        </ul>
+      </div>
+
+      <!-- TAURI APP  (process 1) -->
+      <div class="node app" style="left:676px;top:126px;width:560px;height:318px">
+        <div class="nhdr"><span class="nt">Tauri 2.0 desktop app</span><span class="pill p">PROC 1</span></div>
+        <div class="nsub">React + TypeScript UI hosting an in-process Rust backend (no Python sidecar)</div>
+        <div class="subbox" style="margin-top:10px">
+          <div class="subhdr"><span class="st">React + TypeScript UI</span></div>
+          <div class="nsub" style="margin-top:4px">markdown note editor &middot; neural graph view &middot; settings</div>
+        </div>
+        <div class="subbox">
+          <div class="subhdr"><span class="st">in-process Rust backend</span><span class="tag-local" style="margin-left:auto">on-device</span></div>
+          <ul class="nlist" style="margin-top:8px">
+            <li><b>axum</b> HTTP server &middot; 127.0.0.1:<b>8765</b></li>
+            <li><b>hybrid retriever</b> &middot; vec + BM25 + graph &#8594; RRF &#8594; rerank</li>
+            <li><b>ingestion pipeline</b> + write-back</li>
+            <li><b>fastembed-rs</b> &middot; BGE-small-en-v1.5 ONNX (384-dim) + BGE cross-encoder reranker</li>
+            <li><b>rusqlite</b> + <b>sqlite-vec</b></li>
+            <li><b>notify</b> file watcher</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- STORAGE -->
+      <div class="node storage" style="left:1330px;top:150px;width:414px;height:270px">
+        <div class="nhdr"><span class="nt">~/.neurovault/brains/&lt;id&gt;/</span><span class="pill d">STORE</span></div>
+        <div class="subbox" style="margin-top:10px;border-color:#ddd6fe;background:#fbfaff">
+          <div class="subhdr"><span class="st">vault/*.md</span><span class="tag-canon" style="margin-left:auto">canonical</span></div>
+          <div class="nsub" style="margin-top:4px">human-readable markdown &middot; the source of truth</div>
+        </div>
+        <div class="subbox" style="border-color:#bcd7fd;background:#f7fbff">
+          <div class="subhdr"><span class="st">brain.db</span><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
+          <div class="nsub" style="margin-top:4px">SQLite + sqlite-vec &middot; vectors + knowledge graph</div>
+          <div class="nsub" style="margin-top:3px">a rebuildable index over the vault &middot; delete it &#8594; reconstructs</div>
+        </div>
+      </div>
+
+      <!-- wire labels -->
+      <div class="wl" style="left:265px;top:285px">spawn &middot; stdio</div>
+      <div class="wl" style="left:638px;top:285px">loopback HTTP &#8594; :8765</div>
+      <div class="wl" style="left:1283px;top:285px">read / write</div>
+      <div class="wl blue" style="left:1295px;top:56px">notify &middot; file change &#8594; re-index</div>
+    </div>
+  </div>
+
+  <!-- ===================== GRID: 02 - 06 ===================== -->
+  <div class="grid">
+
+    <!-- 02 RETRIEVAL CORE -->
+    <div class="panel s02">
+      <div class="shead"><span class="snum">02</span><h2>Retrieval Core</h2><span class="srule"></span><span class="stag">hybrid &middot; fuse &middot; rerank &middot; on-device</span></div>
+      <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start">
+        <!-- flow -->
+        <div>
+          <div class="fbox strong"><div class="ft">query</div><div class="fd">one natural-language question</div></div>
+          <div class="vconn"><span class="cap">fan-out &middot; run in parallel</span></div>
+          <div class="parallel">
+            <div class="retr">
+              <div class="rlab"><span class="k">(a)</span> sqlite-vec</div>
+              <div class="rsub">vector search over BGE-small 384-dim embeddings</div>
+              <span class="tag-local">local</span>
+            </div>
+            <div class="retr">
+              <div class="rlab"><span class="k">(b)</span> BM25</div>
+              <div class="rsub">lexical / keyword search (FTS)</div>
+              <span class="tag-local">local</span>
+            </div>
+            <div class="retr">
+              <div class="rlab"><span class="k">(c)</span> entity graph</div>
+              <div class="rsub">knowledge-graph traversal</div>
+              <span class="tag-local">local</span>
+            </div>
+          </div>
+          <div class="vconn"><span class="cap">fuse ranked lists</span></div>
+          <div class="fbox"><div class="ft">RRF &middot; Reciprocal Rank Fusion</div><div class="fd">merge the three ranked result lists into one</div></div>
+          <div class="vconn"><span class="cap">re-score top candidates</span></div>
+          <div class="frow">
+            <div class="fbox grow"><div class="ft">BGE cross-encoder rerank</div><div class="fd">reranker ON by default</div></div>
+            <span class="tag-local">local</span>
+          </div>
+          <div class="vconn"></div>
+          <div class="fbox strong"><div class="ft">top-K results</div><div class="fd">the passages returned to the agent</div></div>
+        </div>
+        <!-- stat + notes -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="statbox">
+            <div class="big">97.45%</div>
+            <div class="metric">hit@5</div>
+            <div class="src">LongMemEval-S benchmark<br>470 answerable questions<br>reranker on by default</div>
+          </div>
+          <div class="noteline">
+            <span class="k">Three retrievers, one fused ranking.</span> Vector, lexical, and graph signals each catch what the others miss; RRF blends them and the cross-encoder sharpens the top.
+          </div>
+          <div class="noteline">
+            <span class="k">Every stage is on-device.</span> Embedding, fusion, and reranking all run locally through fastembed ONNX. No query ever leaves the machine.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 INGEST PIPELINE -->
+    <div class="panel s03">
+      <div class="shead"><span class="snum">03</span><h2>Ingest Pipeline</h2><span class="srule"></span><span class="stag">watch &#8594; chunk &#8594; embed &#8594; index</span></div>
+      <div class="fbox strong"><div class="ft">markdown file change</div><div class="fd">a note is written or edited in the vault</div></div>
+      <div class="vconn"><span class="cap">detected by</span></div>
+      <div class="fbox"><div class="ft">notify watcher</div><div class="fd">filesystem event on vault/*.md</div></div>
+      <div class="vconn"></div>
+      <div class="fbox"><div class="ft">parse &amp; chunk</div><div class="fd">split the note into passages</div></div>
+      <div class="vconn"></div>
+      <div class="frow">
+        <div class="fbox grow"><div class="ft">embed &middot; fastembed ONNX</div><div class="fd">BGE-small-en-v1.5 &#8594; float[384]</div></div>
+        <span class="tag-local">local</span>
+      </div>
+      <div class="vconn"><span class="cap">index into</span></div>
+      <div class="chips" style="justify-content:center">
+        <span class="chip tool">vec0 (embeddings)</span>
+        <span class="chip tool">BM25 / FTS</span>
+        <span class="chip tool">entity graph</span>
+      </div>
+      <div class="vconn"></div>
+      <div class="fbox strong"><div class="ft">engram row written</div><div class="fd">one memory unit, linked into the graph</div></div>
+      <div class="localnote" style="margin-top:14px;color:var(--ink-2);background:var(--panel-soft);border-color:var(--line)">
+        <b style="color:var(--violet-d)">write-back</b> keeps markdown and brain.db in sync in both directions. The DB is <b style="color:var(--blue-ink)">rebuildable</b>: delete brain.db and it reconstructs entirely from the vault.
+      </div>
+    </div>
+
+    <!-- 04 STORAGE & STATE -->
+    <div class="panel s04">
+      <div class="shead"><span class="snum">04</span><h2>Storage &amp; State</h2><span class="srule"></span><span class="stag">md canonical</span></div>
+      <div class="fbox" style="border-color:#ddd6fe;background:#fbfaff">
+        <div class="frow"><div class="ft">vault/*.md</div><span class="tag-canon" style="margin-left:auto">canonical</span></div>
+        <div class="fd">source of truth &middot; human-readable markdown</div>
+      </div>
+      <div class="vconn"><span class="cap">index / rebuild</span></div>
+      <div class="fbox" style="border-color:#bcd7fd;background:#f7fbff">
+        <div class="frow"><div class="ft">brain.db</div><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
+        <div class="fd">SQLite + sqlite-vec &middot; a derived index over the vault</div>
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 4px">Inside brain.db</div>
+      <table class="kv">
+        <tr><td class="k">engrams</td><td>memory-unit rows (the biologically-correct noun)</td></tr>
+        <tr><td class="k">vec0</td><td>virtual table &middot; float[384] embeddings</td></tr>
+        <tr><td class="k">engram_links</td><td>knowledge-graph edges</td></tr>
+        <tr><td class="k">entities</td><td>extracted entities for graph traversal</td></tr>
+        <tr><td class="k">FTS / BM25</td><td>lexical index</td></tr>
+        <tr><td class="k">core_memory</td><td>pinned core-memory blocks</td></tr>
+        <tr><td class="k">todos.jsonl</td><td>handoff / inbox queue (append-only)</td></tr>
+      </table>
+    </div>
+
+    <!-- 05 MCP SURFACE -->
+    <div class="panel s05">
+      <div class="shead"><span class="snum">05</span><h2>MCP Surface</h2><span class="srule"></span><span class="stag">54 tools &middot; tiered &middot; forwards to :8765</span></div>
+      <table class="ttable">
+        <thead><tr><th style="width:150px">Tier</th><th style="width:64px">Tools</th><th>Agent loads</th></tr></thead>
+        <tbody>
+          <tr><td class="tier">minimal</td><td class="cnt">3</td><td>recall &middot; related &middot; session_start</td></tr>
+          <tr class="default"><td class="tier">lite<span class="badge-def">default</span></td><td class="cnt">8</td><td>+ remember &middot; status &middot; list_brains &middot; switch_brain &middot; update</td></tr>
+          <tr><td class="tier">standard</td><td class="cnt">20</td><td>+ recall_chunks &middot; temporal_recall &middot; check_duplicate &middot; core_memory_* &middot; handoff &middot; agent_inbox &middot; ...</td></tr>
+          <tr class="full"><td class="tier">full</td><td class="cnt">54</td><td>the entire surface: graph editing &middot; maintenance &middot; images &middot; multi-agent coordination</td></tr>
+        </tbody>
+      </table>
+      <div class="noteline" style="margin-top:12px">
+        <span class="k">registry:</span> data-driven from <b style="color:var(--ink)">tools.json</b>.
+        <span class="k">tier:</span> <b style="color:var(--ink)">NEUROVAULT_MCP_TIER</b> env var or <b style="color:var(--ink)">~/.neurovault/mcp_tier.txt</b>.
+        Every tool takes an optional <b style="color:var(--ink)">brain</b> param and forwards over loopback HTTP to the app on <b style="color:var(--ink)">:8765</b>.
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 8px">Flagship tools</div>
+      <div class="chips">
+        <span class="chip tool">recall</span><span class="chip tool">related</span><span class="chip tool">remember</span>
+        <span class="chip tool">recall_chunks</span><span class="chip tool">temporal_recall</span><span class="chip tool">session_start</span>
+        <span class="chip tool">handoff</span><span class="chip tool">agent_inbox</span>
+      </div>
+    </div>
+
+    <!-- 06 BRAINS -->
+    <div class="panel s06">
+      <div class="shead"><span class="snum">06</span><h2>Brains</h2><span class="srule"></span><span class="stag">multi-brain</span></div>
+      <div class="brainroot">~/.neurovault/brains/</div>
+      <div class="braintree">
+        <div class="braincard active"><span class="adot"></span><span class="bn">work</span><span class="bparts">vault/ + brain.db</span></div>
+        <div class="braincard"><span class="adot off"></span><span class="bn">research</span><span class="bparts">vault/ + brain.db</span></div>
+        <div class="braincard"><span class="adot off"></span><span class="bn">personal</span><span class="bparts">vault/ + brain.db</span></div>
+      </div>
+      <div class="noteline" style="margin-top:12px">
+        Many <span class="k">fully independent</span> brains live side by side. Each is its own vault + rebuildable index.
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:12px 0 8px">Tools</div>
+      <div class="chips">
+        <span class="chip tool">list_brains</span><span class="chip tool">switch_brain</span><span class="chip tool">recall_across_brains</span>
+      </div>
+      <div class="noteline" style="margin-top:10px">
+        The optional <b style="color:var(--ink)">brain</b> param on every tool targets any brain per call.
+      </div>
+    </div>
+
+    <!-- 07 ALL LOCAL -->
+    <div class="panel s07">
+      <div class="shead"><span class="snum">07</span><h2>All Local &middot; No Paid Path</h2><span class="srule"></span><span class="stag">the differentiator</span></div>
+      <div class="localhero">
+        <div class="lh-left">
+          <div class="pct">100%<small>LOCAL</small></div>
+          <p><b>No external model calls. No paid path at all.</b> Most memory systems split a free/local path from a metered path that reaches out to external embedding, rerank, or LLM APIs.</p>
+          <p>NeuroVault has only one path. <b>Embeddings and reranking both run on-device</b> through fastembed ONNX.</p>
+        </div>
+        <div class="cmp">
+          <div class="cmpcol">
+            <h4>Typical memory system</h4>
+            <div class="lane"><div class="lane-h">free / local path</div>
+              <div class="chips"><span class="chip local">local store</span><span class="chip local">local search</span></div>
+            </div>
+            <div class="lane paid"><div class="lane-h">paid / external path</div>
+              <div class="chips"><span class="chip ext">external embeddings API</span><span class="chip ext">external rerank API</span><span class="chip ext">LLM API calls</span></div>
+            </div>
+            <div class="foot">two code paths &middot; a metered path you can accidentally hit</div>
+          </div>
+          <div class="cmpcol nv">
+            <h4>NeuroVault</h4>
+            <div class="lane" style="border-color:var(--local-line);background:var(--local-bg)"><div class="lane-h">on-device path (the only path)</div>
+              <div class="chips">
+                <span class="chip local">embeddings &middot; fastembed ONNX</span>
+                <span class="chip local">reranking &middot; BGE cross-encoder</span>
+                <span class="chip local">vector &middot; sqlite-vec</span>
+                <span class="chip local">BM25</span>
+                <span class="chip local">entity graph</span>
+                <span class="chip local">storage &middot; SQLite</span>
+              </div>
+            </div>
+            <div class="lane paid empty"><div class="lane-h" style="color:var(--local-ink)">paid / external path</div>
+              <div class="chips"><span class="chip none">external embeddings</span><span class="chip none">external rerank</span><span class="chip none">LLM API</span></div>
+            </div>
+            <div class="foot">one path &middot; everything on-device</div>
+          </div>
+        </div>
+      </div>
+      <div class="localnote">
+        <b>LOCAL = on-device (everything).</b> No API keys. No network model calls. No metered path. Embeddings AND reranking run on-device via fastembed ONNX; the vault and index never leave the machine.
+      </div>
+    </div>
+
+    <!-- 08 BOOT SEQUENCE -->
+    <div class="panel s08">
+      <div class="shead"><span class="snum">08</span><h2>Boot Sequence</h2><span class="srule"></span><span class="stag">app start &#8594; ready</span></div>
+      <div class="steps">
+        <div class="step"><span class="sline"></span><span class="sidx">1</span><div class="sbody">
+          <div class="stitle">app launches</div><div class="sdesc">the Tauri desktop process starts</div></div></div>
+        <div class="step"><span class="sline"></span><span class="sidx">2</span><div class="sbody">
+          <div class="stitle">Rust backend auto-starts <code>axum</code> on <code>127.0.0.1:8765</code></div>
+          <div class="sdesc">in-process HTTP server, loopback only</div></div></div>
+        <div class="step"><span class="sline"></span><span class="sidx">3</span><div class="sbody">
+          <div class="stitle">loads the fastembed embedding + reranker models <span class="tag-local" style="vertical-align:middle">on-device</span></div>
+          <div class="sdesc">BGE-small ONNX + BGE cross-encoder, no download of remote inference</div></div></div>
+        <div class="step"><span class="sline"></span><span class="sidx">4</span><div class="sbody">
+          <div class="stitle">opens or creates the active <code>brain.db</code></div>
+          <div class="sdesc">rebuilds from the vault if the index is missing</div></div></div>
+        <div class="step"><span class="sline"></span><span class="sidx">5</span><div class="sbody">
+          <div class="stitle">starts the <code>notify</code> vault watcher</div>
+          <div class="sdesc">live re-index on markdown changes</div></div></div>
+        <div class="step"><span class="sidx" style="background:var(--local-d)">6</span><div class="sbody">
+          <div class="stitle" style="color:var(--local-ink)">ready</div>
+          <div class="sdesc">recall / remember available over :8765</div></div></div>
+      </div>
+      <div class="bootnote">
+        <span class="ic">&#8594;</span>
+        <div>Agents spawn <code>neurovault-server --mcp-only</code> on demand; it connects to <code>:8765</code> and forwards tool calls. The MCP process loads no model and opens no DB of its own.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================== FOOTER ===================== -->
+  <div class="foot-strip">
+    <b>NEUROVAULT technical reference</b>
+    <span class="dot">&middot;</span> markdown is canonical, brain.db is a rebuildable index
+    <span class="dot">&middot;</span> 3 processes, one loopback port (127.0.0.1:8765)
+    <span class="dot">&middot;</span> 54 MCP tools, 4 tiers
+    <span class="dot">&middot;</span> 97.45% hit@5 on LongMemEval-S
+    <span class="dot">&middot;</span> 100% on-device, no paid path
+    <span style="margin-left:auto">github.com/sirdath/NeuroVault</span>
+  </div>
+</div>
