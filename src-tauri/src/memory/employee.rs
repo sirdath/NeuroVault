@@ -1,34 +1,40 @@
-//! The Curator — NeuroVault's first AI employee (knowledge ops).
+//! AI employees — the fleet engine (roster, per-employee loops, guardrails).
 //!
 //! NeuroVault's core stays a coordination/memory SUBSTRATE: the brain
 //! never runs agents on its own. This module is the deliberate, opt-in
-//! exception the product grew: a thin scheduler + runner that WAKES an
-//! external agent (Claude Code in headless `-p` mode) with a runbook,
-//! and lets it work against the brain over MCP like any other agent.
-//! The agent process is still external; this module only schedules,
-//! observes, and gates it.
+//! workforce built ON that substrate: a roster of hireable employees
+//! (see `roles.rs` for the catalog), each an always-on loop that WAKES
+//! cheap model calls or an external agent (Claude Code headless) and
+//! works against the brain like any other client.
 //!
-//! Safety model (v0 = autonomy level 0, "propose-only"):
-//! - The tool whitelist per autonomy level is passed to Claude Code as
-//!   `--allowedTools`, so enforcement lives in the agent runtime's
-//!   permission layer, not in prompt trust. Level 0 can read, add
-//!   notes (additive, reversible), and hand off — never supersede,
-//!   delete, or bulk-edit.
-//! - Destructive intents are emitted by the agent as `PROPOSAL: {json}`
-//!   lines on stdout; the runner parses them into an approval queue
-//!   (`~/.neurovault/employee/proposals.jsonl`). Approving executes the
-//!   action server-side against a hard-coded action whitelist below.
-//! - Every run is capped (`--max-turns`, wall-clock timeout) and
-//!   journaled to `~/.neurovault/employee/runs.jsonl`.
+//! Economy model (why this can run 24/7 for cents):
+//! - Rust does the WATCHING for free: duplicate/contradiction/orphan
+//!   detection, inbox and meetings pending counts, todo staleness are
+//!   all local algorithms. No LLM burns while nothing changed.
+//! - The model is consulted only for JUDGMENT or WRITING, in small
+//!   batched, mostly toolless `claude -p` calls on the cheap tier
+//!   (`--model haiku`), with `--strict-mcp-config` so the user's other
+//!   MCP servers never boot into context. Subscription-backed via the
+//!   user's own Claude Code login — no API keys.
+//! - Hard daily call budget per employee; the watchers keep queueing
+//!   when it's spent, judgment resumes tomorrow.
 //!
-//! Meetings pathway: transcripts dropped into
-//! `~/.neurovault/brains/<active>/inbox/meetings/` are archived
-//! verbatim (evidence; never edited) under `archive/meetings/`, then a
-//! meetings run distills them into context-aware notes via the normal
-//! MCP surface. "NeuroVault holds conclusions, the archive holds
-//! evidence."
+//! Safety model (autonomy level 0 = propose-only):
+//! - Deep runs get a per-role tool whitelist enforced by Claude Code's
+//!   permission layer (`--allowedTools`) — destructive tools are
+//!   physically unavailable, not merely discouraged.
+//! - Destructive intents surface as `PROPOSAL: {json}` stdout lines,
+//!   parsed into a per-employee approval queue; approving executes
+//!   server-side against the hard-coded action whitelist below.
+//! - Every run is capped (turns + wall clock) and journaled.
+//!
+//! Storage: per-instance state lives under
+//! `~/.neurovault/employee/instances/<id>/` (queue, proposals, runs,
+//! budget, state). The roster is `~/.neurovault/employee/employees.json`.
+//! Legacy singleton files from the first Curator release migrate on
+//! first load.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -41,35 +47,51 @@ use serde_json::{json, Value};
 
 use super::db::open_brain;
 use super::paths::nv_home;
+use super::roles::{role, ROLES};
 use super::types::MemoryError;
 
 type Result<T> = std::result::Result<T, MemoryError>;
 
 // ---------------------------------------------------------------------------
-// Config
+// Config (per employee instance)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmployeeConfig {
-    /// Master switch. Off by default: an employee is opt-in.
+    /// On the clock? Off by default: an employee is opt-in.
     #[serde(default)]
     pub enabled: bool,
-    /// Hours between scheduled hygiene runs.
+    /// Hours between manual-style deep runs (legacy knob, kept for the
+    /// UI's deep-run controls).
     #[serde(default = "default_interval")]
     pub interval_hours: u32,
-    /// Autonomy level. v0 supports only 0 (propose-only); the field
-    /// exists so the trust ladder has a place to live.
+    /// Autonomy level. v0 supports only 0 (propose-only).
     #[serde(default)]
     pub autonomy: u8,
     /// Override path to the `claude` binary; empty = search PATH.
     #[serde(default)]
     pub claude_path: String,
-    /// Cap on agent turns per run (passed as --max-turns).
+    /// Cap on agent turns per deep run (passed as --max-turns).
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
-    /// Wall-clock cap per run, minutes.
+    /// Wall-clock cap per deep run, minutes.
     #[serde(default = "default_timeout_min")]
     pub timeout_minutes: u64,
+    /// Minutes between wakes of this employee's loop.
+    #[serde(default = "default_wake_minutes")]
+    pub wake_minutes: u32,
+    /// Model for judge/digest micro-calls (cheap tier by default).
+    #[serde(default = "default_judge_model")]
+    pub model: String,
+    /// Model for deep runs (meetings distillation, ingest, hygiene).
+    #[serde(default = "default_deep_model")]
+    pub deep_model: String,
+    /// Max work items judged per batch call.
+    #[serde(default = "default_batch_items")]
+    pub max_items_per_run: usize,
+    /// Hard daily cap on model calls for this employee.
+    #[serde(default = "default_daily_budget")]
+    pub daily_call_budget: u32,
 }
 
 fn default_interval() -> u32 {
@@ -81,6 +103,21 @@ fn default_max_turns() -> u32 {
 fn default_timeout_min() -> u64 {
     15
 }
+fn default_wake_minutes() -> u32 {
+    20
+}
+fn default_judge_model() -> String {
+    "haiku".to_string()
+}
+fn default_deep_model() -> String {
+    "sonnet".to_string()
+}
+fn default_batch_items() -> usize {
+    8
+}
+fn default_daily_budget() -> u32 {
+    100
+}
 
 impl Default for EmployeeConfig {
     fn default() -> Self {
@@ -91,41 +128,182 @@ impl Default for EmployeeConfig {
             claude_path: String::new(),
             max_turns: default_max_turns(),
             timeout_minutes: default_timeout_min(),
+            wake_minutes: default_wake_minutes(),
+            model: default_judge_model(),
+            deep_model: default_deep_model(),
+            max_items_per_run: default_batch_items(),
+            daily_call_budget: default_daily_budget(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Roster
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hire {
+    /// Instance id ("curator", "scribe", "scribe-2", ...).
+    pub id: String,
+    /// Role id from the catalog.
+    pub role: String,
+    pub hired_at: String,
+    #[serde(default)]
+    pub config: EmployeeConfig,
 }
 
 fn employee_dir() -> PathBuf {
     nv_home().join("employee")
 }
-fn config_path() -> PathBuf {
-    nv_home().join("employee.json")
+fn roster_path() -> PathBuf {
+    employee_dir().join("employees.json")
 }
-fn proposals_path() -> PathBuf {
-    employee_dir().join("proposals.jsonl")
+fn instance_dir(id: &str) -> PathBuf {
+    employee_dir().join("instances").join(id)
 }
-fn runs_path() -> PathBuf {
-    employee_dir().join("runs.jsonl")
+fn proposals_path(id: &str) -> PathBuf {
+    instance_dir(id).join("proposals.jsonl")
+}
+fn runs_path(id: &str) -> PathBuf {
+    instance_dir(id).join("runs.jsonl")
+}
+fn queue_path(id: &str) -> PathBuf {
+    instance_dir(id).join("queue.jsonl")
+}
+fn budget_path(id: &str) -> PathBuf {
+    instance_dir(id).join("budget.json")
+}
+fn state_path(id: &str) -> PathBuf {
+    instance_dir(id).join("state.json")
 }
 
-pub fn load_config() -> EmployeeConfig {
-    std::fs::read_to_string(config_path())
+/// Load the roster, seeding + migrating on first run: the original
+/// singleton Curator release kept its files at employee/ top level and
+/// its config at ~/.neurovault/employee.json; move them under
+/// instances/curator/ and fold the config into the roster entry.
+pub fn load_roster() -> Vec<Hire> {
+    if let Ok(s) = std::fs::read_to_string(roster_path()) {
+        if let Ok(r) = serde_json::from_str::<Vec<Hire>>(&s) {
+            return r;
+        }
+    }
+    // Seed: the Curator is employee #1, hired by default (still
+    // disabled until the user flips the switch).
+    let legacy_cfg: EmployeeConfig = std::fs::read_to_string(nv_home().join("employee.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let roster = vec![Hire {
+        id: "curator".to_string(),
+        role: "curator".to_string(),
+        hired_at: now_iso(),
+        config: legacy_cfg,
+    }];
+    let _ = std::fs::create_dir_all(instance_dir("curator"));
+    // migrate legacy singleton files if present
+    for (old, newp) in [
+        (
+            employee_dir().join("proposals.jsonl"),
+            proposals_path("curator"),
+        ),
+        (employee_dir().join("runs.jsonl"), runs_path("curator")),
+        (employee_dir().join("queue.jsonl"), queue_path("curator")),
+        (employee_dir().join("budget.json"), budget_path("curator")),
+    ] {
+        if old.exists() && !newp.exists() {
+            let _ = std::fs::rename(&old, &newp);
+        }
+    }
+    let _ = save_roster(&roster);
+    roster
 }
 
-pub fn save_config(cfg: &EmployeeConfig) -> Result<()> {
-    let _ = std::fs::create_dir_all(nv_home());
+pub fn save_roster(roster: &[Hire]) -> Result<()> {
+    let _ = std::fs::create_dir_all(employee_dir());
     std::fs::write(
-        config_path(),
-        serde_json::to_string_pretty(cfg).unwrap_or_default(),
+        roster_path(),
+        serde_json::to_string_pretty(roster).unwrap_or_default(),
     )
-    .map_err(|e| MemoryError::Other(format!("write employee.json: {e}")))
+    .map_err(|e| MemoryError::Other(format!("write roster: {e}")))
+}
+
+pub fn get_hire(id: &str) -> Option<Hire> {
+    load_roster().into_iter().find(|h| h.id == id)
+}
+
+/// Allocate an instance id for a new hire of `role_id`: the bare role
+/// id if free, else role-2, role-3, ...
+fn next_instance_id(role_id: &str, existing: &[String]) -> String {
+    if !existing.iter().any(|e| e == role_id) {
+        return role_id.to_string();
+    }
+    let mut n = 2usize;
+    loop {
+        let cand = format!("{role_id}-{n}");
+        if !existing.iter().any(|e| e == &cand) {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+pub fn hire(role_id: &str) -> Result<Hire> {
+    let def =
+        role(role_id).ok_or_else(|| MemoryError::Other(format!("unknown role '{role_id}'")))?;
+    if !def.available {
+        return Err(MemoryError::Other(format!(
+            "role '{role_id}' is not hireable yet"
+        )));
+    }
+    let mut roster = load_roster();
+    let ids: Vec<String> = roster.iter().map(|h| h.id.clone()).collect();
+    let id = next_instance_id(role_id, &ids);
+    let hire = Hire {
+        id: id.clone(),
+        role: role_id.to_string(),
+        hired_at: now_iso(),
+        config: EmployeeConfig {
+            wake_minutes: def.default_wake_minutes,
+            ..Default::default()
+        },
+    };
+    let _ = std::fs::create_dir_all(instance_dir(&id));
+    roster.push(hire.clone());
+    save_roster(&roster)?;
+    Ok(hire)
+}
+
+pub fn fire(id: &str) -> Result<()> {
+    if id == "curator" {
+        return Err(MemoryError::Other(
+            "the Curator is the built-in first employee; disable it instead of firing".into(),
+        ));
+    }
+    let mut roster = load_roster();
+    let before = roster.len();
+    roster.retain(|h| h.id != id);
+    if roster.len() == before {
+        return Err(MemoryError::Other(format!("no employee '{id}'")));
+    }
+    save_roster(&roster)
+    // instance files are kept on disk: firing is reversible by rehiring
+    // with the same id (history intact).
+}
+
+fn update_config(id: &str, f: impl FnOnce(&mut EmployeeConfig)) -> Result<Hire> {
+    let mut roster = load_roster();
+    let h = roster
+        .iter_mut()
+        .find(|h| h.id == id)
+        .ok_or_else(|| MemoryError::Other(format!("no employee '{id}'")))?;
+    f(&mut h.config);
+    let out = h.clone();
+    save_roster(&roster)?;
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
-// Live state: activity ring + run flag
+// Live state per instance: activity ring + run flag
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,33 +314,48 @@ pub struct ActivityEvent {
     pub line: String,
 }
 
+#[derive(Default)]
 struct LiveState {
     running: bool,
-    current_task: Option<String>,
     seq: u64,
     events: VecDeque<ActivityEvent>,
     kill: Option<tokio::sync::oneshot::Sender<()>>,
+    last_tick: u64,
 }
 
-static LIVE: Lazy<Mutex<LiveState>> = Lazy::new(|| {
-    Mutex::new(LiveState {
-        running: false,
-        current_task: None,
-        seq: 0,
-        events: VecDeque::with_capacity(512),
-        kill: None,
-    })
-});
-
+static LIVE: Lazy<Mutex<HashMap<String, LiveState>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static SCHEDULER_STARTED: AtomicBool = AtomicBool::new(false);
 
+fn with_live<T>(id: &str, f: impl FnOnce(&mut LiveState) -> T) -> T {
+    let mut map = LIVE.lock();
+    f(map.entry(id.to_string()).or_default())
+}
+
+fn push_event(id: &str, kind: &str, line: impl Into<String>) {
+    with_live(id, |st| {
+        st.seq += 1;
+        let ev = ActivityEvent {
+            seq: st.seq,
+            ts: now_iso(),
+            kind: kind.to_string(),
+            line: line.into(),
+        };
+        if st.events.len() >= 500 {
+            st.events.pop_front();
+        }
+        st.events.push_back(ev);
+    });
+}
+
 fn now_iso() -> String {
-    // Seconds precision is plenty for an activity feed.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Manual ISO-8601 (UTC) to avoid pulling chrono in here.
+    iso_from_secs(now)
+}
+
+fn iso_from_secs(now: u64) -> String {
     let days = now / 86_400;
     let (y, mo, d) = civil_from_days(days as i64);
     let secs = now % 86_400;
@@ -191,53 +384,14 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-fn push_event(kind: &str, line: impl Into<String>) {
-    let mut st = LIVE.lock();
-    st.seq += 1;
-    let ev = ActivityEvent {
-        seq: st.seq,
-        ts: now_iso(),
-        kind: kind.to_string(),
-        line: line.into(),
-    };
-    if st.events.len() >= 500 {
-        st.events.pop_front();
-    }
-    st.events.push_back(ev);
-}
-
 // ---------------------------------------------------------------------------
-// Proposals (approval queue)
+// JSONL helpers
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Proposal {
-    pub id: String,
-    pub ts: String,
-    pub action: String,
-    pub title: String,
-    #[serde(default)]
-    pub reason: String,
-    #[serde(default)]
-    pub args: Value,
-    pub status: String, // open | approved | rejected
-    #[serde(default)]
-    pub brain: String,
-}
-
-/// Actions the approve endpoint will execute. Anything else a runbook
-/// emits is stored but can only be rejected — the whitelist is the
-/// contract, not the prompt.
-const EXECUTABLE_ACTIONS: &[&str] = &[
-    "supersede_note",
-    "set_kind",
-    "add_tag",
-    "add_link",
-    "archive_engram",
-];
 
 fn append_jsonl(path: &PathBuf, v: &impl Serialize) -> Result<()> {
-    let _ = std::fs::create_dir_all(employee_dir());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -258,11 +412,38 @@ fn read_jsonl<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Vec<T> {
         .unwrap_or_default()
 }
 
-/// Effective proposal list: last status wins per id (append-only file;
-/// approve/reject append a tombstone row with the new status).
-pub fn list_proposals(status: Option<&str>) -> Vec<Proposal> {
-    let all: Vec<Proposal> = read_jsonl(&proposals_path());
-    let mut latest: std::collections::HashMap<String, Proposal> = Default::default();
+// ---------------------------------------------------------------------------
+// Proposals (approval queue, per instance)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Proposal {
+    pub id: String,
+    pub ts: String,
+    pub action: String,
+    pub title: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub args: Value,
+    pub status: String, // open | approved | rejected
+    #[serde(default)]
+    pub brain: String,
+}
+
+/// Actions the approve endpoint will execute. The whitelist is the
+/// contract, not the prompt.
+const EXECUTABLE_ACTIONS: &[&str] = &[
+    "supersede_note",
+    "set_kind",
+    "add_tag",
+    "add_link",
+    "archive_engram",
+];
+
+pub fn list_proposals(id: &str, status: Option<&str>) -> Vec<Proposal> {
+    let all: Vec<Proposal> = read_jsonl(&proposals_path(id));
+    let mut latest: HashMap<String, Proposal> = Default::default();
     for p in all {
         latest.insert(p.id.clone(), p);
     }
@@ -274,7 +455,6 @@ pub fn list_proposals(status: Option<&str>) -> Vec<Proposal> {
     out
 }
 
-/// Parse a `PROPOSAL: {...}` stdout line into a queued proposal.
 fn parse_proposal_line(line: &str, brain: &str) -> Option<Proposal> {
     let raw = line.trim().strip_prefix("PROPOSAL:")?.trim();
     let v: Value = serde_json::from_str(raw).ok()?;
@@ -337,7 +517,6 @@ fn execute_proposal(p: &Proposal) -> Result<String> {
             let id = get("engram_id")?;
             let tag = get("tag")?;
             let conn = db.lock();
-            // tags live as comma-separated text; append if absent.
             let cur: Option<String> = conn
                 .query_row("SELECT tags FROM engrams WHERE id = ?1", [&id], |r| {
                     r.get(0)
@@ -382,7 +561,40 @@ fn execute_proposal(p: &Proposal) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Meetings inbox
+// Budget per instance
+// ---------------------------------------------------------------------------
+
+fn budget_today(id: &str) -> (String, u32) {
+    let today = now_iso().split('T').next().unwrap_or("").to_string();
+    let v: Value = std::fs::read_to_string(budget_path(id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(json!({}));
+    if v.get("date").and_then(|d| d.as_str()) == Some(today.as_str()) {
+        (
+            today,
+            v.get("calls").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
+        )
+    } else {
+        (today, 0)
+    }
+}
+
+fn budget_bump(id: &str) {
+    let (date, calls) = budget_today(id);
+    let _ = std::fs::create_dir_all(instance_dir(id));
+    let _ = std::fs::write(
+        budget_path(id),
+        json!({"date": date, "calls": calls + 1}).to_string(),
+    );
+}
+
+fn budget_left(id: &str, cfg: &EmployeeConfig) -> bool {
+    budget_today(id).1 < cfg.daily_call_budget
+}
+
+// ---------------------------------------------------------------------------
+// Meetings inbox (brain-scoped; Scribe's desk, also reachable manually)
 // ---------------------------------------------------------------------------
 
 const MEETING_EXTS: &[&str] = &["md", "txt", "vtt", "srt"];
@@ -412,8 +624,6 @@ fn meetings_index_path(brain: &str) -> PathBuf {
     meetings_archive(brain).join("index.jsonl")
 }
 
-/// Scan the inbox: anything with a known extension not yet indexed is
-/// pending. Archives happen at processing time, not scan time.
 pub fn list_meetings(brain: &str) -> Vec<MeetingRecord> {
     let idx: Vec<MeetingRecord> = read_jsonl(&meetings_index_path(brain));
     let processed: std::collections::HashSet<String> = idx.iter().map(|m| m.file.clone()).collect();
@@ -440,10 +650,15 @@ pub fn list_meetings(brain: &str) -> Vec<MeetingRecord> {
     out
 }
 
-/// Copy dropped transcript files into the meetings inbox. Runs in Rust
-/// (same pattern as inbox::add_files) so the webview needs no fs scope.
-/// Returns the filenames actually added; non-transcript extensions are
-/// skipped rather than erroring so a mixed drop still succeeds.
+fn count_pending_meetings(brain: &str) -> usize {
+    list_meetings(brain)
+        .iter()
+        .filter(|m| m.status == "pending")
+        .count()
+}
+
+/// Copy dropped transcript files into the meetings inbox (Rust-side,
+/// so the webview needs no fs scope). Skips non-transcript extensions.
 pub fn add_meeting_files(brain: &str, paths: &[String]) -> Result<Vec<String>> {
     let dir = meetings_inbox(brain);
     std::fs::create_dir_all(&dir)
@@ -472,9 +687,8 @@ pub fn add_meeting_files(brain: &str, paths: &[String]) -> Result<Vec<String>> {
     Ok(added)
 }
 
-/// Move a pending transcript into the immutable archive (verbatim copy;
-/// the inbox copy is removed) and index it. Returns the archive path
-/// the distillation prompt will cite.
+/// Move a pending transcript into the immutable archive (verbatim; the
+/// evidence layer is never edited) and index it.
 fn archive_meeting(brain: &str, file: &str) -> Result<PathBuf> {
     let src = meetings_inbox(brain).join(file);
     let dir = meetings_archive(brain);
@@ -497,31 +711,135 @@ fn archive_meeting(brain: &str, file: &str) -> Result<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Runbooks + tool whitelists
+// Claude invocation helpers
 // ---------------------------------------------------------------------------
 
-/// Level-0 whitelist: read + additive only. Enforced by Claude Code's
-/// permission layer via --allowedTools; the agent cannot call anything
-/// destructive even if the prompt asks it to.
-fn allowed_tools(_autonomy: u8) -> String {
-    [
+fn find_claude(cfg: &EmployeeConfig) -> Option<PathBuf> {
+    if !cfg.claude_path.trim().is_empty() {
+        let p = PathBuf::from(cfg.claude_path.trim());
+        return p.exists().then_some(p);
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join("claude");
+        if cand.exists() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Locate our own headless MCP server binary: bundled next to the app
+/// executable in production, PATH as fallback.
+fn neurovault_server_path() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let cand = dir.join("neurovault-server");
+            if cand.exists() {
+                return Some(cand);
+            }
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join("neurovault-server");
+        if cand.exists() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// One toolless model call on the cheap tier. Empty strict MCP config:
+/// the user's other servers never boot into context, keeping the call
+/// at a few hundred tokens. Returns stdout on success.
+async fn toolless_call(id: &str, cfg: &EmployeeConfig, prompt: String) -> Option<String> {
+    let claude = match find_claude(cfg) {
+        Some(c) => c,
+        None => {
+            push_event(id, "error", "claude CLI not found");
+            return None;
+        }
+    };
+    budget_bump(id);
+    let out = tokio::process::Command::new(&claude)
+        .arg("-p")
+        .arg(prompt)
+        .arg("--model")
+        .arg(&cfg.model)
+        .arg("--max-turns")
+        .arg("1")
+        .arg("--mcp-config")
+        .arg(r#"{"mcpServers":{}}"#)
+        .arg("--strict-mcp-config")
+        .current_dir(nv_home())
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).to_string()),
+        Ok(o) => {
+            push_event(
+                id,
+                "error",
+                format!(
+                    "model call exited {}: {}",
+                    o.status,
+                    truncate_chars(&String::from_utf8_lossy(&o.stderr), 160)
+                ),
+            );
+            None
+        }
+        Err(e) => {
+            push_event(id, "error", format!("model spawn: {e}"));
+            None
+        }
+    }
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Per-role tool whitelist for DEEP runs. Enforced by Claude Code's
+/// permission layer; level 0 never includes destructive tools.
+fn allowed_tools(role_id: &str) -> String {
+    let base = [
         "mcp__neurovault__session_start",
         "mcp__neurovault__recall",
         "mcp__neurovault__recall_chunks",
         "mcp__neurovault__related",
         "mcp__neurovault__status",
         "mcp__neurovault__check_duplicate",
-        "mcp__neurovault__find_clutter",
-        "mcp__neurovault__find_contradictions",
-        "mcp__neurovault__find_orphan_links",
-        "mcp__neurovault__engram_history",
-        "mcp__neurovault__temporal_recall",
         "mcp__neurovault__remember",
-        "mcp__neurovault__handoff",
-        "Read",
-    ]
-    .join(",")
+    ];
+    let extra: &[&str] = match role_id {
+        "curator" => &[
+            "mcp__neurovault__find_clutter",
+            "mcp__neurovault__find_contradictions",
+            "mcp__neurovault__find_orphan_links",
+            "mcp__neurovault__engram_history",
+            "mcp__neurovault__temporal_recall",
+            "mcp__neurovault__handoff",
+            "Read",
+        ],
+        "scribe" => &["mcp__neurovault__handoff", "Read"],
+        "librarian" => &[
+            "mcp__neurovault__list_inbox",
+            "mcp__neurovault__read_inbox_file",
+            "mcp__neurovault__mark_inbox_done",
+        ],
+        _ => &[],
+    };
+    base.iter()
+        .chain(extra.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",")
 }
+
+// ---------------------------------------------------------------------------
+// Deep-run prompts
+// ---------------------------------------------------------------------------
 
 fn hygiene_prompt(brain: &str) -> String {
     format!(
@@ -550,7 +868,7 @@ fn meetings_prompt(brain: &str, archived: &[(String, PathBuf)]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        r#"You are the Curator, NeuroVault's knowledge-ops employee, working on brain '{brain}'. Process these meeting transcripts (raw files are archived verbatim; NEVER edit them):
+        r#"You are the Scribe, NeuroVault's meetings-desk employee, working on brain '{brain}'. Process these meeting transcripts (raw files are archived verbatim; NEVER edit them):
 {files}
 
 For each transcript, in order:
@@ -566,43 +884,41 @@ Rules: never invent engram ids; keep each distilled note under 500 words; no oth
     )
 }
 
-// ---------------------------------------------------------------------------
-// The runner
-// ---------------------------------------------------------------------------
+fn librarian_prompt(brain: &str, pending: usize) -> String {
+    format!(
+        r#"You are the Librarian, NeuroVault's ingest-desk employee, working on brain '{brain}'. The raw drop inbox has {pending} unprocessed file(s).
 
-fn find_claude(cfg: &EmployeeConfig) -> Option<PathBuf> {
-    if !cfg.claude_path.trim().is_empty() {
-        let p = PathBuf::from(cfg.claude_path.trim());
-        return p.exists().then_some(p);
-    }
-    // PATH search without extra deps.
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join("claude");
-        if cand.exists() {
-            return Some(cand);
-        }
-    }
-    None
+Do this:
+1. session_start, then list_inbox.
+2. For up to 5 files: read_inbox_file, then write ONE clean note via remember (deduplicate 0.92): a faithful, well-structured distillation with a clear title, [[wikilinks]] to related notes you find via recall (max 2 recalls per file), and a 'Source' line naming the original file. Then mark_inbox_done for that file.
+3. End with one line: SUMMARY: <n> files ingested, <n> skipped.
+
+Rules: never delete anything; if a file is unreadable or binary, skip it and say so; keep each note under 400 words; no other output formats."#
+    )
 }
 
-/// Kick off a run. Returns Err with a human reason if it can't start.
-pub fn start_run(task: &str) -> std::result::Result<(), String> {
-    let cfg = load_config();
+// ---------------------------------------------------------------------------
+// Deep runner (MCP-connected agent session, per instance)
+// ---------------------------------------------------------------------------
+
+pub fn start_run(id: &str, task: &str) -> std::result::Result<(), String> {
+    let hire = get_hire(id).ok_or_else(|| format!("no employee '{id}'"))?;
+    let cfg = hire.config.clone();
     let claude = find_claude(&cfg).ok_or("claude CLI not found (PATH or claude_path)")?;
     let brain = super::read_ops::resolve_brain_id(None).map_err(|e| e.to_string())?;
 
-    {
-        let mut st = LIVE.lock();
+    let already = with_live(id, |st| {
         if st.running {
-            return Err("a run is already in progress".into());
+            true
+        } else {
+            st.running = true;
+            false
         }
-        st.running = true;
-        st.current_task = Some(task.to_string());
+    });
+    if already {
+        return Err("a run is already in progress".into());
     }
 
-    // Meetings task archives pending transcripts BEFORE the agent runs,
-    // so the prompt can cite immutable paths.
     let prompt = match task {
         "meetings" => {
             let pending: Vec<String> = list_meetings(&brain)
@@ -611,42 +927,49 @@ pub fn start_run(task: &str) -> std::result::Result<(), String> {
                 .map(|m| m.file)
                 .collect();
             if pending.is_empty() {
-                let mut st = LIVE.lock();
-                st.running = false;
-                st.current_task = None;
+                with_live(id, |st| st.running = false);
                 return Err("no pending meeting transcripts".into());
             }
             let mut archived = Vec::new();
             for f in pending {
                 match archive_meeting(&brain, &f) {
                     Ok(p) => archived.push((f, p)),
-                    Err(e) => push_event("error", format!("archive {f}: {e}")),
+                    Err(e) => push_event(id, "error", format!("archive {f}: {e}")),
                 }
             }
             if archived.is_empty() {
-                let mut st = LIVE.lock();
-                st.running = false;
-                st.current_task = None;
+                with_live(id, |st| st.running = false);
                 return Err("archiving failed for all transcripts".into());
             }
             meetings_prompt(&brain, &archived)
+        }
+        "ingest" => {
+            let pending = super::inbox::list_inbox(&brain)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if pending == 0 {
+                with_live(id, |st| st.running = false);
+                return Err("raw inbox is empty".into());
+            }
+            librarian_prompt(&brain, pending)
         }
         _ => hygiene_prompt(&brain),
     };
 
     let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
-    LIVE.lock().kill = Some(kill_tx);
+    with_live(id, |st| st.kill = Some(kill_tx));
 
     let task_name = task.to_string();
     let run_id = uuid::Uuid::new_v4().to_string();
-    push_event("info", format!("run {run_id} started: {task_name}"));
+    let role_id = hire.role.clone();
+    let id_owned = id.to_string();
+    push_event(id, "info", format!("run {run_id} started: {task_name}"));
 
     tokio::spawn(async move {
         let started = std::time::Instant::now();
-        let ok = run_agent(&claude, &cfg, &prompt, &brain, kill_rx).await;
+        let ok = run_agent(&id_owned, &role_id, &claude, &cfg, &prompt, &brain, kill_rx).await;
         let dur = started.elapsed().as_secs();
-        let summary = {
-            let st = LIVE.lock();
+        let summary = with_live(&id_owned, |st| {
             st.events
                 .iter()
                 .rev()
@@ -659,24 +982,27 @@ pub fn start_run(task: &str) -> std::result::Result<(), String> {
                         "run failed".into()
                     }
                 })
-        };
-        let proposals_open = list_proposals(Some("open")).len();
+        });
+        let proposals_open = list_proposals(&id_owned, Some("open")).len();
         let _ = append_jsonl(
-            &runs_path(),
+            &runs_path(&id_owned),
             &json!({
                 "id": run_id, "ts": now_iso(), "task": task_name, "ok": ok,
                 "summary": summary, "duration_s": dur, "proposals": proposals_open,
             }),
         );
-        let mut st = LIVE.lock();
-        st.running = false;
-        st.current_task = None;
-        st.kill = None;
+        with_live(&id_owned, |st| {
+            st.running = false;
+            st.kill = None;
+        });
     });
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_agent(
+    id: &str,
+    role_id: &str,
     claude: &PathBuf,
     cfg: &EmployeeConfig,
     prompt: &str,
@@ -685,11 +1011,14 @@ async fn run_agent(
 ) -> bool {
     use tokio::io::AsyncBufReadExt;
 
+    budget_bump(id);
     let mut cmd = tokio::process::Command::new(claude);
     cmd.arg("-p")
         .arg(prompt)
+        .arg("--model")
+        .arg(&cfg.deep_model)
         .arg("--allowedTools")
-        .arg(allowed_tools(cfg.autonomy))
+        .arg(allowed_tools(role_id))
         .arg("--max-turns")
         .arg(cfg.max_turns.to_string())
         .env("NEUROVAULT_MCP_TIER", "full")
@@ -697,17 +1026,33 @@ async fn run_agent(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
+    // Deep runs need exactly ONE MCP server: ours. A strict config keeps
+    // the user's other servers out of the context (token cost) and works
+    // even if they never registered neurovault with Claude Code.
+    if let Some(server) = neurovault_server_path() {
+        cmd.arg("--mcp-config")
+            .arg(
+                json!({"mcpServers": {"neurovault": {
+                    "command": server.display().to_string(),
+                    "args": ["--mcp-only"],
+                    "env": {"NEUROVAULT_MCP_TIER": "full"},
+                }}})
+                .to_string(),
+            )
+            .arg("--strict-mcp-config");
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            push_event("error", format!("spawn claude: {e}"));
+            push_event(id, "error", format!("spawn claude: {e}"));
             return false;
         }
     };
 
     let stdout = child.stdout.take();
     let brain_owned = brain.to_string();
+    let id_owned = id.to_string();
     let reader = tokio::spawn(async move {
         if let Some(out) = stdout {
             let mut lines = tokio::io::BufReader::new(out).lines();
@@ -719,25 +1064,29 @@ async fn run_agent(
                 if l.starts_with("PROPOSAL:") {
                     match parse_proposal_line(l, &brain_owned) {
                         Some(p) if EXECUTABLE_ACTIONS.contains(&p.action.as_str()) => {
-                            push_event("proposal", format!("{}: {}", p.action, p.title));
-                            let _ = append_jsonl(&proposals_path(), &p);
+                            push_event(&id_owned, "proposal", format!("{}: {}", p.action, p.title));
+                            let _ = append_jsonl(&proposals_path(&id_owned), &p);
                         }
                         Some(p) => {
-                            push_event("error", format!("unknown proposal action '{}'", p.action));
+                            push_event(
+                                &id_owned,
+                                "error",
+                                format!("unknown proposal action '{}'", p.action),
+                            );
                         }
-                        None => push_event("error", "unparseable PROPOSAL line".to_string()),
+                        None => {
+                            push_event(&id_owned, "error", "unparseable PROPOSAL line".to_string())
+                        }
                     }
                 } else if let Some(s) = l.strip_prefix("SUMMARY:") {
-                    push_event("result", s.trim().to_string());
+                    push_event(&id_owned, "result", s.trim().to_string());
                 } else {
-                    // Claude -p prints the assistant text; each line is
-                    // narration worth showing.
                     let kind = if l.contains("mcp__neurovault__") {
                         "tool"
                     } else {
                         "info"
                     };
-                    push_event(kind, l.chars().take(300).collect::<String>());
+                    push_event(&id_owned, kind, l.chars().take(300).collect::<String>());
                 }
             }
         }
@@ -747,16 +1096,16 @@ async fn run_agent(
     let result = tokio::select! {
         status = child.wait() => match status {
             Ok(s) if s.success() => true,
-            Ok(s) => { push_event("error", format!("claude exited: {s}")); false }
-            Err(e) => { push_event("error", format!("wait: {e}")); false }
+            Ok(s) => { push_event(id, "error", format!("claude exited: {s}")); false }
+            Err(e) => { push_event(id, "error", format!("wait: {e}")); false }
         },
         _ = tokio::time::sleep(timeout) => {
-            push_event("error", format!("timeout after {} min; killing run", cfg.timeout_minutes));
+            push_event(id, "error", format!("timeout after {} min; killing run", cfg.timeout_minutes));
             let _ = child.kill().await;
             false
         },
         _ = kill_rx => {
-            push_event("info", "stopped by user");
+            push_event(id, "info", "stopped by user");
             let _ = child.kill().await;
             false
         },
@@ -765,24 +1114,580 @@ async fn run_agent(
     result
 }
 
-/// Ask a running agent to stop. No-op when idle.
-pub fn stop_run() -> bool {
-    let mut st = LIVE.lock();
-    if let Some(tx) = st.kill.take() {
-        let _ = tx.send(());
-        true
-    } else {
-        false
+pub fn stop_run(id: &str) -> bool {
+    with_live(id, |st| {
+        if let Some(tx) = st.kill.take() {
+            let _ = tx.send(());
+            true
+        } else {
+            false
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Curator's sentinel + judge (the economy loop)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkItem {
+    pub id: String,
+    pub key: String,
+    pub ts: String,
+    pub kind: String, // duplicate | contradiction | orphan
+    pub payload: Value,
+    pub status: String, // open | judged
+}
+
+fn list_queue(id: &str, status: Option<&str>) -> Vec<WorkItem> {
+    let all: Vec<WorkItem> = read_jsonl(&queue_path(id));
+    let mut latest: HashMap<String, WorkItem> = Default::default();
+    for w in all {
+        latest.insert(w.key.clone(), w);
+    }
+    let mut out: Vec<WorkItem> = latest
+        .into_values()
+        .filter(|w| status.is_none_or(|s| w.status == s))
+        .collect();
+    out.sort_by(|a, b| a.ts.cmp(&b.ts));
+    out
+}
+
+async fn sentinel_fetch(client: &reqwest::Client, path: &str) -> Option<Value> {
+    let url = format!(
+        "http://127.0.0.1:{}{path}",
+        super::http_server::DEFAULT_PORT
+    );
+    client
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .json::<Value>()
+        .await
+        .ok()
+}
+
+/// One free sentinel sweep for the Curator: local detectors via
+/// loopback, dedupe-keyed into the queue.
+pub async fn sentinel_scan(id: &str) -> usize {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    let known: std::collections::HashSet<String> =
+        list_queue(id, None).into_iter().map(|w| w.key).collect();
+    let mut fresh = 0usize;
+    let qp = queue_path(id);
+    let mut enqueue = |kind: &str, key: String, payload: Value| {
+        if known.contains(&key) {
+            return;
+        }
+        let item = WorkItem {
+            id: uuid::Uuid::new_v4().to_string(),
+            key,
+            ts: now_iso(),
+            kind: kind.to_string(),
+            payload,
+            status: "open".to_string(),
+        };
+        if append_jsonl(&qp, &item).is_ok() {
+            fresh += 1;
+        }
+    };
+
+    if let Some(v) = sentinel_fetch(&client, "/api/clutter").await {
+        if let Some(dups) = v.get("duplicate_titles").and_then(|d| d.as_array()) {
+            for d in dups.iter().take(20) {
+                let eid = d.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+                if eid.is_empty() {
+                    continue;
+                }
+                enqueue(
+                    "duplicate",
+                    format!("dup:{eid}"),
+                    json!({
+                        "id": eid,
+                        "title": d.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+                        "detail": truncate_chars(
+                            d.get("reason").and_then(|x| x.as_str()).unwrap_or(""), 200),
+                    }),
+                );
+            }
+        }
+    }
+    if let Some(v) = sentinel_fetch(&client, "/api/contradictions?resolved=false").await {
+        if let Some(rows) = v.as_array().or_else(|| {
+            v.get("contradictions")
+                .and_then(|c| c.as_array())
+                .or_else(|| v.get("items").and_then(|c| c.as_array()))
+        }) {
+            for c in rows.iter().take(20) {
+                let cid = c.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+                if cid.is_empty() {
+                    continue;
+                }
+                enqueue(
+                    "contradiction",
+                    format!("contra:{cid}"),
+                    json!({
+                        "a_id": c.get("engram_a_id").and_then(|x| x.as_str()).unwrap_or(""),
+                        "a": truncate_chars(c.get("fact_a").and_then(|x| x.as_str()).unwrap_or(""), 200),
+                        "b_id": c.get("engram_b_id").and_then(|x| x.as_str()).unwrap_or(""),
+                        "b": truncate_chars(c.get("fact_b").and_then(|x| x.as_str()).unwrap_or(""), 200),
+                    }),
+                );
+            }
+        }
+    }
+    if let Some(v) = sentinel_fetch(&client, "/api/orphan_links").await {
+        if let Some(rows) = v.get("orphans").and_then(|o| o.as_array()).or_else(|| {
+            v.get("orphan_links")
+                .and_then(|o| o.as_array())
+                .or_else(|| v.as_array())
+        }) {
+            for o in rows.iter().take(20) {
+                let from = o
+                    .get("engram_id")
+                    .or_else(|| o.get("from_id"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default();
+                let target = o
+                    .get("target")
+                    .or_else(|| o.get("link"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default();
+                if from.is_empty() || target.is_empty() {
+                    continue;
+                }
+                enqueue(
+                    "orphan",
+                    format!("orphan:{from}:{target}"),
+                    json!({
+                        "from_id": from,
+                        "from_title": o.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+                        "target": target,
+                    }),
+                );
+            }
+        }
+    }
+    fresh
+}
+
+fn judge_prompt(items: &[WorkItem]) -> String {
+    let mut body = String::from(
+        "You are the Curator's judge for a personal knowledge base. For each numbered \
+         item output EXACTLY one JSON line, nothing else. Be conservative: when unsure, \
+         choose the keep/skip verdict.\n\n",
+    );
+    for (n, w) in items.iter().enumerate() {
+        let i = n + 1;
+        match w.kind.as_str() {
+            "duplicate" => body.push_str(&format!(
+                "Item {i} (duplicate title cluster): note id={} title={:?} detail={:?}\n\
+                 Verdicts: {{\"i\":{i},\"verdict\":\"archive\"}} if it is redundant clutter, \
+                 or {{\"i\":{i},\"verdict\":\"keep\"}}.\n\n",
+                w.payload.get("id").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload
+                    .get("title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
+                w.payload
+                    .get("detail")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
+            )),
+            "contradiction" => body.push_str(&format!(
+                "Item {i} (contradiction): A(id={}): {:?}  B(id={}): {:?}\n\
+                 Verdicts: {{\"i\":{i},\"verdict\":\"supersede\",\"winner\":\"a\"}} (or \"b\") \
+                 when one clearly replaces the other (newer decision, corrected fact), or \
+                 {{\"i\":{i},\"verdict\":\"coexist\"}} when both can be true.\n\n",
+                w.payload.get("a_id").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload.get("a").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload.get("b_id").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload.get("b").and_then(|x| x.as_str()).unwrap_or(""),
+            )),
+            _ => body.push_str(&format!(
+                "Item {i} (broken wikilink): note {:?} links to missing note {:?}.\n\
+                 Verdicts: {{\"i\":{i},\"verdict\":\"drop_link\"}} if the target looks like \
+                 a typo or abandoned stub, or {{\"i\":{i},\"verdict\":\"keep\"}} if a note \
+                 with that name should plausibly exist later.\n\n",
+                w.payload
+                    .get("from_title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
+                w.payload
+                    .get("target")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
+            )),
+        }
+    }
+    body
+}
+
+fn verdict_to_proposal(w: &WorkItem, verdict: &Value, brain: &str) -> Option<Proposal> {
+    let v = verdict.get("verdict")?.as_str()?;
+    let (action, title, args) = match (w.kind.as_str(), v) {
+        ("duplicate", "archive") => (
+            "archive_engram",
+            format!(
+                "Archive redundant: {}",
+                w.payload
+                    .get("title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("note")
+            ),
+            json!({"engram_id": w.payload.get("id")}),
+        ),
+        ("contradiction", "supersede") => {
+            let winner = verdict
+                .get("winner")
+                .and_then(|x| x.as_str())
+                .unwrap_or("a");
+            let (win, lose) = if winner == "b" {
+                ("b_id", "a_id")
+            } else {
+                ("a_id", "b_id")
+            };
+            (
+                "supersede_note",
+                "Supersede contradicted fact".to_string(),
+                json!({
+                    "old_id": w.payload.get(lose),
+                    "new_id": w.payload.get(win),
+                    "reason": "curator: newer/winning fact supersedes the contradicted one",
+                }),
+            )
+        }
+        // Orphan wikilinks live inside note CONTENT; "fixing" one means
+        // editing content, which stays above v0's pay grade. Verdicts
+        // on orphans surface in the feed only.
+        _ => return None,
+    };
+    Some(Proposal {
+        id: uuid::Uuid::new_v4().to_string(),
+        ts: now_iso(),
+        action: action.to_string(),
+        title,
+        reason: format!("judge verdict on {} item", w.kind),
+        args,
+        status: "open".to_string(),
+        brain: brain.to_string(),
+    })
+}
+
+/// One judge batch for the Curator: N open items, one toolless call,
+/// verdicts -> proposals. Returns (judged, proposals).
+pub async fn judge_batch(id: &str) -> (usize, usize) {
+    let Some(hire) = get_hire(id) else {
+        return (0, 0);
+    };
+    let cfg = hire.config;
+    if !budget_left(id, &cfg) {
+        push_event(
+            id,
+            "info",
+            "daily budget reached; queue holds until tomorrow",
+        );
+        return (0, 0);
+    }
+    let open = list_queue(id, Some("open"));
+    if open.is_empty() {
+        return (0, 0);
+    }
+    let batch: Vec<WorkItem> = open.into_iter().take(cfg.max_items_per_run).collect();
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    push_event(
+        id,
+        "info",
+        format!("judge batch: {} item(s) on {}", batch.len(), cfg.model),
+    );
+    let Some(stdout) = toolless_call(id, &cfg, judge_prompt(&batch)).await else {
+        return (0, 0);
+    };
+
+    let mut verdicts: HashMap<usize, Value> = Default::default();
+    for line in stdout.lines() {
+        let l = line.trim();
+        if !l.starts_with('{') {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(l) {
+            if let Some(i) = v.get("i").and_then(|x| x.as_u64()) {
+                verdicts.insert(i as usize, v);
+            }
+        }
+    }
+
+    let mut proposals = 0usize;
+    let mut judged = 0usize;
+    for (n, w) in batch.iter().enumerate() {
+        let Some(v) = verdicts.get(&(n + 1)) else {
+            continue;
+        };
+        judged += 1;
+        if let Some(p) = verdict_to_proposal(w, v, &brain) {
+            push_event(id, "proposal", format!("{}: {}", p.action, p.title));
+            let _ = append_jsonl(&proposals_path(id), &p);
+            proposals += 1;
+        } else {
+            push_event(
+                id,
+                "result",
+                format!(
+                    "{}: {}",
+                    w.kind,
+                    v.get("verdict").and_then(|x| x.as_str()).unwrap_or("skip")
+                ),
+            );
+        }
+        let mut done = w.clone();
+        done.status = "judged".to_string();
+        let _ = append_jsonl(&queue_path(id), &done);
+    }
+    (judged, proposals)
+}
+
+// ---------------------------------------------------------------------------
+// Chronicler + Quartermaster (toolless roles: model writes, Rust files)
+// ---------------------------------------------------------------------------
+
+fn instance_state(id: &str) -> Value {
+    std::fs::read_to_string(state_path(id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(json!({}))
+}
+
+fn save_instance_state(id: &str, v: &Value) {
+    let _ = std::fs::create_dir_all(instance_dir(id));
+    let _ = std::fs::write(state_path(id), v.to_string());
+}
+
+/// Server-side note write: the model produced text; Rust files it into
+/// the vault through the normal indexed write path. Zero MCP.
+fn write_note(brain: &str, rel_filename: &str, content: &str) -> Result<()> {
+    let ctx = super::write_ops::BrainContext::resolve(Some(brain), super::paths::vault_dir(brain))?;
+    super::write_ops::save_note(&ctx, rel_filename, content)?;
+    Ok(())
+}
+
+/// Chronicler: summarize what entered the brain since the last wake
+/// into a daily digest note. One toolless call; skips quiet periods.
+async fn chronicler_tick(id: &str) -> Value {
+    let Some(hire) = get_hire(id) else {
+        return json!({});
+    };
+    let cfg = hire.config;
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    let state = instance_state(id);
+    let since = state
+        .get("last_seen")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1970-01-01T00:00:00Z")
+        .to_string();
+
+    // Free: new engrams since last wake, straight from SQL. Both sides
+    // normalized through datetime() because created_at is stored
+    // space-separated ("2026-07-06 12:00:00") while our cutoff is
+    // ISO-8601 with T/Z — a raw lexicographic compare would be wrong.
+    let rows: Vec<(String, String)> = match open_brain(&brain) {
+        Ok(db) => {
+            let conn = db.lock();
+            let mut stmt = match conn.prepare(
+                "SELECT title, created_at FROM engrams
+                 WHERE state != 'dormant' AND datetime(created_at) > datetime(?1)
+                 ORDER BY created_at ASC LIMIT 40",
+            ) {
+                Ok(s) => s,
+                Err(_) => return json!({}),
+            };
+            stmt.query_map([&since], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default()
+        }
+        Err(_) => return json!({}),
+    };
+    if rows.len() < 3 {
+        return json!({"skipped": "quiet period"}); // not worth a call
+    }
+    if !budget_left(id, &cfg) {
+        push_event(id, "info", "daily budget reached");
+        return json!({});
+    }
+    let titles = rows
+        .iter()
+        .map(|(t, ts)| format!("- {} ({})", t, ts))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = format!(
+        "You are the Chronicler for a personal knowledge base. These notes were added \
+         since the last digest:\n{titles}\n\nWrite a compact daily-digest in markdown \
+         (max 180 words): a 2-sentence overview, then grouped bullets by theme. \
+         Plain markdown only, no preamble."
+    );
+    push_event(
+        id,
+        "info",
+        format!("chronicling {} new note(s)", rows.len()),
+    );
+    let Some(text) = toolless_call(id, &cfg, prompt).await else {
+        return json!({});
+    };
+    let date = now_iso().split('T').next().unwrap_or("today").to_string();
+    let fname = format!("chronicle/{date}-digest.md");
+    match write_note(&brain, &fname, &text) {
+        Ok(()) => {
+            push_event(id, "result", format!("digest written: {fname}"));
+            save_instance_state(id, &json!({"last_seen": now_iso()}));
+            json!({"digest": fname, "notes": rows.len()})
+        }
+        Err(e) => {
+            push_event(id, "error", format!("digest write: {e}"));
+            json!({})
+        }
+    }
+}
+
+/// Quartermaster: audit todos/handoffs for staleness; one toolless
+/// call turns findings into a nudge report note.
+async fn quartermaster_tick(id: &str) -> Value {
+    let Some(hire) = get_hire(id) else {
+        return json!({});
+    };
+    let cfg = hire.config;
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    let todos = super::todos::list_todos(&brain, None).unwrap_or_default();
+    let week_ago = iso_from_secs(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(7 * 86_400),
+    );
+    let stale: Vec<String> = todos
+        .iter()
+        .filter(|t| {
+            (t.status == "open" || t.status == "in_progress")
+                && t.claimed_at
+                    .as_deref()
+                    .map(|c| c < week_ago.as_str())
+                    .unwrap_or(t.status == "open")
+        })
+        .take(15)
+        .map(|t| {
+            format!(
+                "- [{}] {} (for: {}, status: {})",
+                t.priority,
+                truncate_chars(&t.text, 120),
+                if t.agent_match.is_empty() {
+                    "anyone"
+                } else {
+                    &t.agent_match
+                },
+                t.status
+            )
+        })
+        .collect();
+    if stale.is_empty() {
+        return json!({"skipped": "queue healthy"});
+    }
+    if !budget_left(id, &cfg) {
+        push_event(id, "info", "daily budget reached");
+        return json!({});
+    }
+    let prompt = format!(
+        "You are the Quartermaster for a team's work queue. These items look stale:\n{}\n\n\
+         Write a short queue report in markdown (max 150 words): which items look \
+         abandoned vs merely slow, and one suggested next step each. Plain markdown, \
+         no preamble.",
+        stale.join("\n")
+    );
+    push_event(
+        id,
+        "info",
+        format!("auditing {} stale item(s)", stale.len()),
+    );
+    let Some(text) = toolless_call(id, &cfg, prompt).await else {
+        return json!({});
+    };
+    let date = now_iso().split('T').next().unwrap_or("today").to_string();
+    let fname = format!("quartermaster/{date}-queue-report.md");
+    match write_note(&brain, &fname, &text) {
+        Ok(()) => {
+            push_event(id, "result", format!("queue report written: {fname}"));
+            json!({"report": fname, "stale": stale.len()})
+        }
+        Err(e) => {
+            push_event(id, "error", format!("report write: {e}"));
+            json!({})
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Scheduler
+// The tick dispatcher + scheduler
 // ---------------------------------------------------------------------------
 
-/// Start the background scheduler once. Checks every minute; when the
-/// employee is enabled and a full interval has passed since the last
-/// run, kicks a hygiene run (which also reports pending meetings).
+/// One wake of employee `id`, dispatched by role. Free watching first;
+/// the model only runs when there is actual work and budget.
+pub async fn dispatch_tick(id: &str) -> Value {
+    let Some(hire) = get_hire(id) else {
+        return json!({"error": "no such employee"});
+    };
+    with_live(id, |st| {
+        st.last_tick = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    });
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    match hire.role.as_str() {
+        "curator" => {
+            let queued = sentinel_scan(id).await;
+            if queued > 0 {
+                push_event(id, "info", format!("sentinel queued {queued} new item(s)"));
+            }
+            let (judged, proposals) = judge_batch(id).await;
+            json!({"queued": queued, "judged": judged, "proposals": proposals})
+        }
+        "scribe" => {
+            let pending = count_pending_meetings(&brain);
+            if pending == 0 {
+                return json!({"skipped": "no pending transcripts"});
+            }
+            match start_run(id, "meetings") {
+                Ok(()) => json!({"started": "meetings", "pending": pending}),
+                Err(e) => json!({"error": e}),
+            }
+        }
+        "librarian" => {
+            let pending = super::inbox::list_inbox(&brain)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if pending == 0 {
+                return json!({"skipped": "inbox empty"});
+            }
+            match start_run(id, "ingest") {
+                Ok(()) => json!({"started": "ingest", "pending": pending}),
+                Err(e) => json!({"error": e}),
+            }
+        }
+        "chronicler" => chronicler_tick(id).await,
+        "quartermaster" => quartermaster_tick(id).await,
+        other => json!({"error": format!("role '{other}' has no loop yet")}),
+    }
+}
+
+/// Start the fleet scheduler once. Every minute it walks the roster and
+/// wakes each enabled employee whose cadence has elapsed.
 pub fn start_scheduler() {
     if SCHEDULER_STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -790,64 +1695,48 @@ pub fn start_scheduler() {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            let cfg = load_config();
-            if !cfg.enabled {
-                continue;
-            }
-            let due = {
-                let st = LIVE.lock();
-                !st.running && last_journaled_run_is_older_than(cfg.interval_hours)
-            };
-            if due {
-                push_event("info", "scheduled wake");
-                let _ = start_run("hygiene");
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let roster = load_roster();
+            for h in roster {
+                if !h.config.enabled {
+                    continue;
+                }
+                let (due, busy) = with_live(&h.id, |st| {
+                    (
+                        now.saturating_sub(st.last_tick) >= (h.config.wake_minutes as u64) * 60,
+                        st.running,
+                    )
+                });
+                if due && !busy {
+                    let _ = dispatch_tick(&h.id).await;
+                }
             }
         }
     });
 }
 
-fn last_journaled_run_is_older_than(hours: u32) -> bool {
-    let runs: Vec<Value> = read_jsonl(&runs_path());
-    let Some(last) = runs
-        .last()
-        .and_then(|r| r.get("ts"))
-        .and_then(|t| t.as_str())
-    else {
-        return true; // never ran
-    };
-    // Lexicographic compare works for ISO-8601 UTC: compute the cutoff.
-    let cutoff_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .saturating_sub(hours as u64 * 3600);
-    let days = cutoff_secs / 86_400;
-    let (y, mo, d) = civil_from_days(days as i64);
-    let secs = cutoff_secs % 86_400;
-    let cutoff = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y,
-        mo,
-        d,
-        secs / 3600,
-        (secs % 3600) / 60,
-        secs % 60
-    );
-    last < cutoff.as_str()
-}
-
 // ---------------------------------------------------------------------------
-// HTTP endpoints (mounted by http_server)
+// HTTP endpoints
 // ---------------------------------------------------------------------------
 
 use axum::extract::{Path as AxPath, Query as AxQuery, State};
+use axum::http::StatusCode;
 use axum::Json;
 
 use super::handlers::{ApiError, ServerState};
-use axum::http::StatusCode;
 
 #[derive(Serialize)]
 pub struct StatusResponse {
+    id: String,
+    role: String,
+    name: String,
+    title: String,
+    palette: String,
+    palette_soft: String,
+    glyph_seed: u32,
     enabled: bool,
     state: String,
     autonomy: u8,
@@ -857,61 +1746,101 @@ pub struct StatusResponse {
     claude_found: bool,
     meetings_pending: usize,
     proposals_open: usize,
+    model: String,
+    deep_model: String,
+    wake_minutes: u32,
+    queue_depth: usize,
+    judged_total: usize,
+    calls_today: u32,
+    daily_call_budget: u32,
+    last_tick_ts: Option<String>,
 }
 
-fn status_snapshot() -> StatusResponse {
-    let cfg = load_config();
-    let runs: Vec<Value> = read_jsonl(&runs_path());
+fn status_snapshot(id: &str) -> Option<StatusResponse> {
+    let hire = get_hire(id)?;
+    let def = role(&hire.role)?;
+    let cfg = &hire.config;
+    let runs: Vec<Value> = read_jsonl(&runs_path(id));
     let last_run = runs.last().cloned();
     let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
-    let meetings_pending = if brain.is_empty() {
+    let show_meetings = hire.role == "scribe" || hire.role == "curator";
+    let pending_meetings = if brain.is_empty() || !show_meetings {
         0
     } else {
-        list_meetings(&brain)
-            .iter()
-            .filter(|m| m.status == "pending")
-            .count()
+        count_pending_meetings(&brain)
     };
-    let (running, _) = {
-        let st = LIVE.lock();
-        (st.running, st.seq)
-    };
-    StatusResponse {
+    let (running, last_tick) = with_live(id, |st| (st.running, st.last_tick));
+    let (_, calls_today) = budget_today(id);
+    Some(StatusResponse {
+        id: hire.id.clone(),
+        role: hire.role.clone(),
+        name: def.name.to_string(),
+        title: def.title.to_string(),
+        palette: def.palette.to_string(),
+        palette_soft: def.palette_soft.to_string(),
+        glyph_seed: def.glyph_seed,
         enabled: cfg.enabled,
         state: if running { "running" } else { "idle" }.into(),
         autonomy: cfg.autonomy,
         interval_hours: cfg.interval_hours,
-        next_run_ts: None, // v0: schedule is interval-based; UI shows interval
-        claude_found: find_claude(&cfg).is_some(),
-        meetings_pending,
-        proposals_open: list_proposals(Some("open")).len(),
+        next_run_ts: None,
+        claude_found: find_claude(cfg).is_some(),
+        meetings_pending: pending_meetings,
+        proposals_open: list_proposals(id, Some("open")).len(),
         last_run,
-    }
+        model: cfg.model.clone(),
+        deep_model: cfg.deep_model.clone(),
+        wake_minutes: cfg.wake_minutes,
+        queue_depth: list_queue(id, Some("open")).len(),
+        judged_total: list_queue(id, Some("judged")).len(),
+        calls_today,
+        daily_call_budget: cfg.daily_call_budget,
+        last_tick_ts: if last_tick == 0 {
+            None
+        } else {
+            Some(iso_from_secs(last_tick))
+        },
+    })
 }
 
-pub async fn employee_status(_s: State<ServerState>) -> Json<StatusResponse> {
-    Json(status_snapshot())
+fn snapshot_or_404(id: &str) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    status_snapshot(id)
+        .map(Json)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no employee '{id}'")))
 }
 
 #[derive(Deserialize)]
 pub struct ConfigBody {
     enabled: Option<bool>,
     interval_hours: Option<u32>,
+    wake_minutes: Option<u32>,
+    model: Option<String>,
+    daily_call_budget: Option<u32>,
 }
 
-pub async fn employee_config(
-    _s: State<ServerState>,
-    Json(body): Json<ConfigBody>,
-) -> std::result::Result<Json<StatusResponse>, ApiError> {
-    let mut cfg = load_config();
-    if let Some(e) = body.enabled {
-        cfg.enabled = e;
-    }
-    if let Some(h) = body.interval_hours {
-        cfg.interval_hours = h.clamp(1, 168);
-    }
-    save_config(&cfg).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(status_snapshot()))
+fn apply_config(id: &str, body: ConfigBody) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    update_config(id, |cfg| {
+        if let Some(e) = body.enabled {
+            cfg.enabled = e;
+        }
+        if let Some(h) = body.interval_hours {
+            cfg.interval_hours = h.clamp(1, 168);
+        }
+        if let Some(m) = body.wake_minutes {
+            cfg.wake_minutes = m.clamp(5, 720);
+        }
+        if let Some(m) = body.model {
+            let m = m.trim().to_string();
+            if !m.is_empty() {
+                cfg.model = m;
+            }
+        }
+        if let Some(b) = body.daily_call_budget {
+            cfg.daily_call_budget = b.clamp(1, 5000);
+        }
+    })
+    .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    snapshot_or_404(id)
 }
 
 #[derive(Deserialize)]
@@ -919,34 +1848,9 @@ pub struct RunBody {
     task: Option<String>,
 }
 
-pub async fn employee_run(_s: State<ServerState>, Json(body): Json<RunBody>) -> Json<Value> {
-    let task = body.task.unwrap_or_else(|| "hygiene".into());
-    match start_run(&task) {
-        Ok(()) => Json(json!({"started": true})),
-        Err(reason) => Json(json!({"started": false, "reason": reason})),
-    }
-}
-
-pub async fn employee_stop(_s: State<ServerState>) -> Json<Value> {
-    Json(json!({"stopped": stop_run()}))
-}
-
 #[derive(Deserialize)]
 pub struct ActivityQuery {
     since: Option<u64>,
-}
-
-pub async fn employee_activity(
-    _s: State<ServerState>,
-    AxQuery(q): AxQuery<ActivityQuery>,
-) -> Json<Value> {
-    let since = q.since.unwrap_or(0);
-    let st = LIVE.lock();
-    let events: Vec<&ActivityEvent> = st.events.iter().filter(|e| e.seq > since).collect();
-    Json(json!({
-        "events": events,
-        "state": if st.running { "running" } else { "idle" },
-    }))
 }
 
 #[derive(Deserialize)]
@@ -954,60 +1858,247 @@ pub struct RunsQuery {
     limit: Option<usize>,
 }
 
-pub async fn employee_runs(_s: State<ServerState>, AxQuery(q): AxQuery<RunsQuery>) -> Json<Value> {
-    let mut runs: Vec<Value> = read_jsonl(&runs_path());
+fn activity_json(id: &str, since: u64) -> Json<Value> {
+    let (events, running) = with_live(id, |st| {
+        (
+            st.events
+                .iter()
+                .filter(|e| e.seq > since)
+                .cloned()
+                .collect::<Vec<_>>(),
+            st.running,
+        )
+    });
+    Json(json!({
+        "events": events,
+        "state": if running { "running" } else { "idle" },
+    }))
+}
+
+fn runs_json(id: &str, limit: usize) -> Json<Value> {
+    let mut runs: Vec<Value> = read_jsonl(&runs_path(id));
     runs.reverse();
-    runs.truncate(q.limit.unwrap_or(20));
+    runs.truncate(limit);
     Json(json!({ "runs": runs }))
 }
 
-pub async fn employee_proposals(_s: State<ServerState>) -> Json<Value> {
-    Json(json!({ "proposals": list_proposals(Some("open")) }))
-}
-
-pub async fn employee_proposal_approve(
-    _s: State<ServerState>,
-    AxPath(id): AxPath<String>,
-) -> std::result::Result<Json<Value>, ApiError> {
-    let open = list_proposals(Some("open"));
-    let Some(p) = open.into_iter().find(|p| p.id == id) else {
+fn approve_impl(id: &str, pid: &str) -> std::result::Result<Json<Value>, ApiError> {
+    let open = list_proposals(id, Some("open"));
+    let Some(p) = open.into_iter().find(|p| p.id == pid) else {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
-            format!("no open proposal {id}"),
+            format!("no open proposal {pid}"),
         ));
     };
-    let applied = tokio::task::spawn_blocking(move || {
-        let outcome = execute_proposal(&p);
+    let outcome = execute_proposal(&p);
+    if outcome.is_ok() {
         let mut done = p.clone();
-        done.status = if outcome.is_ok() { "approved" } else { "open" }.into();
-        if outcome.is_ok() {
-            let _ = append_jsonl(&proposals_path(), &done);
-        }
-        outcome
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    match applied {
+        done.status = "approved".into();
+        let _ = append_jsonl(&proposals_path(id), &done);
+    }
+    match outcome {
         Ok(msg) => Ok(Json(json!({"ok": true, "applied": msg}))),
         Err(e) => Ok(Json(json!({"ok": false, "error": e.to_string()}))),
     }
 }
 
-pub async fn employee_proposal_reject(
-    _s: State<ServerState>,
-    AxPath(id): AxPath<String>,
-) -> std::result::Result<Json<Value>, ApiError> {
-    let open = list_proposals(Some("open"));
-    let Some(mut p) = open.into_iter().find(|p| p.id == id) else {
+fn reject_impl(id: &str, pid: &str) -> std::result::Result<Json<Value>, ApiError> {
+    let open = list_proposals(id, Some("open"));
+    let Some(mut p) = open.into_iter().find(|p| p.id == pid) else {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
-            format!("no open proposal {id}"),
+            format!("no open proposal {pid}"),
         ));
     };
     p.status = "rejected".into();
-    append_jsonl(&proposals_path(), &p)
+    append_jsonl(&proposals_path(id), &p)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({"ok": true})))
+}
+
+// ---- Fleet endpoints ------------------------------------------------------
+
+/// GET /api/employees — the hire catalog + current roster.
+pub async fn employees_index(_s: State<ServerState>) -> Json<Value> {
+    let roster: Vec<Value> = load_roster()
+        .iter()
+        .filter_map(|h| status_snapshot(&h.id).map(|s| serde_json::to_value(s).unwrap_or_default()))
+        .collect();
+    Json(json!({ "catalog": ROLES, "roster": roster }))
+}
+
+#[derive(Deserialize)]
+pub struct HireBody {
+    role: String,
+}
+
+/// POST /api/employees — hire from the catalog.
+pub async fn employees_hire(
+    _s: State<ServerState>,
+    Json(body): Json<HireBody>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let h = hire(&body.role).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    push_event(&h.id, "info", format!("{} hired", h.id));
+    Ok(Json(json!({ "hired": h })))
+}
+
+/// DELETE /api/employees/:id — fire (files kept; rehire restores).
+pub async fn employees_fire(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    fire(&id).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "fired": id })))
+}
+
+pub async fn employees_status(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    snapshot_or_404(&id)
+}
+
+pub async fn employees_config(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+    Json(body): Json<ConfigBody>,
+) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    apply_config(&id, body)
+}
+
+pub async fn employees_tick(_s: State<ServerState>, AxPath(id): AxPath<String>) -> Json<Value> {
+    Json(dispatch_tick(&id).await)
+}
+
+pub async fn employees_run(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+    Json(body): Json<RunBody>,
+) -> Json<Value> {
+    let task = body.task.unwrap_or_else(|| "hygiene".into());
+    match start_run(&id, &task) {
+        Ok(()) => Json(json!({"started": true})),
+        Err(reason) => Json(json!({"started": false, "reason": reason})),
+    }
+}
+
+pub async fn employees_stop(_s: State<ServerState>, AxPath(id): AxPath<String>) -> Json<Value> {
+    Json(json!({"stopped": stop_run(&id)}))
+}
+
+pub async fn employees_activity(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+    AxQuery(q): AxQuery<ActivityQuery>,
+) -> Json<Value> {
+    activity_json(&id, q.since.unwrap_or(0))
+}
+
+pub async fn employees_runs(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+    AxQuery(q): AxQuery<RunsQuery>,
+) -> Json<Value> {
+    runs_json(&id, q.limit.unwrap_or(20))
+}
+
+pub async fn employees_proposals(
+    _s: State<ServerState>,
+    AxPath(id): AxPath<String>,
+) -> Json<Value> {
+    Json(json!({ "proposals": list_proposals(&id, Some("open")) }))
+}
+
+pub async fn employees_proposal_approve(
+    _s: State<ServerState>,
+    AxPath((id, pid)): AxPath<(String, String)>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    tokio::task::spawn_blocking(move || approve_impl(&id, &pid))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+}
+
+pub async fn employees_proposal_reject(
+    _s: State<ServerState>,
+    AxPath((id, pid)): AxPath<(String, String)>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    reject_impl(&id, &pid)
+}
+
+/// GET /api/employees/:id/meetings — Scribe's desk (brain-scoped).
+pub async fn employees_meetings(
+    _s: State<ServerState>,
+    AxPath(_id): AxPath<String>,
+) -> Json<Value> {
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    let inbox = meetings_inbox(&brain);
+    let _ = std::fs::create_dir_all(&inbox);
+    Json(json!({
+        "meetings": list_meetings(&brain),
+        "inbox_dir": inbox.display().to_string(),
+    }))
+}
+
+// ---- Legacy singleton endpoints (the Curator's alias) ---------------------
+
+pub async fn employee_status(
+    _s: State<ServerState>,
+) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    snapshot_or_404("curator")
+}
+
+pub async fn employee_config(
+    _s: State<ServerState>,
+    Json(body): Json<ConfigBody>,
+) -> std::result::Result<Json<StatusResponse>, ApiError> {
+    apply_config("curator", body)
+}
+
+pub async fn employee_run(_s: State<ServerState>, Json(body): Json<RunBody>) -> Json<Value> {
+    let task = body.task.unwrap_or_else(|| "hygiene".into());
+    match start_run("curator", &task) {
+        Ok(()) => Json(json!({"started": true})),
+        Err(reason) => Json(json!({"started": false, "reason": reason})),
+    }
+}
+
+pub async fn employee_stop(_s: State<ServerState>) -> Json<Value> {
+    Json(json!({"stopped": stop_run("curator")}))
+}
+
+pub async fn employee_tick(_s: State<ServerState>) -> Json<Value> {
+    Json(dispatch_tick("curator").await)
+}
+
+pub async fn employee_activity(
+    _s: State<ServerState>,
+    AxQuery(q): AxQuery<ActivityQuery>,
+) -> Json<Value> {
+    activity_json("curator", q.since.unwrap_or(0))
+}
+
+pub async fn employee_runs(_s: State<ServerState>, AxQuery(q): AxQuery<RunsQuery>) -> Json<Value> {
+    runs_json("curator", q.limit.unwrap_or(20))
+}
+
+pub async fn employee_proposals(_s: State<ServerState>) -> Json<Value> {
+    Json(json!({ "proposals": list_proposals("curator", Some("open")) }))
+}
+
+pub async fn employee_proposal_approve(
+    _s: State<ServerState>,
+    AxPath(pid): AxPath<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    tokio::task::spawn_blocking(move || approve_impl("curator", &pid))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+}
+
+pub async fn employee_proposal_reject(
+    _s: State<ServerState>,
+    AxPath(pid): AxPath<String>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    reject_impl("curator", &pid)
 }
 
 pub async fn employee_meetings(_s: State<ServerState>) -> Json<Value> {
@@ -1037,37 +2128,41 @@ mod tests {
         assert_eq!(p.status, "open");
         assert!(EXECUTABLE_ACTIONS.contains(&p.action.as_str()));
 
-        // unknown actions still parse but are not executable
         let l2 = r#"PROPOSAL: {"action":"rm_rf","title":"nope","args":{}}"#;
         let p2 = parse_proposal_line(l2, "brain-x").unwrap();
         assert!(!EXECUTABLE_ACTIONS.contains(&p2.action.as_str()));
 
-        // garbage does not parse
         assert!(parse_proposal_line("PROPOSAL: not json", "b").is_none());
         assert!(parse_proposal_line("no prefix", "b").is_none());
     }
 
     #[test]
-    fn level0_whitelist_has_no_destructive_tools() {
-        let allow = allowed_tools(0);
-        for banned in [
-            "delete_engrams",
-            "supersede_note",
-            "bulk_set_kind",
-            "bulk_add_tag",
-            "update",
-            "core_memory_set",
-            "core_memory_replace",
-            "remove_link",
-            "optimize_disk",
-        ] {
-            assert!(
-                !allow.contains(banned),
-                "level-0 whitelist must not contain {banned}"
-            );
+    fn per_role_whitelists_have_no_destructive_tools() {
+        for role_id in ["curator", "scribe", "librarian"] {
+            let allow = allowed_tools(role_id);
+            for banned in [
+                "delete_engrams",
+                "supersede_note",
+                "bulk_set_kind",
+                "bulk_add_tag",
+                "mcp__neurovault__update",
+                "core_memory_set",
+                "core_memory_replace",
+                "remove_link",
+                "optimize_disk",
+            ] {
+                assert!(
+                    !allow.contains(banned),
+                    "{role_id} whitelist must not contain {banned}"
+                );
+            }
+            assert!(allow.contains("mcp__neurovault__recall"));
+            assert!(allow.contains("mcp__neurovault__remember"));
         }
-        assert!(allow.contains("mcp__neurovault__recall"));
-        assert!(allow.contains("mcp__neurovault__remember"));
+        // role-specific surface
+        assert!(allowed_tools("librarian").contains("mcp__neurovault__mark_inbox_done"));
+        assert!(!allowed_tools("scribe").contains("mark_inbox_done"));
+        assert!(allowed_tools("curator").contains("find_contradictions"));
     }
 
     #[test]
@@ -1076,9 +2171,24 @@ mod tests {
         assert!(!cfg.enabled);
         assert_eq!(cfg.interval_hours, 24);
         assert_eq!(cfg.autonomy, 0);
+        assert_eq!(cfg.model, "haiku");
+        assert_eq!(cfg.daily_call_budget, 100);
         let s = serde_json::to_string(&cfg).unwrap();
         let back: EmployeeConfig = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.interval_hours, cfg.interval_hours);
+        assert_eq!(back.wake_minutes, cfg.wake_minutes);
+    }
+
+    #[test]
+    fn instance_id_allocation() {
+        let existing = vec!["curator".to_string(), "scribe".to_string()];
+        assert_eq!(next_instance_id("librarian", &existing), "librarian");
+        assert_eq!(next_instance_id("scribe", &existing), "scribe-2");
+        let more = vec![
+            "scribe".to_string(),
+            "scribe-2".to_string(),
+            "scribe-3".to_string(),
+        ];
+        assert_eq!(next_instance_id("scribe", &more), "scribe-4");
     }
 
     #[test]

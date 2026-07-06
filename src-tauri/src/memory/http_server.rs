@@ -197,6 +197,7 @@ fn router() -> Router {
         )
         .route("/api/employee/run", post(super::employee::employee_run))
         .route("/api/employee/stop", post(super::employee::employee_stop))
+        .route("/api/employee/tick", post(super::employee::employee_tick))
         .route(
             "/api/employee/activity",
             get(super::employee::employee_activity),
@@ -217,6 +218,62 @@ fn router() -> Router {
         .route(
             "/api/employee/meetings",
             get(super::employee::employee_meetings),
+        )
+        // The fleet: roster of hireable AI employees (the Curator + the
+        // rest of the catalog). Legacy /api/employee/* above is the
+        // Curator's alias; these are the per-employee routes the "+"
+        // hire menu and Employee Manager consume.
+        .route(
+            "/api/employees",
+            get(super::employee::employees_index).post(super::employee::employees_hire),
+        )
+        .route(
+            "/api/employees/:id",
+            axum::routing::delete(super::employee::employees_fire),
+        )
+        .route(
+            "/api/employees/:id/status",
+            get(super::employee::employees_status),
+        )
+        .route(
+            "/api/employees/:id/config",
+            axum::routing::put(super::employee::employees_config),
+        )
+        .route(
+            "/api/employees/:id/tick",
+            post(super::employee::employees_tick),
+        )
+        .route(
+            "/api/employees/:id/run",
+            post(super::employee::employees_run),
+        )
+        .route(
+            "/api/employees/:id/stop",
+            post(super::employee::employees_stop),
+        )
+        .route(
+            "/api/employees/:id/activity",
+            get(super::employee::employees_activity),
+        )
+        .route(
+            "/api/employees/:id/runs",
+            get(super::employee::employees_runs),
+        )
+        .route(
+            "/api/employees/:id/proposals",
+            get(super::employee::employees_proposals),
+        )
+        .route(
+            "/api/employees/:id/proposals/:pid/approve",
+            post(super::employee::employees_proposal_approve),
+        )
+        .route(
+            "/api/employees/:id/proposals/:pid/reject",
+            post(super::employee::employees_proposal_reject),
+        )
+        .route(
+            "/api/employees/:id/meetings",
+            get(super::employee::employees_meetings),
         )
         // API key management — loopback-mounted ONLY. The gateway
         // does NOT mount these (deliberate: external clients must

@@ -60,6 +60,7 @@ pub mod recall_cache;
 pub mod related;
 pub mod reranker;
 pub mod retriever;
+pub mod roles;
 pub mod rrf;
 pub mod source_mirror;
 pub mod spread;
