@@ -84,6 +84,10 @@ pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
         Err(e) => return Err(format!("could not bind {}: {}", addr, e)),
     };
 
+    // The employee scheduler rides the server's runtime: started once,
+    // no-ops unless the user enables the Curator in Settings/panel.
+    super::employee::start_scheduler();
+
     let (tx, rx) = oneshot::channel::<()>();
     let join = tokio::spawn(async move {
         let _ = axum::serve(listener, app)
@@ -182,6 +186,38 @@ fn router() -> Router {
         .route("/api/optimize_disk", post(optimize_disk))
         .route("/api/mcp_tier", get(mcp_tier_get).put(mcp_tier_set))
         .route("/api/rerank", get(rerank_get).put(rerank_set))
+        // The Curator (AI employee): loopback-only, like everything here.
+        .route(
+            "/api/employee/status",
+            get(super::employee::employee_status),
+        )
+        .route(
+            "/api/employee/config",
+            axum::routing::put(super::employee::employee_config),
+        )
+        .route("/api/employee/run", post(super::employee::employee_run))
+        .route("/api/employee/stop", post(super::employee::employee_stop))
+        .route(
+            "/api/employee/activity",
+            get(super::employee::employee_activity),
+        )
+        .route("/api/employee/runs", get(super::employee::employee_runs))
+        .route(
+            "/api/employee/proposals",
+            get(super::employee::employee_proposals),
+        )
+        .route(
+            "/api/employee/proposals/:id/approve",
+            post(super::employee::employee_proposal_approve),
+        )
+        .route(
+            "/api/employee/proposals/:id/reject",
+            post(super::employee::employee_proposal_reject),
+        )
+        .route(
+            "/api/employee/meetings",
+            get(super::employee::employee_meetings),
+        )
         // API key management — loopback-mounted ONLY. The gateway
         // does NOT mount these (deliberate: external clients must
         // not manage their own keys).

@@ -328,7 +328,7 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
                 walk(&path, vault_root, out);
                 continue;
             }
-            if path.extension().map_or(false, |ext| ext == "md") {
+            if path.extension().is_some_and(|ext| ext == "md") {
                 let rel = path
                     .strip_prefix(vault_root)
                     .unwrap_or(&path)
@@ -357,7 +357,7 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
     }
     walk(&vault, &vault, &mut notes);
 
-    notes.sort_by(|a, b| b.modified.cmp(&a.modified));
+    notes.sort_by_key(|n| std::cmp::Reverse(n.modified));
     Ok(notes)
 }
 
@@ -833,7 +833,7 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
             .args(["/select,", &path])
             .spawn()
             .map_err(|e| format!("explorer failed: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -841,7 +841,7 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
             .args(["-R", &path])
             .spawn()
             .map_err(|e| format!("open failed: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -1183,6 +1183,18 @@ fn nv_inbox_add(
 ) -> std::result::Result<Vec<String>, String> {
     let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
     memory::inbox::add_files(&id, &paths).map_err(|e| e.to_string())
+}
+
+/// Copy dropped meeting transcripts into the active brain's meetings
+/// inbox for the Curator. Rust-side copy: the webview needs no fs
+/// scope (same reasoning as nv_inbox_add).
+#[tauri::command]
+fn nv_meetings_add(
+    paths: Vec<String>,
+    brain_id: Option<String>,
+) -> std::result::Result<Vec<String>, String> {
+    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
+    memory::employee::add_meeting_files(&id, &paths).map_err(|e| e.to_string())
 }
 
 /// List files currently waiting in the active brain's inbox. Mirrors
@@ -1645,7 +1657,7 @@ pub fn run() {
             nv_start_vault_watcher, nv_stop_vault_watcher,
             // Drop-folder inbox: UI file-drop copies raw files into the
             // brain inbox for the connected agent to turn into notes.
-            nv_inbox_add, nv_inbox_list,
+            nv_inbox_add, nv_inbox_list, nv_meetings_add,
             // Brain health scorecard (also on HTTP + MCP).
             nv_diagnose,
             // Engram-level supersession (new note retires a stale one).

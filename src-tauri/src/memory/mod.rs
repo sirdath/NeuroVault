@@ -40,6 +40,7 @@ pub mod core_memory;
 pub mod db;
 pub mod diagnostic;
 pub mod embedder;
+pub mod employee;
 pub mod entities;
 pub mod facts;
 pub mod graphify;

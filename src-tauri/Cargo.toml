@@ -148,7 +148,7 @@ sha2 = "0.10"
 # loop. `axum` gives us the same `/api/*` surface the Python FastAPI
 # server exposed — same URLs, same JSON shapes — so `mcp_proxy.py`
 # keeps working unchanged while Python is retired.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "io-util"] }
 axum = "0.7"
 # CORS for the localhost HTTP server. The Tauri webview's origin is
 # `tauri://localhost` (or `https://tauri.localhost`); plain `fetch()`

@@ -15,6 +15,7 @@ import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsView } from "./components/SettingsView";
+import { EmployeePanel, meetingsDropClaim } from "./components/EmployeePanel";
 import { ActivityBar } from "./components/ActivityBar";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { UpdateButton } from "./components/UpdateButton";
@@ -25,7 +26,7 @@ import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
 import { fetchStatus, fetchHealth } from "./lib/api";
 
-type View = "editor" | "graph";
+type View = "editor" | "graph" | "employee";
 
 /** Shown in place of the graph when Performance mode is "off". Keeps the
  *  graph nav button discoverable (the user can still click into the graph
@@ -75,7 +76,7 @@ export default function App() {
   const [view, setViewState] = useState<View>(() => {
     try {
       const v = localStorage.getItem("nv.view");
-      if (v === "editor" || v === "graph") return v;
+      if (v === "editor" || v === "graph" || v === "employee") return v;
     } catch { /* quota / disabled storage */ }
     return "editor";
   });
@@ -219,6 +220,13 @@ export default function App() {
     getCurrentWebview()
       .onDragDropEvent((event) => {
         const p = event.payload;
+        // The Curator's meetings drop zone (EmployeePanel) claims drags
+        // hovering it, so a dropped transcript goes only to the meetings
+        // inbox, not also to raw/. Yield while it's claimed.
+        if (meetingsDropClaim.over) {
+          setDropActive(false);
+          return;
+        }
         if (p.type === "enter" || p.type === "over") {
           setDropActive(true);
         } else if (p.type === "leave") {
@@ -466,6 +474,12 @@ export default function App() {
         action: () => setView("graph"),
       },
       {
+        id: "view-employee",
+        title: "Switch to Curator",
+        category: "View",
+        action: () => setView("employee"),
+      },
+      {
         id: "toggle-view",
         title: "Cycle views",
         category: "View",
@@ -564,6 +578,7 @@ export default function App() {
       if (ctrl && !e.shiftKey && !e.altKey) {
         if (e.key === "1") { e.preventDefault(); setView("editor"); return; }
         if (e.key === "2") { e.preventDefault(); setView("graph"); return; }
+        if (e.key === "3") { e.preventDefault(); setView("employee"); return; }
       }
       if (ctrl && e.key === "/") {
         e.preventDefault();
@@ -766,6 +781,22 @@ export default function App() {
               </svg>
             }
           />
+          <TabButton
+            active={view === "employee"}
+            onClick={() => setView("employee")}
+            label="Curator"
+            theme={theme}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                <rect x="5" y="8" width="14" height="11" rx="2.5" />
+                <path d="M12 8V5.2" />
+                <circle cx="12" cy="4" r="1.3" fill="currentColor" stroke="none" />
+                <circle cx="9.5" cy="13" r="1.15" fill="currentColor" stroke="none" />
+                <circle cx="14.5" cy="13" r="1.15" fill="currentColor" stroke="none" />
+                <path d="M9.5 16.4h5" />
+              </svg>
+            }
+          />
           </div>
         </div>
 
@@ -842,6 +873,7 @@ export default function App() {
             ) : (
               <NeuralGraph onOpenNote={() => setView("editor")} />
             ))}
+          {view === "employee" && <EmployeePanel />}
         </div>
       </div>
 
@@ -878,7 +910,7 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         commands={commands}
-        currentView={view}
+        currentView={view === "employee" ? undefined : view}
       />
       <QuickCapture
         open={quickCaptureOpen}
