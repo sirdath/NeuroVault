@@ -23,7 +23,6 @@ import { ContextMenu } from "./ContextMenu";
 import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
-import { MarkdownPreview } from "./MarkdownPreview";
 
 const TAB_ORDER_KEY = "nv.tabs.order";
 
@@ -135,9 +134,9 @@ export function Editor() {
     });
   }, []);
 
-  // Reader mode by default. Only switches to raw CodeMirror when the user
-  // explicitly clicks "Edit". Escape flips back to preview.
-  const [mode, setMode] = useState<"preview" | "edit">("preview");
+  // Obsidian-style live preview: one always-on editor. There is no
+  // preview/edit toggle - syntax marks simply hide on every line except the
+  // one you are editing (see editor/livePreview.ts).
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notesRef = useRef(notes);
@@ -163,28 +162,6 @@ export function Editor() {
     saveTimerRef.current = setTimeout(() => { saveNote(); }, 1000);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [isDirty, activeContent, saveNote]);
-
-  // Reset to preview whenever a different note is opened so the user always
-  // starts in reader mode, same as Obsidian's default behaviour.
-  useEffect(() => {
-    setMode("preview");
-  }, [activeFilename]);
-
-  // Escape in edit mode flips back to preview (only when focus is not in
-  // an input the user might be typing into — CodeMirror's own focus is
-  // fine since Escape is treated as a view toggle there).
-  useEffect(() => {
-    if (mode !== "edit") return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const tgt = e.target as HTMLElement | null;
-      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")) return;
-      e.preventDefault();
-      setMode("preview");
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [mode]);
 
   const onChange = useCallback(
     (value: string) => { updateContent(value); },
@@ -301,70 +278,33 @@ export function Editor() {
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}
             </span>
-            {mode === "edit" && (
-              <span
-                className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-lg font-[Geist,sans-serif] font-medium"
-                style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
-              >
-                editing
-              </span>
-            )}
             {isDirty && (
               <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--nv-accent)" }} title="Saving..." />
             )}
           </div>
-          <div className="flex items-center gap-2">
-            {mode === "edit" ? (
-              <button
-                onClick={() => setMode("preview")}
-                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all"
-                style={{
-                  background: "var(--nv-accent)",
-                  color: "var(--nv-bg)",
-                  boxShadow: "inset 0 1px 1px rgba(255,255,255,0.15)",
-                }}
-              >
-                Done
-              </button>
-            ) : (
-              <button
-                onClick={() => setMode("edit")}
-                className="text-[11px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all"
-                style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
-              >
-                Edit
-              </button>
-            )}
-          </div>
         </div>
 
-        {/* Editor body: reader-style preview by default, raw CodeMirror on demand */}
-        {mode === "preview" ? (
-          <MarkdownPreview
-            content={activeContent}
-            onSwitchToEdit={() => setMode("edit")}
+        {/* One always-live editor - Obsidian-style. No preview/edit toggle;
+            syntax marks hide on every line except the one you are editing. */}
+        <div className="flex-1 overflow-auto">
+          <CodeMirror
+            value={activeContent}
+            onChange={onChange}
+            extensions={extensions}
+            theme="none"
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: false,
+              highlightActiveLine: true,
+              highlightSelectionMatches: true,
+              bracketMatching: true,
+              closeBrackets: true,
+              autocompletion: false,
+            }}
+            className="h-full"
+            style={{ height: "100%" }}
           />
-        ) : (
-          <div className="flex-1 overflow-auto">
-            <CodeMirror
-              value={activeContent}
-              onChange={onChange}
-              extensions={extensions}
-              theme="none"
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: false,
-                highlightActiveLine: true,
-                highlightSelectionMatches: true,
-                bracketMatching: true,
-                closeBrackets: true,
-                autocompletion: false,
-              }}
-              className="h-full"
-              style={{ height: "100%" }}
-            />
-          </div>
-        )}
+        </div>
 
         <EditorStats content={activeContent} />
       </div>

@@ -1,11 +1,15 @@
 /**
- * Live Preview extension for CodeMirror 6 — Obsidian-style.
+ * Live Preview extension for CodeMirror 6 - Obsidian-style.
  *
- * Hides markdown syntax tokens (#, **, *, `) when the cursor isn't on that line.
- * When you click into a line the markers reappear so you can edit them.
+ * Walks the markdown syntax tree and conceals the raw syntax marks
+ * (`#`, `**`, `*`, `` ` ``, `~~`, `>`) on every line EXCEPT the one(s) the
+ * cursor is on. The moment you click into a line, that line's markers
+ * reappear so you can edit them; every other line stays formatted.
  *
- * This is the single biggest editor UX upgrade — makes markdown feel like a
- * formatted document instead of raw text.
+ * Formatting itself (bold, italic, heading size/colour) comes from the
+ * theme's highlightStyle - this plugin only hides the punctuation, so a note
+ * reads as a formatted document while remaining a single, always-live editor
+ * (no preview/edit toggle).
  */
 
 import {
@@ -16,40 +20,61 @@ import {
   ViewUpdate,
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
 
-/**
- * A decoration that hides matched ranges (display: none) when applied.
- */
-const hiddenMark = Decoration.mark({
-  class: "cm-hidden-token",
-});
+// Syntax-only node names whose text is pure markdown punctuation to conceal.
+// (Node names come from @lezer/markdown, GFM enabled.)
+const MARK_NODES = new Set<string>([
+  "HeaderMark", // # ## ### ...
+  "EmphasisMark", // * or _  (italic, plus the pair around **bold**)
+  "CodeMark", // ` inline code / ``` fences
+  "StrikethroughMark", // ~~
+  "QuoteMark", // >
+]);
+
+// A replace decoration with no widget collapses its range to zero width.
+const conceal = Decoration.replace({});
+
+/** The set of line numbers the selection touches - these stay raw ("editing"). */
+function activeLineNumbers(view: EditorView): Set<number> {
+  const lines = new Set<number>();
+  const { doc } = view.state;
+  for (const range of view.state.selection.ranges) {
+    const first = doc.lineAt(range.from).number;
+    const last = doc.lineAt(range.to).number;
+    for (let n = first; n <= last; n++) lines.add(n);
+  }
+  return lines;
+}
 
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
+  const active = activeLineNumbers(view);
+  const { doc } = view.state;
+  const tree = syntaxTree(view.state);
 
   for (const { from, to } of view.visibleRanges) {
-    let pos = from;
-    while (pos <= to) {
-      const line = view.state.doc.lineAt(pos);
-      const text = line.text;
-      const isActive = line.number === cursorLine;
+    tree.iterate({
+      from,
+      to,
+      enter: (node) => {
+        if (!MARK_NODES.has(node.name)) return;
+        const start = node.from;
+        let end = node.to;
+        if (start >= end) return;
 
-      // Skip active line — show everything
-      if (!isActive && text.length > 0) {
-        // Headings: hide the # markers
-        const headingMatch = text.match(/^(#{1,6})\s/);
-        if (headingMatch && headingMatch[1]) {
-          const markerEnd = line.from + headingMatch[1].length + 1;
-          builder.add(line.from, markerEnd, hiddenMark);
+        const line = doc.lineAt(start);
+        // On the active line(s) reveal everything - this is the line you edit.
+        if (active.has(line.number)) return;
+
+        // Eat the single space after a `#` or `>` so content isn't indented.
+        if (node.name === "HeaderMark" || node.name === "QuoteMark") {
+          if (end < line.to && doc.sliceString(end, end + 1) === " ") end += 1;
         }
-      }
-
-      pos = line.to + 1;
-      if (pos > view.state.doc.length) break;
-    }
+        builder.add(start, end, conceal);
+      },
+    });
   }
-
   return builder.finish();
 }
 
@@ -62,11 +87,9 @@ export const livePreviewPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (
-        update.docChanged ||
-        update.viewportChanged ||
-        update.selectionSet
-      ) {
+      // Recompute when the doc changes, the viewport scrolls, or the cursor
+      // moves (moving the cursor is what reveals / re-hides a line's marks).
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
         this.decorations = buildDecorations(update.view);
       }
     }
@@ -77,32 +100,10 @@ export const livePreviewPlugin = ViewPlugin.fromClass(
 );
 
 /**
- * CSS that backs the livePreview extension.
- * Hides tokens via display: none when the .cm-hidden-token class is applied.
+ * Kept as a named export so the editor's extension list is unchanged. The
+ * heavy lifting (bold / italic / heading styles) lives in the theme's
+ * highlightStyle; this base theme only gives headings a little breathing room.
  */
 export const livePreviewTheme = EditorView.baseTheme({
-  ".cm-hidden-token": {
-    display: "none !important",
-  },
-  ".cm-line:has(.cm-heading-1)": {
-    fontSize: "2em",
-    fontWeight: "700",
-    color: "#f0a500",
-    lineHeight: "1.3",
-    marginTop: "1em",
-  },
-  ".cm-line:has(.cm-heading-2)": {
-    fontSize: "1.5em",
-    fontWeight: "600",
-    color: "#f0a500",
-    lineHeight: "1.3",
-    marginTop: "0.8em",
-  },
-  ".cm-line:has(.cm-heading-3)": {
-    fontSize: "1.2em",
-    fontWeight: "600",
-    color: "#e8e6f0",
-    lineHeight: "1.3",
-    marginTop: "0.6em",
-  },
+  ".cm-content": { caretColor: "var(--nv-accent, #f0a500)" },
 });
