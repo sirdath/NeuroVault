@@ -85,9 +85,9 @@ export function HireMenu({
                 >
                   <span className="flex-shrink-0 mt-0.5" style={{ width: 40, height: 40 }}>
                     <EmployeeCharacter
+                      role={role.role}
                       palette={role.palette}
                       paletteSoft={role.palette_soft}
-                      seed={role.glyph_seed}
                       size={40}
                       state={soon ? "disabled" : "idle"}
                     />

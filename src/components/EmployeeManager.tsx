@@ -1,17 +1,20 @@
-/* EmployeeManager — the roster shell for NeuroVault's fleet of AI
- * employees. The Curator was the first hire; this window is where you see
- * the whole team, hire more from a catalog, and open any one of them.
+/* EmployeeManager — the "AI Employees" tab: NeuroVault's fleet of opt-in
+ * teammates that live on your machine and quietly work your memory for you.
  *
- * Layout:
- *   - Left rail: the roster (one row per hired employee, each with its own
- *     line-art character, live status dot and open-proposals badge) plus a
- *     "Hire employee" button that opens the catalog dropdown (HireMenu).
- *   - Main area: the selected employee's detail. The Curator keeps its full
- *     mission-control page (the existing <EmployeePanel/>, rendered
- *     verbatim); every other employee gets a lighter inline view built here
- *     from the fleet endpoints under /api/employees/:id/*.
+ * Two views:
+ *   1. The team grid (default). An eyebrow, "Your AI team", the opt-in
+ *      lede, a right-aligned count, then a responsive card grid. Every
+ *      catalog role is a card: hireable roles get a coloured "Hire" button,
+ *      hired employees get a live status dot + "Manage" and click through to
+ *      their detail, and not-yet-available roles are dimmed with "Coming
+ *      soon". Each card carries the employee's own geometric face and colour.
+ *   2. The detail view. Clicking a hired employee opens it — the Curator
+ *      keeps its full mission-control page (<EmployeePanel/>, verbatim);
+ *      every other employee gets a lighter inline view built here from the
+ *      fleet endpoints under /api/employees/:id/*. A "Back to team" control
+ *      returns to the grid.
  *
- * The roster polls /api/employees every 5s; the open employee polls its own
+ * The grid polls /api/employees every 5s; the open employee polls its own
  * /status every 3s. Every fetch is time-bounded and degrades quietly, so a
  * still-booting backend shows loading/empty states rather than wedging.
  */
@@ -21,7 +24,6 @@ import { API_HOST } from "../lib/config";
 import { toast } from "../stores/toastStore";
 import { EmployeePanel } from "./EmployeePanel";
 import { EmployeeCharacter, type CharacterState } from "./EmployeeCharacter";
-import { HireMenu } from "./HireMenu";
 
 const SERVER_URL = API_HOST;
 
@@ -119,7 +121,7 @@ interface RunRecord {
 
 /* ------------------------------------------------------------------ *
  * Small fetch + formatting helpers (kept local so this file owns no
- * cross-component imports beyond the three it is allowed to touch).
+ * cross-component imports beyond the two it is allowed to touch).
  * ------------------------------------------------------------------ */
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -182,6 +184,30 @@ const MANAGER_STYLES = `
 @keyframes nvCaretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .nv-mgr-anim { animation: none !important; } }
 .nv-reduce-motion .nv-mgr-anim { animation: none !important; }
+
+/* Team cards — a raised, tinted surface that lifts and glows in the
+   employee's own colour on hover. --ac / --ac2 are set per card. */
+.nvf-card { transition: border-color .25s ease, transform .25s ease, box-shadow .25s ease; }
+.nvf-card:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--ac) 45%, var(--nv-border));
+  box-shadow: 0 18px 40px -20px var(--ac);
+}
+.nvf-card.is-clickable { cursor: pointer; }
+.nvf-card.is-clickable:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--ac) 55%, var(--nv-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ac) 40%, transparent);
+}
+.nvf-hire { transition: transform .12s ease, box-shadow .25s ease, filter .2s ease; }
+.nvf-hire:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.3) inset, 0 8px 20px -8px var(--ac);
+  filter: brightness(1.06);
+}
+.nvf-hire:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+.nvf-manage-arrow { display: inline-block; transition: transform .2s ease; }
+.nvf-card.is-clickable:hover .nvf-manage-arrow { transform: translateX(3px); }
 `;
 
 /** Map a status into the character's animation state. */
@@ -312,72 +338,388 @@ function CompactStat({ label, children, warn }: { label: string; children: React
 }
 
 /* ------------------------------------------------------------------ *
- * Roster row.
+ * Team grid — the default "Your AI team" view.
  * ------------------------------------------------------------------ */
 
-function RosterRow({
-  emp,
-  selected,
-  onSelect,
-}: {
-  emp: EmployeeStatus;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const state = charState(emp);
-  const props = emp.proposals_open;
+type TeamCardModel =
+  | { kind: "hired"; emp: EmployeeStatus; def?: RoleDef }
+  | { kind: "hire"; def: RoleDef }
+  | { kind: "soon"; def: RoleDef };
+
+/** Fold the catalog + roster into an ordered list of cards. Roles that
+ * have been hired appear as one card per instance (so a role hired twice
+ * shows two cards); every remaining catalog role shows a hire-or-soon card;
+ * any roster instance whose role has left the catalog is appended so it is
+ * never orphaned. */
+function buildCards(catalog: RoleDef[], roster: EmployeeStatus[]): TeamCardModel[] {
+  const cards: TeamCardModel[] = [];
+  for (const def of catalog) {
+    const instances = roster.filter((r) => r.role === def.role);
+    if (instances.length > 0) {
+      for (const emp of instances) cards.push({ kind: "hired", emp, def });
+    } else if (def.available) {
+      cards.push({ kind: "hire", def });
+    } else {
+      cards.push({ kind: "soon", def });
+    }
+  }
+  const known = new Set(catalog.map((c) => c.role));
+  for (const emp of roster) {
+    if (!known.has(emp.role)) cards.push({ kind: "hired", emp });
+  }
+  return cards;
+}
+
+/** The colour-tinted frame shared by every card: the top hairline, the
+ * halo, and the --ac / --ac2 custom properties the children read. */
+function cardFrame(ac: string, ac2: string, extra?: string): {
+  className: string;
+  style: React.CSSProperties & Record<string, string>;
+} {
+  return {
+    className: `nvf-card relative overflow-hidden rounded-[20px]${extra ? ` ${extra}` : ""}`,
+    style: {
+      "--ac": ac,
+      "--ac2": ac2,
+      padding: "24px 22px 20px",
+      background:
+        "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.015)), var(--nv-surface)",
+      border: "1px solid var(--nv-border)",
+    },
+  };
+}
+
+function CardChrome({ ac }: { ac: string }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-xl text-left transition-colors"
-      style={{
-        background: selected ? `${emp.palette}1f` : "transparent",
-        border: `1px solid ${selected ? `${emp.palette}80` : "transparent"}`,
-      }}
-      onMouseEnter={(e) => {
-        if (!selected) (e.currentTarget as HTMLElement).style.background = "var(--nv-bg)";
-      }}
-      onMouseLeave={(e) => {
-        if (!selected) (e.currentTarget as HTMLElement).style.background = "transparent";
-      }}
-    >
-      <span className="flex-shrink-0" style={{ width: 48, height: 48 }}>
-        <EmployeeCharacter
+    <>
+      {/* Top hairline, brightest at the centre. */}
+      <span
+        aria-hidden="true"
+        className="absolute left-0 right-0 top-0"
+        style={{
+          height: 1,
+          background: `linear-gradient(90deg, transparent, ${ac}, transparent)`,
+          opacity: 0.6,
+        }}
+      />
+      {/* Soft halo behind the face. */}
+      <span
+        aria-hidden="true"
+        className="absolute pointer-events-none"
+        style={{
+          top: -40,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 160,
+          height: 120,
+          background: `radial-gradient(closest-side, ${ac}, transparent)`,
+          opacity: 0.14,
+        }}
+      />
+    </>
+  );
+}
+
+function CardBody({
+  role,
+  palette,
+  paletteSoft,
+  name,
+  title,
+  desc,
+  faceState,
+  footer,
+}: {
+  role: string;
+  palette: string;
+  paletteSoft: string;
+  name: string;
+  title: string;
+  desc: string;
+  faceState: CharacterState;
+  footer: ReactNode;
+}) {
+  return (
+    <div className="relative flex flex-col items-center">
+      <div className="relative mx-auto mb-3.5" style={{ width: 96, height: 96, marginTop: 2 }}>
+        <EmployeeCharacter role={role} palette={palette} paletteSoft={paletteSoft} size={96} state={faceState} />
+      </div>
+      <div className="text-[16px] font-semibold font-[Geist,sans-serif] text-center" style={{ color: "var(--nv-text)", letterSpacing: "-0.01em" }}>
+        {name}
+      </div>
+      <div
+        className="text-[11.5px] font-semibold uppercase text-center mt-1"
+        style={{ color: palette, letterSpacing: "0.05em" }}
+      >
+        {title}
+      </div>
+      <p
+        className="text-[12.5px] font-[Geist,sans-serif] text-center leading-[1.5]"
+        style={{ color: "var(--nv-text-muted)", margin: "12px 4px 18px", minHeight: 54 }}
+      >
+        {desc}
+      </p>
+      {footer}
+    </div>
+  );
+}
+
+function TeamCard({
+  model,
+  hiring,
+  onHire,
+  onOpen,
+}: {
+  model: TeamCardModel;
+  hiring: string | null;
+  onHire: (role: string) => void;
+  onOpen: (id: string) => void;
+}) {
+  if (model.kind === "hired") {
+    const { emp } = model;
+    const cs = charState(emp);
+    const statusLabel = emp.state === "running" ? "Running" : emp.enabled ? "On watch" : "Off duty";
+    const frame = cardFrame(emp.palette, emp.palette_soft, "is-clickable");
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Open ${emp.name}`}
+        onClick={() => onOpen(emp.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(emp.id);
+          }
+        }}
+        className={frame.className}
+        style={frame.style}
+      >
+        <CardChrome ac={emp.palette} />
+        {emp.proposals_open > 0 && (
+          <span
+            className="absolute z-10 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-semibold"
+            style={{ top: 14, right: 14, background: "#f59e0b", color: "var(--nv-bg)" }}
+            title={`${emp.proposals_open} open proposal${emp.proposals_open === 1 ? "" : "s"}`}
+          >
+            {emp.proposals_open}
+          </span>
+        )}
+        <CardBody
+          role={emp.role}
           palette={emp.palette}
           paletteSoft={emp.palette_soft}
-          seed={emp.glyph_seed}
-          size={48}
-          state={state}
+          name={emp.name}
+          title={emp.title}
+          desc={model.def?.blurb ?? emp.title}
+          faceState={cs}
+          footer={
+            <div
+              className="w-full flex items-center justify-between rounded-xl"
+              style={{
+                padding: "10px 14px",
+                border: `1px solid ${emp.palette}33`,
+                background: `${emp.palette}14`,
+              }}
+            >
+              <span className="flex items-center gap-2">
+                <StatusDot state={cs} accent={emp.palette} size={8} />
+                <span className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+                  {statusLabel}
+                </span>
+              </span>
+              <span className="text-[12.5px] font-semibold font-[Geist,sans-serif]" style={{ color: emp.palette }}>
+                Manage <span className="nvf-manage-arrow">&rsaquo;</span>
+              </span>
+            </div>
+          }
         />
-      </span>
-      <span className="flex-1 min-w-0">
-        <span className="flex items-center gap-1.5">
-          <span
-            className="text-[13px] font-semibold font-[Geist,sans-serif] truncate"
-            style={{ color: "var(--nv-text)" }}
+      </div>
+    );
+  }
+
+  const { def } = model;
+  const soon = model.kind === "soon";
+  const frame = cardFrame(def.palette, def.palette_soft, soon ? "is-soon" : undefined);
+  const busy = hiring === def.role;
+  return (
+    <div className={frame.className} style={{ ...frame.style, opacity: soon ? 0.62 : 1 }}>
+      <CardChrome ac={def.palette} />
+      <CardBody
+        role={def.role}
+        palette={def.palette}
+        paletteSoft={def.palette_soft}
+        name={def.name}
+        title={def.title}
+        desc={def.blurb}
+        faceState="idle"
+        footer={
+          soon ? (
+            <button
+              type="button"
+              disabled
+              className="w-full font-[Geist,sans-serif]"
+              style={{
+                border: "1px solid var(--nv-border)",
+                background: "transparent",
+                color: "var(--nv-text-dim)",
+                fontWeight: 600,
+                fontSize: 12.5,
+                borderRadius: 12,
+                padding: "11px 14px",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                cursor: "default",
+              }}
+            >
+              Coming soon
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onHire(def.role)}
+              className="nvf-hire w-full font-[Geist,sans-serif]"
+              style={{
+                border: "none",
+                cursor: busy ? "default" : "pointer",
+                fontWeight: 600,
+                fontSize: 13,
+                letterSpacing: "-0.01em",
+                borderRadius: 12,
+                padding: "11px 14px",
+                color: "var(--nv-bg)",
+                background: "linear-gradient(180deg, var(--ac2), var(--ac))",
+                boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset",
+                opacity: busy ? 0.75 : 1,
+              }}
+            >
+              {busy ? (
+                "Hiring..."
+              ) : (
+                <>
+                  <span style={{ marginRight: 6, display: "inline-block", transform: "translateY(1px)" }}>+</span>
+                  Hire {def.name}
+                </>
+              )}
+            </button>
+          )
+        }
+      />
+    </div>
+  );
+}
+
+function TeamGrid({
+  catalog,
+  roster,
+  onHire,
+  onOpen,
+}: {
+  catalog: RoleDef[];
+  roster: EmployeeStatus[];
+  onHire: (role: string) => Promise<void>;
+  onOpen: (id: string) => void;
+}) {
+  const [hiring, setHiring] = useState<string | null>(null);
+
+  const hire = useCallback(
+    async (role: string) => {
+      if (hiring) return;
+      setHiring(role);
+      try {
+        await onHire(role);
+      } finally {
+        setHiring(null);
+      }
+    },
+    [hiring, onHire],
+  );
+
+  const cards = buildCards(catalog, roster);
+  const readyToHire = cards.reduce((n, c) => (c.kind === "hire" ? n + 1 : n), 0);
+  const coming = cards.reduce((n, c) => (c.kind === "soon" ? n + 1 : n), 0);
+
+  return (
+    <div
+      className="h-full overflow-y-auto"
+      style={{
+        background: "var(--nv-bg)",
+        backgroundImage:
+          "radial-gradient(820px 460px at 50% -8%, color-mix(in srgb, var(--nv-accent) 14%, transparent), transparent 66%)",
+      }}
+    >
+      <div className="mx-auto" style={{ maxWidth: 1120, padding: "44px 32px 72px" }}>
+        {/* Header */}
+        <div className="flex items-end justify-between gap-6 flex-wrap" style={{ marginBottom: 6 }}>
+          <div>
+            <div
+              className="text-[12px] uppercase font-[Geist,sans-serif]"
+              style={{ color: "var(--nv-text-dim)", letterSpacing: "0.16em", marginBottom: 10 }}
+            >
+              AI Employees
+            </div>
+            <h1
+              className="font-[Geist,sans-serif]"
+              style={{ fontSize: 30, fontWeight: 640, letterSpacing: "-0.025em", color: "var(--nv-text)", margin: 0 }}
+            >
+              Your AI team
+            </h1>
+            <p
+              className="font-[Geist,sans-serif]"
+              style={{ color: "var(--nv-text-muted)", fontSize: 14.5, lineHeight: 1.55, maxWidth: "60ch", margin: "14px 0 0" }}
+            >
+              Optional teammates that live on your machine and quietly work your memory for you. Hire only
+              who you need, and turn any of them off at any time. Nothing runs until you say so.
+            </p>
+          </div>
+          <div
+            className="flex-shrink-0 text-right font-[Geist,sans-serif]"
+            style={{ color: "var(--nv-text-dim)", fontSize: 12.5, lineHeight: 1.5 }}
           >
-            {emp.name}
-          </span>
-          <StatusDot state={state} accent={emp.palette} size={7} />
-        </span>
-        <span
-          className="block text-[11px] font-[Geist,sans-serif] truncate"
-          style={{ color: "var(--nv-text-muted)" }}
+            <b
+              style={{
+                display: "block",
+                color: "var(--nv-text)",
+                fontSize: 22,
+                fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {readyToHire}
+            </b>
+            ready to hire
+            <br />
+            <span style={{ opacity: 0.7 }}>{coming} more coming</span>
+          </div>
+        </div>
+
+        {/* Grid */}
+        <div
+          className="grid"
+          style={{ marginTop: 34, gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))" }}
         >
-          {emp.title}
-        </span>
-      </span>
-      {props > 0 && (
-        <span
-          className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold flex-shrink-0"
-          style={{ background: "#f59e0b", color: "var(--nv-bg)" }}
-          title={`${props} open proposal${props === 1 ? "" : "s"}`}
+          {cards.map((model) => (
+            <TeamCard
+              key={model.kind === "hired" ? model.emp.id : `role-${model.def.role}`}
+              model={model}
+              hiring={hiring}
+              onHire={(role) => void hire(role)}
+              onOpen={onOpen}
+            />
+          ))}
+        </div>
+
+        <footer
+          className="text-center font-[Geist,sans-serif]"
+          style={{ marginTop: 40, color: "var(--nv-text-dim)", fontSize: 12.5, lineHeight: 1.6 }}
         >
-          {props}
-        </span>
-      )}
-    </button>
+          Every employee is opt-in, runs only when enabled, and asks before it changes anything.
+          <br />
+          Hire one to see it work, or turn it off in a click.
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -870,9 +1212,9 @@ function EmployeeDetail({
         <div className="flex items-start gap-4 mb-6">
           <div className="flex-shrink-0 -mt-1">
             <EmployeeCharacter
+              role={status.role}
               palette={status.palette}
               paletteSoft={status.palette_soft}
-              seed={status.glyph_seed}
               size={120}
               state={cs}
             />
@@ -976,6 +1318,42 @@ function EmployeeDetail({
 }
 
 /* ------------------------------------------------------------------ *
+ * Back-to-team bar, shown above any open employee's detail.
+ * ------------------------------------------------------------------ */
+
+function BackBar({ label, onBack }: { label: string; onBack: () => void }) {
+  return (
+    <div
+      className="flex-shrink-0 flex items-center gap-3 px-6"
+      style={{ height: 48, borderBottom: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}
+    >
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex items-center gap-1.5 text-[12.5px] font-medium font-[Geist,sans-serif] px-2.5 py-1.5 rounded-lg transition-colors"
+        style={{ color: "var(--nv-text-muted)" }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.color = "var(--nv-text)";
+          (e.currentTarget as HTMLElement).style.background = "var(--nv-bg)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.color = "var(--nv-text-muted)";
+          (e.currentTarget as HTMLElement).style.background = "transparent";
+        }}
+      >
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        Back to team
+      </button>
+      <span className="text-[12.5px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * The manager shell.
  * ------------------------------------------------------------------ */
 
@@ -983,7 +1361,6 @@ export function EmployeeManager() {
   const [catalog, setCatalog] = useState<RoleDef[] | null>(null);
   const [roster, setRoster] = useState<EmployeeStatus[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hireOpen, setHireOpen] = useState(false);
   const [booted, setBooted] = useState(false);
 
   const loadFleet = useCallback(async () => {
@@ -1006,13 +1383,11 @@ export function EmployeeManager() {
     return () => clearInterval(iv);
   }, [loadFleet]);
 
-  // Auto-select (prefer the Curator) once the roster arrives, and recover
-  // if the current selection leaves the roster (e.g. after a fire).
+  // If the open employee leaves the roster (e.g. it was fired, here or in
+  // another window), fall back to the team grid.
   useEffect(() => {
-    if (!roster || roster.length === 0) return;
-    if (selectedId && roster.some((r) => r.id === selectedId)) return;
-    const curator = roster.find((r) => r.role === "curator");
-    setSelectedId((curator ?? roster[0]!).id);
+    if (!selectedId || !roster) return;
+    if (!roster.some((r) => r.id === selectedId)) setSelectedId(null);
   }, [roster, selectedId]);
 
   const onHire = useCallback(
@@ -1021,7 +1396,6 @@ export function EmployeeManager() {
         const res = await sendJSON<{ hired: { id: string; role: string } }>("/api/employees", "POST", { role });
         const def = catalog?.find((c) => c.role === role);
         toast.success(`Hired ${def?.name ?? role}`);
-        setHireOpen(false);
         await loadFleet();
         if (res.hired?.id) setSelectedId(res.hired.id);
       } catch (e) {
@@ -1049,95 +1423,42 @@ export function EmployeeManager() {
   const selected = rosterList.find((r) => r.id === selectedId) ?? null;
 
   return (
-    <div className="flex" style={{ height: "100%", background: "var(--nv-bg)", color: "var(--nv-text)" }}>
+    <div className="flex flex-col" style={{ height: "100%", background: "var(--nv-bg)", color: "var(--nv-text)" }}>
       <style>{MANAGER_STYLES}</style>
 
-      {/* Left rail: the roster. */}
-      <div
-        className="relative flex flex-col flex-shrink-0"
-        style={{ width: 220, borderRight: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}
-      >
-        <div className="px-4 pt-5 pb-3">
-          <h1 className="text-[15px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
-            Employees
-          </h1>
-          <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
-            {rosterList.length === 0 ? "Your AI team" : `${rosterList.length} on the roster`}
-          </p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
-          {roster === null && !booted ? (
-            <p className="px-2 py-3 text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              Loading roster...
+      {selected === null ? (
+        catalog === null && !booted ? (
+          <div className="flex-1 flex items-center justify-center" style={{ background: "var(--nv-bg)" }}>
+            <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+              Waking up...
             </p>
-          ) : rosterList.length === 0 ? (
-            <p className="px-2 py-3 text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              No employees yet. Hire your first below.
-            </p>
-          ) : (
-            rosterList.map((emp) => (
-              <RosterRow
-                key={emp.id}
-                emp={emp}
-                selected={emp.id === selectedId}
-                onSelect={() => setSelectedId(emp.id)}
-              />
-            ))
-          )}
-        </div>
-
-        <div className="p-3" style={{ borderTop: "1px solid var(--nv-border)" }}>
-          <button
-            type="button"
-            onClick={() => setHireOpen((o) => !o)}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold font-[Geist,sans-serif] transition-all"
-            style={{
-              background: hireOpen ? "var(--nv-accent)" : "var(--nv-bg)",
-              color: hireOpen ? "var(--nv-bg)" : "var(--nv-text)",
-              border: "1px solid var(--nv-border)",
-            }}
-            aria-haspopup="menu"
-            aria-expanded={hireOpen}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Hire employee
-          </button>
-        </div>
-
-        {hireOpen && (
-          <HireMenu
+          </div>
+        ) : (
+          <TeamGrid
             catalog={catalog ?? []}
             roster={rosterList}
             onHire={onHire}
-            onClose={() => setHireOpen(false)}
+            onOpen={(id) => setSelectedId(id)}
           />
-        )}
-      </div>
-
-      {/* Main area: the selected employee. */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        {selected === null ? (
-          <div className="flex-1 flex items-center justify-center" style={{ background: "var(--nv-bg)" }}>
-            <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              {booted ? "Select an employee, or hire your first." : "Waking up..."}
-            </p>
+        )
+      ) : (
+        <>
+          <BackBar label={selected.name} onBack={() => setSelectedId(null)} />
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {selected.role === "curator" ? (
+              <EmployeePanel />
+            ) : (
+              <EmployeeDetail
+                key={selected.id}
+                initial={selected}
+                blurb={catalog?.find((c) => c.role === selected.role)?.blurb}
+                onFire={(id) => void onFire(id)}
+                onRosterChange={() => void loadFleet()}
+              />
+            )}
           </div>
-        ) : selected.role === "curator" ? (
-          <EmployeePanel />
-        ) : (
-          <EmployeeDetail
-            key={selected.id}
-            initial={selected}
-            blurb={catalog?.find((c) => c.role === selected.role)?.blurb}
-            onFire={(id) => void onFire(id)}
-            onRosterChange={() => void loadFleet()}
-          />
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }
