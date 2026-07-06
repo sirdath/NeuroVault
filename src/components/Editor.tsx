@@ -48,6 +48,8 @@ export function Editor() {
   const saveNote = useNoteStore((s) => s.saveNote);
   const selectNote = useNoteStore((s) => s.selectNote);
   const notes = useNoteStore((s) => s.notes);
+  const createNote = useNoteStore((s) => s.createNote);
+  const [creating, setCreating] = useState(false);
 
   // Tab system — track open tabs as filenames. Order is user-controllable
   // via drag-to-reorder (dnd-kit) and persisted to localStorage so the
@@ -190,22 +192,52 @@ export function Editor() {
   );
 
   if (!activeFilename) {
+    const hasNotes = notes.length > 0;
+    const onNewNote = async () => {
+      if (creating) return;
+      setCreating(true);
+      try {
+        await createNote("Untitled");
+      } finally {
+        setCreating(false);
+      }
+    };
     return (
       <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: "var(--nv-bg)" }}>
-        <div className="text-center max-w-xs">
+        <div className="text-center max-w-sm px-6">
           <div
-            className="w-14 h-14 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+            className="w-16 h-16 mx-auto mb-6 rounded-2xl flex items-center justify-center"
             style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)" }}
           >
-            <svg className="w-6 h-6" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <svg className="w-7 h-7" style={{ color: "var(--nv-text-dim)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
             </svg>
           </div>
-          <p className="text-[15px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-            Select a note to start reading
+          <p className="text-[17px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+            {hasNotes ? "Nothing open yet" : "Your vault is empty"}
           </p>
-          <p className="text-[13px] mt-2 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-            or press <kbd className="px-1.5 py-0.5 rounded-md text-[12px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>Ctrl+N</kbd> to create one
+          <p className="text-[13px] mt-2 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+            {hasNotes
+              ? "Pick a note from the sidebar to start reading, or create a new one."
+              : "Start your memory by writing your first markdown note. Everything stays local on your machine."}
+          </p>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => void onNewNote()}
+              disabled={creating}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold font-[Geist,sans-serif] transition-all disabled:opacity-60"
+              style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              {creating ? "Creating..." : hasNotes ? "New note" : "Create your first note"}
+            </button>
+          </div>
+          <p className="text-[12px] mt-4 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
+            or press <kbd className="px-1.5 py-0.5 rounded-md text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>Ctrl+N</kbd>
           </p>
         </div>
       </div>

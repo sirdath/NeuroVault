@@ -897,6 +897,22 @@ fn show_minitab(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Show + focus the Employees window (the AI Employee Manager). The
+/// window is pre-declared hidden in tauri.conf.json with its own
+/// capability; we reveal it on demand, like the minitab. Creating a
+/// webview from JS needs a permission the main window deliberately
+/// withholds, so the reveal lives here in Rust.
+#[tauri::command]
+fn open_employee_manager(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("employee-manager") {
+        let _ = w.unminimize();
+        w.show().map_err(|e| format!("show employees: {e}"))?;
+        let _ = w.set_focus();
+    }
+    Ok(())
+}
+
 /// Hide the floating minitab.
 #[tauri::command]
 fn hide_minitab(app: tauri::AppHandle) -> Result<(), String> {
@@ -1657,7 +1673,7 @@ pub fn run() {
             nv_start_vault_watcher, nv_stop_vault_watcher,
             // Drop-folder inbox: UI file-drop copies raw files into the
             // brain inbox for the connected agent to turn into notes.
-            nv_inbox_add, nv_inbox_list, nv_meetings_add,
+            nv_inbox_add, nv_inbox_list, nv_meetings_add, open_employee_manager,
             // Brain health scorecard (also on HTTP + MCP).
             nv_diagnose,
             // Engram-level supersession (new note retires a stale one).

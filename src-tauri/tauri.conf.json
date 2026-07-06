@@ -39,6 +39,19 @@
         "skipTaskbar": true,
         "shadow": false,
         "visible": false
+      },
+      {
+        "label": "employee-manager",
+        "url": "index.html?window=employees",
+        "title": "NeuroVault Employees",
+        "width": 1160,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "decorations": true,
+        "theme": "Dark",
+        "visible": false
       }
     ],
     "security": {
@@ -48,7 +61,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["neurovault"]
+        "schemes": [
+          "neurovault"
+        ]
       }
     },
     "updater": {
@@ -78,9 +93,18 @@
       "minimumSystemVersion": "10.15",
       "dmg": {
         "background": "dmg/background.png",
-        "windowSize": { "width": 660, "height": 400 },
-        "appPosition": { "x": 175, "y": 205 },
-        "applicationFolderPosition": { "x": 485, "y": 205 }
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 175,
+          "y": 205
+        },
+        "applicationFolderPosition": {
+          "x": 485,
+          "y": 205
+        }
       }
     }
   }

@@ -1484,41 +1484,13 @@ export function EmployeePanel() {
     }
   }, [loadStatus]);
 
-  // Standalone-window mode: focus the Employees window if it exists, else
-  // create it. The ?window=employees boot path is wired in main.tsx.
+  // Standalone-window mode: the Employees window is pre-declared (hidden)
+  // in tauri.conf.json with its own capability; a Rust command shows and
+  // focuses it, exactly how the minitab window works. Creating a webview
+  // from JS needs a permission the main window deliberately doesn't hold.
   const onOpenWindow = useCallback(async () => {
     try {
-      const mod = await import("@tauri-apps/api/webviewWindow");
-      const WebviewWindow = mod.WebviewWindow;
-      // getByLabel is synchronous in some Tauri v2 builds and async in
-      // others — normalise both to a resolved handle (or null).
-      let existing: unknown = null;
-      try {
-        const got = (WebviewWindow as unknown as { getByLabel?: (l: string) => unknown }).getByLabel?.("employee-manager");
-        existing = got && typeof (got as { then?: unknown }).then === "function" ? await (got as Promise<unknown>) : got;
-      } catch {
-        existing = null;
-      }
-      if (existing) {
-        try {
-          await (existing as { setFocus: () => Promise<void> }).setFocus();
-        } catch {
-          /* focus is best-effort */
-        }
-        return;
-      }
-      const win = new WebviewWindow("employee-manager", {
-        url: "index.html?window=employees",
-        title: "NeuroVault Employees",
-        width: 1100,
-        height: 800,
-      });
-      win
-        .once("tauri://error", (e: { payload: unknown }) => {
-          const detail = typeof e.payload === "string" ? e.payload : "unknown error";
-          toast.error(`Couldn't open the Employees window: ${detail}`);
-        })
-        .catch(() => { /* listener wiring failed; the outer catch handles hard errors */ });
+      await invoke("open_employee_manager");
     } catch (e) {
       toast.error(`Couldn't open the Employees window: ${e instanceof Error ? e.message : String(e)}`);
     }

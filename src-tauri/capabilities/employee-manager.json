@@ -1,0 +1,6 @@
+{
+  "identifier": "employee-manager",
+  "description": "Capability for the AI Employee Manager window — talks to the loopback HTTP API and invokes the meetings-inbox command; no webview-creation or extra plugin surface.",
+  "windows": ["employee-manager"],
+  "permissions": ["core:default"]
+}
