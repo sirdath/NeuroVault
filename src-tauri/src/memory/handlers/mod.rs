@@ -1239,6 +1239,14 @@ pub struct RecallQuery {
     /// persisted at ~/.neurovault/rerank.txt).
     #[serde(default)]
     rerank: Option<bool>,
+    /// Skip the per-brain recall rate limiter for this call. Used by
+    /// AMBIENT consumers (the Claude Code auto-recall hook fires on
+    /// every prompt) so background recalls neither receive the
+    /// throttle-hint pseudo-hit nor consume the budget that teaches
+    /// AGENTS to pace their tool calls. Deliberately NOT exposed in
+    /// the MCP tools.json — agents keep the throttle.
+    #[serde(default)]
+    throttle: Option<bool>,
 }
 
 pub async fn recall(
@@ -1278,11 +1286,16 @@ pub async fn recall(
 
     // Wrap the work so we can audit duration + result count.
     let started = std::time::Instant::now();
+    let skip_throttle = q.throttle == Some(false);
     let (id, result) =
         tokio::task::spawn_blocking(move || -> Result<(String, Vec<RecallHit>), MemoryError> {
             let id = resolve_brain_id(brain_id.as_deref())?;
             let db = open_brain(&id)?;
-            let hits = hybrid_retrieve_throttled(&db, &query_str, &opts)?;
+            let hits = if skip_throttle {
+                super::retriever::hybrid_retrieve(&db, &query_str, &opts)?
+            } else {
+                hybrid_retrieve_throttled(&db, &query_str, &opts)?
+            };
             Ok((id, hits))
         })
         .await

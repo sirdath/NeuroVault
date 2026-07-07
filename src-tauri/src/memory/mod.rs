@@ -45,6 +45,7 @@ pub mod entities;
 pub mod facts;
 pub mod graphify;
 pub mod handlers;
+pub mod hooks;
 pub mod http_server;
 pub mod inbox;
 pub mod ingest;

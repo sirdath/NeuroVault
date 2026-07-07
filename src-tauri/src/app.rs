@@ -657,6 +657,31 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
     Ok(count)
 }
 
+/// Is automatic recall (Claude Code hooks) currently installed?
+#[tauri::command]
+fn nv_auto_recall_status() -> bool {
+    memory::hooks::hooks_installed_at(&memory::hooks::claude_settings_path())
+}
+
+/// Install or remove the automatic-recall hooks in the user's Claude
+/// Code settings. Install points the hook entries at the bundled
+/// `neurovault-server` sidecar; idempotent (re-install refreshes the
+/// path). The hooks themselves fail open when the app isn't running.
+#[tauri::command]
+fn nv_auto_recall_set(enabled: bool) -> std::result::Result<String, String> {
+    let settings = memory::hooks::claude_settings_path();
+    if enabled {
+        let sidecar = mcp_sidecar_path();
+        if sidecar.is_empty() {
+            return Err("sidecar binary not found next to the app".into());
+        }
+        memory::hooks::install_hooks_at(&settings, std::path::Path::new(&sidecar))
+            .map_err(|e| e.to_string())
+    } else {
+        memory::hooks::uninstall_hooks_at(&settings).map_err(|e| e.to_string())
+    }
+}
+
 /// Return the resolved absolute path to the `neurovault-server` sidecar
 /// binary so the Settings UI can render a Claude Desktop MCP config
 /// pointing at it. We check both the target-triple-suffixed name (how
@@ -1651,6 +1676,7 @@ pub fn run() {
             open_main_window, show_minitab, hide_minitab, set_minitab_collapsed,
             minimize_main, shrink_to_widget,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
+            nv_auto_recall_status, nv_auto_recall_set,
             claude_code_config_path, register_claude_code_mcp,
             export_brain_as_zip,
             list_brains_offline, set_active_brain_offline,

@@ -117,6 +117,26 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 
 It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765`. You don't need to open the app first — the MCP server **auto-starts the backend** if it isn't already running (disable with `NEUROVAULT_AUTOSTART=0`). Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
 
+## Automatic memory (zero effort)
+
+MCP memory has a known weakness: the agent only remembers if it *decides* to call `recall` — and models routinely don't. NeuroVault fixes this with **automatic recall** for Claude Code: relevant memories are injected into every prompt automatically, no tool call needed.
+
+Turn it on in **Settings → Automatic Memory (Claude Code)**, or from the terminal:
+
+```bash
+neurovault-server hook install     # wires ~/.claude/settings.json
+neurovault-server hook status
+neurovault-server hook uninstall
+```
+
+How it works: Claude Code [hooks](https://code.claude.com/docs/en/hooks) run NeuroVault on every prompt (`UserPromptSubmit`) and at session open (`SessionStart`). Each prompt is matched against your active brain with the full hybrid retriever; the top memories (relative-score filtered, deduplicated per session) are injected as compact background context. At session start you get a one-shot brain brief: core memory, top memories, open todos.
+
+Design guarantees:
+
+- **Fail-open.** If NeuroVault isn't running, the hooks print nothing and exit 0 — your Claude Code session is never blocked or slowed (hard 3.5 s budget).
+- **Signal only.** Trivial prompts are skipped, weak matches are dropped, and a memory is never injected twice in the same session — asking again surfaces the *next* most relevant memory instead.
+- **Reversible.** Install is idempotent and edits only NeuroVault's own entries in `settings.json` (a backup is written first); uninstall removes exactly those.
+
 ## Screenshots
 
 | | |

@@ -316,6 +316,7 @@ export function SettingsView() {
 
         <McpSection />
         <ClaudeCodeMcpSection />
+        <AutoRecallSection />
         <MCPTierSection />
         <RerankSection />
         <APIGatewaySection />
@@ -948,6 +949,99 @@ function MCPTierSection() {
  *  small recall cost. Backend reads it as the default for the recall
  *  path's `rerank` param.
  */
+/**
+ * Automatic memory for Claude Code. Installs UserPromptSubmit +
+ * SessionStart hooks (via the bundled sidecar's `hook` subcommand) so
+ * relevant memories are injected into every prompt automatically — the
+ * agent no longer has to decide to call recall. The hooks fail open:
+ * when NeuroVault isn't running they print nothing and Claude Code is
+ * unaffected.
+ */
+function AutoRecallSection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const installed = await invoke<boolean>("nv_auto_recall_status");
+        if (!cancelled) setEnabled(installed);
+      } catch {
+        if (!cancelled) setEnabled(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const onToggle = useCallback(async () => {
+    if (enabled === null || saving) return;
+    const next = !enabled;
+    setSaving(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<string>("nv_auto_recall_set", { enabled: next });
+      setEnabled(next);
+      setMsg(
+        next
+          ? "Installed. Takes effect in new Claude Code sessions."
+          : "Removed from Claude Code settings.",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [enabled, saving]);
+
+  const on = enabled === true;
+  return (
+    <Section title="Automatic Memory (Claude Code)">
+      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
+        Injects relevant memories into every Claude Code prompt automatically — no recall tool call needed. A session brief loads at startup, and each prompt is matched against this brain in the background. If NeuroVault isn&apos;t running, the hooks stay silent and Claude Code is unaffected.
+      </p>
+      <button
+        onClick={onToggle}
+        disabled={saving || enabled === null}
+        className="w-full text-left rounded-lg p-3 transition-colors disabled:opacity-50 flex items-center justify-between gap-3"
+        style={{
+          background: on ? "var(--nv-surface-2, var(--nv-surface))" : "var(--nv-bg)",
+          border: on ? "1px solid var(--nv-accent)" : "1px solid var(--nv-border)",
+        }}
+        aria-pressed={on}
+      >
+        <div>
+          <span className="text-[13px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
+            Automatic recall {enabled === null ? "…" : on ? "On" : "Off"}
+          </span>
+          <p className="text-[11.5px] leading-snug font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-muted)" }}>
+            {on
+              ? "Memories surface on their own in every Claude Code session."
+              : "Claude Code only remembers when it explicitly calls the recall tool."}
+          </p>
+        </div>
+        <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-2 py-1 rounded shrink-0" style={{
+          background: on ? "var(--nv-accent)" : "var(--nv-surface)",
+          color: on ? "var(--nv-bg)" : "var(--nv-text-dim)",
+        }}>
+          {enabled === null ? "…" : on ? "On" : "Off"}
+        </span>
+      </button>
+      {msg && (
+        <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-positive)" }}>{msg}</p>
+      )}
+      {error && (
+        <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-negative)" }}>{error}</p>
+      )}
+    </Section>
+  );
+}
+
 function RerankSection() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);

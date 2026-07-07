@@ -36,6 +36,8 @@ neurovault-server: standalone HTTP server for the NeuroVault memory layer.
 
 USAGE:
     neurovault-server [--http-only | --mcp-only] [--port N]
+    neurovault-server hook <install|uninstall|status>
+    neurovault-server hook <user-prompt-submit|session-start>   (called by Claude Code)
 
 OPTIONS:
     --http-only        Informational. The standalone binary is always
@@ -78,6 +80,65 @@ ENVIRONMENT:
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
+
+    // `hook` subcommand: automatic memory for Claude Code. Dispatched
+    // before flag parsing — these modes never bind a port or load a
+    // model; the event modes forward to the running app on :8765 and
+    // FAIL OPEN (print nothing, exit 0) when it isn't up.
+    if args.first().map(String::as_str) == Some("hook") {
+        use neurovault_lib::memory::hooks;
+        return match args.get(1).map(String::as_str) {
+            Some("user-prompt-submit") | Some("session-start") => {
+                ExitCode::from(hooks::run_hook_event(args[1].as_str()).await)
+            }
+            Some("install") => {
+                let Ok(exe) = env::current_exe() else {
+                    eprintln!("cannot resolve own binary path");
+                    return ExitCode::from(1);
+                };
+                match hooks::install_hooks_at(&hooks::claude_settings_path(), &exe) {
+                    Ok(msg) => {
+                        println!("{msg}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("install failed: {e}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+            Some("uninstall") => match hooks::uninstall_hooks_at(&hooks::claude_settings_path()) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("uninstall failed: {e}");
+                    ExitCode::from(1)
+                }
+            },
+            Some("status") => {
+                let installed = hooks::hooks_installed_at(&hooks::claude_settings_path());
+                println!(
+                    "auto-recall hooks: {}",
+                    if installed {
+                        "installed"
+                    } else {
+                        "not installed"
+                    }
+                );
+                ExitCode::SUCCESS
+            }
+            other => {
+                eprintln!(
+                    "usage: neurovault-server hook <install|uninstall|status|user-prompt-submit|session-start>{}",
+                    other.map(|o| format!("  (got '{o}')")).unwrap_or_default()
+                );
+                ExitCode::from(2)
+            }
+        };
+    }
+
     let mut port: Option<u16> = None;
     let mut mint_label: Option<String> = None;
     let mut mcp_only = false;
