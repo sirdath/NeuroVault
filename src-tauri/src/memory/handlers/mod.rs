@@ -1249,6 +1249,57 @@ pub struct RecallQuery {
     throttle: Option<bool>,
 }
 
+#[derive(Deserialize)]
+pub struct QuerySignalQuery {
+    q: String,
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+}
+
+/// GET /api/query_signal — corpus-driven "is this query worth a
+/// retrieval?" statistics. For each query token (BM25 tokenizer, so
+/// index stopwords already dropped) returns its document frequency in
+/// the active brain plus the BM25-style IDF; `max_idf` is the single
+/// number ambient consumers gate on. Cheap: one in-memory map lookup
+/// per token, no embedding, no vector search.
+pub async fn query_signal(
+    Query(q): Query<QuerySignalQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let db = open_brain(&id)?;
+        let idx = super::bm25::index_for(&id);
+        if idx.size() == 0 {
+            idx.build(&db)?;
+        }
+        let (n, stats) = idx.query_signal(&q.q);
+        let nf = n as f64;
+        let idf = |df: u64| -> f64 {
+            if n == 0 {
+                return 0.0;
+            }
+            // Same shape as the BM25 scorer: ln((N - df + 0.5)/(df + 0.5) + 1).
+            ((nf - df as f64 + 0.5) / (df as f64 + 0.5) + 1.0).ln()
+        };
+        let tokens: Vec<serde_json::Value> = stats
+            .iter()
+            .map(|(t, df)| serde_json::json!({"token": t, "df": df, "idf": idf(*df)}))
+            .collect();
+        let max_idf = stats.iter().map(|(_, df)| idf(*df)).fold(0.0_f64, f64::max);
+        Ok(serde_json::json!({
+            "brain": id,
+            "n_docs": n,
+            "tokens": tokens,
+            "max_idf": max_idf,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
 pub async fn recall(
     Query(q): Query<RecallQuery>,
     _s: State<ServerState>,

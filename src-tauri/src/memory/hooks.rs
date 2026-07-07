@@ -66,6 +66,168 @@ const RELATIVE_SCORE_FLOOR: f64 = 0.5;
 /// Per-hit snippet length (chars).
 const SNIPPET_LEN: usize = 220;
 
+/// Conversational filler that must not count as recall signal.
+/// Empirical note (2026-07-07): we A/B'd a corpus-IDF gate against
+/// this list using /api/query_signal — in a NOTES corpus, chat glue
+/// ("continue", "sure") is RARE (df 20/33k => idf 7.4, higher than
+/// "reranking" at 5.5), so document-frequency rates glue as highly
+/// informative. The signal is inverted for this purpose; a curated
+/// list is the correct tool. Any 4+ letter word not listed counts as
+/// contentful, so non-English prompts pass open.
+const STOPWORDS: &[&str] = &[
+    "this",
+    "that",
+    "these",
+    "those",
+    "then",
+    "than",
+    "there",
+    "here",
+    "where",
+    "when",
+    "what",
+    "which",
+    "with",
+    "without",
+    "will",
+    "would",
+    "should",
+    "could",
+    "shall",
+    "must",
+    "have",
+    "having",
+    "been",
+    "being",
+    "were",
+    "your",
+    "yours",
+    "mine",
+    "ours",
+    "them",
+    "they",
+    "their",
+    "theirs",
+    "some",
+    "same",
+    "such",
+    "just",
+    "very",
+    "much",
+    "more",
+    "most",
+    "many",
+    "each",
+    "every",
+    "also",
+    "into",
+    "onto",
+    "from",
+    "over",
+    "under",
+    "about",
+    "after",
+    "before",
+    "again",
+    "still",
+    "only",
+    "even",
+    "ever",
+    "never",
+    "always",
+    "once",
+    "make",
+    "makes",
+    "made",
+    "making",
+    "sure",
+    "work",
+    "works",
+    "worked",
+    "working",
+    "well",
+    "good",
+    "great",
+    "nice",
+    "okay",
+    "continue",
+    "continues",
+    "continued",
+    "keep",
+    "keeps",
+    "going",
+    "lets",
+    "please",
+    "thanks",
+    "thank",
+    "want",
+    "wants",
+    "wanted",
+    "need",
+    "needs",
+    "needed",
+    "like",
+    "liked",
+    "look",
+    "looks",
+    "looked",
+    "looking",
+    "check",
+    "checks",
+    "checked",
+    "take",
+    "takes",
+    "taken",
+    "give",
+    "gives",
+    "given",
+    "help",
+    "helps",
+    "done",
+    "doing",
+    "know",
+    "knows",
+    "think",
+    "thinks",
+    "thing",
+    "things",
+    "stuff",
+    "ways",
+    "come",
+    "comes",
+    "came",
+    "start",
+    "starts",
+    "started",
+    "finish",
+    "finished",
+    "right",
+    "wrong",
+    "yeah",
+    "back",
+    "next",
+    "last",
+    "first",
+    "second",
+    "time",
+    "times",
+    "later",
+    "soon",
+    "little",
+    "really",
+    "actually",
+    "maybe",
+    "probably",
+    "possibly",
+    "everything",
+    "something",
+    "anything",
+    "nothing",
+    "someone",
+    "anyone",
+    "everyone",
+];
+
 // ---------------------------------------------------------------------------
 // Hook execution (stdin JSON in, context block on stdout)
 // ---------------------------------------------------------------------------
@@ -103,8 +265,12 @@ pub async fn run_hook_event(event: &str) -> u8 {
             0
         }
         _ => {
-            eprintln!("unknown hook event '{event}'");
-            2
+            // Never exit 2 from the hook path: for UserPromptSubmit,
+            // exit 2 BLOCKS the user's prompt. A version-skewed binary
+            // must degrade to silence, not lock Claude Code (incident
+            // 2026-07-07).
+            eprintln!("unknown hook event '{event}' (ignored)");
+            0
         }
     }
 }
@@ -132,6 +298,7 @@ async fn prompt_context(payload: &Value) -> Option<String> {
 
     let query: String = prompt.chars().take(MAX_QUERY_LEN).collect();
     let client = http_client()?;
+
     // No `rerank` param: the server preference applies (reranker on by
     // default), same as every other consumer. `throttle=false` marks
     // this as ambient traffic: it must not consume the rate-limit
@@ -312,11 +479,30 @@ async fn session_context(_payload: &Value) -> Option<String> {
     Some(out)
 }
 
-/// Trivial-prompt guard: short acks, slash commands, and memory
-/// shortcuts don't deserve a recall round-trip.
+/// A token is contentful when it's 4+ chars and not conversational
+/// filler. One such token justifies a recall round-trip.
+fn contentful_token_count(prompt: &str) -> usize {
+    prompt
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4)
+        .filter(|w| {
+            let lower = w.to_lowercase();
+            !STOPWORDS.contains(&lower.as_str())
+        })
+        .count()
+}
+
+/// Trivial-prompt guard: short acks, slash commands, memory shortcuts,
+/// and pure conversational glue don't deserve a recall round-trip.
+/// Vector search always has SOME nearest neighbor, so a vague prompt
+/// would otherwise inject plausible-but-useless memories (observed
+/// live with "then lets continue and make sure that it works well").
 fn worth_recalling(prompt: &str) -> bool {
     let p = prompt.trim();
-    p.len() >= MIN_PROMPT_LEN && !p.starts_with('/') && !p.starts_with('#')
+    p.len() >= MIN_PROMPT_LEN
+        && !p.starts_with('/')
+        && !p.starts_with('#')
+        && contentful_token_count(p) >= 1
 }
 
 /// One line, bounded length, and no angle brackets so injected content
@@ -412,10 +598,15 @@ fn is_our_entry(entry: &Value) -> bool {
 }
 
 fn our_entry(binary: &Path, event_arg: &str, matcher: Option<&str>) -> Value {
+    // `|| true`: shell-level fail-open. If the binary is missing, or is
+    // an older build without the `hook` subcommand (whose arg parser
+    // exits 2 — the code that BLOCKS a UserPromptSubmit), the command
+    // still exits 0. No NeuroVault failure may ever block a prompt.
+    let fail_open = if cfg!(windows) { "" } else { " || true" };
     let mut entry = json!({
         "hooks": [{
             "type": "command",
-            "command": format!("\"{}\" hook {}", binary.display(), event_arg),
+            "command": format!("\"{}\" hook {}{}", binary.display(), event_arg, fail_open),
             "timeout": 10
         }]
     });
@@ -425,16 +616,58 @@ fn our_entry(binary: &Path, event_arg: &str, matcher: Option<&str>) -> Value {
     entry
 }
 
-/// Install (or refresh) the auto-recall hooks in `settings_path`.
-/// Idempotent: existing NeuroVault entries are replaced, everything
-/// else in the file is preserved byte-for-byte at the JSON level.
+/// Copy `binary` to a stable location no build system touches. Global
+/// hooks must NEVER point into a repo's target/ directory: builds and
+/// checkouts from other sessions replace those binaries, and a stale
+/// binary without the `hook` subcommand blocked every prompt in every
+/// session (incident 2026-07-07). The snapshot under ~/.neurovault/bin
+/// changes only when install runs again.
+fn snapshot_binary(binary: &Path, snapshot_dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(snapshot_dir)
+        .map_err(|e| MemoryError::Other(format!("create {}: {e}", snapshot_dir.display())))?;
+    let dest = snapshot_dir.join("neurovault-hook");
+    // Copy via temp + rename so a concurrent hook invocation never sees
+    // a half-written executable.
+    let tmp = snapshot_dir.join(".neurovault-hook.tmp");
+    std::fs::copy(binary, &tmp).map_err(|e| MemoryError::Other(format!("snapshot copy: {e}")))?;
+    std::fs::rename(&tmp, &dest)
+        .map_err(|e| MemoryError::Other(format!("snapshot rename: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(dest)
+}
+
+/// Install (or refresh) the auto-recall hooks in `settings_path`,
+/// pointing them at a stable SNAPSHOT of `binary` (see
+/// `snapshot_binary`). Idempotent: existing NeuroVault entries are
+/// replaced, everything else in the file is preserved byte-for-byte at
+/// the JSON level.
 pub fn install_hooks_at(settings_path: &Path, binary: &Path) -> Result<String> {
+    install_hooks_snapshot(settings_path, binary, &nv_bin_dir())
+}
+
+/// Default stable directory for hook binaries: ~/.neurovault/bin.
+fn nv_bin_dir() -> PathBuf {
+    super::paths::nv_home().join("bin")
+}
+
+/// Testable core of install: `snapshot_dir` is where the binary copy
+/// lives (production: ~/.neurovault/bin).
+pub fn install_hooks_snapshot(
+    settings_path: &Path,
+    binary: &Path,
+    snapshot_dir: &Path,
+) -> Result<String> {
     if !binary.exists() {
         return Err(MemoryError::Other(format!(
             "hook binary not found at {}",
             binary.display()
         )));
     }
+    let binary = &snapshot_binary(binary, snapshot_dir)?;
     // The command string is parsed by a shell: refuse binary paths with
     // shell-active characters rather than trying to escape them.
     let bin_str = binary.display().to_string();
@@ -611,6 +844,17 @@ mod tests {
         dir.join("settings.json")
     }
 
+    /// Tests must never write into the real ~/.neurovault/bin.
+    fn tmp_snapshot_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-hooks-snap-{name}-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn install_for_test(settings: &Path, binary: &Path, name: &str) -> Result<String> {
+        install_hooks_snapshot(settings, binary, &tmp_snapshot_dir(name))
+    }
+
     fn fake_binary() -> PathBuf {
         // current_exe always exists and contains no spaces-with-quotes
         // issues for the command string in tests.
@@ -627,8 +871,8 @@ mod tests {
         )
         .unwrap();
         let bin = fake_binary();
-        install_hooks_at(&path, &bin).unwrap();
-        install_hooks_at(&path, &bin).unwrap(); // twice on purpose
+        install_for_test(&path, &bin, "idem").unwrap();
+        install_for_test(&path, &bin, "idem").unwrap(); // twice on purpose
 
         let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // top-level keys preserved
@@ -659,7 +903,7 @@ mod tests {
         )
         .unwrap();
         let bin = fake_binary();
-        install_hooks_at(&path, &bin).unwrap();
+        install_for_test(&path, &bin, "uninst").unwrap();
         assert!(hooks_installed_at(&path));
         uninstall_hooks_at(&path).unwrap();
         assert!(!hooks_installed_at(&path));
@@ -682,13 +926,18 @@ mod tests {
         )
         .unwrap();
         let bin = fake_binary();
-        install_hooks_at(&path, &bin).unwrap();
+        install_for_test(&path, &bin, "stale").unwrap();
         let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let ups = root["hooks"]["UserPromptSubmit"].as_array().unwrap();
         assert_eq!(ups.len(), 1, "stale entry must be replaced, not duplicated");
         let cmd = ups[0]["hooks"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains(&*bin.to_string_lossy()));
+        // Points at the stable SNAPSHOT, never a repo target/ path, and
+        // carries the shell-level fail-open so a version-skewed binary
+        // can never block a prompt (incident 2026-07-07).
+        assert!(cmd.contains("neurovault-hook"), "{cmd}");
         assert!(!cmd.contains("/old/target"));
+        #[cfg(not(windows))]
+        assert!(cmd.ends_with("|| true"), "{cmd}");
     }
 
     #[test]
@@ -696,9 +945,25 @@ mod tests {
         let path = tmp_settings("corrupt");
         std::fs::write(&path, "{ not json").unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
-        assert!(install_hooks_at(&path, &fake_binary()).is_err());
+        assert!(install_for_test(&path, &fake_binary(), "corrupt").is_err());
         // file untouched
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn conversational_glue_is_skipped_topical_passes() {
+        // The exact prompt that injected ML noise in live use 2026-07-07.
+        assert!(!worth_recalling(
+            "then lets continue and make sure that it works well"
+        ));
+        assert!(!worth_recalling("ok great lets keep going with this"));
+        assert!(!worth_recalling("please make sure everything looks good"));
+        // One substantive token is enough.
+        assert!(worth_recalling("fix the reranker"));
+        assert!(worth_recalling("lets continue with the supabase migration"));
+        assert!(worth_recalling("make sure the throttle bypass works"));
+        // Non-English content passes open (the stoplist is English-only).
+        assert!(worth_recalling("erklaere mir die architektur bitte"));
     }
 
     #[test]
@@ -790,7 +1055,17 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let evil = dir.join("nv$(rm)server");
         std::fs::write(&evil, "x").unwrap();
-        assert!(install_hooks_at(&path, &evil).is_err());
+        // The snapshot destination is safe, so a shell-special SOURCE
+        // path is fine now — but the snapshot itself must succeed and
+        // the resulting command must reference the safe copy.
+        let out = install_for_test(&path, &evil, "shellchars");
+        assert!(out.is_ok(), "{out:?}");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let cmd = root["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(!cmd.contains("rm)server"), "{cmd}");
+        assert!(cmd.contains("neurovault-hook"));
         let _ = std::fs::remove_file(&evil);
     }
 

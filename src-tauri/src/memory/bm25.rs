@@ -121,6 +121,25 @@ impl Bm25Index {
 
     /// Number of documents currently indexed. Matches Python's
     /// `size` property.
+    /// Corpus statistics for a query's tokens: `(indexed_doc_count,
+    /// [(token, doc_freq)])`, using the index's own tokenizer (so its
+    /// stopword filtering applies). Powers the ambient-recall signal
+    /// gate: a token's rarity in THIS brain says whether the prompt is
+    /// specific enough to be worth a retrieval round-trip -- the
+    /// corpus itself decides which words are informative (the TF-IDF
+    /// idea), no hardcoded language-specific lists.
+    pub fn query_signal(&self, query: &str) -> (u64, Vec<(String, u64)>) {
+        let inner = self.inner.read();
+        let stats = tokenize(query)
+            .into_iter()
+            .map(|t| {
+                let df = *inner.df.get(&t).unwrap_or(&0);
+                (t, df)
+            })
+            .collect();
+        (inner.n, stats)
+    }
+
     pub fn size(&self) -> usize {
         self.inner.read().n as usize
     }
