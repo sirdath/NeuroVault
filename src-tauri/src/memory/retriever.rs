@@ -893,10 +893,106 @@ type EngramRow = (
     String,
 );
 
+/// Per-candidate breakdown of every retrieval signal, captured during
+/// `hybrid_retrieve_with_scores`. `Option` fields are `None` when that
+/// channel didn't surface the candidate (or the stage didn't run —
+/// e.g. `ce_*` when the reranker was off or unavailable). Consumed by
+/// the ambient-recall gate (`ambient.rs`), which needs an ABSOLUTE
+/// relevance signal (the cross-encoder logit), not just the fused
+/// ordering. See docs/specs/ambient-recall.md.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ChannelScores {
+    /// 1-based rank in the semantic KNN list, if surfaced there.
+    pub semantic_rank: Option<usize>,
+    pub semantic_sim: Option<f64>,
+    /// 1-based rank in the BM25 list, if surfaced there.
+    pub bm25_rank: Option<usize>,
+    pub bm25_score: Option<f64>,
+    /// 1-based rank in the entity-graph list, if surfaced there.
+    pub graph_rank: Option<usize>,
+    pub graph_score: Option<f64>,
+    /// Weighted RRF sum after channel fusion (pre-rerank magnitude).
+    pub rrf: f64,
+    /// What `RecallHit.score` reports for this candidate.
+    pub final_score: f64,
+    /// Raw cross-encoder logit (roughly [-10, 10]); `None` when the
+    /// reranker didn't run for this candidate.
+    pub ce_logit: Option<f32>,
+    /// `sigmoid(ce_logit)` in (0, 1) — the gate's absolute signal.
+    pub ce_prob: Option<f64>,
+}
+
+/// `sigmoid(logit)` — maps a raw cross-encoder logit (roughly
+/// [-10, 10]) into the (0, 1) probability the gate compares against an
+/// absolute floor. Factored out so it can be unit-tested without
+/// touching the reranker model. See docs/specs/ambient-recall.md ("The
+/// gate": `ce_prob < effective_floor → silent`).
+#[inline]
+fn ce_prob(logit: f32) -> f64 {
+    1.0 / (1.0 + (-(logit as f64)).exp())
+}
+
+/// `hybrid_retrieve` plus a per-hit [`ChannelScores`] side channel,
+/// keyed by engram id. Behavior of the returned hits is byte-identical
+/// to `hybrid_retrieve` for the same opts (both delegate to the same
+/// inner pipeline — the capture is a passive side channel that never
+/// touches fusion, rerank, filtering, or ordering); the map has one
+/// entry per RETURNED hit.
+///
+/// Consumed by the ambient-recall gate, which needs the ABSOLUTE
+/// cross-encoder signal (`ce_prob`), not just the fused ordering. Note
+/// `with_scores` does NOT force the reranker on — the caller sets
+/// `use_reranker` (the ambient path passes `true` because the CE score
+/// IS its gate). When the reranker didn't run for a candidate, its
+/// `ce_*` fields stay `None`. See docs/specs/ambient-recall.md.
+pub fn hybrid_retrieve_with_scores(
+    db: &BrainDb,
+    query: &str,
+    opts: &RecallOpts,
+) -> Result<(Vec<RecallHit>, HashMap<String, ChannelScores>)> {
+    let mut scores: HashMap<String, ChannelScores> = HashMap::new();
+    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores))?;
+    Ok((hits, scores))
+}
+
 /// Run `hybrid_retrieve` end-to-end. Equivalent to Python's
 /// `retriever.hybrid_retrieve`, minus the cross-encoder reranker
 /// branch. BM25 is ensured to be built before the first query fires.
+///
+/// Thin delegate over [`hybrid_retrieve_inner`] with no capture — the
+/// score-capture side channel (`hybrid_retrieve_with_scores`) shares
+/// the exact same pipeline so the two callers can never diverge.
 pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<Vec<RecallHit>> {
+    hybrid_retrieve_inner(db, query, opts, None)
+}
+
+/// The shared retrieval pipeline. When `capture` is `Some`, it is
+/// filled with one [`ChannelScores`] per returned hit as an ADDITIVE
+/// side effect: every write to it is gated on `capture.is_some()`, so
+/// the `None` (i.e. `hybrid_retrieve`) path pays only a branch check
+/// and produces byte-identical hits. The capture NEVER feeds back into
+/// scoring — raw CE logits are exposed alongside the ranking, not
+/// blended into it (per the 2026-06-24 rank-fusion eval note below).
+fn hybrid_retrieve_inner(
+    db: &BrainDb,
+    query: &str,
+    opts: &RecallOpts,
+    mut capture: Option<&mut HashMap<String, ChannelScores>>,
+) -> Result<Vec<RecallHit>> {
+    // One-time flag: keeps the per-channel capture branches (temp maps
+    // below) off the hot path entirely for the `hybrid_retrieve` caller.
+    let capturing = capture.is_some();
+    // Per-channel scratch, keyed by engram id. Populated only when
+    // capturing; assembled into `ChannelScores` at the hit-mapping site
+    // once `rrf`/`final_score` are known. Ranks are 1-based positions in
+    // each channel's ranked list; `graph_score` has no cheap raw value
+    // (the graph channel yields ids only) so it stays `None`.
+    let mut cap_sem_rank: HashMap<String, usize> = HashMap::new();
+    let mut cap_sem_sim: HashMap<String, f64> = HashMap::new();
+    let mut cap_bm25_rank: HashMap<String, usize> = HashMap::new();
+    let mut cap_bm25_score: HashMap<String, f64> = HashMap::new();
+    let mut cap_graph_rank: HashMap<String, usize> = HashMap::new();
+    let mut cap_ce_logit: HashMap<String, f32> = HashMap::new();
     let exclude_set: HashSet<String> = opts.exclude_kinds.iter().cloned().collect();
     // Pull any `kind:`, `folder:`, `after:` … operators out of the
     // query before embedding. The remaining free text is what goes
@@ -1060,6 +1156,50 @@ pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<V
 
     // --- Signal 3: graph traverse ---
     let graph_ranked = graph_retrieve(db, query, candidate_pool)?;
+
+    // --- Score capture: per-channel ranks + raw scores -------------------
+    // (Ambient-recall side channel; docs/specs/ambient-recall.md,
+    // "Retriever change (additive only)".) These are the SAME three
+    // ranked lists the RRF fusion loop below consumes, recorded here —
+    // after every list is final, before fusion — so the captured 1-based
+    // ranks are exactly what `rrf_score(rank + 1)` sees. Read-only over
+    // the lists; fusion inputs are untouched.
+    if capturing {
+        for (i, eid) in semantic_ranked.iter().enumerate() {
+            cap_sem_rank.insert(eid.clone(), i + 1);
+        }
+        // Raw semantic similarity: `semantic_hits` is chunk-level,
+        // distance ASC, and `semantic_ranked` kept the FIRST (= best)
+        // chunk per engram — so the first occurrence here is the chunk
+        // that earned the engram its rank. `1.0 - distance` is the
+        // codebase's cosine-similarity convention (handlers/mod.rs).
+        for h in &semantic_hits {
+            if cap_sem_rank.contains_key(&h.engram_id) {
+                cap_sem_sim
+                    .entry(h.engram_id.clone())
+                    .or_insert(1.0 - h.distance);
+            }
+        }
+        for (i, eid) in bm25_ranked.iter().enumerate() {
+            cap_bm25_rank.insert(eid.clone(), i + 1);
+        }
+        // Raw BM25: `bm25_sorted` is (chunk_id, score) DESC and
+        // `bm25_ranked` kept the first chunk per engram, so the first
+        // resolution here is the score that ranked the engram.
+        for (cid, s) in &bm25_sorted {
+            if let Some(eid) = chunk_to_engram.get(cid) {
+                if cap_bm25_rank.contains_key(eid) {
+                    cap_bm25_score.entry(eid.clone()).or_insert(*s);
+                }
+            }
+        }
+        // The graph channel yields ids only — no cheap raw score
+        // upstream — so `graph_score` stays None per the spec; the
+        // 1-based rank is the whole signal.
+        for (i, eid) in graph_ranked.iter().enumerate() {
+            cap_graph_rank.insert(eid.clone(), i + 1);
+        }
+    }
 
     // --- Signal 4: titles ---
     // Pull (id, title, filename) for every non-dormant engram.
@@ -1675,6 +1815,21 @@ pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<V
             .collect();
         match reranker::rerank(effective_query, &docs) {
             Ok(scores) => {
+                // Score capture: record the RAW logits here, keyed by
+                // engram id, because `fuse_cross_encoder` below only
+                // writes the rank-fused magnitude back into
+                // `rerank_score` — the logits are otherwise discarded,
+                // and the ambient gate needs them as an ABSOLUTE
+                // relevance signal (docs/specs/ambient-recall.md).
+                // `scores[i]` aligns with `candidates[i]` (the first
+                // `limit` candidates, pre-fusion order — same alignment
+                // `mags` relies on). Read-only: ranking still uses only
+                // the rank-fused value, never the raw logit.
+                if capturing {
+                    for (i, s) in scores.iter().enumerate().take(candidates.len()) {
+                        cap_ce_logit.insert(candidates[i].engram_id.clone(), *s);
+                    }
+                }
                 // Rank-fuse the cross-encoder with the hybrid ordering
                 // (see fuse_cross_encoder) instead of a magnitude blend.
                 let mags: Vec<f64> = candidates
@@ -1772,6 +1927,32 @@ pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<V
     for c in candidates.into_iter().take(opts.top_k) {
         let confidence = engram_confidence(db, &c.engram_id, &c.kind);
         bump_access(db, &c.engram_id).ok();
+        // Score capture: assemble this hit's ChannelScores now that both
+        // late-stage values exist — `c.rrf_score` (the fused value this
+        // candidate carried out of `rrf_scores`) and `c.final_score`
+        // (exactly what `RecallHit.score` reports below). One entry per
+        // RETURNED hit, so the map and the hit list always agree.
+        // `ce_*` stay None whenever the reranker didn't score this
+        // candidate: rerank off/errored, or the candidate sat past the
+        // reranked prefix (docs/specs/ambient-recall.md).
+        if let Some(cap) = capture.as_deref_mut() {
+            let logit = cap_ce_logit.get(&c.engram_id).copied();
+            cap.insert(
+                c.engram_id.clone(),
+                ChannelScores {
+                    semantic_rank: cap_sem_rank.get(&c.engram_id).copied(),
+                    semantic_sim: cap_sem_sim.get(&c.engram_id).copied(),
+                    bm25_rank: cap_bm25_rank.get(&c.engram_id).copied(),
+                    bm25_score: cap_bm25_score.get(&c.engram_id).copied(),
+                    graph_rank: cap_graph_rank.get(&c.engram_id).copied(),
+                    graph_score: None,
+                    rrf: c.rrf_score,
+                    final_score: c.final_score,
+                    ce_logit: logit,
+                    ce_prob: logit.map(ce_prob),
+                },
+            );
+        }
         results.push(RecallHit {
             engram_id: c.engram_id,
             title: c.title,
@@ -2332,5 +2513,178 @@ mod fusion_tests {
             out[0] > min_out,
             "hybrid #1 should not collapse to the lowest score: out={out:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod channel_scores_tests {
+    // Ambient-recall score capture (docs/specs/ambient-recall.md).
+    // Model-free by design: the reranker ONNX (~1 GB) must never load in
+    // a test, so we cover the ce_prob transform (the gate's absolute
+    // signal) and the ChannelScores None-by-default contract here; the
+    // end-to-end plumbing rides the existing temp-brain integration
+    // test (tests/retrieval_integration.rs), which exercises
+    // hybrid_retrieve through the shared inner pipeline with rerank off.
+    use super::{ce_prob, ChannelScores};
+
+    #[test]
+    fn ce_prob_is_a_sigmoid() {
+        // Anchor: logit 0 → exactly 0.5 (the CE's "coin flip").
+        assert!((ce_prob(0.0) - 0.5).abs() < 1e-12);
+        // Symmetry: sigmoid(x) + sigmoid(-x) = 1 — the gate's floor
+        // comparisons rely on the transform not skewing either tail.
+        for x in [0.1_f32, 1.0, 2.5, 7.0] {
+            assert!((ce_prob(x) + ce_prob(-x) - 1.0).abs() < 1e-12);
+        }
+        // Monotone: a higher logit must never gate lower.
+        assert!(ce_prob(2.0) > ce_prob(1.0));
+        assert!(ce_prob(-1.0) > ce_prob(-2.0));
+        // Open interval (0,1) even at the reranker's extremes — the
+        // gate's `< floor` / `>= high_confidence` checks assume a
+        // probability, never 0/1/NaN.
+        for x in [-10.0_f32, -7.3, 4.2, 10.0] {
+            let p = ce_prob(x);
+            assert!(p > 0.0 && p < 1.0 && p.is_finite(), "ce_prob({x}) = {p}");
+        }
+        // Spot value against the closed form (logit 2 → ~0.8808).
+        assert!((ce_prob(2.0) - 0.880_797_077_977_882_4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn default_channel_scores_report_no_signal() {
+        // The spec's None-means-absent contract: a Default (the "channel
+        // never saw this candidate" shape) must carry no phantom rank,
+        // raw score, or CE signal the gate could mistake for evidence.
+        let d = ChannelScores::default();
+        assert!(d.semantic_rank.is_none() && d.semantic_sim.is_none());
+        assert!(d.bm25_rank.is_none() && d.bm25_score.is_none());
+        assert!(d.graph_rank.is_none() && d.graph_score.is_none());
+        assert!(d.ce_logit.is_none() && d.ce_prob.is_none());
+        assert_eq!(d.rrf, 0.0);
+        assert_eq!(d.final_score, 0.0);
+    }
+
+    // End-to-end capture plumbing over a real temp brain. #[ignore]
+    // because in-crate unit tests run in parallel and share the global
+    // brain cache + embedder singleton + env vars (the order-pollution
+    // documented in tests/retrieval_integration.rs) — this must only
+    // run targeted:
+    //   cargo test --no-default-features with_scores -- --ignored
+    // Reranker is ABLATED (never opts.use_reranker-forced, never
+    // shape-triggered) so the ~1 GB CE model can't load in a test; the
+    // small BGE embedder (the same one every retrieval test loads) is
+    // the only model touched.
+    #[test]
+    #[ignore = "targeted-run only: shares global brain cache/env with parallel unit tests"]
+    fn with_scores_covers_every_hit_and_matches_hybrid_retrieve() {
+        use std::sync::Arc;
+
+        use crate::memory::{db, ingest};
+
+        use super::{hybrid_retrieve, hybrid_retrieve_with_scores, RecallOpts};
+
+        // Isolation: unique temp NEUROVAULT_HOME + explicit vec0 path,
+        // mirroring tests/retrieval_integration.rs.
+        let home = std::env::temp_dir().join(format!("nv-chscores-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("mk temp home");
+        std::env::set_var("NEUROVAULT_HOME", &home);
+        let vec0_file = if cfg!(target_os = "windows") {
+            "vec0.dll"
+        } else if cfg!(target_os = "macos") {
+            "vec0.dylib"
+        } else {
+            "vec0.so"
+        };
+        let vec0 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(vec0_file);
+        assert!(vec0.exists(), "{vec0_file} missing at {vec0:?}");
+        std::env::set_var("NEUROVAULT_VEC_EXTENSION", &vec0);
+
+        db::close_all();
+        let brain: Arc<_> = db::open_brain("chscores-test-brain").expect("open brain");
+        for (fname, body) in [
+            (
+                "espresso.md",
+                "# Coffee\n\nI pull a 1:2 ratio espresso from Ethiopian \
+                 Yirgacheffe beans every morning, never with milk.",
+            ),
+            (
+                "vector-db.md",
+                "# Storage decision\n\nWe chose sqlite-vec over Chroma for \
+                 the embedding store: single file, no server process.",
+            ),
+            (
+                "yoga.md",
+                "# Health\n\nYoga classes happen at Serenity Yoga on Camden \
+                 High Street, Monday and Thursday evenings.",
+            ),
+            (
+                "guitar.md",
+                "# Music\n\nFor electric guitar I prefer a Fender \
+                 Stratocaster over a Gibson Les Paul.",
+            ),
+        ] {
+            ingest::ingest_content(fname, body, &brain)
+                .unwrap_or_else(|e| panic!("ingest {fname} failed: {e}"));
+        }
+
+        // recency ablated → deterministic oracle (see the integration
+        // test's ORACLE PROBLEM note); reranker ablated → no CE model.
+        let opts = RecallOpts {
+            top_k: 4,
+            ablate: vec!["recency".to_string(), "reranker".to_string()],
+            ..RecallOpts::default()
+        };
+        let query = "which vector database did we choose for embeddings";
+
+        let (hits, scores) =
+            hybrid_retrieve_with_scores(&brain, query, &opts).expect("with_scores");
+        assert!(!hits.is_empty(), "fixture query returned zero hits");
+        // ADDITIVE-ONLY contract: same hits, same order, same scores as
+        // the plain path (bump_access only touches access_count /
+        // accessed_at, so back-to-back calls are score-stable).
+        let plain = hybrid_retrieve(&brain, query, &opts).expect("plain");
+        assert_eq!(
+            hits.iter().map(|h| &h.engram_id).collect::<Vec<_>>(),
+            plain.iter().map(|h| &h.engram_id).collect::<Vec<_>>(),
+            "with_scores changed hit identity/order vs hybrid_retrieve"
+        );
+        for (a, b) in hits.iter().zip(plain.iter()) {
+            assert_eq!(a.score, b.score, "score drift on {}", a.engram_id);
+        }
+
+        // One map entry per RETURNED hit, with sane per-channel fields.
+        for h in &hits {
+            let cs = scores
+                .get(&h.engram_id)
+                .unwrap_or_else(|| panic!("no ChannelScores for hit {}", h.engram_id));
+            assert!(cs.rrf > 0.0, "surfaced hit must carry fused rrf > 0");
+            assert_eq!(
+                cs.final_score, h.score,
+                "final_score must mirror RecallHit.score"
+            );
+            // Every hit reached fusion through at least one channel.
+            assert!(
+                cs.semantic_rank.is_some() || cs.bm25_rank.is_some() || cs.graph_rank.is_some(),
+                "hit {} surfaced by no channel",
+                h.engram_id
+            );
+            // Ranks are 1-based; raw scores only appear alongside a rank.
+            for r in [cs.semantic_rank, cs.bm25_rank, cs.graph_rank]
+                .into_iter()
+                .flatten()
+            {
+                assert!(r >= 1, "channel ranks are 1-based");
+            }
+            assert!(cs.semantic_sim.is_none() || cs.semantic_rank.is_some());
+            assert!(cs.bm25_score.is_none() || cs.bm25_rank.is_some());
+            assert!(cs.graph_score.is_none(), "graph has no raw score by design");
+            // Reranker ablated → the CE stage never ran.
+            assert!(cs.ce_logit.is_none() && cs.ce_prob.is_none());
+        }
+        db::close_all();
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

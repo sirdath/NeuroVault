@@ -38,6 +38,7 @@ USAGE:
     neurovault-server [--http-only | --mcp-only] [--port N]
     neurovault-server hook <install|uninstall|status>
     neurovault-server hook <user-prompt-submit|session-start>   (called by Claude Code)
+    neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>]
 
 OPTIONS:
     --http-only        Informational. The standalone binary is always
@@ -80,6 +81,14 @@ ENVIRONMENT:
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
+
+    // `ambient` subcommand: debug window into Ambient Recall. Talks to
+    // the running app on :8765 like the hook does, but with debug=true
+    // so the full candidate table + gate reasoning come back. The one
+    // place in the ambient stack where failing LOUDLY is correct.
+    if args.first().map(String::as_str) == Some("ambient") {
+        return ambient_cli(&args[1..]).await;
+    }
 
     // `hook` subcommand: automatic memory for Claude Code. Dispatched
     // before flag parsing — these modes never bind a port or load a
@@ -264,5 +273,193 @@ async fn main() -> ExitCode {
         g.stop().await;
     }
     handle.stop().await;
+    ExitCode::SUCCESS
+}
+
+/// `ambient test "<prompt>" [--cwd <path>] [--brain <id>]` — run one
+/// prompt through /api/ambient_recall with debug=true and pretty-print
+/// the packet, the candidate table, the gate decision, and the final
+/// block. See docs/specs/ambient-recall.md ("Debug CLI").
+async fn ambient_cli(args: &[String]) -> ExitCode {
+    use neurovault_lib::memory::hooks::resolve_repo_branch;
+    use serde_json::{json, Value};
+
+    let usage = "usage: neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>]";
+    if args.first().map(String::as_str) != Some("test") {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+    let Some(prompt) = args.get(1).filter(|p| !p.trim().is_empty()) else {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    };
+    let mut cwd: Option<String> = None;
+    let mut brain: Option<String> = None;
+    let mut i = 2;
+    while i < args.len() {
+        match (args.get(i).map(String::as_str), args.get(i + 1)) {
+            (Some("--cwd"), Some(v)) => {
+                cwd = Some(v.clone());
+                i += 2;
+            }
+            (Some("--brain"), Some(v)) => {
+                brain = Some(v.clone());
+                i += 2;
+            }
+            (Some(other), _) => {
+                eprintln!("unknown argument: {other}\n{usage}");
+                return ExitCode::from(2);
+            }
+            (None, _) => break,
+        }
+    }
+    let cwd = cwd.or_else(|| {
+        env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    });
+    let (repo, branch) = resolve_repo_branch(cwd.as_deref());
+
+    let packet = json!({
+        "prompt": prompt,
+        "cwd": cwd,
+        "session_id": "ambient-cli",
+        "host": "cli",
+        "event": "AmbientTest",
+        "brain": brain,
+        "repo": repo,
+        "branch": branch,
+        "debug": true,
+    });
+    println!("── packet ──────────────────────────────────────────────");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&packet).unwrap_or_default()
+    );
+
+    let base =
+        env::var("NEUROVAULT_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8765".to_string());
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .no_proxy()
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("http client: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let resp = match client
+        .post(format!("{base}/api/ambient_recall"))
+        .json(&packet)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "cannot reach NeuroVault on {base} — is the app (or `neurovault-server --http-only`) running?\n  {e}"
+            );
+            return ExitCode::from(1);
+        }
+    };
+    if !resp.status().is_success() {
+        eprintln!("server error: HTTP {}", resp.status());
+        if let Ok(body) = resp.text().await {
+            eprintln!("{body}");
+        }
+        return ExitCode::from(1);
+    }
+    let v: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("malformed response: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    println!("── candidates ──────────────────────────────────────────");
+    let empty = Vec::new();
+    let cands = v["candidates"].as_array().unwrap_or(&empty);
+    if cands.is_empty() {
+        println!("(none)");
+    } else {
+        println!(
+            "{:<7} {:<8} {:>4} {:>5} {:>6}  {:<24} title",
+            "ce", "rrf", "sem", "bm25", "graph", "signals"
+        );
+        for c in cands {
+            let s = &c["scores"];
+            let fmt_rank = |x: &Value| {
+                x.as_u64()
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|| "-".into())
+            };
+            println!(
+                "{:<7} {:<8} {:>4} {:>5} {:>6}  {:<24} {}{}",
+                s["ce_prob"]
+                    .as_f64()
+                    .map(|p| format!("{p:.2}"))
+                    .unwrap_or_else(|| "-".into()),
+                s["rrf"]
+                    .as_f64()
+                    .map(|p| format!("{p:.4}"))
+                    .unwrap_or_else(|| "-".into()),
+                fmt_rank(&s["semantic_rank"]),
+                fmt_rank(&s["bm25_rank"]),
+                fmt_rank(&s["graph_rank"]),
+                c["signals"]
+                    .as_array()
+                    .map(|a| a
+                        .iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","))
+                    .unwrap_or_default(),
+                c["title"].as_str().unwrap_or("?"),
+                if c["excluded"].as_bool() == Some(true) {
+                    "  [excluded]"
+                } else {
+                    ""
+                },
+            );
+        }
+    }
+
+    println!("── decision ────────────────────────────────────────────");
+    println!(
+        "{} — {}",
+        v["decision"].as_str().unwrap_or("?"),
+        v["reason"].as_str().unwrap_or("?")
+    );
+    println!(
+        "brain: {} · quality: {} contentful token(s){}{} · tokens: {}",
+        v["brain"].as_str().unwrap_or("?"),
+        v["quality"]["contentful_tokens"].as_u64().unwrap_or(0),
+        if v["quality"]["vague"].as_bool() == Some(true) {
+            " · VAGUE"
+        } else {
+            ""
+        },
+        v["quality"]["signals"]
+            .as_array()
+            .filter(|a| !a.is_empty())
+            .map(|a| format!(
+                " · signals: {}",
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+            .unwrap_or_default(),
+        v["tokens"].as_u64().unwrap_or(0),
+    );
+
+    println!("── context block ───────────────────────────────────────");
+    match v["context_block"].as_str() {
+        Some(block) => println!("{block}"),
+        None => println!("no injection"),
+    }
     ExitCode::SUCCESS
 }

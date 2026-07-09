@@ -139,6 +139,7 @@ fn router() -> Router {
         .route("/api/graph", get(graph))
         .route("/api/recall", get(recall))
         .route("/api/query_signal", get(query_signal))
+        .route("/api/ambient_recall", post(ambient_recall))
         .route("/api/recall/multi", post(recall_multi))
         .route("/api/recall_across_brains", get(recall_across_brains))
         .route("/api/recall/chunks", get(recall_chunks))

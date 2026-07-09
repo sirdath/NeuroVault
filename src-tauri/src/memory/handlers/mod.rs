@@ -1300,6 +1300,29 @@ pub async fn query_signal(
     Ok(Json(out))
 }
 
+/// POST /api/ambient_recall — the Ambient Recall engine (see
+/// docs/specs/ambient-recall.md). Body: AmbientQueryPacket. Ambient
+/// traffic never touches the recall throttle: it is machine-paced, and
+/// its own gate is the rate control ("prefer silence over weak
+/// context"). Runs on the blocking pool: retrieval + the reranker are
+/// CPU-bound.
+pub async fn ambient_recall(
+    _s: State<ServerState>,
+    Json(packet): Json<super::ambient::AmbientQueryPacket>,
+) -> Result<Json<super::ambient::AmbientResponse>, ApiError> {
+    let out = tokio::task::spawn_blocking(
+        move || -> Result<super::ambient::AmbientResponse, MemoryError> {
+            let id = resolve_brain_id(packet.brain.as_deref())?;
+            let db = open_brain(&id)?;
+            super::ambient::run(&db, &id, &packet)
+        },
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
 pub async fn recall(
     Query(q): Query<RecallQuery>,
     _s: State<ServerState>,
