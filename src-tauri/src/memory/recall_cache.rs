@@ -222,6 +222,12 @@ pub fn clear_all() {
 mod tests {
     use super::*;
 
+    /// The cache is process-global and every test calls clear_all():
+    /// running them in parallel wipes each other's entries mid-assert
+    /// (the long-standing "one random cache test fails under full-suite
+    /// load" flake — 2026-07-08..10). Serialize them.
+    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn hit(id: &str) -> RecallHit {
         RecallHit {
             engram_id: id.to_string(),
@@ -236,6 +242,7 @@ mod tests {
 
     #[test]
     fn hit_returns_cached_value() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_all();
         put("brain-a", "foo", vec![hit("e1")]);
         let got = get("brain-a", "foo").unwrap();
@@ -245,6 +252,7 @@ mod tests {
 
     #[test]
     fn normalisation_matches_variants() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_all();
         put("brain-a", "  FOO  bar  ", vec![hit("e1")]);
         assert!(get("brain-a", "foo bar").is_some());
@@ -253,6 +261,7 @@ mod tests {
 
     #[test]
     fn invalidate_wipes_brain() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_all();
         put("brain-a", "foo", vec![hit("e1")]);
         invalidate_brain("brain-a");
@@ -261,6 +270,7 @@ mod tests {
 
     #[test]
     fn invalidate_is_brain_scoped() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_all();
         put("brain-a", "foo", vec![hit("e1")]);
         put("brain-b", "foo", vec![hit("e2")]);
@@ -271,6 +281,7 @@ mod tests {
 
     #[test]
     fn lru_evicts_oldest_when_over_cap() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_all();
         for i in 0..(MAX_PER_BRAIN + 20) {
             put("brain-a", &format!("q{}", i), vec![hit(&format!("e{}", i))]);
