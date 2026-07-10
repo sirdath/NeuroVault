@@ -924,8 +924,12 @@ pub fn uninstall_hooks_at(settings_path: &Path) -> Result<String> {
         .map_err(|e| MemoryError::Other(format!("settings.json is not valid JSON: {e}")))?;
     let mut removed = 0usize;
     if let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) {
-        for event in ["UserPromptSubmit", "SessionStart"] {
-            if let Some(list) = hooks.get_mut(event).and_then(|a| a.as_array_mut()) {
+        // Sweep EVERY hook event, not a hardcoded list — when install
+        // grows a new event (Stop/SessionEnd, 2026-07-10), uninstall
+        // must never orphan it. is_our_entry is marker-based, so
+        // foreign entries are untouched regardless of event name.
+        for (_event, list_val) in hooks.iter_mut() {
+            if let Some(list) = list_val.as_array_mut() {
                 let before = list.len();
                 list.retain(|e| !is_our_entry(e));
                 removed += before - list.len();
@@ -1230,6 +1234,28 @@ mod tests {
             }
         }
         cwd
+    }
+
+    #[test]
+    fn uninstall_sweeps_every_event_not_a_hardcoded_list() {
+        let path = tmp_settings("sweep");
+        std::fs::write(&path, "{}").unwrap();
+        let bin = fake_binary();
+        install_for_test(&path, &bin, "sweep").unwrap();
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let events: Vec<&String> = root["hooks"].as_object().unwrap().keys().collect();
+        assert!(events.len() >= 4, "install writes 4 events: {events:?}");
+        uninstall_hooks_at(&path).unwrap();
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for (ev, list) in root["hooks"].as_object().unwrap() {
+            let leftovers: Vec<_> = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| is_our_entry(e))
+                .collect();
+            assert!(leftovers.is_empty(), "orphaned NV entry under {ev}");
+        }
     }
 
     #[test]

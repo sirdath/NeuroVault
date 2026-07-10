@@ -1197,6 +1197,29 @@ fn log_decision_with_trace(
     if let Err(e) = append_log(log_file, &record) {
         eprintln!("[ambient] decision log write failed: {e}");
     }
+    // Journal: the context decision is an EXPERIENCE (the injected/
+    // silent verdict on one intention). Prompt content never enters
+    // the journal — the sha ties it to the ambient log record, which
+    // holds the full Inspector trace.
+    let mut ev = super::journal::Event::now(brain_id, "context_decision", "prompt", &prompt_sha);
+    ev.session_id = packet.session_id.clone();
+    ev.host = packet.host.clone();
+    ev.room = packet.room.clone();
+    ev.actor = "system".into();
+    ev.after = Some(format!(
+        "{} ({}); {} memories, {} tokens",
+        resp.decision,
+        resp.intent.as_deref().unwrap_or("pre-routing"),
+        resp.memories.len(),
+        resp.tokens
+    ));
+    ev.source_refs = vec![format!(
+        "ambient:{}",
+        record["event_id"].as_str().unwrap_or("")
+    )];
+    ev.capture_method = "ambient".into();
+    ev.confidence = 1.0;
+    super::journal::record(ev);
 }
 
 // ---------------------------------------------------------------------------

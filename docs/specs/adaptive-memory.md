@@ -676,6 +676,13 @@ memory visible in the Inspector; low = stays a raw event). That is
 what keeps "automatic" from becoming "silently invent structured
 knowledge."
 
+**Transcript-reader hardening (ticket, pre-consolidation):** when
+consolidation reads transcript references from outcome events, it must
+canonicalise the path, reject symlinks and any path outside approved
+transcript roots (~/.claude/projects), enforce a size limit, and apply
+the private-content rules BEFORE reading. Referencing-not-reading in
+the hook is the load-bearing design; the reader carries the checks.
+
 Roadmap (revised): journal → temporal_diff on it → automatic
 consolidation → post-response/outcome feedback → PersonProfile →
 multi-host adapters → learned salience/recipes only after enough
