@@ -65,6 +65,12 @@ pub struct Event {
     /// same key and are skipped by `append_idempotent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// Explicit turn correlation: the event_id of the context_decision
+    /// that OPENED the turn. Consolidation groups experience units by
+    /// this (and causal `caused_by:<event_id>` source_refs) — never by
+    /// timestamp proximity, which interleaved sessions destroy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     #[serde(default)]
     pub event_id: String,
     #[serde(default)]
@@ -328,6 +334,38 @@ pub fn read_window(
     out
 }
 
+/// Latest event of `event_type` for `session_id`, scanning the newest
+/// segments backwards (bounded: current + previous month). The causal
+/// stamp for outcome events — "which decision opened this turn" — is
+/// resolved HERE, by explicit session identity, never by wall-clock
+/// adjacency.
+pub fn latest_for_session(brain_id: &str, session_id: &str, event_type: &str) -> Option<Event> {
+    let dir = journal_dir(brain_id);
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("events-"))
+        })
+        .collect();
+    files.sort();
+    for path in files.iter().rev().take(2) {
+        let raw = fs::read_to_string(path).ok()?;
+        for line in raw.lines().rev() {
+            let Ok(ev) = serde_json::from_str::<Event>(line) else {
+                continue;
+            };
+            if ev.event_type == event_type && ev.session_id.as_deref() == Some(session_id) {
+                return Some(ev);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +518,58 @@ mod tests {
             assert!(all[0].before.as_ref().unwrap().chars().count() <= 500);
             assert_eq!(all[0].schema_version, 1);
             assert!(all[0].emitter.starts_with("neurovault-core/"));
+        });
+    }
+
+    #[test]
+    fn turn_correlation_survives_interleaved_sessions() {
+        with_temp_home(|| {
+            let b = "jturns";
+            // Two sessions, events fully interleaved in time — the
+            // exact case timestamp-proximity grouping gets wrong.
+            let mut turn_a = Event::now(b, "context_decision", "prompt", "sha-a1");
+            turn_a.session_id = Some("sess-A".into());
+            turn_a.turn_id = Some(turn_a.event_id.clone());
+            append(&turn_a).unwrap();
+
+            let mut turn_b = Event::now(b, "context_decision", "prompt", "sha-b1");
+            turn_b.session_id = Some("sess-B".into());
+            turn_b.turn_id = Some(turn_b.event_id.clone());
+            append(&turn_b).unwrap();
+
+            // B's response arrives BEFORE A's (interleaved).
+            let opened_b = latest_for_session(b, "sess-B", "context_decision").unwrap();
+            let mut resp_b = Event::now(b, "assistant_response_completed", "session", "sess-B");
+            resp_b.session_id = Some("sess-B".into());
+            resp_b.turn_id = opened_b.turn_id.clone();
+            resp_b.source_refs = vec![format!("caused_by:{}", opened_b.event_id)];
+            append(&resp_b).unwrap();
+
+            let opened_a = latest_for_session(b, "sess-A", "context_decision").unwrap();
+            let mut resp_a = Event::now(b, "assistant_response_completed", "session", "sess-A");
+            resp_a.session_id = Some("sess-A".into());
+            resp_a.turn_id = opened_a.turn_id.clone();
+            resp_a.source_refs = vec![format!("caused_by:{}", opened_a.event_id)];
+            append(&resp_a).unwrap();
+
+            // Correlation must pair by turn_id, not order of arrival.
+            assert_eq!(
+                opened_b.event_id, turn_b.event_id,
+                "B's response found B's turn"
+            );
+            assert_eq!(
+                opened_a.event_id, turn_a.event_id,
+                "A's response found A's turn"
+            );
+            let now = OffsetDateTime::now_utc();
+            let evs = read_window(b, now - time::Duration::hours(1), now, None);
+            let by_turn: std::collections::HashMap<Option<String>, usize> =
+                evs.iter().fold(Default::default(), |mut m, e| {
+                    *m.entry(e.turn_id.clone()).or_default() += 1;
+                    m
+                });
+            assert_eq!(by_turn.get(&Some(turn_a.event_id.clone())), Some(&2));
+            assert_eq!(by_turn.get(&Some(turn_b.event_id.clone())), Some(&2));
         });
     }
 

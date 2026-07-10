@@ -1202,6 +1202,10 @@ fn log_decision_with_trace(
     // the journal — the sha ties it to the ambient log record, which
     // holds the full Inspector trace.
     let mut ev = super::journal::Event::now(brain_id, "context_decision", "prompt", &prompt_sha);
+    // A context decision OPENS a turn: its own event_id is the
+    // turn_id that outcome events (response, tools, corrections)
+    // reference — explicit causal grouping, never timestamp proximity.
+    ev.turn_id = Some(ev.event_id.clone());
     ev.session_id = packet.session_id.clone();
     ev.host = packet.host.clone();
     ev.room = packet.room.clone();

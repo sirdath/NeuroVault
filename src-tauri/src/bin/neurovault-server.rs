@@ -39,6 +39,7 @@ USAGE:
     neurovault-server hook <install|uninstall|status>
     neurovault-server hook <user-prompt-submit|session-start|stop|session-end>   (called by Claude Code)
     neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>] [--intent <name>] [--room <folder>]
+    neurovault-server consolidate [--brain <id>] [--room <folder>] [--hours <n>]   (shadow: report only)
 
 OPTIONS:
     --http-only        Informational. The standalone binary is always
@@ -88,6 +89,12 @@ async fn main() -> ExitCode {
     // place in the ambient stack where failing LOUDLY is correct.
     if args.first().map(String::as_str) == Some("ambient") {
         return ambient_cli(&args[1..]).await;
+    }
+
+    // `consolidate` subcommand: run SHADOW consolidation against the
+    // running app and pretty-print the report (writes nothing).
+    if args.first().map(String::as_str) == Some("consolidate") {
+        return consolidate_cli(&args[1..]).await;
     }
 
     // `hook` subcommand: automatic memory for Claude Code. Dispatched
@@ -497,6 +504,109 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
     match v["context_block"].as_str() {
         Some(block) => println!("{block}"),
         None => println!("no injection"),
+    }
+    ExitCode::SUCCESS
+}
+
+/// `consolidate [--brain X] [--room Y] [--hours N]` — shadow-mode
+/// consolidation via the running app; prints proposals + evidence.
+async fn consolidate_cli(args: &[String]) -> ExitCode {
+    use serde_json::{json, Value};
+    let mut brain: Option<String> = None;
+    let mut room: Option<String> = None;
+    let mut hours: i64 = 24;
+    let mut i = 0;
+    while i < args.len() {
+        match (args.get(i).map(String::as_str), args.get(i + 1)) {
+            (Some("--brain"), Some(v)) => {
+                brain = Some(v.clone());
+                i += 2;
+            }
+            (Some("--room"), Some(v)) => {
+                room = Some(v.clone());
+                i += 2;
+            }
+            (Some("--hours"), Some(v)) => {
+                hours = v.parse().unwrap_or(24);
+                i += 2;
+            }
+            (Some(other), _) => {
+                eprintln!("unknown argument: {other}");
+                return ExitCode::from(2);
+            }
+            (None, _) => break,
+        }
+    }
+    let base =
+        env::var("NEUROVAULT_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8765".to_string());
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("http client: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let resp = match client
+        .post(format!("{base}/api/consolidate"))
+        .json(&json!({"brain": brain, "room": room, "window_hours": hours}))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            eprintln!("server error: HTTP {}", r.status());
+            return ExitCode::from(1);
+        }
+        Err(e) => {
+            eprintln!("cannot reach NeuroVault on {base} — is the app running?\n  {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let v: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("malformed response: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    println!(
+        "── consolidation report (SHADOW — nothing written) ─────\nbrain: {} · window: {}h · events: {} · units: {}",
+        v["brain"].as_str().unwrap_or("?"),
+        hours,
+        v["events_read"].as_u64().unwrap_or(0),
+        v["units"].as_array().map(|a| a.len()).unwrap_or(0),
+    );
+    let empty = Vec::new();
+    let props = v["proposals"].as_array().unwrap_or(&empty);
+    if props.is_empty() {
+        println!("no proposals");
+    }
+    for p in props {
+        println!(
+            "\n[{}] {} ({:?} band)\n  object: {} · {}\n  reason: {}\n  evidence: {}",
+            p["proposal_id"].as_str().unwrap_or("?"),
+            p["action"].as_str().unwrap_or("?"),
+            p["band"].as_str().unwrap_or("?"),
+            p["object_id"].as_str().unwrap_or("?"),
+            p["title"].as_str().unwrap_or(""),
+            p["reason"].as_str().unwrap_or(""),
+            p["evidence"]
+                .as_array()
+                .map(|a| a
+                    .iter()
+                    .filter_map(|x| x.as_str())
+                    .map(|s| &s[..8.min(s.len())])
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_default(),
+        );
+    }
+    for n in v["notes"].as_array().unwrap_or(&empty) {
+        println!("note: {}", n.as_str().unwrap_or(""));
     }
     ExitCode::SUCCESS
 }

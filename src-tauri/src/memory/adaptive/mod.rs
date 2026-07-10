@@ -21,6 +21,7 @@
 //! layer can never regress the shipped behavior.
 
 pub mod composer;
+pub mod consolidate;
 pub mod orchestrator;
 pub mod recipes;
 pub mod router;

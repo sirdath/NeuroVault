@@ -1301,6 +1301,73 @@ pub async fn query_signal(
 }
 
 #[derive(Deserialize)]
+pub struct ConsolidateBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+    /// Window to consolidate, in hours back from now (default 24).
+    #[serde(default)]
+    window_hours: Option<i64>,
+}
+
+/// POST /api/consolidate — SHADOW mode (stage 1): reads experience
+/// units from the journal, returns a deterministic report with
+/// evidence-cited proposals, writes NOTHING to memories. The report
+/// also lands in logs/consolidation_reports.jsonl for the Inspector.
+pub async fn consolidate_shadow(
+    _s: State<ServerState>,
+    Json(body): Json<ConsolidateBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let scope = scope_for(&id, body.room.as_deref());
+        let now = time::OffsetDateTime::now_utc();
+        let hours = body.window_hours.unwrap_or(24).clamp(1, 24 * 90);
+        let report = super::adaptive::consolidate::run_shadow(
+            &scope,
+            now - time::Duration::hours(hours),
+            now,
+        )?;
+        serde_json::to_value(&report).map_err(|e| MemoryError::Other(e.to_string()))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/consolidation_reports — the Inspector's consolidation feed.
+pub async fn consolidation_reports(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let limit = q.limit.unwrap_or(20).min(200);
+        let path = super::paths::nv_home()
+            .join("logs")
+            .join("consolidation_reports.jsonl");
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let records: Vec<serde_json::Value> = raw
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter(|r: &serde_json::Value| {
+                q.brain_id
+                    .as_deref()
+                    .is_none_or(|b| r["brain"].as_str() == Some(b))
+            })
+            .take(limit)
+            .collect();
+        Ok(serde_json::json!({ "count": records.len(), "records": records }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
 pub struct JournalEventBody {
     #[serde(default, alias = "brain")]
     brain_id: Option<String>,
@@ -1369,6 +1436,21 @@ pub async fn journal_event(
             .capture_method
             .clone()
             .unwrap_or_else(|| "endpoint".into());
+        // Causal turn stamping: outcome events reference the
+        // context_decision that opened their turn — resolved by
+        // explicit session identity, never wall-clock adjacency
+        // (interleaved sessions destroy timestamp grouping).
+        if ev.turn_id.is_none() && ev.event_type != "context_decision" {
+            if let Some(sid) = ev.session_id.clone() {
+                if let Some(opened) =
+                    super::journal::latest_for_session(&id, &sid, "context_decision")
+                {
+                    ev.turn_id = opened.turn_id.clone();
+                    ev.source_refs
+                        .push(format!("caused_by:{}", opened.event_id));
+                }
+            }
+        }
         let written = super::journal::append_idempotent(&ev)?;
         Ok(serde_json::json!({
             "brain": id,
