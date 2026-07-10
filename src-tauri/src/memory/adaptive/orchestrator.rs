@@ -19,10 +19,13 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use super::recipes::{ContextRecipe, SectionSource, SectionSpec};
+use super::salience::{age_days, salience, SalienceInput};
 use super::types::{load_working_state, WorkingState};
 use super::Scope;
 use crate::memory::db::BrainDb;
-use crate::memory::retriever::{hybrid_retrieve_with_scores, RecallOpts, THROTTLE_HINT_ID};
+use crate::memory::retriever::{
+    hybrid_retrieve_with_scores, structural_confidence, RecallOpts, THROTTLE_HINT_ID,
+};
 use crate::memory::types::MemoryError;
 use crate::memory::{reranker, todos};
 
@@ -41,6 +44,8 @@ pub struct SectionItem {
     pub engram_id: Option<String>,
     /// CE probability when the item came through the pooled rerank.
     pub ce_prob: Option<f64>,
+    /// Salience (spec §5.2) when the item is an engram.
+    pub salience: Option<f64>,
 }
 
 /// A section after retrieval + gating.
@@ -92,6 +97,7 @@ pub fn run_recipe(
         engram_id: String,
         title: String,
         content: String,
+        salience: f64,
     }
 
     let mut raw: Vec<RawSection> = Vec::with_capacity(recipe.sections.len());
@@ -116,6 +122,7 @@ pub fn run_recipe(
                         line: render_working_state(&ws, stale, now, sanitize),
                         engram_id: None,
                         ce_prob: None,
+                        salience: None,
                     });
                 }
             }
@@ -134,6 +141,7 @@ pub fn run_recipe(
                             line,
                             engram_id: None,
                             ce_prob: None,
+                            salience: None,
                         });
                     }
                     if open.is_empty() {
@@ -178,11 +186,24 @@ pub fn run_recipe(
                                 ));
                                 continue;
                             }
+                            // Lifecycle gate (spec §5.1): superseded /
+                            // rejected / archived memories are never
+                            // auto-injected, whatever their relevance.
+                            let row = lifecycle_row(db, &h.engram_id);
+                            if let Some(reason) = lifecycle_verdict(
+                                row.as_ref().map(|r| r.state.as_str()).unwrap_or("active"),
+                                row.as_ref().and_then(|r| r.superseded_by.as_deref()),
+                            ) {
+                                sec.skipped.push((short(&h.engram_id), reason.to_string()));
+                                continue;
+                            }
+                            let sal = row.as_ref().map(|r| r.salience(now)).unwrap_or(0.5);
                             seen_engrams.insert(h.engram_id.clone(), raw.len());
                             sec.cands.push(RawCand {
                                 engram_id: h.engram_id,
                                 title: h.title,
                                 content: h.content,
+                                salience: sal,
                             });
                         }
                     }
@@ -258,13 +279,29 @@ pub fn run_recipe(
                 ));
             } else {
                 // Rank by CE within the section, gate on the floor.
-                let mut scored: Vec<(usize, f64)> = sec
+                let mut scored: Vec<(usize, f64, f64)> = sec
                     .cands
                     .iter()
                     .enumerate()
-                    .map(|(ci, _)| (ci, ce_map.get(&(si, ci)).copied().unwrap_or(0.0)))
+                    .map(|(ci, c)| {
+                        (
+                            ci,
+                            ce_map.get(&(si, ci)).copied().unwrap_or(0.0),
+                            c.salience,
+                        )
+                    })
                     .collect();
-                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                // PlaybookRules order by SALIENCE first (standing
+                // orders: importance and freshness outrank prompt
+                // similarity); everything else by CE with salience as
+                // the tiebreak (spec §5.2: salience orders within a
+                // type, never overrides relevance).
+                let rules_first = matches!(sec.spec.source, SectionSource::PlaybookRules);
+                scored.sort_by(|a, b| {
+                    let ka = if rules_first { (a.2, a.1) } else { (a.1, a.2) };
+                    let kb = if rules_first { (b.2, b.1) } else { (b.1, b.2) };
+                    kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
+                });
                 // PlaybookRules are standing orders: they apply
                 // because they're IN SCOPE, not because they resemble
                 // the prompt ("avoid cost-cutting framing" must gate a
@@ -278,7 +315,7 @@ pub fn run_recipe(
                     SectionSource::PlaybookRules => 0.0,
                     _ => recipe.gate.ce_floor,
                 };
-                for (ci, p) in scored {
+                for (ci, p, sal) in scored {
                     let c = &sec.cands[ci];
                     if result.items.len() >= sec.spec.max_items {
                         break;
@@ -304,6 +341,7 @@ pub fn run_recipe(
                         ),
                         engram_id: Some(c.engram_id.clone()),
                         ce_prob: Some(p),
+                        salience: Some(sal),
                     });
                 }
             }
@@ -344,6 +382,90 @@ fn section_query(
             format!("{folder}after:{date} {text}")
         }
         _ => format!("{folder}{text}"),
+    }
+}
+
+/// The lifecycle fields salience + the gate need, in one PK lookup.
+struct LifecycleRow {
+    state: String,
+    superseded_by: Option<String>,
+    kind: String,
+    use_count: u32,
+    importance: String,
+    /// Freshest of last_confirmed_at / accessed_at / updated_at /
+    /// created_at (RFC-3339-ish).
+    last_touch: Option<String>,
+}
+
+impl LifecycleRow {
+    fn salience(&self, now: time::OffsetDateTime) -> f64 {
+        let age = self
+            .last_touch
+            .as_deref()
+            .and_then(parse_when)
+            .map(|t| age_days(t, now))
+            .unwrap_or(365.0);
+        let conf = structural_confidence(&self.kind);
+        salience(&SalienceInput {
+            age_days: age,
+            kind: self.kind.clone(),
+            use_count: self.use_count,
+            importance: self.importance.clone(),
+            confidence: conf,
+            reliability: conf,
+            ..SalienceInput::default()
+        })
+    }
+}
+
+/// SQLite timestamps here are either RFC-3339 or the space-separated
+/// `datetime('now')` shape; accept both.
+fn parse_when(raw: &str) -> Option<time::OffsetDateTime> {
+    use time::format_description::well_known::Rfc3339;
+    if let Ok(t) = time::OffsetDateTime::parse(raw, &Rfc3339) {
+        return Some(t);
+    }
+    let patched = format!("{}Z", raw.replace(' ', "T"));
+    time::OffsetDateTime::parse(&patched, &Rfc3339).ok()
+}
+
+fn lifecycle_row(db: &BrainDb, engram_id: &str) -> Option<LifecycleRow> {
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COALESCE(state,'active'), superseded_by, COALESCE(kind,'note'), \
+                COALESCE(access_count,0), COALESCE(importance,'normal'), \
+                COALESCE(last_confirmed_at, accessed_at, updated_at, created_at) \
+         FROM engrams WHERE id = ?1",
+        [engram_id],
+        |r| {
+            Ok(LifecycleRow {
+                state: r.get(0)?,
+                superseded_by: r.get(1)?,
+                kind: r.get(2)?,
+                use_count: r.get::<_, i64>(3)? as u32,
+                importance: r.get(4)?,
+                last_touch: r.get(5)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// Spec §5.1: statuses that are NEVER auto-injected. Superseded and
+/// rejected memories stay retrievable by explicit search (and
+/// explain_decision will label them as history in V1c); ambient
+/// context must only carry live facts.
+fn lifecycle_verdict(state: &str, superseded_by: Option<&str>) -> Option<&'static str> {
+    if let Some(s) = superseded_by {
+        if !s.is_empty() {
+            return Some("superseded");
+        }
+    }
+    match state {
+        "archived" => Some("archived"),
+        "rejected" => Some("rejected"),
+        "dormant" => Some("deleted"),
+        _ => None,
     }
 }
 
@@ -439,6 +561,16 @@ mod tests {
             section_query(SectionSource::Semantic, "plain", &brain, now),
             "plain"
         );
+    }
+
+    #[test]
+    fn lifecycle_verdict_blocks_dead_states_only() {
+        assert_eq!(lifecycle_verdict("active", None), None);
+        assert_eq!(lifecycle_verdict("fresh", Some("")), None);
+        assert_eq!(lifecycle_verdict("archived", None), Some("archived"));
+        assert_eq!(lifecycle_verdict("rejected", None), Some("rejected"));
+        assert_eq!(lifecycle_verdict("dormant", None), Some("deleted"));
+        assert_eq!(lifecycle_verdict("active", Some("abc")), Some("superseded"));
     }
 
     #[test]

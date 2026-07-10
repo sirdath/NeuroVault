@@ -1426,7 +1426,8 @@ pub async fn playbook_rule_create(
             // preference-extraction heuristics.
             let conn = ctx.db.lock();
             let _ = conn.execute(
-                "UPDATE engrams SET kind = 'preference' WHERE id = ?1",
+                "UPDATE engrams SET kind = 'preference', importance = 'high', \
+                 last_confirmed_at = datetime('now') WHERE id = ?1",
                 rusqlite::params![res.engram_id],
             );
         }

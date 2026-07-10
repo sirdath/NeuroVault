@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     agent_id     TEXT,                 -- which agent wrote this (claude-code, cursor, claude-desktop, user, etc.)
     superseded_by     TEXT,            -- engram id that replaced this one; non-null = stale, hidden from default recall (reversible metadata, note stays on disk)
     superseded_reason TEXT,            -- short why, set when an agent/user retires this note
+    importance        TEXT DEFAULT 'normal', -- low|normal|high; user corrections write high (adaptive-memory §5)
+    last_confirmed_at TEXT,            -- re-confirmation refreshes salience without editing the note
     created_at   TEXT DEFAULT (datetime('now')),
     updated_at   TEXT DEFAULT (datetime('now')),
     accessed_at  TEXT DEFAULT (datetime('now'))

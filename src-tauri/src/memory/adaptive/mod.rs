@@ -24,6 +24,7 @@ pub mod composer;
 pub mod orchestrator;
 pub mod recipes;
 pub mod router;
+pub mod salience;
 pub mod types;
 
 use serde::{Deserialize, Serialize};

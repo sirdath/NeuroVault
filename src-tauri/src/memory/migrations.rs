@@ -37,6 +37,29 @@ pub fn run_all(conn: &Connection) -> Result<()> {
     migrate_add_summaries(conn)?;
     migrate_add_expired_at(conn)?;
     migrate_add_supersession(conn)?;
+    migrate_add_lifecycle(conn)?;
+    Ok(())
+}
+
+/// Adaptive Memory V1b (docs/specs/adaptive-memory.md §5): salience
+/// and lifecycle need `importance` (low|normal|high — user corrections
+/// write high) and `last_confirmed_at` (a re-confirmation refreshes a
+/// memory without editing it). Status itself reuses the existing
+/// `state` column (active/dormant + archived/rejected) and the
+/// existing `superseded_by` column — no parallel status field.
+pub fn migrate_add_lifecycle(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "engrams")? {
+        return Ok(()); // fresh DB: schema.sql creates the full shape
+    }
+    if !column_exists(conn, "engrams", "importance")? {
+        conn.execute(
+            "ALTER TABLE engrams ADD COLUMN importance TEXT DEFAULT 'normal'",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "engrams", "last_confirmed_at")? {
+        conn.execute("ALTER TABLE engrams ADD COLUMN last_confirmed_at TEXT", [])?;
+    }
     Ok(())
 }
 
