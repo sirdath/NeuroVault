@@ -1301,6 +1301,88 @@ pub async fn query_signal(
 }
 
 #[derive(Deserialize)]
+pub struct JournalEventBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    event_type: String,
+    #[serde(default)]
+    object_type: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    source_refs: Vec<String>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+    #[serde(default)]
+    capture_method: Option<String>,
+}
+
+/// POST /api/journal_event — the outcome-capture channel (adaptive
+/// spec §12b). Thin hosts (hooks, IDE adapters) report normalized
+/// experience events; the server stamps identity and appends to the
+/// immutable journal. Idempotent when the caller supplies a key
+/// (repeated hook deliveries are one occurrence).
+pub async fn journal_event(
+    _s: State<ServerState>,
+    Json(body): Json<JournalEventBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        if body.event_type.trim().is_empty() {
+            return Err(MemoryError::Other("event_type required".into()));
+        }
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let mut ev = super::journal::Event::now(
+            &id,
+            body.event_type.trim(),
+            body.object_type.as_deref().unwrap_or("session"),
+            body.object_id
+                .as_deref()
+                .or(body.session_id.as_deref())
+                .unwrap_or("unknown"),
+        );
+        ev.room = body.room.clone();
+        ev.session_id = body.session_id.clone();
+        ev.host = body.host.clone();
+        if let Some(a) = &body.actor {
+            ev.actor = a.clone();
+        }
+        ev.title = body.title.clone();
+        ev.before = body.before.clone();
+        ev.after = body.after.clone();
+        ev.source_refs = body.source_refs.clone();
+        ev.idempotency_key = body.idempotency_key.clone();
+        ev.capture_method = body
+            .capture_method
+            .clone()
+            .unwrap_or_else(|| "endpoint".into());
+        let written = super::journal::append_idempotent(&ev)?;
+        Ok(serde_json::json!({
+            "brain": id,
+            "event_id": ev.event_id,
+            "written": written,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
 pub struct AmbientLogQuery {
     #[serde(default)]
     limit: Option<usize>,

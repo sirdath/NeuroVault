@@ -270,6 +270,17 @@ pub async fn run_hook_event(event: &str) -> u8 {
             }
             0
         }
+        // Outcome capture (adaptive spec §12b): what the AI DID, not
+        // just what the user asked. Print nothing — these hooks exist
+        // only to journal experience; every failure is silent exit 0.
+        "stop" => {
+            report_outcome(&payload, "assistant_response_completed").await;
+            0
+        }
+        "session-end" => {
+            report_outcome(&payload, "session_ended").await;
+            0
+        }
         _ => {
             // Never exit 2 from the hook path: for UserPromptSubmit,
             // exit 2 BLOCKS the user's prompt. A version-skewed binary
@@ -432,6 +443,58 @@ fn inject_line(block: &str) -> String {
 
 /// SessionStart: one compact brain bootstrap — core memory, top
 /// memories, open todos. Injected once, before the first prompt.
+/// Build the outcome event payload for POST /api/journal_event. Pure
+/// (testable): None when the payload lacks a session id. The
+/// idempotency key ties redeliveries of the same occurrence together:
+/// Stop fires per assistant turn, so the transcript byte-length at
+/// fire time distinguishes turns within a session without reading the
+/// transcript (privacy: content travels by REFERENCE — consolidation
+/// reads it later, with consent semantics, not the hook).
+fn outcome_event(payload: &Value, event_type: &str) -> Option<Value> {
+    let session = payload.get("session_id")?.as_str()?;
+    let transcript = payload.get("transcript_path").and_then(|t| t.as_str());
+    let transcript_len = transcript
+        .and_then(|t| std::fs::metadata(t).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let key = match event_type {
+        "assistant_response_completed" => format!("stop-{session}-{transcript_len}"),
+        _ => format!("{event_type}-{session}"),
+    };
+    Some(json!({
+        "event_type": event_type,
+        "object_type": "session",
+        "object_id": session,
+        "session_id": session,
+        "host": "claude_code",
+        "actor": "agent:claude-code",
+        "source_refs": transcript.map(|t| vec![t.to_string()]).unwrap_or_default(),
+        "after": payload.get("cwd").and_then(|c| c.as_str()).map(|c| format!("cwd: {c}")),
+        "idempotency_key": key,
+        "capture_method": "hook",
+    }))
+}
+
+/// Fire-and-forget outcome report. Shorter timeout than recall: a
+/// Stop hook must never make "Claude finished" feel slow.
+async fn report_outcome(payload: &Value, event_type: &str) {
+    let Some(body) = outcome_event(payload, event_type) else {
+        return;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1_500))
+        .no_proxy()
+        .build()
+    else {
+        return;
+    };
+    let _ = client
+        .post(format!("{}/api/journal_event", api_base()))
+        .json(&body)
+        .send()
+        .await;
+}
+
 async fn session_context(_payload: &Value) -> Option<String> {
     let client = http_client()?;
     let resp: Value = client
@@ -679,7 +742,12 @@ pub fn claude_settings_path() -> PathBuf {
 /// the hook SUBCOMMAND arguments, not the binary path — the path varies
 /// (dev target/, /Applications, target-triple-suffixed sidecar names)
 /// but `<binary> hook user-prompt-submit` is uniquely ours.
-const HOOK_ARG_MARKERS: [&str; 2] = [" hook user-prompt-submit", " hook session-start"];
+const HOOK_ARG_MARKERS: [&str; 4] = [
+    " hook user-prompt-submit",
+    " hook session-start",
+    " hook stop",
+    " hook session-end",
+];
 
 fn is_our_entry(entry: &Value) -> bool {
     entry
@@ -818,6 +886,8 @@ pub fn install_hooks_snapshot(
             "session-start",
             Some("startup|resume|clear"),
         ),
+        ("Stop", "stop", None),
+        ("SessionEnd", "session-end", None),
     ] {
         let arr = hooks
             .as_object_mut()
@@ -1160,6 +1230,26 @@ mod tests {
             }
         }
         cwd
+    }
+
+    #[test]
+    fn outcome_event_builder_is_pure_and_keyed() {
+        // no session id -> no event, hook stays silent
+        assert!(outcome_event(&json!({}), "assistant_response_completed").is_none());
+        let ev = outcome_event(
+            &json!({"session_id": "s-9", "transcript_path": "/nonexistent/t.jsonl", "cwd": "/w"}),
+            "assistant_response_completed",
+        )
+        .unwrap();
+        assert_eq!(ev["event_type"], "assistant_response_completed");
+        assert_eq!(ev["object_id"], "s-9");
+        assert_eq!(ev["host"], "claude_code");
+        // transcript missing -> len 0, key still deterministic
+        assert_eq!(ev["idempotency_key"], "stop-s-9-0");
+        assert_eq!(ev["source_refs"][0], "/nonexistent/t.jsonl");
+        assert_eq!(ev["after"], "cwd: /w");
+        let end = outcome_event(&json!({"session_id": "s-9"}), "session_ended").unwrap();
+        assert_eq!(end["idempotency_key"], "session_ended-s-9");
     }
 
     #[test]

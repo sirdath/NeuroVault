@@ -34,9 +34,37 @@ use super::types::MemoryError;
 
 type Result<T> = std::result::Result<T, MemoryError>;
 
+fn default_schema_version() -> u8 {
+    1
+}
+
+/// Per-process monotonic counter backing `Event.seq`.
+static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Bounded evidence: large payloads are stored by REFERENCE
+/// (`source_refs`), never inlined — before/after are summaries.
+const FIELD_CAP: usize = 500;
+
 /// One experience. Field names follow the adaptive-memory spec.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Event {
+    /// Journal schema version — consumers branch on this, replays
+    /// across versions stay interpretable.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u8,
+    /// Who wrote this ("neurovault-core/<crate version>").
+    #[serde(default)]
+    pub emitter: String,
+    /// Per-process monotonic sequence — ordering must never depend
+    /// solely on wall-clock timestamps (same-second events, clock
+    /// skew). Readers sort by (ts, seq).
+    #[serde(default)]
+    pub seq: u64,
+    /// Optional writer-side dedup key: repeated hook deliveries of the
+    /// same underlying occurrence (retries, re-fired hooks) carry the
+    /// same key and are skipped by `append_idempotent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(default)]
     pub event_id: String,
     #[serde(default)]
@@ -95,6 +123,9 @@ impl Event {
     /// Convenience constructor stamping id/ts and the common fields.
     pub fn now(brain_id: &str, event_type: &str, object_type: &str, object_id: &str) -> Self {
         Event {
+            schema_version: 1,
+            emitter: format!("neurovault-core/{}", env!("CARGO_PKG_VERSION")),
+            seq: SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             event_id: uuid::Uuid::new_v4().to_string(),
             ts: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
@@ -129,6 +160,23 @@ fn segment_for(ts: &str) -> String {
 /// on a file opened O_APPEND). Errors bubble; hot-path callers use
 /// [`record`] instead.
 pub fn append(event: &Event) -> Result<()> {
+    // Privacy exclusion: private folders never enter the journal.
+    if is_private(event) {
+        return Ok(());
+    }
+    let mut event = event.clone();
+    // Bounded evidence — big payloads travel by reference.
+    if let Some(b) = &event.before {
+        if b.chars().count() > FIELD_CAP {
+            event.before = Some(b.chars().take(FIELD_CAP).collect());
+        }
+    }
+    if let Some(a) = &event.after {
+        if a.chars().count() > FIELD_CAP {
+            event.after = Some(a.chars().take(FIELD_CAP).collect());
+        }
+    }
+    let event = &event;
     let dir = journal_dir(&event.brain_id);
     fs::create_dir_all(&dir).map_err(|e| MemoryError::Other(format!("journal dir: {e}")))?;
     let path = dir.join(segment_for(&event.ts));
@@ -139,8 +187,47 @@ pub fn append(event: &Event) -> Result<()> {
         .append(true)
         .open(&path)
         .map_err(|e| MemoryError::Other(format!("journal open: {e}")))?;
-    writeln!(f, "{line}").map_err(|e| MemoryError::Other(format!("journal write: {e}")))?;
+    // ONE write syscall for line+newline: O_APPEND makes a single
+    // write atomic w.r.t. the offset, but `writeln!` may split into
+    // multiple writes and interleave under concurrency (caught by the
+    // invariant test — 129/200 events survived 8 threads before this).
+    let mut buf = line.into_bytes();
+    buf.push(b'\n');
+    f.write_all(&buf)
+        .map_err(|e| MemoryError::Other(format!("journal write: {e}")))?;
     Ok(())
+}
+
+/// Folders whose contents never enter the journal (privacy rule; the
+/// Gatekeeper employee extends this later). Matches any path segment.
+fn is_private(event: &Event) -> bool {
+    let private_seg = |s: &str| {
+        s.split('/')
+            .any(|seg| seg == "_private" || seg == ".private" || seg.starts_with('.'))
+    };
+    event.privacy_label.as_deref() == Some("sensitive")
+        || event.room.as_deref().is_some_and(private_seg)
+        || (event.object_type == "engram" && private_seg(&event.object_id))
+        || event.title.as_deref().is_some_and(private_seg)
+}
+
+/// Append unless an event with the same `idempotency_key` already sits
+/// in the tail of the current segment (bounded 64 KiB scan — repeated
+/// hook deliveries land close together; a same-key event months apart
+/// is a different occurrence).
+pub fn append_idempotent(event: &Event) -> Result<bool> {
+    if let Some(key) = &event.idempotency_key {
+        let path = journal_dir(&event.brain_id).join(segment_for(&event.ts));
+        if let Ok(raw) = fs::read_to_string(&path) {
+            let tail_start = raw.len().saturating_sub(64 * 1024);
+            let needle = format!("\"idempotency_key\":\"{key}\"");
+            if raw[tail_start..].contains(&needle) {
+                return Ok(false);
+            }
+        }
+    }
+    append(event)?;
+    Ok(true)
 }
 
 /// Fail-soft append for hot paths (ingest, hooks, endpoints): the
@@ -235,6 +322,9 @@ pub fn read_window(
             out.push(ev);
         }
     }
+    // Ordering never depends solely on wall-clock: (ts, seq) is the
+    // journal's total order for same-process bursts.
+    out.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.seq.cmp(&b.seq)));
     out
 }
 
@@ -242,7 +332,13 @@ pub fn read_window(
 mod tests {
     use super::*;
 
+    /// NEUROVAULT_HOME is process-global: tests touching it must
+    /// serialize or they read each other's homes (the documented
+    /// env-var race from retrieval_integration.rs).
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn with_temp_home<F: FnOnce()>(f: F) {
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let home = std::env::temp_dir().join(format!(
             "nv-journal-{}-{}",
             std::process::id(),
@@ -296,6 +392,94 @@ mod tests {
             let wide_start = OffsetDateTime::parse("2020-01-01T00:00:00Z", &Rfc3339).unwrap();
             let wide = read_window(b, wide_start, now, None);
             assert_eq!(wide.len(), 3);
+        });
+    }
+
+    #[test]
+    fn concurrent_appends_do_not_interleave_or_lose_writes() {
+        with_temp_home(|| {
+            let b = "jconc";
+            let threads: Vec<_> = (0..8)
+                .map(|t| {
+                    std::thread::spawn(move || {
+                        for i in 0..25 {
+                            let mut ev =
+                                Event::now(b, "task_created", "task", &format!("t{t}-{i}"));
+                            ev.title = Some(format!("payload {t}-{i} {}", "x".repeat(300)));
+                            append(&ev).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+            let now = OffsetDateTime::now_utc();
+            let all = read_window(b, now - time::Duration::hours(1), now, None);
+            assert_eq!(all.len(), 200, "no lost or torn writes");
+            // every line parsed (torn writes would have been skipped
+            // and dropped the count); ids unique
+            let ids: std::collections::HashSet<_> = all.iter().map(|e| &e.event_id).collect();
+            assert_eq!(ids.len(), 200);
+        });
+    }
+
+    #[test]
+    fn idempotent_append_skips_redelivery() {
+        with_temp_home(|| {
+            let b = "jidem";
+            let mut ev = Event::now(b, "assistant_response_completed", "session", "s1");
+            ev.idempotency_key = Some("stop-s1-42".into());
+            assert!(append_idempotent(&ev).unwrap());
+            let mut redelivery = ev.clone();
+            redelivery.event_id = uuid::Uuid::new_v4().to_string();
+            assert!(
+                !append_idempotent(&redelivery).unwrap(),
+                "redelivery skipped"
+            );
+            let now = OffsetDateTime::now_utc();
+            assert_eq!(
+                read_window(b, now - time::Duration::hours(1), now, None).len(),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn ordering_uses_seq_within_same_timestamp_and_replay_is_deterministic() {
+        with_temp_home(|| {
+            let b = "jorder";
+            let ts = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
+            for i in 0..5u64 {
+                let mut ev = Event::now(b, "note_created", "engram", &format!("n{i}"));
+                ev.ts = ts.clone(); // identical wall-clock
+                append(&ev).unwrap();
+            }
+            let now = OffsetDateTime::now_utc() + time::Duration::minutes(1);
+            let a = read_window(b, now - time::Duration::hours(1), now, None);
+            let b2 = read_window(b, now - time::Duration::hours(1), now, None);
+            let ids_a: Vec<_> = a.iter().map(|e| e.object_id.clone()).collect();
+            let ids_b: Vec<_> = b2.iter().map(|e| e.object_id.clone()).collect();
+            assert_eq!(ids_a, ids_b, "replay produces identical order");
+            assert_eq!(ids_a, vec!["n0", "n1", "n2", "n3", "n4"], "seq order");
+        });
+    }
+
+    #[test]
+    fn private_paths_and_big_payloads_are_guarded() {
+        with_temp_home(|| {
+            let b = "jpriv";
+            let mut ev = Event::now(b, "note_created", "engram", "_private/diary.md");
+            append(&ev).unwrap(); // silently excluded
+            ev = Event::now(b, "note_created", "engram", "ok.md");
+            ev.before = Some("y".repeat(5000));
+            append(&ev).unwrap();
+            let now = OffsetDateTime::now_utc();
+            let all = read_window(b, now - time::Duration::hours(1), now, None);
+            assert_eq!(all.len(), 1, "private event never journaled");
+            assert!(all[0].before.as_ref().unwrap().chars().count() <= 500);
+            assert_eq!(all[0].schema_version, 1);
+            assert!(all[0].emitter.starts_with("neurovault-core/"));
         });
     }
 

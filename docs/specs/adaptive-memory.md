@@ -640,11 +640,30 @@ Emitters (V1): note_created/updated (ingest — an unchanged content
 hash emits NOTHING; index refreshes are not experiences),
 note_superseded, task_created/completed (todos), playbook_rule_added
 (explicit corrections, confidence 0.95), working_state_updated
-(before → after). Planned: session boundaries, assistant/tool
-outcomes, file watchers — every host adapter emits the same
-normalized events, capturing as many of the boundaries (before prompt
-→ after response → after tools → session end) as the host exposes;
-intentions without outcomes are half a memory.
+(before → after). **Outcome channel (shipped)**: Claude Code `Stop` →
+`assistant_response_completed` (transcript by REFERENCE, never
+inlined; idempotency-keyed per turn) and `SessionEnd` →
+`session_ended`, via `POST /api/journal_event` — intentions without
+outcomes are half a memory. Planned: tool/agent outcomes, files
+changed during runs, post-output corrections; every host adapter
+emits the same normalized events across whatever boundaries it
+exposes (before prompt → after response → after tools → session end).
+
+**Journal invariants (verified by tests, 2026-07-10):** concurrent
+appends never tear or lose writes (single-syscall O_APPEND — the
+invariant test caught a real `writeln!` tearing bug); repeated hook
+delivery is idempotent (`idempotency_key`, bounded tail scan); events
+carry `schema_version` + `emitter`; ordering is (ts, seq), never
+wall-clock alone; before/after are bounded (500 chars) with large
+payloads by reference; private path segments and `sensitive` labels
+never enter the journal; a corrupt line never breaks a segment read;
+replay produces identical projected order. Backfilled projections are
+marked and never written into the journal. Consolidation rules
+(§ bands above, plus: replayable + idempotent, every derived memory
+cites its evidence event ids, LLM output is untrusted schema-validated
+input, cursor+write advance atomically, the Inspector shows why
+anything was created/merged/superseded/withheld) bind its
+implementation.
 
 temporal_diff is the journal's first consumer (journal-first
 collection; state synthesis survives only as BACKFILL for pre-journal

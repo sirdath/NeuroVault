@@ -37,7 +37,7 @@ neurovault-server: standalone HTTP server for the NeuroVault memory layer.
 USAGE:
     neurovault-server [--http-only | --mcp-only] [--port N]
     neurovault-server hook <install|uninstall|status>
-    neurovault-server hook <user-prompt-submit|session-start>   (called by Claude Code)
+    neurovault-server hook <user-prompt-submit|session-start|stop|session-end>   (called by Claude Code)
     neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>] [--intent <name>] [--room <folder>]
 
 OPTIONS:
@@ -97,9 +97,10 @@ async fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("hook") {
         use neurovault_lib::memory::hooks;
         return match args.get(1).map(String::as_str) {
-            Some("user-prompt-submit") | Some("session-start") => {
-                ExitCode::from(hooks::run_hook_event(args[1].as_str()).await)
-            }
+            Some("user-prompt-submit")
+            | Some("session-start")
+            | Some("stop")
+            | Some("session-end") => ExitCode::from(hooks::run_hook_event(args[1].as_str()).await),
             Some("install") => {
                 let Ok(exe) = env::current_exe() else {
                     eprintln!("cannot resolve own binary path");

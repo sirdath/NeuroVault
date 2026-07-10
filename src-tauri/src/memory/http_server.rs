@@ -141,6 +141,7 @@ fn router() -> Router {
         .route("/api/query_signal", get(query_signal))
         .route("/api/ambient_recall", post(ambient_recall))
         .route("/api/ambient_log", get(ambient_log))
+        .route("/api/journal_event", post(journal_event))
         .route(
             "/api/working_state",
             get(working_state_get).post(working_state_set),
