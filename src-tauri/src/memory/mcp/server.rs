@@ -151,7 +151,7 @@ mod tests {
     fn full_tier_shows_all_tools() {
         std::env::set_var("NEUROVAULT_MCP_TIER", "full");
         let s = NeuroVaultMcp::new(None);
-        assert_eq!(s.visible_tools().len(), 54);
+        assert_eq!(s.visible_tools().len(), 55);
         std::env::remove_var("NEUROVAULT_MCP_TIER");
     }
 

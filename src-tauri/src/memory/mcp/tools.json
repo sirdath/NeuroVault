@@ -3159,5 +3159,94 @@
    "body": [],
    "special": null
   }
+ },
+ {
+  "name": "get_relevant_context",
+  "title": "Get relevant context (Adaptive Memory)",
+  "description": "Intent-aware context for the current situation. Routes the query through the MemoryRouter (continue_work, prepare_brief, draft_output, review_risks, explain_decision, find_source, temporal_diff, general_question), retrieves per the intent's ContextRecipe (working state, decisions, tasks, playbook rules, sources), gates on cross-encoder relevance, and returns ONE structured, sanitized <neurovault_context> packet with memory IDs and why-injected notes.\n\nPrefer this over raw recall when preparing briefs, drafting deliverables, resuming work ('continue'), explaining decisions, or citing sources. Returns decision='silent' with a reason when nothing clears the gate - silence over weak context is the intended behavior, not an error. Pass intent to force a recipe; omit to let the router classify. Set room to scope to a vault folder (a client/project 'room').",
+  "annotations": {
+   "read_only": true,
+   "idempotent": true,
+   "open_world": false
+  },
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "description": "The user prompt / situation to contextualize."
+    },
+    "room": {
+     "type": "string",
+     "description": "Optional vault-folder scope (e.g. 'clients/acme')."
+    },
+    "intent": {
+     "type": "string",
+     "description": "Optional forced intent: continue_work | prepare_brief | draft_output | review_risks | explain_decision | find_source | temporal_diff | general_question. Omit to auto-route."
+    },
+    "brain": {
+     "type": "string",
+     "description": "Optional brain id to scope the lookup."
+    },
+    "agent_id": {
+     "type": "string",
+     "description": "Calling agent id (for the decision log)."
+    },
+    "debug": {
+     "type": "boolean",
+     "default": false,
+     "description": "Include per-section candidate/skip detail."
+    }
+   },
+   "required": [
+    "query"
+   ]
+  },
+  "call": {
+   "method": "POST",
+   "path": "/api/ambient_recall",
+   "path_params": [],
+   "query": [],
+   "body": [
+    {
+     "param": "prompt",
+     "from": "query",
+     "transform": "none",
+     "omit": "never"
+    },
+    {
+     "param": "room",
+     "from": "room",
+     "transform": "none",
+     "omit": "if_falsy"
+    },
+    {
+     "param": "intent",
+     "from": "intent",
+     "transform": "none",
+     "omit": "if_falsy"
+    },
+    {
+     "param": "brain",
+     "from": "brain",
+     "transform": "none",
+     "omit": "if_falsy"
+    },
+    {
+     "param": "host",
+     "from": "agent_id",
+     "transform": "none",
+     "omit": "if_falsy"
+    },
+    {
+     "param": "debug",
+     "from": "debug",
+     "transform": "none",
+     "omit": "if_none"
+    }
+   ],
+   "special": null,
+   "special_note": null
+  }
  }
 ]

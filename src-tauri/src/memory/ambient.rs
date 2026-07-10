@@ -61,6 +61,13 @@ pub struct AmbientQueryPacket {
     /// Explicit brain override; `None` = server resolves the default.
     #[serde(default, alias = "brain_id")]
     pub brain: Option<String>,
+    /// Room (vault-folder scope) for Adaptive Memory; None = brain-wide.
+    #[serde(default)]
+    pub room: Option<String>,
+    /// Force a recall intent (CLI --intent / MCP callers); None = the
+    /// MemoryRouter classifies the prompt.
+    #[serde(default)]
+    pub intent: Option<String>,
     /// Repo/project name if the client resolved one (cwd-walk).
     #[serde(default)]
     pub repo: Option<String>,
@@ -125,6 +132,16 @@ pub struct AmbientResponse {
     /// Candidate table, only when `packet.debug` (CLI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<AmbientCandidate>>,
+    /// Adaptive Memory: routed intent ("prepare_brief", …); absent on
+    /// the classic general_question pipeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_confidence: Option<f64>,
+    /// Per-section debug (injected ids + skipped-with-reasons), only
+    /// when `packet.debug`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Value>,
 }
 
 /// Debug view of one candidate the gate considered.
@@ -685,6 +702,9 @@ pub fn run_at(
         context_block: None,
         tokens: 0,
         candidates: None,
+        intent: None,
+        intent_confidence: None,
+        sections: None,
     };
 
     if !cfg.enabled {
@@ -697,6 +717,105 @@ pub fn run_at(
         log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
         return Ok(resp);
     }
+    // ---- Adaptive Memory: intent routing (docs/specs/adaptive-memory.md)
+    // Runs BEFORE the glue guard: continue-class prompts are glue by
+    // design and are claimed by continue_work when fresh working state
+    // exists. Intents without a recipe (general_question) fall through
+    // to the classic pipeline below, bit-for-bit.
+    {
+        use super::adaptive::{self, composer, orchestrator, recipes, router, types as atypes};
+        let scope = adaptive::Scope {
+            brain_id: brain_id.to_string(),
+            room: packet
+                .room
+                .as_deref()
+                .map(adaptive::normalize_room)
+                .filter(|r| !r.is_empty()),
+        };
+        let ws = atypes::load_working_state(&scope);
+        let ws_fresh = !ws.is_empty() && !ws.is_stale(OffsetDateTime::now_utc());
+        let routed = match packet
+            .intent
+            .as_deref()
+            .and_then(atypes::RecallIntent::parse)
+        {
+            Some(forced) => router::RouterOutput {
+                intent: forced,
+                confidence: 1.0,
+                reason: "intent forced by caller".into(),
+            },
+            None => router::route(&router::RouterInput {
+                prompt: &packet.prompt,
+                scope: &scope,
+                agent_id: None,
+                host: packet.host.as_deref(),
+                working_state_fresh: ws_fresh,
+            }),
+        };
+        if let Some(recipe) = recipes::recipe_for(routed.intent) {
+            let run =
+                orchestrator::run_recipe(db, &scope, &packet.prompt, recipe, &packet.exclude_ids)?;
+            let sections_debug = packet.debug.then(|| {
+                Value::Array(
+                    run.sections
+                        .iter()
+                        .map(|sec| {
+                            json!({
+                                "title": sec.title,
+                                "injected": sec.items.iter().map(|i| i.display_id.clone()).collect::<Vec<_>>(),
+                                "skipped": sec.skipped,
+                            })
+                        })
+                        .collect(),
+                )
+            });
+            let mut resp = match composer::compose(&run, &routed, &scope, recipe.token_budget) {
+                Some(pk) => AmbientResponse {
+                    decision: "inject".into(),
+                    reason: format!(
+                        "{} -> {}; {} item(s) passed the gate",
+                        routed.reason,
+                        routed.intent.as_str(),
+                        pk.item_count
+                    ),
+                    brain: brain_id.to_string(),
+                    quality: quality.clone(),
+                    memories: pk
+                        .items
+                        .iter()
+                        .filter(|i| i.engram_id.is_some())
+                        .map(|i| AmbientMemory {
+                            engram_id: i.engram_id.clone().unwrap_or_default(),
+                            title: i.display_id.clone(),
+                            snippet: i.line.clone(),
+                            source: None,
+                            why: format!("intent {}", routed.intent.as_str()),
+                            scores: ChannelScores {
+                                ce_prob: i.ce_prob,
+                                ..ChannelScores::default()
+                            },
+                        })
+                        .collect(),
+                    context_block: Some(pk.block),
+                    tokens: pk.tokens,
+                    candidates: None,
+                    intent: None,
+                    intent_confidence: None,
+                    sections: None,
+                },
+                None => silent(
+                    &format!("intent {}: nothing passed the gate", routed.intent.as_str()),
+                    &quality,
+                ),
+            };
+            resp.intent = Some(routed.intent.as_str().to_string());
+            resp.intent_confidence = Some(routed.confidence);
+            resp.sections = sections_debug;
+            log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
+            return Ok(resp);
+        }
+    }
+
     // Defense-in-depth mirror of the hook client's `worth_recalling`
     // pre-gate: pure conversational glue never retrieves, whatever the
     // host. Found live during calibration: a brain note QUOTING a glue
@@ -824,6 +943,9 @@ pub fn run_at(
 
     let tokens = estimate_tokens(&block);
     let resp = AmbientResponse {
+        intent: None,
+        intent_confidence: None,
+        sections: None,
         decision: "inject".into(),
         reason: if floor.is_nan() {
             "exact_match_reranker_unavailable".to_string()
@@ -910,6 +1032,8 @@ fn log_decision(
         "candidates": candidates,
         "decision": resp.decision,
         "reason": resp.reason,
+        "intent": resp.intent,
+        "intent_confidence": resp.intent_confidence,
         "injected": resp.memories.iter().map(|m| m.engram_id.clone()).collect::<Vec<_>>(),
         "tokens": resp.tokens,
         "ms": t0.elapsed().as_millis() as u64,

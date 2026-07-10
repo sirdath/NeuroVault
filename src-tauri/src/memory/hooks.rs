@@ -545,10 +545,46 @@ pub(crate) fn contentful_token_count(prompt: &str) -> usize {
 /// live with "then lets continue and make sure that it works well").
 fn worth_recalling(prompt: &str) -> bool {
     let p = prompt.trim();
+    if is_continue_phrase(p) {
+        // Continue-class prompts are glue by design: the server's
+        // MemoryRouter claims them for `continue_work` (an O(1)
+        // working-state read) when fresh state exists, and stays
+        // silent otherwise. They must reach the server to be routed.
+        return !p.starts_with('/') && !p.starts_with('#');
+    }
     p.len() >= MIN_PROMPT_LEN
         && !p.starts_with('/')
         && !p.starts_with('#')
         && contentful_token_count(p) >= 1
+}
+
+/// Mirror of the router's continue_work triggers (short list, kept in
+/// sync by the adaptive-memory spec §4.2). Word-boundary-checked for
+/// the single words so "continuous integration" doesn't match.
+fn is_continue_phrase(p: &str) -> bool {
+    let lc = p.to_lowercase();
+    if lc.len() > 60 {
+        return false; // long prompts carry their own signal
+    }
+    for phrase in [
+        "what was i doing",
+        "what was i working on",
+        "pick up where",
+        "where were we",
+        "where did we leave off",
+        "keep going",
+    ] {
+        if lc.contains(phrase) {
+            return true;
+        }
+    }
+    for word in ["continue", "resume"] {
+        let hit = lc.split(|c: char| !c.is_alphanumeric()).any(|t| t == word);
+        if hit {
+            return true;
+        }
+    }
+    false
 }
 
 /// One line, bounded length, and no angle brackets so injected content
@@ -1015,12 +1051,22 @@ mod tests {
 
     #[test]
     fn conversational_glue_is_skipped_topical_passes() {
-        // The exact prompt that injected ML noise in live use 2026-07-07.
-        assert!(!worth_recalling(
+        // Continue-class glue now PASSES the pre-gate by design
+        // (adaptive-memory spec §4.2): the server's MemoryRouter
+        // claims it for continue_work when fresh working state
+        // exists, and its glue guard keeps it silent otherwise. The
+        // 2026-07-07 noise regression cannot recur: the decision just
+        // moved server-side, behind the router + no_contentful_tokens
+        // guard.
+        assert!(worth_recalling(
             "then lets continue and make sure that it works well"
         ));
-        assert!(!worth_recalling("ok great lets keep going with this"));
+        assert!(worth_recalling("ok great lets keep going with this"));
+        // Non-continue glue still never leaves the client.
         assert!(!worth_recalling("please make sure everything looks good"));
+        // ("sounds" is a contentful token by the stoplist rules, so
+        // that variant legitimately passes; use pure-stopword glue.)
+        assert!(!worth_recalling("okay thanks again"));
         // One substantive token is enough.
         assert!(worth_recalling("fix the reranker"));
         assert!(worth_recalling("lets continue with the supabase migration"));
@@ -1032,10 +1078,17 @@ mod tests {
     #[test]
     fn trivial_prompts_are_skipped() {
         assert!(!worth_recalling("yes"));
-        assert!(!worth_recalling("continue"));
+        // "continue" reaches the server now (continue_work routing) —
+        // but never as a slash/shortcut command, and other trivia
+        // still dies client-side.
+        assert!(worth_recalling("continue"));
+        assert!(worth_recalling("resume"));
+        assert!(!worth_recalling("/continue"));
         assert!(!worth_recalling("/model opus"));
         assert!(!worth_recalling("# remember this")); // memory shortcut
         assert!(!worth_recalling("   ok   "));
+        // "continuous integration" is not a continue phrase; it passes
+        // on substance instead (contentful tokens).
         assert!(worth_recalling(
             "what do we know about the reranker benchmark"
         ));

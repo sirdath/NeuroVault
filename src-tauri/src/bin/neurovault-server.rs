@@ -38,7 +38,7 @@ USAGE:
     neurovault-server [--http-only | --mcp-only] [--port N]
     neurovault-server hook <install|uninstall|status>
     neurovault-server hook <user-prompt-submit|session-start>   (called by Claude Code)
-    neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>]
+    neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>] [--intent <name>] [--room <folder>]
 
 OPTIONS:
     --http-only        Informational. The standalone binary is always
@@ -284,7 +284,7 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
     use neurovault_lib::memory::hooks::resolve_repo_branch;
     use serde_json::{json, Value};
 
-    let usage = "usage: neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>]";
+    let usage = "usage: neurovault-server ambient test \"<prompt>\" [--cwd <path>] [--brain <id>] [--intent <name>] [--room <folder>]";
     if args.first().map(String::as_str) != Some("test") {
         eprintln!("{usage}");
         return ExitCode::from(2);
@@ -295,6 +295,8 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
     };
     let mut cwd: Option<String> = None;
     let mut brain: Option<String> = None;
+    let mut intent: Option<String> = None;
+    let mut room: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         match (args.get(i).map(String::as_str), args.get(i + 1)) {
@@ -304,6 +306,14 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
             }
             (Some("--brain"), Some(v)) => {
                 brain = Some(v.clone());
+                i += 2;
+            }
+            (Some("--intent"), Some(v)) => {
+                intent = Some(v.clone());
+                i += 2;
+            }
+            (Some("--room"), Some(v)) => {
+                room = Some(v.clone());
                 i += 2;
             }
             (Some(other), _) => {
@@ -327,6 +337,8 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
         "host": "cli",
         "event": "AmbientTest",
         "brain": brain,
+        "intent": intent,
+        "room": room,
         "repo": repo,
         "branch": branch,
         "debug": true,
@@ -433,6 +445,30 @@ async fn ambient_cli(args: &[String]) -> ExitCode {
         v["decision"].as_str().unwrap_or("?"),
         v["reason"].as_str().unwrap_or("?")
     );
+    if let Some(intent) = v["intent"].as_str() {
+        println!(
+            "intent: {intent} (confidence {})",
+            v["intent_confidence"].as_f64().unwrap_or(0.0)
+        );
+    }
+    if let Some(sections) = v["sections"].as_array() {
+        for sec in sections {
+            let skipped = sec["skipped"].as_array().map(|a| a.len()).unwrap_or(0);
+            println!(
+                "  section {:<28} injected: {:<24} skipped: {}",
+                sec["title"].as_str().unwrap_or("?"),
+                sec["injected"]
+                    .as_array()
+                    .map(|a| a
+                        .iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","))
+                    .unwrap_or_default(),
+                skipped
+            );
+        }
+    }
     println!(
         "brain: {} · quality: {} contentful token(s){}{} · tokens: {}",
         v["brain"].as_str().unwrap_or("?"),

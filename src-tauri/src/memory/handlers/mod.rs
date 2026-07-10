@@ -1300,6 +1300,159 @@ pub async fn query_signal(
     Ok(Json(out))
 }
 
+/// GET /api/working_state — the per-scope hot buffer behind the
+/// `continue_work` intent (docs/specs/adaptive-memory.md §3.2.3).
+pub async fn working_state_get(
+    Query(q): Query<WorkingStateQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let scope = scope_for(&id, q.room.as_deref());
+        let ws = super::adaptive::types::load_working_state(&scope);
+        let stale = ws.is_stale(time::OffsetDateTime::now_utc());
+        Ok(serde_json::json!({ "brain": id, "room": scope.room, "stale": stale, "state": ws }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct WorkingStateQuery {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct WorkingStateSetBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+    #[serde(flatten)]
+    update: super::adaptive::types::WorkingState,
+}
+
+/// POST /api/working_state — merge a partial update into the buffer
+/// (Some/non-empty fields overwrite; the rest survive). Agents report
+/// what they're doing; "continue" replays it for free.
+pub async fn working_state_set(
+    _s: State<ServerState>,
+    Json(body): Json<WorkingStateSetBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let scope = scope_for(&id, body.room.as_deref());
+        let mut ws = super::adaptive::types::load_working_state(&scope);
+        ws.apply(body.update, time::OffsetDateTime::now_utc());
+        super::adaptive::types::save_working_state(&scope, &ws)?;
+        Ok(serde_json::json!({ "brain": id, "room": scope.room, "status": "updated", "state": ws }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct PlaybookRuleBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+    /// The rule itself ("Avoid cost-cutting framing; use operational
+    /// resilience framing.").
+    rule: String,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// POST /api/playbook_rule — capture a user correction as a typed
+/// PlaybookRule note (importance=high, confidence=high; the single
+/// highest-value capture in the system, spec §3.2.6). Written through
+/// the NORMAL note path (markdown canonical), then kind-tagged
+/// `preference` so the PlaybookRules recipe sections retrieve it.
+pub async fn playbook_rule_create(
+    _s: State<ServerState>,
+    Json(body): Json<PlaybookRuleBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        if body.rule.trim().len() < 8 {
+            return Err(MemoryError::Other("rule text too short".into()));
+        }
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let scope = scope_for(&id, body.room.as_deref());
+        let now = time::OffsetDateTime::now_utc();
+        let rule = super::adaptive::types::PlaybookRule::from_correction(
+            body.rule.trim(),
+            scope.room.clone(),
+            now,
+        );
+        let title = body.title.clone().unwrap_or_else(|| {
+            let t: String = body.rule.trim().chars().take(60).collect();
+            format!("Rule: {t}")
+        });
+        let md = rule.to_markdown(&title);
+        // playbook/ folder inside the room (or brain-wide playbook/).
+        let slug: String = title
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let prefix = scope
+            .room
+            .as_ref()
+            .map(|r| format!("{r}/playbook"))
+            .unwrap_or_else(|| "playbook".to_string());
+        let filename = format!("{prefix}/{}-{short}.md", &slug[..slug.len().min(48)]);
+        let ctx = super::write_ops::BrainContext::resolve(Some(&id), super::paths::vault_dir(&id))?;
+        let res = super::write_ops::save_note(&ctx, &filename, &md)?;
+        {
+            // Direct kind tag — deterministic, no reliance on the
+            // preference-extraction heuristics.
+            let conn = ctx.db.lock();
+            let _ = conn.execute(
+                "UPDATE engrams SET kind = 'preference' WHERE id = ?1",
+                rusqlite::params![res.engram_id],
+            );
+        }
+        Ok(serde_json::json!({
+            "brain": id,
+            "engram_id": res.engram_id,
+            "filename": res.filename,
+            "status": res.status,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// Shared scope builder for the adaptive endpoints.
+fn scope_for(brain_id: &str, room: Option<&str>) -> super::adaptive::Scope {
+    super::adaptive::Scope {
+        brain_id: brain_id.to_string(),
+        room: room
+            .map(super::adaptive::normalize_room)
+            .filter(|r| !r.is_empty()),
+    }
+}
+
 /// POST /api/ambient_recall — the Ambient Recall engine (see
 /// docs/specs/ambient-recall.md). Body: AmbientQueryPacket. Ambient
 /// traffic never touches the recall throttle: it is machine-paced, and

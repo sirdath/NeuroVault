@@ -1,6 +1,6 @@
 //! Data-driven MCP tool registry.
 //!
-//! The full 54-tool surface (46 ported 1:1 from the Python
+//! The full 55-tool surface (46 ported 1:1 from the Python
 //! `server/mcp_proxy.py`, plus graphify + agent-coordination) lives in
 //! `tools.json` (embedded via
 //! `include_str!`) so it can be audited as data rather than code. Each
@@ -101,7 +101,7 @@ pub fn load_tools() -> Vec<ToolDef> {
 // --- Tiers ---------------------------------------------------------------
 //
 // Mirrors mcp_proxy.py's TIER_* sets exactly. Default is `lite` (changed
-// upstream 2026-05-16 from `full`): shipping all 54 tools to every agent
+// upstream 2026-05-16 from `full`): shipping all 55 tools to every agent
 // inflates the system prompt and dilutes attention on the load-bearing
 // memory tools. `full` opts back into the entire surface.
 
@@ -126,6 +126,7 @@ const TIER_STANDARD_ADD: &[&str] = &[
     "engram_history",
     "handoff",
     "agent_inbox",
+    "get_relevant_context",
 ];
 
 /// Allow-set of tool names for a tier. `None` means "full" (no filter).
@@ -183,12 +184,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_parses_and_has_54_tools() {
+    fn registry_parses_and_has_55_tools() {
         let tools = load_tools();
         assert_eq!(
             tools.len(),
-            54,
-            "expected 54 tools (46 ported + 6 graphify + handoff + agent_inbox)"
+            55,
+            "expected 55 tools (46 ported + 6 graphify + handoff + agent_inbox + get_relevant_context)"
         );
         // names unique
         let mut seen = HashSet::new();
@@ -213,7 +214,7 @@ mod tests {
     fn tier_sets_match_proxy_counts() {
         assert_eq!(allowed_for_tier("minimal").unwrap().len(), 3);
         assert_eq!(allowed_for_tier("lite").unwrap().len(), 8);
-        assert_eq!(allowed_for_tier("standard").unwrap().len(), 20);
+        assert_eq!(allowed_for_tier("standard").unwrap().len(), 21);
         assert!(allowed_for_tier("full").is_none());
         // unknown -> lite
         assert_eq!(allowed_for_tier("bogus").unwrap().len(), 8);
