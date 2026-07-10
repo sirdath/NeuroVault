@@ -759,6 +759,82 @@ pub fn run_at(
                 working_state_fresh: ws_fresh,
             }),
         };
+        // temporal_diff runs its own pipeline (spec V1c-2): change
+        // events over an anchored window, ranked by importance of
+        // change — a reconstructed brief, not a recall recipe. The
+        // explicit no-change brief still INJECTS: the user asked a
+        // question, and "nothing meaningful changed" is the answer.
+        if routed.intent == atypes::RecallIntent::TemporalDiff {
+            use super::adaptive::temporal;
+            let now = OffsetDateTime::now_utc();
+            let anchor =
+                temporal::resolve_anchor(&packet.prompt, now, temporal::read_last_seen(&scope));
+            let start = OffsetDateTime::parse(&anchor.start, &Rfc3339).unwrap_or(now);
+            let mut events = temporal::collect_changes(db, &scope, start, now)?;
+            temporal::rank_changes(&mut events, start, now);
+            let brief = temporal::compose_brief(&events, &anchor, &scope, 700);
+            temporal::write_last_seen(&scope, now);
+
+            let sections_trace = Value::Array(vec![json!({
+                "title": "Change events",
+                "items": events
+                    .iter()
+                    .map(|e| json!({
+                        "id": format!("C-{}", e.change_id),
+                        "engram_id": e.object_id,
+                        "salience": e.importance_score,
+                        "trace": {
+                            "kind": e.object_type,
+                            "lifecycle": e.lifecycle,
+                            "change_type": e.change_type,
+                            "score_reason": e.score_reason,
+                        },
+                    }))
+                    .collect::<Vec<_>>(),
+                "skipped": brief.skipped,
+            })]);
+            let mut resp = AmbientResponse {
+                decision: "inject".into(),
+                reason: format!(
+                    "{} → temporal_diff; anchor {:?} ({}); {} event(s), {} meaningful",
+                    routed.reason,
+                    anchor.anchor,
+                    anchor.reason,
+                    events.len(),
+                    brief.injected
+                ),
+                brain: brain_id.to_string(),
+                quality: quality.clone(),
+                memories: Vec::new(),
+                tokens: brief.tokens,
+                context_block: Some(brief.block),
+                candidates: None,
+                intent: Some(routed.intent.as_str().to_string()),
+                intent_confidence: Some(routed.confidence),
+                sections: packet.debug.then(|| sections_trace.clone()),
+            };
+            if resp.tokens == 0 {
+                resp.tokens = resp
+                    .context_block
+                    .as_deref()
+                    .map(|b| b.chars().count() / 4)
+                    .unwrap_or(0);
+            }
+            log_decision_with_trace(
+                log_file,
+                &cfg,
+                packet,
+                brain_id,
+                &quality,
+                &[],
+                &resp,
+                Some(&sections_trace),
+                Some(&anchor.reason),
+                t0,
+            );
+            return Ok(resp);
+        }
+
         if let Some(recipe) = recipes::recipe_for(routed.intent) {
             let run =
                 orchestrator::run_recipe(db, &scope, &packet.prompt, recipe, &packet.exclude_ids)?;

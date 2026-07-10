@@ -122,6 +122,13 @@ const RULES: &[Rule] = &[
             "since last week",
             "since the last meeting",
             "since our last",
+            "what did i miss",
+            "did i miss anything",
+            "while i was away",
+            "since i last",
+            "since last time",
+            "what's new in",
+            "whats new in",
         ],
     },
     Rule {

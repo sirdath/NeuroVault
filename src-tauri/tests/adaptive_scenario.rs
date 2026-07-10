@@ -167,6 +167,52 @@ fn consulting_room_story() {
     assert!(block.contains("Open tasks"));
 
     // ------------------------------------------------------------------
+    // 6b. temporal_diff: a reconstructed change brief, not recent
+    //     memories. The task created above must appear as a change
+    //     event; asking again immediately ("what did i miss") uses the
+    //     last-seen marker and reports no meaningful changes — stated
+    //     explicitly, never silent. Pure SQL/jsonl: no models.
+    // ------------------------------------------------------------------
+    let resp = run_at(
+        &brain,
+        brain_id,
+        &packet("what changed since yesterday?", None),
+        &cfg,
+        &log,
+    )
+    .unwrap();
+    assert_eq!(resp.intent.as_deref(), Some("temporal_diff"));
+    assert_eq!(resp.decision, "inject", "{}", resp.reason);
+    let block = resp.context_block.as_deref().unwrap();
+    assert!(block.contains("<neurovault_temporal_diff"), "{block}");
+    assert!(block.contains("Time window:"));
+    assert!(
+        block.contains("Send revised pricing deck"),
+        "task change event present: {block}"
+    );
+    assert!(block.contains("Recommended next action:"), "{block}");
+    assert!(resp.reason.contains("Yesterday"), "{}", resp.reason);
+
+    // marker written -> "what did i miss" anchors on it; nothing new
+    // happened in between, so the brief says so explicitly.
+    let resp = run_at(
+        &brain,
+        brain_id,
+        &packet("what did i miss?", None),
+        &cfg,
+        &log,
+    )
+    .unwrap();
+    assert_eq!(resp.intent.as_deref(), Some("temporal_diff"));
+    assert_eq!(resp.decision, "inject");
+    let block = resp.context_block.as_deref().unwrap();
+    assert!(
+        block.contains("No meaningful changes"),
+        "explicit no-change brief: {block}"
+    );
+    assert!(resp.reason.contains("SinceLastSession"), "{}", resp.reason);
+
+    // ------------------------------------------------------------------
     // 7. The decision log recorded every event above, one JSON line
     //    each, with intent fields — the Inspector's substrate.
     // ------------------------------------------------------------------
@@ -176,10 +222,13 @@ fn consulting_room_story() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert!(
-        lines.len() >= 5,
+        lines.len() >= 7,
         "one record per event, got {}",
         lines.len()
     );
+    assert!(lines
+        .iter()
+        .any(|r| r["intent"] == "temporal_diff" && r["sections"][0]["title"] == "Change events"));
     assert!(lines
         .iter()
         .any(|r| r["intent"] == "continue_work" && r["decision"] == "inject"));

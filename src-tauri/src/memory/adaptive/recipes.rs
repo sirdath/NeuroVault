@@ -213,25 +213,6 @@ pub const RECIPES: &[ContextRecipe] = &[
         // relief (existing gate rule) lowers it further on verbatim hits.
         gate: GateProfile { ce_floor: 0.35 },
     },
-    ContextRecipe {
-        intent: RecallIntent::TemporalDiff,
-        sections: &[
-            SectionSpec {
-                title: "Recent changes",
-                source: SectionSource::RecentChanges { window_days: 7 },
-                max_items: 6,
-                floor: Some(0.0),
-            },
-            SectionSpec {
-                title: "Open tasks",
-                source: SectionSource::OpenTasks,
-                max_items: 4,
-                floor: None,
-            },
-        ],
-        token_budget: 700,
-        gate: GateProfile { ce_floor: 0.40 },
-    },
 ];
 
 /// Recipe lookup. `GeneralQuestion` (and anything unknown) returns
@@ -254,7 +235,6 @@ mod tests {
             RecallIntent::ReviewRisks,
             RecallIntent::ExplainDecision,
             RecallIntent::FindSource,
-            RecallIntent::TemporalDiff,
         ] {
             let r = recipe_for(i).unwrap_or_else(|| panic!("{i:?} has no recipe"));
             assert!(!r.sections.is_empty());
@@ -264,8 +244,10 @@ mod tests {
                 assert!(s.max_items >= 1 && s.max_items <= 8);
             }
         }
-        // …and the fallback deliberately has none.
+        // …and the fallback deliberately has none; temporal_diff runs
+        // its own pipeline (temporal.rs), not a recipe.
         assert!(recipe_for(RecallIntent::GeneralQuestion).is_none());
+        assert!(recipe_for(RecallIntent::TemporalDiff).is_none());
     }
 
     #[test]
