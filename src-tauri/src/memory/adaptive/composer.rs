@@ -131,6 +131,7 @@ mod tests {
             engram_id: engram.map(String::from),
             ce_prob: None,
             salience: None,
+            trace: None,
         }
     }
 
