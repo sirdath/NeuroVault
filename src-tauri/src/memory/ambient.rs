@@ -132,8 +132,10 @@ pub struct AmbientResponse {
     /// Candidate table, only when `packet.debug` (CLI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<AmbientCandidate>>,
-    /// Adaptive Memory: routed intent ("prepare_brief", …); absent on
-    /// the classic general_question pipeline.
+    /// Adaptive Memory: routed intent ("prepare_brief", …). Present on
+    /// every routed request — including general_question fall-throughs
+    /// — so the Inspector can trace WHY a prompt took the classic
+    /// path. Absent only on pre-routing guards (disabled/empty).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -722,6 +724,11 @@ pub fn run_at(
     // design and are claimed by continue_work when fresh working state
     // exists. Intents without a recipe (general_question) fall through
     // to the classic pipeline below, bit-for-bit.
+    // The router verdict survives the adaptive block so the classic
+    // tail can stamp it on responses + the log: the Inspector must see
+    // WHY a prompt fell through ("matched 'continue' but no fresh
+    // working state"), not just that it did.
+    let route_note: Option<(String, f64)>;
     {
         use super::adaptive::{self, composer, orchestrator, recipes, router, types as atypes};
         let scope = adaptive::Scope {
@@ -814,6 +821,7 @@ pub fn run_at(
             log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
             return Ok(resp);
         }
+        route_note = Some((routed.intent.as_str().to_string(), routed.confidence));
     }
 
     // Defense-in-depth mirror of the hook client's `worth_recalling`
@@ -824,7 +832,11 @@ pub fn run_at(
     // that it's useful context. Zero contentful tokens + zero signals
     // means there is nothing to be relevant TO.
     if quality.contentful_tokens == 0 && quality.signals.is_empty() {
-        let resp = silent("no_contentful_tokens", &quality);
+        let mut resp = silent("no_contentful_tokens", &quality);
+        if let Some((i, c)) = &route_note {
+            resp.intent = Some(i.clone());
+            resp.intent_confidence = Some(*c);
+        }
         log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
         return Ok(resp);
     }
@@ -883,6 +895,10 @@ pub fn run_at(
         };
         let mut resp = silent(reason, &quality);
         resp.candidates = debug_rows;
+        if let Some((i, c)) = &route_note {
+            resp.intent = Some(i.clone());
+            resp.intent_confidence = Some(*c);
+        }
         log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
         return Ok(resp);
     }
@@ -902,6 +918,10 @@ pub fn run_at(
         GateOutcome::Silent { reason } => {
             let mut resp = silent(&reason, &quality);
             resp.candidates = debug_rows;
+            if let Some((i, c)) = &route_note {
+                resp.intent = Some(i.clone());
+                resp.intent_confidence = Some(*c);
+            }
             log_decision(log_file, &cfg, packet, brain_id, &quality, &kept, &resp, t0);
             return Ok(resp);
         }
@@ -942,7 +962,7 @@ pub fn run_at(
     }
 
     let tokens = estimate_tokens(&block);
-    let resp = AmbientResponse {
+    let mut resp = AmbientResponse {
         intent: None,
         intent_confidence: None,
         sections: None,
@@ -966,6 +986,10 @@ pub fn run_at(
         tokens,
         candidates: debug_rows,
     };
+    if let Some((i, c)) = &route_note {
+        resp.intent = Some(i.clone());
+        resp.intent_confidence = Some(*c);
+    }
     log_decision(log_file, &cfg, packet, brain_id, &quality, &kept, &resp, t0);
     Ok(resp)
 }

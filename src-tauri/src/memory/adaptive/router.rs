@@ -91,6 +91,12 @@ const RULES: &[Rule] = &[
         phrases: &[
             "where did this number",
             "where did that number",
+            "number come from",
+            "figure come from",
+            "percent come from",
+            "where is this from",
+            "what's the source",
+            "whats the source",
             "where does this come from",
             "where did this come from",
             "what source",
@@ -304,6 +310,10 @@ mod tests {
                 RecallIntent::ExplainDecision,
             ),
             ("where did this number come from", RecallIntent::FindSource),
+            (
+                "where did the 21 percent number come from",
+                RecallIntent::FindSource,
+            ),
             (
                 "what changed since the last meeting",
                 RecallIntent::TemporalDiff,

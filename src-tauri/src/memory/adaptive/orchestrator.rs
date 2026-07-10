@@ -269,10 +269,15 @@ pub fn run_recipe(
             items: sec.items,
             skipped: sec.skipped,
         };
+        // Quota sections (floor override 0.0, and PlaybookRules) carry
+        // items that belong by SCOPE + salience, not prompt
+        // similarity — so they order salience-first and still deliver
+        // when the reranker is down. Floored sections stay
+        // conservative: no CE, no injection.
+        let is_quota =
+            sec.spec.floor == Some(0.0) || matches!(sec.spec.source, SectionSource::PlaybookRules);
         if !sec.cands.is_empty() {
-            if ce_by_pos.is_none() {
-                // Conservative rule (spec §7.1): no CE, no semantic
-                // injection. Structural sections still deliver.
+            if ce_by_pos.is_none() && !is_quota {
                 result.skipped.push((
                     sec.spec.title.to_string(),
                     "reranker unavailable; semantic section suppressed".into(),
@@ -291,15 +296,14 @@ pub fn run_recipe(
                         )
                     })
                     .collect();
-                // PlaybookRules order by SALIENCE first (standing
-                // orders: importance and freshness outrank prompt
-                // similarity); everything else by CE with salience as
-                // the tiebreak (spec §5.2: salience orders within a
-                // type, never overrides relevance).
-                let rules_first = matches!(sec.spec.source, SectionSource::PlaybookRules);
+                // Quota sections order by SALIENCE first (importance
+                // and freshness outrank prompt similarity); everything
+                // else by CE with salience as the tiebreak (spec §5.2:
+                // salience orders within a type, never overrides
+                // relevance).
                 scored.sort_by(|a, b| {
-                    let ka = if rules_first { (a.2, a.1) } else { (a.1, a.2) };
-                    let kb = if rules_first { (b.2, b.1) } else { (b.1, b.2) };
+                    let ka = if is_quota { (a.2, a.1) } else { (a.1, a.2) };
+                    let kb = if is_quota { (b.2, b.1) } else { (b.1, b.2) };
                     kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 // PlaybookRules are standing orders: they apply
@@ -311,10 +315,10 @@ pub fn run_recipe(
                 // recipe's absolute floor. (Found live: a captured
                 // rule scored ce 0.04 against the draft prompt it
                 // existed to constrain.)
-                let floor = match sec.spec.source {
+                let floor = sec.spec.floor.unwrap_or(match sec.spec.source {
                     SectionSource::PlaybookRules => 0.0,
                     _ => recipe.gate.ce_floor,
-                };
+                });
                 for (ci, p, sal) in scored {
                     let c = &sec.cands[ci];
                     if result.items.len() >= sec.spec.max_items {
@@ -523,7 +527,10 @@ fn render_working_state(
         .age_hours(now)
         .map(|h| {
             if h < 1 {
-                "updated <1h ago".to_string()
+                // no angle brackets anywhere inside the packet — the
+                // injection-as-data invariant applies to OUR text too
+                // (caught by the scenario test's tag-shape assertion).
+                "updated under 1h ago".to_string()
             } else if h < 48 {
                 format!("updated {h}h ago")
             } else {

@@ -571,16 +571,42 @@ guess weights into code.
   half-lives; gate lifecycle rules; decay pass; DecisionMemory /
   RoomSummary promotion; typed index tables.
 
-**V1c — Consolidation + people + time**
-- Consolidator trait + deterministic impl + CLI/post-ingest triggers;
-  PersonProfile; TemporalDiff intent wired to temporal machinery;
-  Memory Inspector UI panel.
+**V1c — trust and observability first (order set by Dath, 2026-07-10:
+the system now makes judgment calls — matters/stale/superseded/
+rule-outranks-chunk/inject-or-silent — and those decisions must be
+VISIBLE before adding more intelligence)**
+- **V1c-1 Memory Inspector / Context Trace UI** — for every event:
+  prompt → detected intent (+ confidence + reason) → recipe → per-type
+  candidates with ALL scores (salience components, cross-encoder,
+  lifecycle status) → gate verdict + skip reasons → composed packet +
+  tokens → feedback outcome. Per memory: why included / why excluded,
+  whether salience or reranker won, whether a superseded memory was
+  suppressed. Backend: enrich the decision log with the full adaptive
+  trace (sections, salience components) + a read endpoint; UI panel
+  renders the JSONL. Required BEFORE deeper injection, consolidation,
+  or learned weighting.
+- **V1c-2 temporal_diff real machinery** — reconstructed change brief
+  ("Since yesterday: 2 new files, 1 decision approved, 3 tasks moved,
+  1 risk raised, 1 rule superseded"): changed/new files, new/updated/
+  superseded decisions, task transitions, new rules/preferences, agent
+  outputs. The most human-like, most demoable feature.
+- **V1c-3 PersonProfile / StakeholderMemory** — the consulting killer:
+  name/role/org/decision power/communication style/preferences/
+  concerns/dislikes/last interaction + links to meetings, decisions,
+  tasks. Powers briefs, emails, proposals, stakeholder strategy.
+- **V1c-4 Consolidation sleep job** — LAST of V1c, deliberately after
+  observability exists (consolidation WRITES memories; never let the
+  system write more before its decisions are inspectable).
+  Conservative: suggestions by default, not silent rewrites.
 
 **V2 — Learning + capture**
 - Session-end (Stop) hook → cited-detection → salience/threshold
   fitting from the log; LLM router fallback (cheap judge); Curator as
   LLM Consolidator; API wrapper adapter; auto-capture of corrections
   from conversation deltas (the write-side twin).
+- HARD PRECONDITION (Dath, 2026-07-10): no learned salience weights
+  until the Inspector exists — otherwise there is no way to tell
+  whether the model learned something useful or learned noise.
 
 Each phase ships alone, tests included, `general_question` fallback
 guaranteeing no regression of today's behavior at every step.

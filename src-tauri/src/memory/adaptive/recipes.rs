@@ -38,6 +38,14 @@ pub struct SectionSpec {
     pub title: &'static str,
     pub source: SectionSource,
     pub max_items: usize,
+    /// CE-floor override. `None` = the recipe's gate floor.
+    /// `Some(0.0)` marks a QUOTA section: its items belong because
+    /// they're in scope and recent/important ("latest decisions" in a
+    /// brief, "recent changes" in a diff), so they order by SALIENCE,
+    /// never gate on prompt similarity, and still deliver when the
+    /// reranker is down. First live scenario (2026-07-10): the room's
+    /// own pricing decision was CE-skipped from its own briefing.
+    pub floor: Option<f64>,
 }
 
 /// Per-intent gate tuning (spec §7.1). The CE floor applies to
@@ -67,11 +75,13 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Current situation",
                 source: SectionSource::WorkingState,
                 max_items: 1,
+                floor: None,
             },
             SectionSpec {
                 title: "Open tasks",
                 source: SectionSource::OpenTasks,
                 max_items: 3,
+                floor: None,
             },
         ],
         token_budget: 400,
@@ -85,26 +95,31 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Current situation",
                 source: SectionSource::WorkingState,
                 max_items: 1,
+                floor: None,
             },
             SectionSpec {
                 title: "Relevant decisions",
                 source: SectionSource::Decisions,
                 max_items: 3,
+                floor: Some(0.0),
             },
             SectionSpec {
                 title: "Open tasks",
                 source: SectionSource::OpenTasks,
                 max_items: 5,
+                floor: None,
             },
             SectionSpec {
                 title: "Playbook rules",
                 source: SectionSource::PlaybookRules,
                 max_items: 3,
+                floor: None,
             },
             SectionSpec {
                 title: "Background",
                 source: SectionSource::Semantic,
                 max_items: 3,
+                floor: None,
             },
         ],
         token_budget: 900,
@@ -117,16 +132,19 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Playbook rules",
                 source: SectionSource::PlaybookRules,
                 max_items: 4,
+                floor: None,
             },
             SectionSpec {
                 title: "Relevant decisions",
                 source: SectionSource::Decisions,
                 max_items: 2,
+                floor: Some(0.0),
             },
             SectionSpec {
                 title: "Background",
                 source: SectionSource::Semantic,
                 max_items: 3,
+                floor: None,
             },
         ],
         token_budget: 700,
@@ -139,21 +157,25 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Open tasks and blockers",
                 source: SectionSource::OpenTasks,
                 max_items: 5,
+                floor: None,
             },
             SectionSpec {
                 title: "Relevant decisions",
                 source: SectionSource::Decisions,
                 max_items: 3,
+                floor: Some(0.0),
             },
             SectionSpec {
                 title: "Playbook rules",
                 source: SectionSource::PlaybookRules,
                 max_items: 2,
+                floor: None,
             },
             SectionSpec {
                 title: "Background",
                 source: SectionSource::Semantic,
                 max_items: 3,
+                floor: None,
             },
         ],
         token_budget: 700,
@@ -166,11 +188,13 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Decisions",
                 source: SectionSource::Decisions,
                 max_items: 4,
+                floor: None,
             },
             SectionSpec {
                 title: "Sources",
                 source: SectionSource::Sources,
                 max_items: 3,
+                floor: None,
             },
         ],
         token_budget: 700,
@@ -182,6 +206,7 @@ pub const RECIPES: &[ContextRecipe] = &[
             title: "Sources",
             source: SectionSource::Sources,
             max_items: 5,
+            floor: None,
         }],
         token_budget: 700,
         // Exact-evidence lookups tolerate a lower floor; strong-match
@@ -195,11 +220,13 @@ pub const RECIPES: &[ContextRecipe] = &[
                 title: "Recent changes",
                 source: SectionSource::RecentChanges { window_days: 7 },
                 max_items: 6,
+                floor: Some(0.0),
             },
             SectionSpec {
                 title: "Open tasks",
                 source: SectionSource::OpenTasks,
                 max_items: 4,
+                floor: None,
             },
         ],
         token_budget: 700,
