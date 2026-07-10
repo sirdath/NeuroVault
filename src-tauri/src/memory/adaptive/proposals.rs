@@ -47,15 +47,30 @@ pub struct ProposedField {
     pub evidence: Vec<String>,
 }
 
+/// What the HUMAN decided. Independent of execution: an executor
+/// failure never rewrites the user's verdict, and approval precision
+/// is never confused with executor success (Dath, stage-2 tightening).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProposalStatus {
-    Proposed,
+pub enum ReviewStatus {
+    Unreviewed,
     Approved,
-    EditedApproved,
+    /// Approved with field edits (both values retained).
+    Edited,
     Rejected,
-    Superseded,
-    AwaitingEvidence,
+}
+
+/// What the SYSTEM did about an approved proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationStatus {
+    /// Nothing will ever execute for this class.
+    NotApplicable,
+    /// Awaiting an executor or supporting evidence (e.g.
+    /// working_state_refresh until the hardened transcript reader).
+    Pending,
+    Applied,
+    Failed,
 }
 
 /// The stored proposal record. Appended on creation and on every
@@ -74,7 +89,10 @@ pub struct StoredProposal {
     /// Evidence for the proposal as a whole (union of field evidence
     /// plus unit-level events).
     pub evidence: Vec<String>,
-    pub status: ProposalStatus,
+    pub review_status: ReviewStatus,
+    pub application_status: ApplicationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_error: Option<String>,
     pub proposed_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<String>,
@@ -86,10 +104,6 @@ pub struct StoredProposal {
     /// new proposal, clearly linked).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predecessor: Option<String>,
-    /// True when the approval also executed a write (stage-2 applies
-    /// only demonstrably safe classes; the rest acknowledge-only).
-    #[serde(default)]
-    pub applied: bool,
 }
 
 fn store_path(brain_id: &str) -> PathBuf {
@@ -161,15 +175,15 @@ pub fn decide(
         .ok_or_else(|| MemoryError::Other(format!("unknown proposal {proposal_id}")))?;
     let target = if approve {
         if edits.is_empty() {
-            ProposalStatus::Approved
+            ReviewStatus::Approved
         } else {
-            ProposalStatus::EditedApproved
+            ReviewStatus::Edited
         }
     } else {
-        ProposalStatus::Rejected
+        ReviewStatus::Rejected
     };
-    match rec.status {
-        ProposalStatus::Proposed | ProposalStatus::AwaitingEvidence => {}
+    match rec.review_status {
+        ReviewStatus::Unreviewed => {}
         existing if existing == target => return Ok((rec, false)), // idempotent
         existing => {
             return Err(MemoryError::Other(format!(
@@ -190,7 +204,7 @@ pub fn decide(
             )));
         }
     }
-    rec.status = target;
+    rec.review_status = target;
     rec.decided_at = Some(now_iso());
     rec.decided_by = Some(reviewer.to_string());
     rec.decision_reason = reason.map(String::from);
@@ -211,7 +225,7 @@ pub fn decide(
     );
     ev.actor = format!("user:{reviewer}");
     ev.title = Some(rec.title.clone());
-    ev.after = Some(format!("{:?}", rec.status));
+    ev.after = Some(format!("{:?}", rec.review_status));
     ev.source_refs = rec.evidence.clone();
     ev.capture_method = "review".into();
     ev.idempotency_key = Some(format!(
@@ -222,20 +236,48 @@ pub fn decide(
     Ok((rec, true))
 }
 
+/// Record an application outcome for an APPROVED proposal. Never
+/// touches review_status: executor success is a different axis from
+/// human judgment.
+pub fn set_application(
+    brain_id: &str,
+    proposal_id: &str,
+    status: ApplicationStatus,
+    error: Option<&str>,
+) -> Result<StoredProposal> {
+    let mut rec = get(brain_id, proposal_id)
+        .ok_or_else(|| MemoryError::Other(format!("unknown proposal {proposal_id}")))?;
+    rec.application_status = status;
+    rec.application_error = error.map(String::from);
+    append(brain_id, &rec)?;
+    Ok(rec)
+}
+
 /// Review-quality metrics — more than approval rate, per Dath: a
 /// system can hit impressive precision by proposing almost nothing,
 /// so unreviewed counts and audited false negatives are first-class.
 #[derive(Debug, Default, Serialize)]
 pub struct Metrics {
     pub total: usize,
-    pub proposed: usize,
-    pub awaiting_evidence: usize,
+    // review axis
+    pub unreviewed: usize,
     pub approved_untouched: usize,
     pub approved_after_edits: usize,
     pub rejected: usize,
-    pub superseded: usize,
+    // application axis (independent)
+    pub app_not_applicable: usize,
+    pub app_pending: usize,
+    pub app_applied: usize,
+    pub app_failed: usize,
     pub field_edit_rate: f64,
     pub rejection_rate: f64,
+    /// reviewed / total — reviewers may preferentially inspect obvious
+    /// items; low coverage means precision numbers are not yet
+    /// trustworthy.
+    pub review_coverage: f64,
+    /// Deterministic sample of unreviewed proposal ids to audit next
+    /// (nudges review of ORDINARY items, not just eye-catching ones).
+    pub audit_sample: Vec<String>,
     pub median_review_seconds: Option<i64>,
     /// action → (approved, rejected) — precision per proposal type.
     pub by_action: HashMap<String, (usize, usize)>,
@@ -261,22 +303,23 @@ pub fn metrics(brain_id: &str) -> Metrics {
             .iter()
             .filter(|f| f.approved_value.is_some())
             .count();
-        match p.status {
-            ProposalStatus::Proposed => m.proposed += 1,
-            ProposalStatus::AwaitingEvidence => m.awaiting_evidence += 1,
-            ProposalStatus::Approved => m.approved_untouched += 1,
-            ProposalStatus::EditedApproved => m.approved_after_edits += 1,
-            ProposalStatus::Rejected => m.rejected += 1,
-            ProposalStatus::Superseded => m.superseded += 1,
+        match p.review_status {
+            ReviewStatus::Unreviewed => m.unreviewed += 1,
+            ReviewStatus::Approved => m.approved_untouched += 1,
+            ReviewStatus::Edited => m.approved_after_edits += 1,
+            ReviewStatus::Rejected => m.rejected += 1,
         }
-        let decided = matches!(
-            p.status,
-            ProposalStatus::Approved | ProposalStatus::EditedApproved | ProposalStatus::Rejected
-        );
+        match p.application_status {
+            ApplicationStatus::NotApplicable => m.app_not_applicable += 1,
+            ApplicationStatus::Pending => m.app_pending += 1,
+            ApplicationStatus::Applied => m.app_applied += 1,
+            ApplicationStatus::Failed => m.app_failed += 1,
+        }
+        let decided = p.review_status != ReviewStatus::Unreviewed;
         if decided {
             let e = m.by_action.entry(p.action.clone()).or_default();
             let b = m.by_band.entry(p.band.clone()).or_default();
-            if p.status == ProposalStatus::Rejected {
+            if p.review_status == ReviewStatus::Rejected {
                 e.1 += 1;
                 b.1 += 1;
             } else {
@@ -297,6 +340,23 @@ pub fn metrics(brain_id: &str) -> Metrics {
     if decided_n > 0 {
         m.rejection_rate = m.rejected as f64 / decided_n as f64;
     }
+    if m.total > 0 {
+        m.review_coverage = decided_n as f64 / m.total as f64;
+    }
+    // Deterministic audit sample: unreviewed ids ordered by their own
+    // hash — stable across calls, biased toward nobody's preferences.
+    let mut unrev: Vec<&String> = all
+        .iter()
+        .filter(|(_, p)| p.review_status == ReviewStatus::Unreviewed)
+        .map(|(id, _)| id)
+        .collect();
+    unrev.sort_by_key(|id| {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(id.as_bytes());
+        h.finalize().to_vec()
+    });
+    m.audit_sample = unrev.into_iter().take(5).cloned().collect();
     if total_fields > 0 {
         m.field_edit_rate = edited_fields as f64 / total_fields as f64;
     }
@@ -351,13 +411,14 @@ mod tests {
                 evidence: vec!["ev-1".into(), "ev-2".into()],
             }],
             evidence: vec!["ev-1".into(), "ev-2".into()],
-            status: ProposalStatus::Proposed,
+            review_status: ReviewStatus::Unreviewed,
+            application_status: ApplicationStatus::Pending,
+            application_error: None,
             proposed_at: now_iso(),
             decided_at: None,
             decided_by: None,
             decision_reason: None,
             predecessor: None,
-            applied: false,
         }
     }
 
@@ -372,7 +433,8 @@ mod tests {
             edits.insert("superseded_by".to_string(), "e-newer".to_string());
             let (rec, changed) = decide(b, "p1", true, &edits, "dath", None).unwrap();
             assert!(changed);
-            assert_eq!(rec.status, ProposalStatus::EditedApproved);
+            assert_eq!(rec.review_status, ReviewStatus::Edited);
+            assert_eq!(rec.application_status, ApplicationStatus::Pending);
             assert_eq!(rec.fields[0].proposed_value, "e-new");
             assert_eq!(rec.fields[0].approved_value.as_deref(), Some("e-newer"));
 

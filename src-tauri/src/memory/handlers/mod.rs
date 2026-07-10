@@ -1301,6 +1301,86 @@ pub async fn query_signal(
 }
 
 #[derive(Deserialize)]
+pub struct JournalEventsQuery {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    /// Comma-separated event ids (bounded 50) — the Inspector's
+    /// experience-unit timeline fetch.
+    ids: String,
+    /// Days back to search (default 60).
+    #[serde(default)]
+    days: Option<i64>,
+}
+
+/// GET /api/journal_events?ids=a,b,c — resolve evidence ids into full
+/// events so the Proposal Inspector can render the unit timeline:
+/// intention → injected context → outcome.
+pub async fn journal_events_by_id(
+    Query(q): Query<JournalEventsQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let wanted: std::collections::HashSet<&str> = q
+            .ids
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .take(50)
+            .collect();
+        let now = time::OffsetDateTime::now_utc();
+        let start = now - time::Duration::days(q.days.unwrap_or(60).clamp(1, 365));
+        let events: Vec<_> = super::journal::read_window(&id, start, now, None)
+            .into_iter()
+            .filter(|e| wanted.contains(e.event_id.as_str()))
+            .collect();
+        Ok(serde_json::json!({ "brain": id, "count": events.len(), "events": events }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct FalseNegativeBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    description: String,
+    #[serde(default)]
+    evidence: Vec<String>,
+    #[serde(default)]
+    reviewer: Option<String>,
+}
+
+/// POST /api/consolidation_false_negative — the human marks something
+/// consolidation SHOULD have proposed and didn't. Counted in metrics:
+/// impressive precision by proposing almost nothing is not success.
+pub async fn consolidation_false_negative(
+    _s: State<ServerState>,
+    Json(body): Json<FalseNegativeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        if body.description.trim().len() < 4 {
+            return Err(MemoryError::Other("description required".into()));
+        }
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let mut ev =
+            super::journal::Event::now(&id, "consolidation_false_negative", "audit", "manual");
+        ev.actor = format!("user:{}", body.reviewer.as_deref().unwrap_or("user"));
+        ev.after = Some(body.description.trim().chars().take(300).collect());
+        ev.source_refs = body.evidence.clone();
+        ev.capture_method = "review".into();
+        crate::memory::journal::append(&ev)?;
+        Ok(serde_json::json!({ "brain": id, "event_id": ev.event_id }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
 pub struct ProposalDecisionBody {
     #[serde(default, alias = "brain")]
     brain_id: Option<String>,
@@ -1333,53 +1413,76 @@ pub async fn proposal_approve(
             reviewer,
             body.reason.as_deref(),
         )?;
-        // Apply the SAFE classes only; everything else is acknowledged
-        // review state, not an automatic write.
-        let mut applied_note = "acknowledged (no automatic write for this class)".to_string();
-        if changed && !rec.applied {
-            match rec.action.as_str() {
+        // APPLICATION is a separate axis from REVIEW: an executor
+        // failure lands in application_status/Failed and never rewrites
+        // the human's verdict. Only demonstrably safe classes execute;
+        // the rest stay Pending until their executor (or evidence)
+        // exists.
+        use super::adaptive::proposals::{set_application, ApplicationStatus};
+        if changed {
+            let outcome: std::result::Result<Option<&str>, String> = match rec.action.as_str() {
                 "memory_strengthened" => {
                     let db = open_brain(&id)?;
                     let conn = db.lock();
-                    let n = conn.execute(
+                    match conn.execute(
                         "UPDATE engrams SET last_confirmed_at = datetime('now') WHERE id = ?1",
                         rusqlite::params![rec.object_id],
-                    )?;
-                    if n > 0 {
-                        rec.applied = true;
-                        applied_note = "applied: last_confirmed_at refreshed".into();
-                    } else {
-                        applied_note = "approve recorded; engram not found to strengthen".into();
+                    ) {
+                        Ok(n) if n > 0 => Ok(Some("last_confirmed_at refreshed")),
+                        Ok(_) => Err("engram not found to strengthen".into()),
+                        Err(e) => Err(e.to_string()),
                     }
                 }
                 "supersession_suggestion" => {
-                    let older = rec
-                        .fields
-                        .iter()
-                        .find(|f| f.name == "superseded_engram")
-                        .map(|f| f.approved_value.clone().unwrap_or(f.proposed_value.clone()));
-                    let newer = rec
-                        .fields
-                        .iter()
-                        .find(|f| f.name == "superseded_by")
-                        .map(|f| f.approved_value.clone().unwrap_or(f.proposed_value.clone()));
-                    if let (Some(older), Some(newer)) = (older, newer) {
-                        let db = open_brain(&id)?;
-                        let reason = format!("approved consolidation proposal {}", rec.proposal_id);
-                        if super::write_ops::supersede_note(&db, &older, &newer, Some(&reason))? {
-                            rec.applied = true;
-                            applied_note = "applied: note superseded".into();
-                        } else {
-                            applied_note = "approve recorded; engram not found to supersede".into();
+                    let field = |name: &str| {
+                        rec.fields
+                            .iter()
+                            .find(|f| f.name == name)
+                            .map(|f| f.approved_value.clone().unwrap_or(f.proposed_value.clone()))
+                    };
+                    match (field("superseded_engram"), field("superseded_by")) {
+                        (Some(older), Some(newer)) => {
+                            let db = open_brain(&id)?;
+                            let reason =
+                                format!("approved consolidation proposal {}", rec.proposal_id);
+                            match super::write_ops::supersede_note(
+                                &db,
+                                &older,
+                                &newer,
+                                Some(&reason),
+                            ) {
+                                Ok(true) => Ok(Some("note superseded")),
+                                Ok(false) => Err("engram not found to supersede".into()),
+                                Err(e) => Err(e.to_string()),
+                            }
                         }
+                        _ => Err("missing supersession fields".into()),
                     }
                 }
-                _ => {}
-            }
-            if rec.applied {
-                super::adaptive::proposals::append(&id, &rec)?;
-            }
+                // No executor yet: approved but application stays
+                // Pending (working_state_refresh awaits the hardened
+                // transcript reader; room summaries await their
+                // summariser).
+                _ => Ok(None),
+            };
+            rec = match outcome {
+                Ok(Some(_)) => {
+                    set_application(&id, &rec.proposal_id, ApplicationStatus::Applied, None)?
+                }
+                Ok(None) => rec, // stays Pending
+                Err(e) => {
+                    set_application(&id, &rec.proposal_id, ApplicationStatus::Failed, Some(&e))?
+                }
+            };
         }
+        let applied_note = format!(
+            "{:?}{}",
+            rec.application_status,
+            rec.application_error
+                .as_deref()
+                .map(|e| format!(": {e}"))
+                .unwrap_or_default()
+        );
         Ok(serde_json::json!({
             "brain": id,
             "proposal": rec,
@@ -1430,7 +1533,7 @@ pub async fn proposals_list(
             .into_values()
             .filter(|p| {
                 q.decision.as_deref().is_none_or(|want| {
-                    format!("{:?}", p.status).eq_ignore_ascii_case(&want.replace('_', ""))
+                    format!("{:?}", p.review_status).eq_ignore_ascii_case(&want.replace('_', ""))
                 })
             })
             .collect();

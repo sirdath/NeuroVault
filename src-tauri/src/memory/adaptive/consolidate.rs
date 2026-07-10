@@ -146,19 +146,7 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
     // INCOMPLETE — unit-scoped rules defer, the report says so, and
     // the watermark's grace window guarantees the unit is reconsidered
     // when the outcome lands.
-    let incomplete_turns: std::collections::HashSet<&str> = events
-        .iter()
-        .filter(|e| e.event_type == "context_decision")
-        .filter(|d| {
-            !events
-                .iter()
-                .any(|o| o.turn_id == d.turn_id && o.event_type == "assistant_response_completed")
-                && !events
-                    .iter()
-                    .any(|o| o.event_type == "session_ended" && o.session_id == d.session_id)
-        })
-        .filter_map(|d| d.turn_id.as_deref())
-        .collect();
+    let incomplete_turns = find_incomplete_turns(events);
     if !incomplete_turns.is_empty() {
         notes.push(format!(
             "{} turn(s) awaiting outcome evidence; deferred, not skipped (grace-window replay reconsiders them)",
@@ -380,6 +368,66 @@ pub fn run_shadow(
 /// the completed unit and proposes exactly once.
 pub const GRACE_HOURS: i64 = 48;
 
+/// The grace window alone only guarantees recovery INSIDE 48h. For
+/// unusually late outcomes, a tiny persisted pending-turn index keeps
+/// unresolved turns recoverable: the read window extends back to the
+/// oldest pending turn until it completes or expires (visibly) at the
+/// TTL. Preference over a hard 48h boundary per Dath 2026-07-10.
+pub const PENDING_TTL_DAYS: i64 = 14;
+
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
+struct PendingTurns {
+    /// turn_id → first_seen (RFC-3339 of the opening decision).
+    turns: std::collections::BTreeMap<String, String>,
+}
+
+fn pending_path(brain_id: &str) -> std::path::PathBuf {
+    crate::memory::paths::nv_home()
+        .join("brains")
+        .join(brain_id)
+        .join("journal")
+        .join("pending_turns.json")
+}
+
+fn read_pending(brain_id: &str) -> PendingTurns {
+    std::fs::read_to_string(pending_path(brain_id))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_pending(brain_id: &str, p: &PendingTurns) -> Result<()> {
+    let path = pending_path(brain_id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| MemoryError::Other(format!("pending dir: {e}")))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(p).unwrap_or_default())
+        .map_err(|e| MemoryError::Other(format!("pending write: {e}")))?;
+    std::fs::rename(&tmp, &path).map_err(|e| MemoryError::Other(format!("pending rename: {e}")))?;
+    Ok(())
+}
+
+/// Turns opened by a context_decision with no outcome (response or
+/// session end) among `events`. Shared by the proposer (deferral
+/// notes) and the runner (pending index).
+fn find_incomplete_turns(events: &[&Event]) -> std::collections::HashMap<String, String> {
+    events
+        .iter()
+        .filter(|e| e.event_type == "context_decision")
+        .filter(|d| {
+            !events
+                .iter()
+                .any(|o| o.turn_id == d.turn_id && o.event_type == "assistant_response_completed")
+                && !events
+                    .iter()
+                    .any(|o| o.event_type == "session_ended" && o.session_id == d.session_id)
+        })
+        .filter_map(|d| d.turn_id.clone().map(|t| (t, d.ts.clone())))
+        .collect()
+}
+
 #[derive(Debug, Serialize, serde::Deserialize)]
 struct ConsolidationState {
     watermark: String,
@@ -423,25 +471,55 @@ fn write_watermark(brain_id: &str, now: OffsetDateTime) -> Result<()> {
 /// predecessor via same action+object).
 pub fn run_proposal(scope: &Scope) -> Result<ConsolidationReport> {
     let now = OffsetDateTime::now_utc();
-    let start = read_watermark(&scope.brain_id)
+    let mut pending = read_pending(&scope.brain_id);
+    // Expire visibly: an unresolved turn past the TTL is dropped from
+    // the index with a note — never silently.
+    let mut expired: Vec<String> = Vec::new();
+    pending.turns.retain(|turn, first_seen| {
+        let alive = OffsetDateTime::parse(first_seen, &Rfc3339)
+            .map(|t| now - t <= time::Duration::days(PENDING_TTL_DAYS))
+            .unwrap_or(false);
+        if !alive {
+            expired.push(turn.clone());
+        }
+        alive
+    });
+    let grace_start = read_watermark(&scope.brain_id)
         .map(|w| w - time::Duration::hours(GRACE_HOURS))
         .unwrap_or(now - time::Duration::days(7));
+    // The read window reaches back to the OLDEST pending turn, so an
+    // outcome arriving at 49h (or 13 days) still finds its opening
+    // decision and completes the same unit.
+    let oldest_pending = pending
+        .turns
+        .values()
+        .filter_map(|ts| OffsetDateTime::parse(ts, &Rfc3339).ok())
+        .min();
+    let start = match oldest_pending {
+        Some(p) if p < grace_start => p - time::Duration::minutes(1),
+        _ => grace_start,
+    };
     let mut report = build_report(scope, start, now, "proposal")?;
+    for t in &expired {
+        report.notes.push(format!(
+            "pending turn {t} expired unresolved after {PENDING_TTL_DAYS}d TTL (visible orphan, not a silent skip)"
+        ));
+    }
 
     let store = proposals::load_all(&scope.brain_id);
     let mut kept: Vec<Proposal> = Vec::new();
     for p in report.proposals.drain(..) {
         if let Some(existing) = store.get(&p.proposal_id) {
             report.notes.push(format!(
-                "proposal {} already known (status {:?}); not regenerated",
-                p.proposal_id, existing.status
+                "proposal {} already known (review {:?}); not regenerated",
+                p.proposal_id, existing.review_status
             ));
             continue;
         }
         let predecessor = store
             .values()
             .find(|sp| {
-                sp.status == proposals::ProposalStatus::Rejected
+                sp.review_status == proposals::ReviewStatus::Rejected
                     && sp.action == p.action
                     && sp.object_id == p.object_id
             })
@@ -463,19 +541,35 @@ pub fn run_proposal(scope: &Scope) -> Result<ConsolidationReport> {
             band: format!("{:?}", p.band).to_lowercase(),
             fields: p.fields.clone(),
             evidence: p.evidence.clone(),
-            status: proposals::ProposalStatus::Proposed,
+            review_status: proposals::ReviewStatus::Unreviewed,
+            application_status: proposals::ApplicationStatus::Pending,
+            application_error: None,
             proposed_at: now.format(&Rfc3339).unwrap_or_default(),
             decided_at: None,
             decided_by: None,
             decision_reason: None,
             predecessor,
-            applied: false,
         };
         proposals::append(&scope.brain_id, &rec)?;
         kept.push(p);
     }
     report.proposals = kept;
-    // Watermark advances only after store appends succeeded.
+    // Refresh the pending index from THIS window's view: still-open
+    // turns keep their original first_seen; completed ones drop out.
+    let events = read_window(&scope.brain_id, start, now, scope.room.as_deref());
+    let refs: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.capture_method != "review" && !e.event_type.starts_with("consolidation_"))
+        .collect();
+    let open_now = find_incomplete_turns(&refs);
+    let mut next = PendingTurns::default();
+    for (turn, first_seen) in open_now {
+        let keep_seen = pending.turns.get(&turn).cloned().unwrap_or(first_seen);
+        next.turns.insert(turn, keep_seen);
+    }
+    // Ordering: proposals appended -> pending index -> watermark; a
+    // crash between steps only replays idempotent work.
+    write_pending(&scope.brain_id, &next)?;
     write_watermark(&scope.brain_id, now)?;
     Ok(report)
 }
@@ -683,6 +777,85 @@ mod tests {
             // stage-2 rule: contents were NOT inferred
             assert_eq!(ws_stored[0].fields.len(), 1);
             assert_eq!(ws_stored[0].fields[0].name, "needs_refresh");
+        });
+    }
+
+    /// The 49-hour case: the outcome arrives AFTER the grace window.
+    /// The pending-turn index must keep the unit recoverable — same
+    /// unit, exactly one proposal, pending entry cleared.
+    #[test]
+    fn outcome_at_49_hours_is_still_recovered() {
+        with_temp_home(|| {
+            let brain = "c49";
+            let scope = Scope::brain(brain);
+            let t0 = OffsetDateTime::now_utc() - time::Duration::hours(49);
+
+            // 1. decision arrived 49h ago (back-dated event)
+            let mut turn = Event::now(brain, "context_decision", "prompt", "sha-49");
+            turn.session_id = Some("s-49".into());
+            turn.turn_id = Some(turn.event_id.clone());
+            turn.ts = t0.format(&Rfc3339).unwrap();
+            append(&turn).unwrap();
+
+            // 2. a run records the incomplete turn in the pending index
+            //    (first-run window is 7d, so the decision is visible)
+            //    and advances the watermark to now.
+            let r1 = run_proposal(&scope).unwrap();
+            assert!(r1.notes.iter().any(|n| n.contains("awaiting outcome")));
+            assert!(read_pending(brain)
+                .turns
+                .contains_key(turn.turn_id.as_deref().unwrap()));
+
+            // 3. outcome arrives NOW — 49h after the opening decision,
+            //    outside the 48h grace behind the new watermark.
+            let mut end_ev = Event::now(brain, "session_ended", "session", "s-49");
+            end_ev.session_id = Some("s-49".into());
+            append(&end_ev).unwrap();
+
+            // 4. next run: grace alone would MISS the opening decision;
+            //    the pending index extends the window back to t0.
+            let r2 = run_proposal(&scope).unwrap();
+            let ws: Vec<_> = r2
+                .proposals
+                .iter()
+                .filter(|p| p.action == "working_state_refresh")
+                .collect();
+            assert_eq!(
+                ws.len(),
+                1,
+                "late unit completed exactly once: {:?}",
+                r2.notes
+            );
+            assert!(
+                !read_pending(brain)
+                    .turns
+                    .contains_key(turn.turn_id.as_deref().unwrap()),
+                "completed turn leaves the pending index"
+            );
+
+            // 5. idempotent thereafter
+            let r3 = run_proposal(&scope).unwrap();
+            assert!(r3.proposals.is_empty());
+        });
+    }
+
+    /// Unresolved turns expire VISIBLY at the TTL, never silently.
+    #[test]
+    fn pending_turns_expire_visibly_at_ttl() {
+        with_temp_home(|| {
+            let brain = "cttl";
+            let scope = Scope::brain(brain);
+            let mut p = PendingTurns::default();
+            let old = OffsetDateTime::now_utc() - time::Duration::days(PENDING_TTL_DAYS + 1);
+            p.turns
+                .insert("turn-ancient".into(), old.format(&Rfc3339).unwrap());
+            write_pending(brain, &p).unwrap();
+            let r = run_proposal(&scope).unwrap();
+            assert!(r
+                .notes
+                .iter()
+                .any(|n| n.contains("turn-ancient") && n.contains("expired")));
+            assert!(read_pending(brain).turns.is_empty());
         });
     }
 
