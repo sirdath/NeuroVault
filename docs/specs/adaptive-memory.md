@@ -337,7 +337,15 @@ link_bonus= +linked_to_active_decision +linked_to_deadline
 
 Salience **orders and budgets within a type**; it never overrides the
 CE relevance floor for semantic retrieval (a salient-but-irrelevant
-memory is still irrelevant). For non-semantic shapes (WorkingState,
+memory is still irrelevant).
+
+**Anti-feedback rule (Dath, 2026-07-10):** being retrieved is NOT
+being used. Ambient/adaptive candidate retrieval never bumps
+`access_count` (the `_quiet` retrieval variant), or salience's usage
+component becomes a self-feeding loop — retrieved once → stronger →
+retrieved more. Usage strength comes only from meaningful evidence:
+explicit saves, corrections, approvals, citation in outputs,
+successful task outcomes. For non-semantic shapes (WorkingState,
 recipe-pinned RoomSummary) salience gates staleness instead.
 
 Weights are constants in v1, per-brain-tunable in `ambient.json`
@@ -612,6 +620,47 @@ Each phase ships alone, tests included, `general_question` fallback
 guaranteeing no regression of today's behavior at every step.
 
 ---
+
+## 12b. The Event Journal (V1c-2 foundation — direction set 2026-07-10)
+
+Temporal reasoning, consolidation, and feedback all need an
+AUTHORITATIVE record of what happened. `updated_at` cannot say what
+changed, the previous value, who changed it, which session caused it,
+or whether it was meaningful. So NeuroVault keeps an **append-only,
+immutable Event Journal** (`~/.neurovault/brains/<id>/journal/
+events-YYYY-MM.jsonl`, monthly segments, never discarded): typed
+memories are DERIVED state; events are the historical evidence they
+can be rebuilt from.
+
+Event: `{event_id, ts, brain_id, room?, session_id?, host?, actor,
+event_type, object_type, object_id, title?, kind?, before?, after?,
+source_refs[], confidence, capture_method, privacy_label?}`.
+
+Emitters (V1): note_created/updated (ingest — an unchanged content
+hash emits NOTHING; index refreshes are not experiences),
+note_superseded, task_created/completed (todos), playbook_rule_added
+(explicit corrections, confidence 0.95), working_state_updated
+(before → after). Planned: session boundaries, assistant/tool
+outcomes, file watchers — every host adapter emits the same
+normalized events, capturing as many of the boundaries (before prompt
+→ after response → after tools → session end) as the host exposes;
+intentions without outcomes are half a memory.
+
+temporal_diff is the journal's first consumer (journal-first
+collection; state synthesis survives only as BACKFILL for pre-journal
+windows, marked as such in every score reason). Consolidation becomes
+its second: raw events → deterministic extraction → candidate
+memories → optional background LLM judgment → dedup/contradiction
+checks → three confidence bands (high = write automatically: explicit
+corrections/decisions/deadlines/file changes; medium = proposed
+memory visible in the Inspector; low = stays a raw event). That is
+what keeps "automatic" from becoming "silently invent structured
+knowledge."
+
+Roadmap (revised): journal → temporal_diff on it → automatic
+consolidation → post-response/outcome feedback → PersonProfile →
+multi-host adapters → learned salience/recipes only after enough
+outcome data exists.
 
 ## 13. Non-goals (v1)
 

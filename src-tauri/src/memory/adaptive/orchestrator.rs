@@ -24,7 +24,7 @@ use super::types::{load_working_state, WorkingState};
 use super::Scope;
 use crate::memory::db::BrainDb;
 use crate::memory::retriever::{
-    hybrid_retrieve_with_scores, structural_confidence, RecallOpts, THROTTLE_HINT_ID,
+    hybrid_retrieve_with_scores_quiet, structural_confidence, RecallOpts, THROTTLE_HINT_ID,
 };
 use crate::memory::types::MemoryError;
 use crate::memory::{reranker, todos};
@@ -181,7 +181,7 @@ pub fn run_recipe(
                     use_reranker: false, // pooled pass below
                     ablate: Vec::new(),
                 };
-                match hybrid_retrieve_with_scores(db, &query, &opts) {
+                match hybrid_retrieve_with_scores_quiet(db, &query, &opts) {
                     Ok((hits, _)) => {
                         for h in hits {
                             if h.engram_id == THROTTLE_HINT_ID || h.state == "throttle_hint" {

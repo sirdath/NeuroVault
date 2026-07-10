@@ -951,7 +951,23 @@ pub fn hybrid_retrieve_with_scores(
     opts: &RecallOpts,
 ) -> Result<(Vec<RecallHit>, HashMap<String, ChannelScores>)> {
     let mut scores: HashMap<String, ChannelScores> = HashMap::new();
-    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores))?;
+    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), true)?;
+    Ok((hits, scores))
+}
+
+/// `hybrid_retrieve_with_scores` WITHOUT the access-count bump.
+/// Ambient/adaptive consumers use this: automatic candidate retrieval
+/// must not strengthen memories, or salience's usage component becomes
+/// a self-feeding loop (retrieved once → stronger → retrieved more).
+/// Usage strength comes from meaningful evidence — explicit saves,
+/// corrections, citations — never from being a candidate.
+pub fn hybrid_retrieve_with_scores_quiet(
+    db: &BrainDb,
+    query: &str,
+    opts: &RecallOpts,
+) -> Result<(Vec<RecallHit>, HashMap<String, ChannelScores>)> {
+    let mut scores: HashMap<String, ChannelScores> = HashMap::new();
+    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), false)?;
     Ok((hits, scores))
 }
 
@@ -963,7 +979,7 @@ pub fn hybrid_retrieve_with_scores(
 /// score-capture side channel (`hybrid_retrieve_with_scores`) shares
 /// the exact same pipeline so the two callers can never diverge.
 pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<Vec<RecallHit>> {
-    hybrid_retrieve_inner(db, query, opts, None)
+    hybrid_retrieve_inner(db, query, opts, None, true)
 }
 
 /// The shared retrieval pipeline. When `capture` is `Some`, it is
@@ -978,6 +994,7 @@ fn hybrid_retrieve_inner(
     query: &str,
     opts: &RecallOpts,
     mut capture: Option<&mut HashMap<String, ChannelScores>>,
+    bump: bool,
 ) -> Result<Vec<RecallHit>> {
     // One-time flag: keeps the per-channel capture branches (temp maps
     // below) off the hot path entirely for the `hybrid_retrieve` caller.
@@ -1926,7 +1943,9 @@ fn hybrid_retrieve_inner(
     let mut results: Vec<RecallHit> = Vec::with_capacity(opts.top_k);
     for c in candidates.into_iter().take(opts.top_k) {
         let confidence = engram_confidence(db, &c.engram_id, &c.kind);
-        bump_access(db, &c.engram_id).ok();
+        if bump {
+            bump_access(db, &c.engram_id).ok();
+        }
         // Score capture: assemble this hit's ChannelScores now that both
         // late-stage values exist — `c.rrf_score` (the fused value this
         // candidate carried out of `rrf_scores`) and `c.final_score`

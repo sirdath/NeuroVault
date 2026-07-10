@@ -246,7 +246,166 @@ struct EngramChangeRow {
     agent_id: Option<String>,
 }
 
+/// Journal-first collection: the append-only Event Journal is the
+/// authoritative record of what happened; state synthesis (below)
+/// remains ONLY as backfill for objects/windows predating the journal
+/// (state can prove existence, never the story). Journal coverage
+/// wins per object.
 pub fn collect_changes(
+    db: &BrainDb,
+    scope: &Scope,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+) -> Result<Vec<ChangeEvent>> {
+    let jevents =
+        crate::memory::journal::read_window(&scope.brain_id, start, end, scope.room.as_deref());
+    let mut events: Vec<ChangeEvent> = jevents
+        .iter()
+        .filter_map(|ev| project_journal_event(db, ev, end))
+        .collect();
+    let covered: std::collections::HashSet<(String, String)> = events
+        .iter()
+        .map(|e| (e.object_type.to_string(), e.object_id.clone()))
+        .collect();
+
+    for mut e in collect_from_state(db, scope, start, end)? {
+        if covered.contains(&(e.object_type.to_string(), e.object_id.clone())) {
+            continue;
+        }
+        e.score_reason = "backfill (pre-journal state synthesis); ".to_string();
+        events.push(e);
+    }
+
+    // dedup: strongest event wins per object (journal + backfill mix)
+    events.sort_by(|a, b| {
+        base_weight(b.change_type)
+            .partial_cmp(&base_weight(a.change_type))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen = std::collections::HashSet::new();
+    events.retain(|e| seen.insert((e.object_type, e.object_id.clone())));
+    Ok(events)
+}
+
+/// Map one journal event into the change model. Unknown event types
+/// survive in the journal for future consumers but do not enter the
+/// diff. No invention: fields come straight from the event.
+fn project_journal_event(
+    db: &BrainDb,
+    ev: &crate::memory::journal::Event,
+    now: OffsetDateTime,
+) -> Option<ChangeEvent> {
+    let (change_type, object_type): (ChangeType, &'static str) = match ev.event_type.as_str() {
+        "note_created" => (
+            match ev.kind.as_deref() {
+                Some("decision") => ChangeType::DecisionAdded,
+                Some("preference") => ChangeType::PlaybookRuleAdded,
+                Some("source") | Some("code") => ChangeType::SourceAdded,
+                _ => ChangeType::Created,
+            },
+            "engram",
+        ),
+        "note_updated" => (ChangeType::Updated, "engram"),
+        "note_superseded" => (ChangeType::Superseded, "engram"),
+        "playbook_rule_added" => (ChangeType::PlaybookRuleAdded, "engram"),
+        "task_created" => (ChangeType::TaskCreated, "task"),
+        "task_claimed" => (ChangeType::TaskClaimed, "task"),
+        "task_completed" => (ChangeType::TaskCompleted, "task"),
+        "working_state_updated" => (ChangeType::WorkingStateUpdated, "working_state"),
+        _ => return None, // sessions/context decisions: activity, not change
+    };
+    let salience = match object_type {
+        "engram" => engram_salience(db, &ev.object_id, now).unwrap_or(0.5),
+        "task" => {
+            if ev.after.as_deref().is_some_and(|a| a.contains("high")) {
+                0.8
+            } else {
+                0.5
+            }
+        }
+        _ => 0.6,
+    };
+    let high_pri_task = change_type == ChangeType::TaskCreated
+        && ev.after.as_deref().is_some_and(|a| a.contains("high"));
+    let action = matches!(change_type, ChangeType::DecisionAdded) || high_pri_task;
+    let title = ev
+        .title
+        .clone()
+        .unwrap_or_else(|| ev.object_id.chars().take(40).collect());
+    Some(ChangeEvent {
+        change_id: format!("j-{}", &ev.event_id[..8.min(ev.event_id.len())]),
+        object_type,
+        object_id: ev.object_id.clone(),
+        change_type,
+        title: sanitize(&title, 90),
+        summary: match change_type {
+            ChangeType::Superseded => ev
+                .source_refs
+                .first()
+                .map(|r| sanitize(r, 90))
+                .unwrap_or_else(|| "superseded".into()),
+            ChangeType::PlaybookRuleAdded => ev
+                .after
+                .as_deref()
+                .map(|a| sanitize(a, 90))
+                .unwrap_or_else(|| "new playbook rule".into()),
+            _ => format!(
+                "{} ({})",
+                ev.event_type.replace('_', " "),
+                ev.capture_method
+            ),
+        },
+        before: ev.before.as_deref().map(|b| sanitize(b, 60)),
+        after: ev.after.as_deref().map(|a| sanitize(a, 60)),
+        timestamp: ev.ts.clone(),
+        actor: ev.actor.clone(),
+        source_ids: ev.source_refs.clone(),
+        lifecycle: if change_type == ChangeType::Superseded {
+            "superseded".into()
+        } else {
+            "active".into()
+        },
+        salience,
+        importance_score: 0.0,
+        score_reason: String::new(),
+        action_required: action,
+        recommended_action: high_pri_task.then(|| format!("Address: {}", sanitize(&title, 70))),
+    })
+}
+
+/// Salience for a journal-referenced engram, from its current row.
+fn engram_salience(db: &BrainDb, engram_id: &str, now: OffsetDateTime) -> Option<f64> {
+    let conn = db.lock();
+    let (kind, importance, access, touched): (String, String, i64, Option<String>) = conn
+        .query_row(
+            "SELECT COALESCE(kind,'note'), COALESCE(importance,'normal'), \
+                    COALESCE(access_count,0), \
+                    COALESCE(last_confirmed_at, accessed_at, updated_at, created_at) \
+             FROM engrams WHERE id = ?1",
+            [engram_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok()?;
+    Some(
+        salience_breakdown(&SalienceInput {
+            age_days: touched
+                .as_deref()
+                .and_then(parse_when)
+                .map(|t| age_days(t, now))
+                .unwrap_or(1.0),
+            kind: kind.clone(),
+            use_count: access as u32,
+            importance,
+            confidence: structural_confidence(&kind),
+            reliability: structural_confidence(&kind),
+            ..SalienceInput::default()
+        })
+        .total,
+    )
+}
+
+/// State synthesis — BACKFILL ONLY (see collect_changes).
+fn collect_from_state(
     db: &BrainDb,
     scope: &Scope,
     start: OffsetDateTime,
@@ -522,15 +681,6 @@ pub fn collect_changes(
         }
     }
 
-    // ---- dedup: strongest event wins per object ----
-    events.sort_by(|a, b| {
-        base_weight(b.change_type)
-            .partial_cmp(&base_weight(a.change_type))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut seen = std::collections::HashSet::new();
-    events.retain(|e| seen.insert((e.object_type, e.object_id.clone())));
-
     Ok(events)
 }
 
@@ -574,8 +724,8 @@ pub fn rank_changes(events: &mut [ChangeEvent], start: OffsetDateTime, end: Offs
             .unwrap_or(0.0);
         e.importance_score = (base + sal + action + recency).min(1.0);
         e.score_reason = format!(
-            "base {base:.2} ({:?}) + salience {sal:.2} + action {action:.2} + recency {recency:.2}",
-            e.change_type
+            "{}base {base:.2} ({:?}) + salience {sal:.2} + action {action:.2} + recency {recency:.2}",
+            e.score_reason, e.change_type
         );
     }
     events.sort_by(|a, b| {

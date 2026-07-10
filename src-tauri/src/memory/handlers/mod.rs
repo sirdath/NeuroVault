@@ -1402,8 +1402,30 @@ pub async fn working_state_set(
         let id = resolve_brain_id(body.brain_id.as_deref())?;
         let scope = scope_for(&id, body.room.as_deref());
         let mut ws = super::adaptive::types::load_working_state(&scope);
+        let before = ws.current_task.clone().unwrap_or_else(|| "(empty)".into());
         ws.apply(body.update, time::OffsetDateTime::now_utc());
         super::adaptive::types::save_working_state(&scope, &ws)?;
+        {
+            let mut ev = super::journal::Event::now(
+                &id,
+                "working_state_updated",
+                "working_state",
+                &scope.room_slug(),
+            );
+            ev.room = scope.room.clone();
+            ev.actor = ws
+                .updated_by
+                .clone()
+                .map(|a| format!("agent:{a}"))
+                .unwrap_or_else(|| "user".into());
+            ev.before = Some(before.chars().take(120).collect());
+            ev.after = ws
+                .current_task
+                .clone()
+                .map(|t| t.chars().take(120).collect());
+            ev.capture_method = "endpoint".into();
+            super::journal::record(ev);
+        }
         Ok(serde_json::json!({ "brain": id, "room": scope.room, "status": "updated", "state": ws }))
     })
     .await
@@ -1484,6 +1506,19 @@ pub async fn playbook_rule_create(
                  last_confirmed_at = datetime('now') WHERE id = ?1",
                 rusqlite::params![res.engram_id],
             );
+        }
+        {
+            // Explicit user correction — the highest-confidence
+            // experience the system can capture.
+            let mut ev =
+                super::journal::Event::now(&id, "playbook_rule_added", "engram", &res.engram_id);
+            ev.title = Some(title.clone());
+            ev.kind = Some("preference".into());
+            ev.room = scope.room.clone();
+            ev.after = Some(body.rule.trim().chars().take(160).collect());
+            ev.capture_method = "explicit_correction".into();
+            ev.confidence = 0.95;
+            super::journal::record(ev);
         }
         Ok(serde_json::json!({
             "brain": id,

@@ -51,6 +51,7 @@ pub mod hooks;
 pub mod http_server;
 pub mod inbox;
 pub mod ingest;
+pub mod journal;
 pub mod mcp;
 pub mod migrations;
 pub mod pagerank_state;

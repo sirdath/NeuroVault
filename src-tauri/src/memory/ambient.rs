@@ -31,7 +31,7 @@ use uuid::Uuid;
 use super::db::BrainDb;
 use super::hooks::{contentful_tokens, sanitize};
 use super::retriever::{
-    hybrid_retrieve_with_scores, ChannelScores, RecallHit, RecallOpts, THROTTLE_HINT_ID,
+    hybrid_retrieve_with_scores_quiet, ChannelScores, RecallHit, RecallOpts, THROTTLE_HINT_ID,
 };
 use super::types::MemoryError;
 
@@ -955,7 +955,7 @@ pub fn run_at(
         use_reranker: true,
         ablate: Vec::new(),
     };
-    let (hits, score_map) = hybrid_retrieve_with_scores(db, &query, &opts)?;
+    let (hits, score_map) = hybrid_retrieve_with_scores_quiet(db, &query, &opts)?;
 
     // Candidate prep: sentinel + dedup filtering, signal detection.
     let exclude: HashSet<&str> = packet.exclude_ids.iter().map(String::as_str).collect();

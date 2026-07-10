@@ -190,6 +190,10 @@ fn consulting_room_story() {
         block.contains("Send revised pricing deck"),
         "task change event present: {block}"
     );
+    assert!(
+        block.contains("[C-j-"),
+        "change events come from the JOURNAL, not state synthesis: {block}"
+    );
     assert!(block.contains("Recommended next action:"), "{block}");
     assert!(resp.reason.contains("Yesterday"), "{}", resp.reason);
 

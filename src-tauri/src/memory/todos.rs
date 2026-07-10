@@ -187,6 +187,19 @@ pub fn add_todo(brain_id: &str, args: AddTodoArgs) -> Result<Todo> {
         source_engram: args.source_engram,
     };
     append_todo(brain_id, &todo)?;
+    {
+        let mut ev = super::journal::Event::now(brain_id, "task_created", "task", &todo.id);
+        ev.title = Some(todo.text.chars().take(120).collect());
+        ev.actor = todo
+            .created_by
+            .clone()
+            .map(|a| format!("agent:{a}"))
+            .unwrap_or_else(|| "user".into());
+        ev.after = Some(format!("open ({})", todo.priority));
+        ev.capture_method = "todos".into();
+        ev.source_refs = todo.source_engram.clone().into_iter().collect();
+        super::journal::record(ev);
+    }
     Ok(todo)
 }
 
@@ -230,12 +243,26 @@ pub fn complete_todo(brain_id: &str, id: &str) -> Result<Todo> {
     if cur.status == "done" {
         return Ok(cur);
     }
+    let before_status = cur.status.clone();
     let next = Todo {
         status: "done".to_string(),
         completed_at: Some(now_iso()),
         ..cur
     };
     append_todo(brain_id, &next)?;
+    {
+        let mut ev = super::journal::Event::now(brain_id, "task_completed", "task", &next.id);
+        ev.title = Some(next.text.chars().take(120).collect());
+        ev.actor = next
+            .claimed_by
+            .clone()
+            .map(|a| format!("agent:{a}"))
+            .unwrap_or_else(|| "user".into());
+        ev.before = Some(before_status);
+        ev.after = Some("done".into());
+        ev.capture_method = "todos".into();
+        super::journal::record(ev);
+    }
     Ok(next)
 }
 

@@ -89,6 +89,39 @@ pub fn save_note(ctx: &BrainContext, filename: &str, content: &str) -> Result<Wr
         }
     };
 
+    // Journal: only REAL changes are experiences — `unchanged` means
+    // the content hash matched (an index refresh, not an event).
+    if status != "unchanged" {
+        let kind: Option<String> = {
+            let conn = ctx.db.lock();
+            conn.query_row(
+                "SELECT COALESCE(kind,'note') FROM engrams WHERE id = ?1",
+                [&engram_id],
+                |r| r.get(0),
+            )
+            .ok()
+        };
+        let mut ev = super::journal::Event::now(
+            &ctx.brain_id,
+            if status == "created" {
+                "note_created"
+            } else {
+                "note_updated"
+            },
+            "engram",
+            &engram_id,
+        );
+        ev.title = Some(filename.to_string());
+        ev.kind = kind;
+        ev.room = std::path::Path::new(filename)
+            .parent()
+            .and_then(|p| p.to_str())
+            .filter(|p| !p.is_empty())
+            .map(String::from);
+        ev.capture_method = "ingest".into();
+        super::journal::record(ev);
+    }
+
     Ok(WriteResult {
         engram_id,
         filename: filename.to_string(),
@@ -225,5 +258,25 @@ pub fn supersede_note(
          updated_at = datetime('now') WHERE id = ?3",
         rusqlite::params![new_id, reason, old_id],
     )?;
+    if n > 0 {
+        let title: Option<String> = conn
+            .query_row("SELECT title FROM engrams WHERE id = ?1", [old_id], |r| {
+                r.get(0)
+            })
+            .ok();
+        drop(conn);
+        let mut ev = super::journal::Event::now(db.brain_id(), "note_superseded", "engram", old_id);
+        ev.title = title;
+        ev.before = Some("active".into());
+        ev.after = Some(format!("superseded by {}", &new_id[..new_id.len().min(8)]));
+        if let Some(r) = reason {
+            ev.source_refs = vec![format!(
+                "reason: {}",
+                r.chars().take(120).collect::<String>()
+            )];
+        }
+        super::journal::record(ev);
+        return Ok(true);
+    }
     Ok(n > 0)
 }
