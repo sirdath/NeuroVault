@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { API_HOST } from "../lib/config";
+import ProposalReview from "./ProposalReview";
 
 type ItemTrace = {
   kind?: string;
@@ -263,6 +264,7 @@ function RecordCard({ r }: { r: LogRecord }) {
 }
 
 export default function MemoryInspector({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<"trace" | "proposals">("trace");
   const [records, setRecords] = useState<LogRecord[]>([]);
   const [decision, setDecision] = useState<string>("");
   const [intent, setIntent] = useState<string>("");
@@ -331,27 +333,57 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         <h1 className="text-sm font-semibold" style={{ color: "var(--nv-text)" }}>
           Memory Inspector
         </h1>
+        <div className="flex items-center gap-1 ml-2">
+          {(
+            [
+              ["trace", "Context Trace"],
+              ["proposals", "Proposals"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className="text-[11px] px-2.5 py-1 rounded-md"
+              style={{
+                background: tab === id ? "rgba(240,165,0,0.12)" : "transparent",
+                color: tab === id ? "var(--nv-accent, #f0a500)" : "var(--nv-text-dim)",
+                border: `1px solid ${tab === id ? "rgba(240,165,0,0.3)" : "transparent"}`,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-          every automatic-recall decision, explained
+          {tab === "trace"
+            ? "every automatic-recall decision, explained"
+            : "review what consolidation wants to learn"}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <select value={decision} onChange={(e) => setDecision(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
-            <option value="">all decisions</option>
-            <option value="inject">inject</option>
-            <option value="silent">silent</option>
-          </select>
-          <select value={intent} onChange={(e) => setIntent(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
-            <option value="">all intents</option>
-            {intents.map((i) => (
-              <option key={i} value={i}>
-                {i}
-              </option>
-            ))}
-          </select>
+          {tab === "trace" && (
+            <>
+              <select value={decision} onChange={(e) => setDecision(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
+                <option value="">all decisions</option>
+                <option value="inject">inject</option>
+                <option value="silent">silent</option>
+              </select>
+              <select value={intent} onChange={(e) => setIntent(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
+                <option value="">all intents</option>
+                {intents.map((i) => (
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {tab === "trace" && (
           <label className="flex items-center gap-1 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
             auto-refresh
           </label>
+          )}
+          {tab === "trace" && (
           <button
             onClick={load}
             className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80"
@@ -359,6 +391,7 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
           >
             Refresh
           </button>
+          )}
           <button
             onClick={onClose}
             className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80"
@@ -369,6 +402,9 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
+      {tab === "proposals" ? (
+        <ProposalReview />
+      ) : (
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
         {error && (
           <div className="text-xs" style={{ color: "#f87171" }}>
@@ -385,6 +421,7 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
           <RecordCard key={r.event_id} r={r} />
         ))}
       </div>
+      )}
     </div>
   );
 }
