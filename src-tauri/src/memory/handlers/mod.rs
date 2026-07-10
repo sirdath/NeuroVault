@@ -1300,6 +1300,60 @@ pub async fn query_signal(
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+pub struct AmbientLogQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    /// "inject" | "silent" — omit for both.
+    #[serde(default)]
+    decision: Option<String>,
+    #[serde(default)]
+    intent: Option<String>,
+}
+
+/// GET /api/ambient_log — the Memory Inspector's feed (adaptive-memory
+/// spec V1c-1). Returns the newest decision-log records, newest first,
+/// with optional brain/decision/intent filters. Reads the JSONL tail;
+/// the log rotates at 8MB so a full read stays cheap.
+pub async fn ambient_log(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let limit = q.limit.unwrap_or(50).min(500);
+        let path = super::ambient::log_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut records: Vec<serde_json::Value> = raw
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|r| {
+                q.brain_id
+                    .as_deref()
+                    .is_none_or(|b| r["brain"].as_str() == Some(b))
+                    && q.decision
+                        .as_deref()
+                        .is_none_or(|d| r["decision"].as_str() == Some(d))
+                    && q.intent
+                        .as_deref()
+                        .is_none_or(|i| r["intent"].as_str() == Some(i))
+            })
+            .take(limit)
+            .collect();
+        // rev() above walks newest-last files backwards, so records are
+        // already newest-first; keep them that way.
+        let total = records.len();
+        records.shrink_to_fit();
+        Ok(serde_json::json!({ "records": records, "count": total }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
 /// GET /api/working_state — the per-scope hot buffer behind the
 /// `continue_work` intent (docs/specs/adaptive-memory.md §3.2.3).
 pub async fn working_state_get(

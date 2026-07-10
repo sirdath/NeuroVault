@@ -762,20 +762,36 @@ pub fn run_at(
         if let Some(recipe) = recipes::recipe_for(routed.intent) {
             let run =
                 orchestrator::run_recipe(db, &scope, &packet.prompt, recipe, &packet.exclude_ids)?;
-            let sections_debug = packet.debug.then(|| {
-                Value::Array(
-                    run.sections
-                        .iter()
-                        .map(|sec| {
-                            json!({
-                                "title": sec.title,
-                                "injected": sec.items.iter().map(|i| i.display_id.clone()).collect::<Vec<_>>(),
-                                "skipped": sec.skipped,
-                            })
+            // The full per-section trace is built for EVERY request —
+            // it is the Inspector's substrate (spec V1c-1: every
+            // recall, ranking, lifecycle, and gate decision must be
+            // visible). `debug` only decides whether it also rides
+            // the HTTP response; the decision log always gets it.
+            let sections_trace = Value::Array(
+                run.sections
+                    .iter()
+                    .map(|sec| {
+                        json!({
+                            "title": sec.title,
+                            "items": sec
+                                .items
+                                .iter()
+                                .map(|i| {
+                                    json!({
+                                        "id": i.display_id,
+                                        "engram_id": i.engram_id,
+                                        "ce_prob": i.ce_prob,
+                                        "salience": i.salience,
+                                        "trace": i.trace,
+                                    })
+                                })
+                                .collect::<Vec<_>>(),
+                            "skipped": sec.skipped,
                         })
-                        .collect(),
-                )
-            });
+                    })
+                    .collect(),
+            );
+            let sections_debug = packet.debug.then(|| sections_trace.clone());
             let mut resp = match composer::compose(&run, &routed, &scope, recipe.token_budget) {
                 Some(pk) => AmbientResponse {
                     decision: "inject".into(),
@@ -818,7 +834,18 @@ pub fn run_at(
             resp.intent = Some(routed.intent.as_str().to_string());
             resp.intent_confidence = Some(routed.confidence);
             resp.sections = sections_debug;
-            log_decision(log_file, &cfg, packet, brain_id, &quality, &[], &resp, t0);
+            log_decision_with_trace(
+                log_file,
+                &cfg,
+                packet,
+                brain_id,
+                &quality,
+                &[],
+                &resp,
+                Some(&sections_trace),
+                Some(&routed.reason),
+                t0,
+            );
             return Ok(resp);
         }
         route_note = Some((routed.intent.as_str().to_string(), routed.confidence));
@@ -1023,6 +1050,26 @@ fn log_decision(
     resp: &AmbientResponse,
     t0: Instant,
 ) {
+    log_decision_with_trace(
+        log_file, cfg, packet, brain_id, quality, considered, resp, None, None, t0,
+    )
+}
+
+/// Full-trace variant: `sections` is the adaptive per-section trace,
+/// `route_reason` the router's own words ("matched 'prepare me for'").
+#[allow(clippy::too_many_arguments)]
+fn log_decision_with_trace(
+    log_file: &Path,
+    cfg: &EffectiveConfig,
+    packet: &AmbientQueryPacket,
+    brain_id: &str,
+    quality: &QueryQuality,
+    considered: &[(&RecallHit, ChannelScores, Vec<String>)],
+    resp: &AmbientResponse,
+    sections: Option<&Value>,
+    route_reason: Option<&str>,
+    t0: Instant,
+) {
     let prompt_sha = {
         let mut h = Sha256::new();
         h.update(packet.prompt.as_bytes());
@@ -1058,7 +1105,16 @@ fn log_decision(
         "reason": resp.reason,
         "intent": resp.intent,
         "intent_confidence": resp.intent_confidence,
+        "route_reason": route_reason,
+        "sections": sections,
         "injected": resp.memories.iter().map(|m| m.engram_id.clone()).collect::<Vec<_>>(),
+        // Bounded head of the final packet so the Inspector can show
+        // what was actually injected (memory content is the user's own
+        // local data; the PROMPT stays hash-only unless opted in).
+        "context_block_head": resp
+            .context_block
+            .as_deref()
+            .map(|b| b.chars().take(700).collect::<String>()),
         "tokens": resp.tokens,
         "ms": t0.elapsed().as_millis() as u64,
     });

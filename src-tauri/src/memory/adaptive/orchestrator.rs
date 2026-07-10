@@ -19,7 +19,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use super::recipes::{ContextRecipe, SectionSource, SectionSpec};
-use super::salience::{age_days, salience, SalienceInput};
+use super::salience::{age_days, salience_breakdown, SalienceBreakdown, SalienceInput};
 use super::types::{load_working_state, WorkingState};
 use super::Scope;
 use crate::memory::db::BrainDb;
@@ -46,6 +46,18 @@ pub struct SectionItem {
     pub ce_prob: Option<f64>,
     /// Salience (spec §5.2) when the item is an engram.
     pub salience: Option<f64>,
+    /// Full salience components + lifecycle status for the trace —
+    /// the Inspector's per-memory "why" (spec V1c-1).
+    pub trace: Option<ItemTrace>,
+}
+
+/// Per-memory trace: everything the Inspector needs to explain a
+/// ranking/gate decision without re-running it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ItemTrace {
+    pub kind: String,
+    pub lifecycle: String,
+    pub salience: SalienceBreakdown,
 }
 
 /// A section after retrieval + gating.
@@ -98,6 +110,7 @@ pub fn run_recipe(
         title: String,
         content: String,
         salience: f64,
+        trace: Option<ItemTrace>,
     }
 
     let mut raw: Vec<RawSection> = Vec::with_capacity(recipe.sections.len());
@@ -123,6 +136,7 @@ pub fn run_recipe(
                         engram_id: None,
                         ce_prob: None,
                         salience: None,
+                        trace: None,
                     });
                 }
             }
@@ -142,6 +156,7 @@ pub fn run_recipe(
                             engram_id: None,
                             ce_prob: None,
                             salience: None,
+                            trace: None,
                         });
                     }
                     if open.is_empty() {
@@ -197,13 +212,15 @@ pub fn run_recipe(
                                 sec.skipped.push((short(&h.engram_id), reason.to_string()));
                                 continue;
                             }
-                            let sal = row.as_ref().map(|r| r.salience(now)).unwrap_or(0.5);
+                            let trace = row.as_ref().map(|r| r.trace(now));
+                            let sal = trace.as_ref().map(|t| t.salience.total).unwrap_or(0.5);
                             seen_engrams.insert(h.engram_id.clone(), raw.len());
                             sec.cands.push(RawCand {
                                 engram_id: h.engram_id,
                                 title: h.title,
                                 content: h.content,
                                 salience: sal,
+                                trace,
                             });
                         }
                     }
@@ -346,6 +363,7 @@ pub fn run_recipe(
                         engram_id: Some(c.engram_id.clone()),
                         ce_prob: Some(p),
                         salience: Some(sal),
+                        trace: c.trace.clone(),
                     });
                 }
             }
@@ -402,7 +420,7 @@ struct LifecycleRow {
 }
 
 impl LifecycleRow {
-    fn salience(&self, now: time::OffsetDateTime) -> f64 {
+    fn trace(&self, now: time::OffsetDateTime) -> ItemTrace {
         let age = self
             .last_touch
             .as_deref()
@@ -410,7 +428,7 @@ impl LifecycleRow {
             .map(|t| age_days(t, now))
             .unwrap_or(365.0);
         let conf = structural_confidence(&self.kind);
-        salience(&SalienceInput {
+        let breakdown = salience_breakdown(&SalienceInput {
             age_days: age,
             kind: self.kind.clone(),
             use_count: self.use_count,
@@ -418,7 +436,17 @@ impl LifecycleRow {
             confidence: conf,
             reliability: conf,
             ..SalienceInput::default()
-        })
+        });
+        let lifecycle = if self.superseded_by.as_deref().is_some_and(|x| !x.is_empty()) {
+            "superseded".to_string()
+        } else {
+            self.state.clone()
+        };
+        ItemTrace {
+            kind: self.kind.clone(),
+            lifecycle,
+            salience: breakdown,
+        }
     }
 }
 

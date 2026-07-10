@@ -52,13 +52,28 @@ pub fn half_life_days(kind: &str) -> f64 {
     }
 }
 
-/// Weighted salience in [0,1].
+/// Every component of one salience verdict — the Inspector shows
+/// these (and the v2 learner fits weights against them), so they are
+/// first-class, serialized, and logged; never just a folded number.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SalienceBreakdown {
+    pub recency: f64,
+    pub usage: f64,
+    pub importance: f64,
+    pub confidence: f64,
+    pub reliability: f64,
+    pub link_bonus: f64,
+    /// The weighted total in [0,1].
+    pub total: f64,
+}
+
+/// Weighted salience with per-component visibility.
 ///
 /// ```text
 /// 0.25·recency + 0.20·usage + 0.20·importance
 ///   + 0.15·confidence + 0.10·reliability + 0.10·link_bonus
 /// ```
-pub fn salience(input: &SalienceInput) -> f64 {
+pub fn salience_breakdown(input: &SalienceInput) -> SalienceBreakdown {
     let recency = (-input.age_days.max(0.0) / half_life_days(&input.kind) * std::f64::consts::LN_2)
         .exp()
         .clamp(0.0, 1.0);
@@ -77,13 +92,28 @@ pub fn salience(input: &SalienceInput) -> f64 {
     .filter(|&&b| b)
     .count() as f64;
     let link_bonus = (links / 3.0).clamp(0.0, 1.0);
-
-    0.25 * recency
+    let confidence = input.confidence.clamp(0.0, 1.0);
+    let reliability = input.reliability.clamp(0.0, 1.0);
+    let total = 0.25 * recency
         + 0.20 * usage
         + 0.20 * importance
-        + 0.15 * input.confidence.clamp(0.0, 1.0)
-        + 0.10 * input.reliability.clamp(0.0, 1.0)
-        + 0.10 * link_bonus
+        + 0.15 * confidence
+        + 0.10 * reliability
+        + 0.10 * link_bonus;
+    SalienceBreakdown {
+        recency,
+        usage,
+        importance,
+        confidence,
+        reliability,
+        link_bonus,
+        total,
+    }
+}
+
+/// The folded score (ordering, budgets, decay).
+pub fn salience(input: &SalienceInput) -> f64 {
+    salience_breakdown(input).total
 }
 
 /// Days between two instants, non-negative.

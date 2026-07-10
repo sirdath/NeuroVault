@@ -4,6 +4,7 @@ import { useDensityStore, type Density } from "../stores/densityStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 import { useUpdateStore } from "../stores/updateStore";
+import MemoryInspector from "./MemoryInspector";
 
 
 const FONT_SIZES = [
@@ -317,6 +318,7 @@ export function SettingsView() {
         <McpSection />
         <ClaudeCodeMcpSection />
         <AutoRecallSection />
+        <InspectorSection />
         <MCPTierSection />
         <RerankSection />
         <APIGatewaySection />
@@ -471,6 +473,27 @@ function AppVersion() {
  *  Update pill, so a check here lights up the pill (and vice-versa).
  *  "Update" downloads + installs via the native updater when configured,
  *  else opens the GitHub release page (current unsigned-installer state). */
+function InspectorSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section title="Memory Inspector">
+      <SettingRow
+        label="Context trace"
+        description="Every automatic-recall decision, explained: detected intent, candidates with salience and reranker scores, lifecycle status, gate verdicts with skip reasons, and the injected packet. Silence is a decision too - inspect why nothing was injected."
+      >
+        <button
+          onClick={() => setOpen(true)}
+          className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-accent, #f0a500)" }}
+        >
+          Open Inspector
+        </button>
+      </SettingRow>
+      {open && <MemoryInspector onClose={() => setOpen(false)} />}
+    </Section>
+  );
+}
+
 function UpdatesSection() {
   const info = useUpdateStore((s) => s.info);
   const checking = useUpdateStore((s) => s.checking);
