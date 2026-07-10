@@ -1301,6 +1301,168 @@ pub async fn query_signal(
 }
 
 #[derive(Deserialize)]
+pub struct ProposalDecisionBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+    #[serde(default)]
+    reviewer: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    /// Field edits (name -> approved value); both values are retained.
+    #[serde(default)]
+    edits: std::collections::HashMap<String, String>,
+}
+
+/// POST /api/proposals/:id/approve — review decision as a journal
+/// event; idempotent under concurrent approvals; applies only the
+/// demonstrably safe classes (memory_strengthened, approved
+/// supersessions) and acknowledges the rest.
+pub async fn proposal_approve(
+    Path(pid): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<ProposalDecisionBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let reviewer = body.reviewer.as_deref().unwrap_or("user");
+        let (mut rec, changed) = super::adaptive::proposals::decide(
+            &id,
+            &pid,
+            true,
+            &body.edits,
+            reviewer,
+            body.reason.as_deref(),
+        )?;
+        // Apply the SAFE classes only; everything else is acknowledged
+        // review state, not an automatic write.
+        let mut applied_note = "acknowledged (no automatic write for this class)".to_string();
+        if changed && !rec.applied {
+            match rec.action.as_str() {
+                "memory_strengthened" => {
+                    let db = open_brain(&id)?;
+                    let conn = db.lock();
+                    let n = conn.execute(
+                        "UPDATE engrams SET last_confirmed_at = datetime('now') WHERE id = ?1",
+                        rusqlite::params![rec.object_id],
+                    )?;
+                    if n > 0 {
+                        rec.applied = true;
+                        applied_note = "applied: last_confirmed_at refreshed".into();
+                    } else {
+                        applied_note = "approve recorded; engram not found to strengthen".into();
+                    }
+                }
+                "supersession_suggestion" => {
+                    let older = rec
+                        .fields
+                        .iter()
+                        .find(|f| f.name == "superseded_engram")
+                        .map(|f| f.approved_value.clone().unwrap_or(f.proposed_value.clone()));
+                    let newer = rec
+                        .fields
+                        .iter()
+                        .find(|f| f.name == "superseded_by")
+                        .map(|f| f.approved_value.clone().unwrap_or(f.proposed_value.clone()));
+                    if let (Some(older), Some(newer)) = (older, newer) {
+                        let db = open_brain(&id)?;
+                        let reason = format!("approved consolidation proposal {}", rec.proposal_id);
+                        if super::write_ops::supersede_note(&db, &older, &newer, Some(&reason))? {
+                            rec.applied = true;
+                            applied_note = "applied: note superseded".into();
+                        } else {
+                            applied_note = "approve recorded; engram not found to supersede".into();
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if rec.applied {
+                super::adaptive::proposals::append(&id, &rec)?;
+            }
+        }
+        Ok(serde_json::json!({
+            "brain": id,
+            "proposal": rec,
+            "changed": changed,
+            "apply": applied_note,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// POST /api/proposals/:id/reject
+pub async fn proposal_reject(
+    Path(pid): Path<String>,
+    _s: State<ServerState>,
+    Json(body): Json<ProposalDecisionBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(body.brain_id.as_deref())?;
+        let reviewer = body.reviewer.as_deref().unwrap_or("user");
+        let (rec, changed) = super::adaptive::proposals::decide(
+            &id,
+            &pid,
+            false,
+            &std::collections::HashMap::new(),
+            reviewer,
+            body.reason.as_deref(),
+        )?;
+        Ok(serde_json::json!({ "brain": id, "proposal": rec, "changed": changed }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/proposals?brain=&status= — the Inspector's review queue.
+pub async fn proposals_list(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let all = super::adaptive::proposals::load_all(&id);
+        let mut list: Vec<_> = all
+            .into_values()
+            .filter(|p| {
+                q.decision.as_deref().is_none_or(|want| {
+                    format!("{:?}", p.status).eq_ignore_ascii_case(&want.replace('_', ""))
+                })
+            })
+            .collect();
+        list.sort_by(|a, b| b.proposed_at.cmp(&a.proposed_at));
+        list.truncate(q.limit.unwrap_or(100).min(500));
+        Ok(serde_json::json!({ "brain": id, "count": list.len(), "proposals": list }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/consolidation_metrics — review quality beyond approval
+/// rate (untouched vs edited approvals, field edit rate, per-type and
+/// per-band precision, unreviewed backlog, audited false negatives).
+pub async fn consolidation_metrics(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let m = super::adaptive::proposals::metrics(&id);
+        serde_json::to_value(&m).map_err(|e| MemoryError::Other(e.to_string()))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
 pub struct ConsolidateBody {
     #[serde(default, alias = "brain")]
     brain_id: Option<String>,
@@ -1309,6 +1471,10 @@ pub struct ConsolidateBody {
     /// Window to consolidate, in hours back from now (default 24).
     #[serde(default)]
     window_hours: Option<i64>,
+    /// "shadow" (default) or "proposal" (stage 2: proposals enter the
+    /// review store; watermark advances).
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 /// POST /api/consolidate — SHADOW mode (stage 1): reads experience
@@ -1324,11 +1490,15 @@ pub async fn consolidate_shadow(
         let scope = scope_for(&id, body.room.as_deref());
         let now = time::OffsetDateTime::now_utc();
         let hours = body.window_hours.unwrap_or(24).clamp(1, 24 * 90);
-        let report = super::adaptive::consolidate::run_shadow(
-            &scope,
-            now - time::Duration::hours(hours),
-            now,
-        )?;
+        let report = if body.mode.as_deref() == Some("proposal") {
+            super::adaptive::consolidate::run_proposal(&scope)?
+        } else {
+            super::adaptive::consolidate::run_shadow(
+                &scope,
+                now - time::Duration::hours(hours),
+                now,
+            )?
+        };
         serde_json::to_value(&report).map_err(|e| MemoryError::Other(e.to_string()))
     })
     .await

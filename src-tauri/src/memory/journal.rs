@@ -366,17 +366,21 @@ pub fn latest_for_session(brain_id: &str, session_id: &str, event_type: &str) ->
     None
 }
 
+/// NEUROVAULT_HOME is process-global; EVERY test that redirects it
+/// must hold THIS lock — one shared mutex across modules, or two
+/// modules' separate locks happily interleave and wipe each other's
+/// homes (bitten three times: retrieval, recall_cache, proposals).
+#[cfg(test)]
+pub(crate) static TEST_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// NEUROVAULT_HOME is process-global: tests touching it must
-    /// serialize or they read each other's homes (the documented
-    /// env-var race from retrieval_integration.rs).
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = super::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let home = std::env::temp_dir().join(format!(
             "nv-journal-{}-{}",
             std::process::id(),

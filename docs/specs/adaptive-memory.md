@@ -683,6 +683,26 @@ transcript roots (~/.claude/projects), enforce a size limit, and apply
 the private-content rules BEFORE reading. Referencing-not-reading in
 the hook is the load-bearing design; the reader carries the checks.
 
+**Stage-2 review contract (locked 2026-07-10):** approval/rejection/
+edits are journal events referencing proposal_id (capture_method
+"review" — the collector's loop guard excludes them from evidence);
+rejected proposals are never regenerated from identical evidence (the
+deterministic id is in the store); new evidence hashes to a new id
+linked to its rejected predecessor; field edits retain BOTH values;
+every FIELD carries its own evidence; working-state CONTENTS are not
+inferred until the hardened transcript reader exists (only
+needs_refresh is proposed); concurrent approvals are idempotent;
+watermark advance is atomic (temp+rename) and ordered AFTER store
+appends — replaying the grace overlap reduces to no-ops via
+deterministic ids (at-least-once, exactly-once effect); the LATE-
+OUTCOME invariant is test-locked (decision → incomplete → watermark
+advances → outcome arrives → same unit completes → exactly one stable
+proposal). Metrics beyond approval rate: untouched vs edited
+approvals, field-level edit rate, rejection rate, time-to-review,
+precision by type and band, unreviewed backlog, audited false
+negatives (a system can hit impressive precision by proposing almost
+nothing).
+
 Roadmap (revised): journal → temporal_diff on it → automatic
 consolidation → post-response/outcome feedback → PersonProfile →
 multi-host adapters → learned salience/recipes only after enough

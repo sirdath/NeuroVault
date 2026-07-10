@@ -23,6 +23,7 @@
 pub mod composer;
 pub mod consolidate;
 pub mod orchestrator;
+pub mod proposals;
 pub mod recipes;
 pub mod router;
 pub mod salience;

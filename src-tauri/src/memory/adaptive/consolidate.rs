@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use super::proposals::{self, ProposedField, StoredProposal};
 use super::Scope;
 use crate::memory::journal::{read_window, Event};
 use crate::memory::types::MemoryError;
@@ -67,6 +68,9 @@ pub struct Proposal {
     pub title: String,
     pub reason: String,
     pub band: Band,
+    /// Per-field provenance: every proposed field carries ITS OWN
+    /// evidence, not just the proposal as a whole (stage-2 rule).
+    pub fields: Vec<ProposedField>,
     /// Journal event ids justifying this proposal — never empty.
     pub evidence: Vec<String>,
 }
@@ -130,6 +134,38 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
 
+    // Loop guard (stage-2 rule): consolidation NEVER consumes its own
+    // review/consolidation events as fresh source evidence.
+    let events: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.capture_method != "review" && !e.event_type.starts_with("consolidation_"))
+        .collect();
+    let events: &[&Event] = &events;
+
+    // Late-outcome guard: a turn whose outcome hasn't arrived yet is
+    // INCOMPLETE — unit-scoped rules defer, the report says so, and
+    // the watermark's grace window guarantees the unit is reconsidered
+    // when the outcome lands.
+    let incomplete_turns: std::collections::HashSet<&str> = events
+        .iter()
+        .filter(|e| e.event_type == "context_decision")
+        .filter(|d| {
+            !events
+                .iter()
+                .any(|o| o.turn_id == d.turn_id && o.event_type == "assistant_response_completed")
+                && !events
+                    .iter()
+                    .any(|o| o.event_type == "session_ended" && o.session_id == d.session_id)
+        })
+        .filter_map(|d| d.turn_id.as_deref())
+        .collect();
+    if !incomplete_turns.is_empty() {
+        notes.push(format!(
+            "{} turn(s) awaiting outcome evidence; deferred, not skipped (grace-window replay reconsiders them)",
+            incomplete_turns.len()
+        ));
+    }
+
     // Rule 1 — memory_strengthened (deterministic state transition):
     // a completed task whose creation cited a source engram is REAL
     // outcome evidence for that engram (the anti-feedback rule's
@@ -150,6 +186,12 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
                 reason: "task completed; its source engram earned outcome-based usage strength"
                     .into(),
                 band: Band::High,
+                fields: vec![ProposedField {
+                    name: "last_confirmed_at".into(),
+                    proposed_value: "now".into(),
+                    approved_value: None,
+                    evidence: evidence.clone(),
+                }],
                 evidence,
             });
         }
@@ -160,6 +202,7 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
     // decide (the pair might be intentional).
     let notes_created: Vec<&Event> = events
         .iter()
+        .copied()
         .filter(|e| e.event_type == "note_created")
         .collect();
     for (i, a) in notes_created.iter().enumerate() {
@@ -182,7 +225,22 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
                     || tb.starts_with(&ta[..12.min(ta.len())]))
             {
                 let evidence = vec![a.event_id.clone(), b.event_id.clone()];
+                let fields = vec![
+                    ProposedField {
+                        name: "superseded_engram".into(),
+                        proposed_value: a.object_id.clone(),
+                        approved_value: None,
+                        evidence: vec![a.event_id.clone()],
+                    },
+                    ProposedField {
+                        name: "superseded_by".into(),
+                        proposed_value: b.object_id.clone(),
+                        approved_value: None,
+                        evidence: vec![b.event_id.clone()],
+                    },
+                ];
                 proposals.push(Proposal {
+                    fields,
                     proposal_id: pid("supersession_suggestion", &b.object_id, &evidence),
                     action: "supersession_suggestion",
                     memory_type: "engram",
@@ -205,6 +263,7 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
     // window. "continue" would replay stale intent.
     let session_ended: Vec<&Event> = events
         .iter()
+        .copied()
         .filter(|e| e.event_type == "session_ended")
         .collect();
     let ws_updated = events
@@ -213,6 +272,7 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
     for end in &session_ended {
         let decisions_in_session: Vec<&Event> = events
             .iter()
+            .copied()
             .filter(|e| e.event_type == "context_decision" && e.session_id == end.session_id)
             .collect();
         if !decisions_in_session.is_empty() && !ws_updated {
@@ -221,7 +281,17 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
                 .map(|e| e.event_id.clone())
                 .collect();
             evidence.push(end.event_id.clone());
+            // Stage-2 rule: WORKING-STATE CONTENTS ARE NOT INFERRED
+            // until the hardened transcript reader exists. This
+            // proposes only the FACT that a refresh is needed — the
+            // task/draft/next-step fields stay empty by design.
             proposals.push(Proposal {
+                fields: vec![ProposedField {
+                    name: "needs_refresh".into(),
+                    proposed_value: "true".into(),
+                    approved_value: None,
+                    evidence: evidence.clone(),
+                }],
                 proposal_id: pid(
                     "working_state_refresh",
                     end.session_id.as_deref().unwrap_or("?"),
@@ -259,6 +329,12 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
         if evs.len() >= 3 {
             let evidence: Vec<String> = evs.iter().map(|e| e.event_id.clone()).collect();
             proposals.push(Proposal {
+                fields: vec![ProposedField {
+                    name: "refresh".into(),
+                    proposed_value: "true".into(),
+                    approved_value: None,
+                    evidence: evidence.clone(),
+                }],
                 proposal_id: pid("room_summary_refresh", &room, &evidence),
                 action: "room_summary_refresh",
                 memory_type: "room_summary",
@@ -289,10 +365,132 @@ pub fn run_shadow(
     start: OffsetDateTime,
     end: OffsetDateTime,
 ) -> Result<ConsolidationReport> {
+    build_report(scope, start, end, "shadow")
+}
+
+// ---------------------------------------------------------------------------
+// Proposal mode (stage 2): watermark + grace window + store dedupe
+// ---------------------------------------------------------------------------
+
+/// Late outcomes must not be skipped: the window always replays a
+/// GRACE period behind the watermark, and deterministic proposal_ids
+/// make the replay idempotent against the store. An incomplete turn
+/// (decision without outcome) produces no unit-scoped proposal today;
+/// when its outcome lands inside the grace window, the next run sees
+/// the completed unit and proposes exactly once.
+pub const GRACE_HOURS: i64 = 48;
+
+#[derive(Debug, Serialize, serde::Deserialize)]
+struct ConsolidationState {
+    watermark: String,
+}
+
+fn state_path(brain_id: &str) -> std::path::PathBuf {
+    crate::memory::paths::nv_home()
+        .join("brains")
+        .join(brain_id)
+        .join("consolidation_state.json")
+}
+
+fn read_watermark(brain_id: &str) -> Option<OffsetDateTime> {
+    let raw = std::fs::read_to_string(state_path(brain_id)).ok()?;
+    let st: ConsolidationState = serde_json::from_str(&raw).ok()?;
+    OffsetDateTime::parse(&st.watermark, &Rfc3339).ok()
+}
+
+/// Atomic (temp + rename): a crash between store appends and this
+/// write only means the overlap is replayed — and replay reduces to
+/// no-ops via deterministic ids. At-least-once, exactly-once effect.
+fn write_watermark(brain_id: &str, now: OffsetDateTime) -> Result<()> {
+    let path = state_path(brain_id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| MemoryError::Other(format!("state dir: {e}")))?;
+    }
+    let st = ConsolidationState {
+        watermark: now.format(&Rfc3339).unwrap_or_default(),
+    };
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string(&st).unwrap_or_default())
+        .map_err(|e| MemoryError::Other(format!("state write: {e}")))?;
+    std::fs::rename(&tmp, &path).map_err(|e| MemoryError::Other(format!("state rename: {e}")))?;
+    Ok(())
+}
+
+/// Stage-2 run: everything shadow does, PLUS new proposals enter the
+/// review store. Known proposal_ids are skipped whatever their status
+/// — a REJECTED proposal is never regenerated from identical evidence
+/// (new evidence hashes to a new id, linked to its rejected
+/// predecessor via same action+object).
+pub fn run_proposal(scope: &Scope) -> Result<ConsolidationReport> {
+    let now = OffsetDateTime::now_utc();
+    let start = read_watermark(&scope.brain_id)
+        .map(|w| w - time::Duration::hours(GRACE_HOURS))
+        .unwrap_or(now - time::Duration::days(7));
+    let mut report = build_report(scope, start, now, "proposal")?;
+
+    let store = proposals::load_all(&scope.brain_id);
+    let mut kept: Vec<Proposal> = Vec::new();
+    for p in report.proposals.drain(..) {
+        if let Some(existing) = store.get(&p.proposal_id) {
+            report.notes.push(format!(
+                "proposal {} already known (status {:?}); not regenerated",
+                p.proposal_id, existing.status
+            ));
+            continue;
+        }
+        let predecessor = store
+            .values()
+            .find(|sp| {
+                sp.status == proposals::ProposalStatus::Rejected
+                    && sp.action == p.action
+                    && sp.object_id == p.object_id
+            })
+            .map(|sp| sp.proposal_id.clone());
+        if let Some(pred) = &predecessor {
+            report.notes.push(format!(
+                "proposal {} supersedes rejected predecessor {pred} (new evidence)",
+                p.proposal_id
+            ));
+        }
+        let rec = StoredProposal {
+            proposal_id: p.proposal_id.clone(),
+            brain_id: scope.brain_id.clone(),
+            action: p.action.to_string(),
+            memory_type: p.memory_type.to_string(),
+            object_id: p.object_id.clone(),
+            title: p.title.clone(),
+            reason: p.reason.clone(),
+            band: format!("{:?}", p.band).to_lowercase(),
+            fields: p.fields.clone(),
+            evidence: p.evidence.clone(),
+            status: proposals::ProposalStatus::Proposed,
+            proposed_at: now.format(&Rfc3339).unwrap_or_default(),
+            decided_at: None,
+            decided_by: None,
+            decision_reason: None,
+            predecessor,
+            applied: false,
+        };
+        proposals::append(&scope.brain_id, &rec)?;
+        kept.push(p);
+    }
+    report.proposals = kept;
+    // Watermark advances only after store appends succeeded.
+    write_watermark(&scope.brain_id, now)?;
+    Ok(report)
+}
+
+/// Shared internals for shadow + proposal runs.
+fn build_report(
+    scope: &Scope,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+    mode: &'static str,
+) -> Result<ConsolidationReport> {
     let events = read_window(&scope.brain_id, start, end, scope.room.as_deref());
     let units = group_units(&events);
-    let (proposals, mut notes) = propose(&events);
-    if proposals.is_empty() {
+    let (props, mut notes) = propose(&events);
+    if props.is_empty() {
         notes.push("no proposal-worthy patterns in this window (that is a valid outcome)".into());
     }
     let fmt = |t: OffsetDateTime| t.format(&Rfc3339).unwrap_or_default();
@@ -301,15 +499,14 @@ pub fn run_shadow(
         ts: fmt(OffsetDateTime::now_utc()),
         brain: scope.brain_id.clone(),
         room: scope.room.clone(),
-        mode: "shadow",
+        mode,
         window_start: fmt(start),
         window_end: fmt(end),
         events_read: events.len(),
         units,
-        proposals,
+        proposals: props,
         notes,
     };
-    // Best-effort report log (the Inspector's consolidation feed).
     let path = crate::memory::paths::nv_home()
         .join("logs")
         .join("consolidation_reports.jsonl");
@@ -326,10 +523,10 @@ mod tests {
     use super::*;
     use crate::memory::journal::{append, Event};
 
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let home = std::env::temp_dir().join(format!(
             "nv-consolidate-{}-{}",
             std::process::id(),
@@ -419,6 +616,148 @@ mod tests {
             let _ = run_shadow(&scope, start, now).unwrap();
             let after = crate::memory::journal::read_window(brain, start, now, None).len();
             assert_eq!(before, after, "shadow consolidation writes no events");
+        });
+    }
+
+    /// Dath's late-outcome invariant, verbatim: decision arrives →
+    /// run sees incomplete turn → watermark advances → outcome arrives
+    /// LATER → next run completes the SAME experience unit → exactly
+    /// one stable proposal exists.
+    #[test]
+    fn late_outcomes_are_never_skipped() {
+        with_temp_home(|| {
+            let brain = "clate";
+            let scope = Scope::brain(brain);
+
+            // 1. context decision arrives (turn opens; no outcome yet)
+            let mut turn = Event::now(brain, "context_decision", "prompt", "sha-late");
+            turn.session_id = Some("s-late".into());
+            turn.turn_id = Some(turn.event_id.clone());
+            append(&turn).unwrap();
+
+            // 2. consolidation runs; the turn is incomplete
+            let r1 = run_proposal(&scope).unwrap();
+            assert!(
+                !r1.proposals
+                    .iter()
+                    .any(|p| p.action == "working_state_refresh"),
+                "incomplete turn must not produce the unit-scoped proposal"
+            );
+            assert!(
+                r1.notes.iter().any(|n| n.contains("awaiting outcome")),
+                "deferral is visible, not silent: {:?}",
+                r1.notes
+            );
+            // 3. watermark advanced
+            assert!(read_watermark(brain).is_some());
+
+            // 4. the outcome arrives later
+            let mut end_ev = Event::now(brain, "session_ended", "session", "s-late");
+            end_ev.session_id = Some("s-late".into());
+            append(&end_ev).unwrap();
+
+            // 5. next run replays the grace window and completes the unit
+            let r2 = run_proposal(&scope).unwrap();
+            let ws: Vec<_> = r2
+                .proposals
+                .iter()
+                .filter(|p| p.action == "working_state_refresh")
+                .collect();
+            assert_eq!(ws.len(), 1, "the completed unit proposes exactly once");
+            let pid = ws[0].proposal_id.clone();
+
+            // 6. exactly one stable proposal exists — further runs are no-ops
+            let r3 = run_proposal(&scope).unwrap();
+            assert!(
+                r3.proposals.is_empty(),
+                "replay is idempotent: {:?}",
+                r3.proposals.iter().map(|p| p.action).collect::<Vec<_>>()
+            );
+            let store = proposals::load_all(brain);
+            let ws_stored: Vec<_> = store
+                .values()
+                .filter(|p| p.action == "working_state_refresh")
+                .collect();
+            assert_eq!(ws_stored.len(), 1);
+            assert_eq!(ws_stored[0].proposal_id, pid);
+            // stage-2 rule: contents were NOT inferred
+            assert_eq!(ws_stored[0].fields.len(), 1);
+            assert_eq!(ws_stored[0].fields[0].name, "needs_refresh");
+        });
+    }
+
+    /// Rejected proposals are not regenerated from identical evidence;
+    /// new evidence creates a NEW proposal linked to the predecessor.
+    #[test]
+    fn rejected_is_final_and_new_evidence_links_back() {
+        with_temp_home(|| {
+            let brain = "crej";
+            let scope = Scope::brain(brain);
+            // completed task citing an engram -> memory_strengthened
+            let mut done = Event::now(brain, "task_completed", "task", "t-r");
+            done.title = Some("Ship deck".into());
+            done.source_refs = vec!["engram-r".into()];
+            append(&done).unwrap();
+
+            let r1 = run_proposal(&scope).unwrap();
+            let pid = r1
+                .proposals
+                .iter()
+                .find(|p| p.action == "memory_strengthened")
+                .unwrap()
+                .proposal_id
+                .clone();
+            proposals::decide(
+                brain,
+                &pid,
+                false,
+                &std::collections::HashMap::new(),
+                "dath",
+                Some("not meaningful"),
+            )
+            .unwrap();
+
+            // identical evidence -> never regenerated
+            let r2 = run_proposal(&scope).unwrap();
+            assert!(r2.proposals.is_empty());
+            assert!(r2
+                .notes
+                .iter()
+                .any(|n| n.contains(&pid) && n.contains("Rejected")));
+
+            // NEW evidence (another completed task citing same engram)
+            let mut done2 = Event::now(brain, "task_completed", "task", "t-r2");
+            done2.title = Some("Ship deck v2".into());
+            done2.source_refs = vec!["engram-r".into()];
+            append(&done2).unwrap();
+            let r3 = run_proposal(&scope).unwrap();
+            let newp: Vec<_> = r3
+                .proposals
+                .iter()
+                .filter(|p| p.action == "memory_strengthened")
+                .collect();
+            assert_eq!(newp.len(), 1);
+            assert_ne!(newp[0].proposal_id, pid, "new evidence, new id");
+            let stored = proposals::get(brain, &newp[0].proposal_id).unwrap();
+            assert_eq!(
+                stored.predecessor.as_deref(),
+                Some(pid.as_str()),
+                "linked to the rejected predecessor"
+            );
+        });
+    }
+
+    /// Review events never become fresh source evidence (no loops).
+    #[test]
+    fn consolidation_ignores_its_own_events() {
+        with_temp_home(|| {
+            let brain = "cloop";
+            let scope = Scope::brain(brain);
+            let mut ev = Event::now(brain, "consolidation_approved", "proposal", "p-x");
+            ev.capture_method = "review".into();
+            append(&ev).unwrap();
+            let r = run_proposal(&scope).unwrap();
+            assert!(r.proposals.is_empty(), "review events are not evidence");
         });
     }
 
