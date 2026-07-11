@@ -15,6 +15,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { API_HOST } from "../lib/config";
+import {
+  actionCopy,
+  applicationLabel,
+  bandLabel,
+  eventSentence,
+  reviewLabel,
+  PROPOSALS_EXPLAINER,
+} from "../lib/inspectorCopy";
 
 type ProposedField = {
   name: string;
@@ -126,21 +134,9 @@ function Timeline({ evidence }: { evidence: string[] }) {
       {sorted.map((e) => (
         <div key={e.event_id} className="flex items-start gap-2 text-[11px]">
           <span className="tabular-nums shrink-0" style={{ color: "var(--nv-text-dim)" }}>
-            {e.ts.replace("T", " ").slice(5, 19)}
+            {e.ts.replace("T", " ").slice(5, 16)}
           </span>
-          <Chip text={e.event_type.replace(/_/g, " ")} tone="dim" />
-          <span className="truncate" style={{ color: "var(--nv-text)" }}>
-            {e.title ?? ""}
-            {e.before || e.after ? (
-              <span style={{ color: "var(--nv-text-dim)" }}>
-                {" "}
-                {e.before ?? ""}{e.before || e.after ? " → " : ""}{e.after ?? ""}
-              </span>
-            ) : null}
-          </span>
-          <span className="ml-auto font-mono text-[10px] shrink-0" style={{ color: "var(--nv-text-dim)", opacity: 0.6 }}>
-            {e.event_id.slice(0, 8)}
-          </span>
+          <span style={{ color: "var(--nv-text)" }}>{eventSentence(e)}</span>
         </div>
       ))}
       {sorted.length === 0 && (
@@ -189,6 +185,7 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
 
   const unreviewed = p.review_status === "unreviewed";
   const age = p.proposed_at.replace("T", " ").slice(5, 16);
+  const copy = actionCopy(p.action);
 
   return (
     <div
@@ -196,13 +193,11 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
       style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
     >
       <button className="w-full flex items-center gap-2 text-left" onClick={() => setOpen((o) => !o)}>
-        <Chip text={p.review_status} tone={reviewTone(p.review_status)} />
-        <Chip text={p.application_status} tone={appTone(p.application_status)} />
-        <Chip text={p.action.replace(/_/g, " ")} tone="dim" />
-        <Chip text={p.band} tone={p.band === "high" ? "ok" : p.band === "medium" ? "accent" : "dim"} />
-        <span className="text-xs truncate flex-1" style={{ color: "var(--nv-text)" }}>
-          {p.title || p.object_id}
+        <Chip text={reviewLabel(p.review_status)} tone={reviewTone(p.review_status)} />
+        <span className="text-xs truncate flex-1 font-medium" style={{ color: "var(--nv-text)" }}>
+          {copy.headline}
         </span>
+        <Chip text={bandLabel(p.band)} tone={p.band === "high" ? "ok" : p.band === "medium" ? "accent" : "dim"} />
         <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--nv-text-dim)" }}>
           {age}
         </span>
@@ -213,22 +208,31 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
 
       {open && (
         <div className="mt-3 space-y-3 text-xs" style={{ color: "var(--nv-text)" }}>
-          <div className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-            rule: {p.reason}
+          <p className="text-[12px] leading-relaxed" style={{ color: "var(--nv-text)" }}>
+            {copy.meaning}
+          </p>
+          <div className="flex items-center gap-2">
+            <Chip text={applicationLabel(p.application_status)} tone={appTone(p.application_status)} />
+            <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+              {copy.ifApproved}
+            </span>
           </div>
           {p.predecessor && (
             <div className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-              supersedes rejected proposal <span className="font-mono">{p.predecessor}</span> (new evidence)
+              You rejected a similar suggestion before — this one exists because NEW evidence appeared.
             </div>
           )}
           {p.application_error && (
             <div className="text-[11px]" style={{ color: "#f87171" }}>
-              application failed: {p.application_error} (review verdict unchanged)
+              NeuroVault couldn't apply this ({p.application_error}) — your decision still counts.
             </div>
           )}
 
           {/* Fields — each with its own evidence and optional edit */}
           <div className="space-y-2">
+            <div className="text-[11px] font-semibold" style={{ color: "var(--nv-text)" }}>
+              What it wants to record
+            </div>
             {p.fields.map((f) => (
               <div key={f.name} className="pl-3 border-l" style={{ borderColor: "var(--nv-border)" }}>
                 <div className="flex items-center gap-2">
@@ -279,9 +283,21 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
 
           {/* Experience-unit timeline */}
           <div>
-            <div className="text-[11px] font-semibold mb-1">Experience unit (evidence timeline)</div>
+            <div className="text-[11px] font-semibold mb-1">What happened (the evidence)</div>
             <Timeline evidence={p.evidence} />
           </div>
+
+          {/* Technical detail, collapsed by default */}
+          <details className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+            <summary className="cursor-pointer">Technical detail</summary>
+            <div className="mt-1 space-y-0.5 font-mono text-[10px]">
+              <div>action: {p.action}</div>
+              <div>rule: {p.reason}</div>
+              <div>proposal: {p.proposal_id}</div>
+              <div>object: {p.object_id}</div>
+              {p.predecessor && <div>predecessor: {p.predecessor}</div>}
+            </div>
+          </details>
 
           {error && (
             <div className="text-[11px]" style={{ color: "#f87171" }}>
@@ -290,14 +306,17 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
           )}
 
           {unreviewed && !rejecting && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[12px] font-medium" style={{ color: "var(--nv-text)" }}>
+                {copy.question}
+              </span>
               <button
                 disabled={busy}
                 onClick={() => decide(true)}
                 className="text-[11px] px-3 py-1 rounded-md font-semibold hover:opacity-80 disabled:opacity-40"
                 style={{ background: "rgba(74,222,128,0.15)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.3)" }}
               >
-                {Object.keys(edits).length > 0 ? "Approve with edits" : "Approve"}
+                {Object.keys(edits).length > 0 ? "Yes, with my corrections" : "Yes, that's right"}
               </button>
               <button
                 disabled={busy}
@@ -305,11 +324,8 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
                 className="text-[11px] px-3 py-1 rounded-md font-semibold hover:opacity-80 disabled:opacity-40"
                 style={{ background: "rgba(248,113,113,0.12)", color: "#f87171", border: "1px solid rgba(248,113,113,0.3)" }}
               >
-                Reject…
+                No, that's wrong…
               </button>
-              <span className="text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
-                one proposal at a time — inspected labels are the product
-              </span>
             </div>
           )}
           {unreviewed && rejecting && (
@@ -318,7 +334,7 @@ function ProposalCard({ p, onChanged }: { p: Proposal; onChanged: () => void }) 
                 autoFocus
                 className="flex-1 text-[11px] rounded-md px-2 py-1"
                 style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--nv-border)", color: "var(--nv-text)" }}
-                placeholder="why is this wrong? (stored with the rejection)"
+                placeholder="what makes it wrong? (teaches NeuroVault what to avoid)"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
               />
@@ -427,13 +443,16 @@ export default function ProposalReview() {
     <div className="flex-1 flex overflow-hidden">
       {/* Queue */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+        <p className="text-[11px] leading-relaxed max-w-2xl" style={{ color: "var(--nv-text-dim)" }}>
+          {PROPOSALS_EXPLAINER}
+        </p>
         <div className="flex items-center gap-2 flex-wrap">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
-            <option value="unreviewed">unreviewed</option>
-            <option value="">all statuses</option>
-            <option value="approved">approved</option>
-            <option value="edited">edited</option>
-            <option value="rejected">rejected</option>
+            <option value="unreviewed">waiting for you</option>
+            <option value="">everything</option>
+            <option value="approved">you said yes</option>
+            <option value="edited">you corrected</option>
+            <option value="rejected">you said no</option>
           </select>
           <select value={actionFilter} onChange={(e) => setActionFilter(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
             <option value="">all actions</option>
@@ -450,7 +469,7 @@ export default function ProposalReview() {
             <option value="low">low</option>
           </select>
           <button onClick={runConsolidation} className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80" style={selectStyle}>
-            Run consolidation
+            Check for new suggestions
           </button>
           <button onClick={load} className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80" style={selectStyle}>
             Refresh
@@ -469,7 +488,7 @@ export default function ProposalReview() {
         )}
         {!error && visible.length === 0 && (
           <div className="text-xs" style={{ color: "var(--nv-text-dim)" }}>
-            No proposals in this view. Run consolidation to read new experience units from the journal.
+            Nothing here right now. Press “Check for new suggestions” and NeuroVault will look through recent activity.
           </div>
         )}
         {visible.map((p) => (
@@ -483,43 +502,32 @@ export default function ProposalReview() {
         style={{ borderLeft: "1px solid var(--nv-border)", color: "var(--nv-text-dim)" }}
       >
         <div className="font-semibold text-xs" style={{ color: "var(--nv-text)" }}>
-          Review quality
+          Your reviewing, at a glance
         </div>
         {metrics ? (
           <>
             <div className="space-y-1">
               <div>
-                unreviewed: <b style={{ color: "var(--nv-accent, #f0a500)" }}>{metrics.unreviewed}</b> / {metrics.total}
+                waiting for you: <b style={{ color: "var(--nv-accent, #f0a500)" }}>{metrics.unreviewed}</b> of {metrics.total}
               </div>
-              <div>coverage: {(metrics.review_coverage * 100).toFixed(0)}%</div>
-              <div>approved untouched: {metrics.approved_untouched}</div>
-              <div>approved after edits: {metrics.approved_after_edits}</div>
-              <div>rejected: {metrics.rejected}</div>
-              <div>field edit rate: {(metrics.field_edit_rate * 100).toFixed(0)}%</div>
+              <div>reviewed so far: {(metrics.review_coverage * 100).toFixed(0)}%</div>
+              <div>“yes” as-is: {metrics.approved_untouched}</div>
+              <div>“yes” after your corrections: {metrics.approved_after_edits}</div>
+              <div>“no”: {metrics.rejected}</div>
             </div>
             <div className="space-y-1">
               <div className="font-semibold" style={{ color: "var(--nv-text)" }}>
-                Application (independent)
+                What actually changed
               </div>
-              <div>applied: {metrics.app_applied}</div>
-              <div>pending: {metrics.app_pending}</div>
-              <div>failed: {metrics.app_failed}</div>
+              <div>changes applied: {metrics.app_applied}</div>
+              <div>approved but changes nothing yet: {metrics.app_pending}</div>
+              <div>couldn't apply: {metrics.app_failed}</div>
             </div>
             <div className="space-y-1">
               <div className="font-semibold" style={{ color: "var(--nv-text)" }}>
-                Audit
+                Keeping it honest
               </div>
-              <div>false negatives recorded: {metrics.audited_false_negatives}</div>
-              {metrics.audit_sample.length > 0 && (
-                <div>
-                  sample these ordinary unreviewed items:
-                  {metrics.audit_sample.map((id) => (
-                    <div key={id} className="font-mono text-[10px]">
-                      {id}
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div>things it missed (you reported): {metrics.audited_false_negatives}</div>
             </div>
           </>
         ) : (
@@ -527,12 +535,12 @@ export default function ProposalReview() {
         )}
         <div className="space-y-1 pt-2" style={{ borderTop: "1px solid var(--nv-border)" }}>
           <div className="font-semibold" style={{ color: "var(--nv-text)" }}>
-            Consolidation missed something?
+            Did NeuroVault miss something it should have noticed?
           </div>
           <textarea
             className="w-full text-[11px] rounded-md px-2 py-1 h-16 resize-none"
             style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--nv-border)", color: "var(--nv-text)" }}
-            placeholder="describe the memory it should have proposed"
+            placeholder="e.g. “I made a big decision today and it never suggested saving it”"
             value={fnText}
             onChange={(e) => setFnText(e.target.value)}
           />
@@ -542,7 +550,7 @@ export default function ProposalReview() {
             className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80 disabled:opacity-40"
             style={selectStyle}
           >
-            Record false negative
+            Report a miss
           </button>
         </div>
       </div>

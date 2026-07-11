@@ -478,8 +478,8 @@ function InspectorSection() {
   return (
     <Section title="Memory Inspector">
       <SettingRow
-        label="Context trace"
-        description="Every automatic-recall decision, explained: detected intent, candidates with salience and reranker scores, lifecycle status, gate verdicts with skip reasons, and the injected packet. Silence is a decision too - inspect why nothing was injected."
+        label="See what your memory is doing"
+        description="Two views: Recall activity shows what NeuroVault quietly added to your Claude conversations (and when it chose to stay out of the way). Suggestions shows things it thinks it learned from your sessions - each one waits for your yes or no."
       >
         <button
           onClick={() => setOpen(true)}

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { API_HOST } from "../lib/config";
 import ProposalReview from "./ProposalReview";
+import { decisionSentence, intentLabel, TRACE_EXPLAINER } from "../lib/inspectorCopy";
 
 type ItemTrace = {
   kind?: string;
@@ -167,10 +168,10 @@ function RecordCard({ r }: { r: LogRecord }) {
       style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
     >
       <button className="w-full flex items-center gap-2 text-left" onClick={() => setOpen((o) => !o)}>
-        <Chip text={r.decision} tone={r.decision === "inject" ? "ok" : "dim"} />
-        {r.intent && <Chip text={r.intent} tone="accent" />}
+        <Chip text={r.decision === "inject" ? "memories added" : "stayed quiet"} tone={r.decision === "inject" ? "ok" : "dim"} />
+        {r.intent && <Chip text={intentLabel(r.intent)} tone="accent" />}
         <span className="text-xs truncate flex-1" style={{ color: "var(--nv-text)" }}>
-          {r.reason}
+          {decisionSentence(r.decision, r.reason, r.injected.length, r.tokens)}
         </span>
         <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--nv-text-dim)" }}>
           {r.tokens > 0 ? `${r.tokens} tok · ` : ""}
@@ -183,23 +184,24 @@ function RecordCard({ r }: { r: LogRecord }) {
 
       {open && (
         <div className="mt-3 space-y-3 text-xs" style={{ color: "var(--nv-text)" }}>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-            <span>brain: {r.brain}</span>
-            {r.host && <span>host: {r.host}</span>}
-            {r.intent_confidence != null && <span>router confidence: {pct(r.intent_confidence)}</span>}
-            {r.quality && (
-              <span>
-                quality: {r.quality.contentful_tokens} token(s)
-                {r.quality.vague ? " · vague" : ""}
-                {r.quality.signals.length > 0 ? ` · ${r.quality.signals.join(", ")}` : ""}
-              </span>
-            )}
-          </div>
-          {r.route_reason && (
-            <div className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-              router: {r.route_reason}
+          <details className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+            <summary className="cursor-pointer">Technical detail</summary>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+              <span>decision: {r.reason}</span>
+              <span>brain: {r.brain}</span>
+              {r.host && <span>host: {r.host}</span>}
+              {r.intent && <span>intent: {r.intent}</span>}
+              {r.intent_confidence != null && <span>router confidence: {pct(r.intent_confidence)}</span>}
+              {r.quality && (
+                <span>
+                  quality: {r.quality.contentful_tokens} token(s)
+                  {r.quality.vague ? " · vague" : ""}
+                  {r.quality.signals.length > 0 ? ` · ${r.quality.signals.join(", ")}` : ""}
+                </span>
+              )}
+              {r.route_reason && <span>router: {r.route_reason}</span>}
             </div>
-          )}
+          </details>
           {r.prompt_text ? (
             <div className="text-[11px] italic" style={{ color: "var(--nv-text-dim)" }}>
               “{r.prompt_text}”
@@ -342,8 +344,8 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1 ml-2">
           {(
             [
-              ["trace", "Context Trace"],
-              ["proposals", "Proposals"],
+              ["trace", "Recall activity"],
+              ["proposals", "Suggestions"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -362,22 +364,22 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         </div>
         <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
           {tab === "trace"
-            ? "every automatic-recall decision, explained"
-            : "review what consolidation wants to learn"}
+            ? "what NeuroVault added to your conversations, and why"
+            : "suggestions waiting for your yes or no"}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {tab === "trace" && (
             <>
               <select value={decision} onChange={(e) => setDecision(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
-                <option value="">all decisions</option>
-                <option value="inject">inject</option>
-                <option value="silent">silent</option>
+                <option value="">added & quiet</option>
+                <option value="inject">memories added</option>
+                <option value="silent">stayed quiet</option>
               </select>
               <select value={intent} onChange={(e) => setIntent(e.target.value)} className="text-[11px] rounded-md px-2 py-1" style={selectStyle}>
-                <option value="">all intents</option>
+                <option value="">any activity</option>
                 {intents.map((i) => (
                   <option key={i} value={i}>
-                    {i}
+                    {intentLabel(i)}
                   </option>
                 ))}
               </select>
@@ -412,6 +414,9 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         <ProposalReview />
       ) : (
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+        <p className="text-[11px] leading-relaxed max-w-2xl" style={{ color: "var(--nv-text-dim)" }}>
+          {TRACE_EXPLAINER}
+        </p>
         {error && (
           <div className="text-xs" style={{ color: "#f87171" }}>
             {error}
