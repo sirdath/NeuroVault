@@ -11,10 +11,10 @@
 ## Observation window 1
 
 - **RESTART (2026-07-11):** no labels were recorded under the original
-  review UI, and the Memory Review redesign (8991163) replaces the
-  labeling instrument. The window restarts when the redesigned UI is
-  approved by Dath and installed; the criteria below are unchanged.
-- **Period:** two working weeks from the restart date.
+  review UI, and the Memory Review redesign (8991163) replaced the
+  labeling instrument. Dath approved via screenshots; installed
+  2026-07-11 15:18. The criteria below are unchanged.
+- **Period:** 2026-07-11 → 2026-07-25 (two working weeks).
 - **No rule or threshold changes midstream.** Errors are reviewed in
   batches; a rule changes only when a PATTERN emerges, and any
   material change resets the window.
