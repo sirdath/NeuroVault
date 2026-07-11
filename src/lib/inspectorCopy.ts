@@ -68,6 +68,10 @@ export type ActionCopy = {
   proposedChange?: string;
   question: string;
   ifApproved: string;
+  /** True when approving EXECUTES a change today; false when the
+   *  decision only evaluates the observation (two different action
+   *  models in the UI — "Apply change" vs "Accurate"). */
+  executable: boolean;
 };
 const ACTIONS: Record<string, ActionCopy> = {
   working_state_refresh: {
@@ -75,43 +79,48 @@ const ACTIONS: Record<string, ActionCopy> = {
     meaning:
       "This session completed meaningful work, but the state NeuroVault uses when you say “continue” was not refreshed.",
     proposedChange: "Mark this project's working state as needing an update.",
-    question: "Should NeuroVault remember this?",
+    question: "Is this observation accurate?",
     ifApproved:
-      "NeuroVault records that a refresh is needed. It will not invent the missing task, files or next step.",
+      "Your answer evaluates this rule — no memory changes today. NeuroVault will not invent the missing task, files or next step.",
+    executable: false,
   },
   memory_strengthened: {
     headline: "This memory proved itself useful",
     meaning:
       "A task linked to this memory was completed — real evidence the memory matters.",
     proposedChange: "Mark the memory as confirmed by use, which keeps it fresher for longer.",
-    question: "Should NeuroVault remember this?",
-    ifApproved: "The memory's “last confirmed” date is updated. Nothing else changes.",
+    question: "Apply this change?",
+    ifApproved: "Applying this updates the memory's “last confirmed” date. Nothing else changes, and it can be reversed.",
+    executable: true,
   },
   supersession_suggestion: {
     headline: "These two notes might be duplicates",
     meaning:
       "Two notes with nearly identical titles live in the same folder. The newer one may have replaced the older one without saying so.",
     proposedChange: "Mark the older note as replaced by the newer one.",
-    question: "Should NeuroVault remember this?",
+    question: "Apply this change?",
     ifApproved:
-      "The older note stops appearing in automatic recall. The note itself is untouched and can be restored.",
+      "Applying this stops the older note appearing in automatic recall. The note itself is untouched and can be restored.",
+    executable: true,
   },
   room_summary_refresh: {
     headline: "This folder's summary is falling behind",
     meaning:
       "Quite a few things changed in this folder recently, so its overview summary is probably stale.",
     proposedChange: "Flag this folder's summary for a refresh.",
-    question: "Should NeuroVault remember this?",
+    question: "Is this observation accurate?",
     ifApproved:
-      "The flag is recorded. Nothing is rewritten — the summariser isn't built yet, so this only teaches NeuroVault whether these nudges are wanted.",
+      "Your answer evaluates this rule — no memory changes today. Nothing is rewritten; the summariser isn't built yet.",
+    executable: false,
   },
 };
 export const actionCopy = (action: string): ActionCopy =>
   ACTIONS[action] ?? {
     headline: humanize(action),
     meaning: "NeuroVault noticed a pattern in your recent activity.",
-    question: "Is this observation right?",
-    ifApproved: "Your answer is recorded as feedback.",
+    question: "Is this observation accurate?",
+    ifApproved: "Your answer evaluates this rule — no memory changes today.",
+    executable: false,
   };
 
 /** Review-status chips. */

@@ -236,7 +236,7 @@ function FocusedProposal({
       {/* 4. Consequence */}
       <div className="mb-6">
         <div className="text-[11px] font-semibold tracking-wider uppercase mb-1" style={{ color: T.dim }}>
-          If approved
+          {copy.executable ? "If applied" : "What your answer does"}
         </div>
         <p className="text-[14px] leading-relaxed" style={{ color: T.text, opacity: 0.9 }}>
           {copy.ifApproved}
@@ -333,7 +333,7 @@ function FocusedProposal({
             className="text-[13px] px-4 py-2 rounded-lg hover:opacity-80 disabled:opacity-40"
             style={{ color: "#f87171", border: "1px solid rgba(248,113,113,0.35)" }}
           >
-            Reject
+            {copy.executable ? "Reject" : "Not accurate"}
           </button>
           <button
             disabled={busy}
@@ -349,7 +349,7 @@ function FocusedProposal({
             className="text-[13px] px-5 py-2 rounded-lg font-semibold hover:opacity-90 disabled:opacity-40 ml-auto"
             style={{ background: "rgba(74,222,128,0.16)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.4)" }}
           >
-            Approve memory
+            {copy.executable ? "Apply change" : "Accurate"}
           </button>
         </div>
       )}
@@ -397,7 +397,13 @@ function FocusedProposal({
               className="text-[13px] px-5 py-2 rounded-lg font-semibold ml-auto disabled:opacity-40"
               style={{ background: "rgba(74,222,128,0.16)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.4)" }}
             >
-              {Object.keys(edits).length > 0 ? "Approve with corrections" : "Approve memory"}
+              {Object.keys(edits).length > 0
+                ? copy.executable
+                  ? "Apply with corrections"
+                  : "Accurate, with corrections"
+                : copy.executable
+                  ? "Apply change"
+                  : "Accurate"}
             </button>
           </div>
         </div>
