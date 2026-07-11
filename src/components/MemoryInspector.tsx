@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { API_HOST } from "../lib/config";
 import ProposalReview from "./ProposalReview";
 
@@ -319,7 +320,12 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
     color: "var(--nv-text)",
   } as const;
 
-  return (
+  // Portal to <body>: the Inspector is opened from inside the Settings
+  // slide-over, whose ancestor chain forms a CSS containing block
+  // (retained transform), so a plain `position: fixed` resolves against
+  // the 420px panel instead of the viewport — the "Inspector opens at
+  // sidebar size" glitch. A portal escapes ANY ancestor styling.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex flex-col"
       style={{ background: "var(--nv-bg, #111)" }}
@@ -422,6 +428,7 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         ))}
       </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

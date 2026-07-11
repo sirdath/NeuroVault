@@ -190,6 +190,80 @@ const darkenHex  = (hex: string, t: number) => blendHex(hex, 0, t);
  *  combined with a small alpha drop, dormant reads as "this exists
  *  but isn't currently part of the live conversation" without
  *  vanishing. */
+/**
+ * SPRITE CACHE — the graph's dominant per-frame cost was rebuilding two
+ * radial gradients and enabling shadowBlur for EVERY node on EVERY
+ * frame (paintNode2D at 60fps × N nodes). Everything zoom-independent
+ * about the orb (shadow, 3-stop gradient, specular, dark rim) is baked
+ * ONCE per unique (color, size-bucket, shape, dormant) into an
+ * offscreen canvas at 6× supersample, then stamped with drawImage —
+ * which is 10-30× cheaper and stays crisp well past the label-zoom
+ * threshold. Zoom-DEPENDENT strokes (health ring, hairline rim width,
+ * labels) stay live in paintNode2D.
+ */
+const SPRITE_SS = 6; // supersample factor (crispness under zoom)
+const SPRITE_PAD = 4; // world-units of padding for the drop shadow
+const spriteCache = new Map<string, HTMLCanvasElement>();
+
+function getNodeSprite(
+  baseColor: string,
+  r: number,
+  shape: GraphNodeShape,
+): HTMLCanvasElement | null {
+  // Quantize the radius so the cache stays small (0.5-unit buckets).
+  const rq = Math.max(1, Math.round(r * 2) / 2);
+  const key = `${baseColor}|${shape}|${rq}`;
+  const hit = spriteCache.get(key);
+  if (hit) return hit;
+  if (spriteCache.size > 512) spriteCache.clear(); // palette churn guard
+
+  const world = 2 * (rq + SPRITE_PAD);
+  const px = Math.ceil(world * SPRITE_SS);
+  const cnv = document.createElement("canvas");
+  cnv.width = px;
+  cnv.height = px;
+  const c = cnv.getContext("2d");
+  if (!c) return null;
+  c.scale(SPRITE_SS, SPRITE_SS);
+  const cx = rq + SPRITE_PAD;
+  const cy = rq + SPRITE_PAD;
+
+  // Drop shadow + gradient orb (same recipe as the previous per-frame
+  // paint — visuals unchanged, cost moved to once-per-key).
+  c.save();
+  c.shadowColor = "rgba(0, 0, 0, 0.45)";
+  c.shadowBlur = 3 * SPRITE_SS * 0.5;
+  c.shadowOffsetY = 0.5;
+  const gx = cx - rq * 0.32;
+  const gy = cy - rq * 0.38;
+  const grad = c.createRadialGradient(gx, gy, rq * 0.1, cx, cy, rq * 1.05);
+  const lighter = lightenHex(baseColor, 0.34);
+  const darker = darkenHex(baseColor, 0.22);
+  grad.addColorStop(0, lighter);
+  grad.addColorStop(0.55, baseColor);
+  grad.addColorStop(1, darker);
+  drawNodeShape(c, cx, cy, rq, shape);
+  c.fillStyle = grad;
+  c.fill();
+  c.restore();
+
+  // Specular highlight (baked; skipped for squares as before).
+  if (shape !== "square" && rq >= 3) {
+    const sx = cx - rq * 0.42;
+    const sy = cy - rq * 0.46;
+    const sr = Math.max(0.7, rq * 0.3);
+    const spec = c.createRadialGradient(sx, sy, 0, sx, sy, sr);
+    spec.addColorStop(0, "rgba(255, 255, 255, 0.42)");
+    spec.addColorStop(1, "rgba(255, 255, 255, 0)");
+    c.fillStyle = spec;
+    c.beginPath();
+    c.arc(sx, sy, sr, 0, Math.PI * 2);
+    c.fill();
+  }
+  spriteCache.set(key, cnv);
+  return cnv;
+}
+
 function desaturateHex(hex: string, amount: number): string {
   if (!(hex.startsWith("#") && hex.length === 7)) return hex;
   const k = `D${amount.toFixed(2)}_${hex}`;
@@ -719,6 +793,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     () => new Set(rawNodes.filter((n) => n.kind === "code").map((n) => n.id)),
     [rawNodes],
   );
+  // Auto-degrade: past this many nodes the glassy sprite paint cannot
+  // hold 60fps on any setting, so the flat-fill path kicks in
+  // automatically (the user's explicit Lite toggle still forces it at
+  // any size). Declared before `nodes` via function hoisting is not
+  // possible for consts, so it lives just above the first use below.
   const nodes = useMemo(
     () => (showCode ? rawNodes : rawNodes.filter((n) => n.kind !== "code")),
     [rawNodes, showCode],
@@ -1572,54 +1651,28 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // Lite (low-power) mode: a single flat fill, no radial gradient, drop
     // shadow, specular highlight, health ring, or label. The glassy per-node
     // paint is the dominant cost at scale; the preset trades it for speed.
-    if (lite) {
+    if (lite || nodes.length > 800) {
       drawNodeShape(ctx, node.x, node.y, r, nodeShape);
       ctx.fillStyle = withAlpha(baseColor, alpha);
       ctx.fill();
       return;
     }
 
-    // Drop shadow (atmosphere). Drawn on the gradient fill pass so the
-    // shadow follows the orb shape, not just the path.
-    ctx.save();
-    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
-    ctx.shadowBlur = 3;
-    ctx.shadowOffsetY = 0.5;
-
-    // 3-stop radial gradient. Centre offset toward top-left of the
-    // node so the highlight reads as overhead lighting. Inner radius
-    // small but non-zero — a hard pinhole highlight looks plastic;
-    // 0.1·r softens it.
-    const gx = node.x - r * 0.32;
-    const gy = node.y - r * 0.38;
-    const grad = ctx.createRadialGradient(gx, gy, r * 0.1, node.x, node.y, r * 1.05);
-    const lighter = lightenHex(baseColor, 0.34);
-    const darker  = darkenHex(baseColor, 0.22);
-    grad.addColorStop(0,   withAlpha(lighter, alpha));
-    grad.addColorStop(0.55, withAlpha(baseColor, alpha));
-    grad.addColorStop(1,   withAlpha(darker, alpha));
-
-    drawNodeShape(ctx, node.x, node.y, r, nodeShape);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    ctx.restore();
-
-    // Specular highlight — small soft white spot, top-left. Only on
-    // circle / hex (square would look like a sticker corner), only
-    // when the node is large enough (≥3 px) and not focus-dimmed.
-    if (focusAlpha > 0.4 && nodeShape !== "square" && r >= 3) {
-      const sx = node.x - r * 0.42;
-      const sy = node.y - r * 0.46;
-      const sr = Math.max(0.7, r * 0.3);
-      const specGrad = ctx.createRadialGradient(sx, sy, 0, sx, sy, sr);
-      specGrad.addColorStop(0, `rgba(255, 255, 255, ${0.42 * alpha})`);
-      specGrad.addColorStop(1, `rgba(255, 255, 255, 0)`);
+    // Cached-sprite stamp: shadow, gradient orb, and specular are baked
+    // once per (color, size, shape) — see getNodeSprite. Alpha (focus /
+    // orphan / search dims) applies via globalAlpha over the stamp, so
+    // the dimming behavior is identical to the old per-frame paint.
+    const sprite = getNodeSprite(baseColor, r, nodeShape);
+    if (sprite) {
+      const world = 2 * (Math.max(1, Math.round(r * 2) / 2) + 4);
       ctx.save();
-      ctx.fillStyle = specGrad;
-      ctx.beginPath();
-      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, node.x - world / 2, node.y - world / 2, world, world);
       ctx.restore();
+    } else {
+      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
+      ctx.fillStyle = withAlpha(baseColor, alpha);
+      ctx.fill();
     }
 
     // HEALTH RING — drawn after fill, before the dark rim. This is the
@@ -1705,7 +1758,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fillStyle = withAlpha("#c7c5dc", labelAlpha);
       ctx.fillText(truncated, node.x, labelY);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors, lite]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors, lite, nodes.length]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
