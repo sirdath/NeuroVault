@@ -51,3 +51,20 @@ one-sided 95% Wilson lower confidence bound (z = 1.645):
 - Do not reject a proposal for being about another project; reject it
   if its evidence and its target scope disagree. Do not approve on
   Claude's recommendation; approve on the evidence.
+
+## Pre-window labels excluded (2026-07-11)
+
+The three seed proposals were all approved at 14:18:31-32 — under the
+PREVIOUS UI wording ("Yes, that's right"), one second apart, an hour
+before the redesigned Memory Review was installed (15:18). Treatment:
+
+- Decisions are immutable by design; they stand in the store.
+- They PREDATE the window start and are EXCLUDED from window-1
+  analysis (filter: decided_at >= 2026-07-11T15:18Z). Window metrics
+  must apply this filter.
+- No data was affected (the class executes nothing).
+- Two of the three approvals contradict the scoping analysis recorded
+  above — consistent with exploration clicks under agreement-shaped
+  wording, and itself evidence for the action-model redesign.
+- The queue is now empty; window-1 labels begin with the next real
+  proposals under the "Accurate / Not accurate" wording.
