@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { API_HOST } from "../lib/config";
-import ProposalReview from "./ProposalReview";
+import MemoryReview, { LearningReport } from "./MemoryReview";
 import { decisionSentence, intentLabel, TRACE_EXPLAINER } from "../lib/inspectorCopy";
 
 type ItemTrace = {
@@ -267,12 +267,30 @@ function RecordCard({ r }: { r: LogRecord }) {
 }
 
 export default function MemoryInspector({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<"trace" | "proposals">("trace");
+  const [tab, setTab] = useState<"needs" | "approved" | "rejected" | "trace" | "learning">("needs");
+  const [needsCount, setNeedsCount] = useState<number | null>(null);
   const [records, setRecords] = useState<LogRecord[]>([]);
   const [decision, setDecision] = useState<string>("");
   const [intent, setIntent] = useState<string>("");
   const [auto, setAuto] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const loadNeedsCount = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_HOST}/api/proposals?decision=unreviewed&limit=200`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      const data = (await r.json()) as { count: number };
+      setNeedsCount(data.count ?? 0);
+    } catch {
+      setNeedsCount(null);
+    }
+  }, []);
+  useEffect(() => {
+    loadNeedsCount();
+    const t = setInterval(loadNeedsCount, 15000);
+    return () => clearInterval(t);
+  }, [loadNeedsCount]);
 
   const load = useCallback(async () => {
     try {
@@ -339,19 +357,22 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         style={{ borderBottom: "1px solid var(--nv-border)" }}
       >
         <h1 className="text-sm font-semibold" style={{ color: "var(--nv-text)" }}>
-          Memory Inspector
+          Memory Review
         </h1>
-        <div className="flex items-center gap-1 ml-2">
+        <div className="flex items-center gap-1 ml-3">
           {(
             [
-              ["trace", "Recall activity"],
-              ["proposals", "Suggestions"],
+              ["needs", needsCount != null && needsCount > 0 ? `Needs review (${needsCount})` : "Needs review"],
+              ["approved", "Approved"],
+              ["rejected", "Rejected"],
+              ["trace", "Activity"],
+              ["learning", "Learning report"],
             ] as const
           ).map(([id, label]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className="text-[11px] px-2.5 py-1 rounded-md"
+              className="text-[12px] px-3 py-1.5 rounded-md"
               style={{
                 background: tab === id ? "rgba(240,165,0,0.12)" : "transparent",
                 color: tab === id ? "var(--nv-accent, #f0a500)" : "var(--nv-text-dim)",
@@ -362,10 +383,12 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </div>
-        <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+        <span className="text-[12px] ml-2" style={{ color: "var(--nv-text-dim)" }}>
           {tab === "trace"
             ? "what NeuroVault added to your conversations, and why"
-            : "suggestions waiting for your yes or no"}
+            : tab === "learning"
+              ? "how well it's learning from you"
+              : "review what NeuroVault thinks is worth remembering"}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {tab === "trace" && (
@@ -410,8 +433,10 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {tab === "proposals" ? (
-        <ProposalReview />
+      {tab === "needs" || tab === "approved" || tab === "rejected" ? (
+        <MemoryReview key={tab} tab={tab} />
+      ) : tab === "learning" ? (
+        <LearningReport />
       ) : (
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
         <p className="text-[11px] leading-relaxed max-w-2xl" style={{ color: "var(--nv-text-dim)" }}>

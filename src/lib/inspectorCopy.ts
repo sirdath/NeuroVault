@@ -64,40 +64,46 @@ export function decisionSentence(
 export type ActionCopy = {
   headline: string;
   meaning: string;
+  /** The proposed change, in plain English (never raw field names). */
+  proposedChange?: string;
   question: string;
   ifApproved: string;
 };
 const ACTIONS: Record<string, ActionCopy> = {
   working_state_refresh: {
-    headline: "Your “continue” snapshot looks out of date",
+    headline: "Your project state may be out of date",
     meaning:
-      "A session did real work and ended, but the little note NeuroVault keeps about “what you were doing” was never updated. If you type “continue”, it would recall older work instead of this session's.",
-    question: "Is that a fair observation?",
+      "This session completed meaningful work, but the state NeuroVault uses when you say “continue” was not refreshed.",
+    proposedChange: "Mark this project's working state as needing an update.",
+    question: "Should NeuroVault remember this?",
     ifApproved:
-      "Nothing changes yet — NeuroVault can't safely read what the session did until the transcript reader ships. Your answer just teaches it whether this kind of observation is useful.",
+      "NeuroVault records that a refresh is needed. It will not invent the missing task, files or next step.",
   },
   memory_strengthened: {
     headline: "This memory proved itself useful",
     meaning:
-      "A task linked to this memory was completed. That's real evidence the memory matters, so NeuroVault wants to mark it as “confirmed by use” (which keeps it fresher for longer).",
-    question: "Should it be marked as confirmed?",
+      "A task linked to this memory was completed — real evidence the memory matters.",
+    proposedChange: "Mark the memory as confirmed by use, which keeps it fresher for longer.",
+    question: "Should NeuroVault remember this?",
     ifApproved: "The memory's “last confirmed” date is updated. Nothing else changes.",
   },
   supersession_suggestion: {
     headline: "These two notes might be duplicates",
     meaning:
       "Two notes with nearly identical titles live in the same folder. The newer one may have replaced the older one without saying so.",
-    question: "Should the older note be marked as replaced by the newer one?",
+    proposedChange: "Mark the older note as replaced by the newer one.",
+    question: "Should NeuroVault remember this?",
     ifApproved:
-      "The older note is marked “replaced” and stops appearing in automatic recall. The note itself is untouched and can be restored.",
+      "The older note stops appearing in automatic recall. The note itself is untouched and can be restored.",
   },
   room_summary_refresh: {
     headline: "This folder's summary is falling behind",
     meaning:
       "Quite a few things changed in this folder recently, so its overview summary is probably stale.",
-    question: "Would a refreshed summary be worth it?",
+    proposedChange: "Flag this folder's summary for a refresh.",
+    question: "Should NeuroVault remember this?",
     ifApproved:
-      "Nothing changes yet — the summariser isn't built. Your answer teaches NeuroVault whether these nudges are wanted.",
+      "The flag is recorded. Nothing is rewritten — the summariser isn't built yet, so this only teaches NeuroVault whether these nudges are wanted.",
   },
 };
 export const actionCopy = (action: string): ActionCopy =>
@@ -172,6 +178,64 @@ export function eventSentence(e: {
       return `${humanize(e.event_type)}${t ? ` ${t}` : ""}`;
   }
 }
+
+/** Human memory-type names for the context row. */
+export const memoryTypeLabel = (t: string): string =>
+  ({
+    working_state: "Working state",
+    engram: "Saved memory",
+    room_summary: "Folder summary",
+  })[t] ?? humanize(t);
+
+/** Human labels for proposed-field names (edit mode / details). */
+export const fieldLabel = (name: string): string =>
+  ({
+    needs_refresh: "Needs an update?",
+    last_confirmed_at: "Last confirmed",
+    superseded_engram: "Older note",
+    superseded_by: "Replaced by",
+    refresh: "Refresh the summary?",
+  })[name] ?? humanize(name);
+
+/** Relative time — "just now", "3h ago", "yesterday at 15:08", date. */
+export function relativeTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const now = Date.now();
+  const mins = Math.floor((now - t) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (hours < 24 && d.getDate() === new Date().getDate()) return `today at ${hhmm}`;
+  const yesterday = new Date(now - 86400000);
+  if (d.getDate() === yesterday.getDate() && now - t < 2 * 86400000) return `yesterday at ${hhmm}`;
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} at ${hhmm}`;
+}
+
+/** Pull a human project name out of evidence events (session cwd). */
+export function projectFromEvents(
+  events: Array<{ event_type: string; after?: string | null }>
+): string | null {
+  for (const e of events) {
+    if (e.event_type === "session_ended" && e.after?.startsWith("cwd: ")) {
+      const seg = e.after.replace("cwd: ", "").split("/").filter(Boolean).pop();
+      if (seg) return seg.trim();
+    }
+  }
+  return null;
+}
+
+/** Rejection reasons — a menu beats free text for label quality. */
+export const REJECT_REASONS = [
+  "Not meaningful work",
+  "Already up to date",
+  "Wrong project",
+  "Incorrect observation",
+  "Duplicate",
+  "Other",
+] as const;
 
 /** Tab explainers — one paragraph a stranger can read. */
 export const TRACE_EXPLAINER =
