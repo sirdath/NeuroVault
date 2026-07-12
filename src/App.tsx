@@ -15,6 +15,7 @@ import { Toasts } from "./components/Toasts";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsView } from "./components/SettingsView";
+import Home from "./components/Home";
 import { EmployeePanel, meetingsDropClaim } from "./components/EmployeePanel";
 import { ActivityBar } from "./components/ActivityBar";
 import { ActivityPanel } from "./components/ActivityPanel";
@@ -26,7 +27,7 @@ import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
 import { fetchStatus, fetchHealth } from "./lib/api";
 
-type View = "editor" | "graph" | "employee";
+type View = "home" | "editor" | "graph" | "employee";
 
 // The AI Employees feature is excluded from the public base build. Flip this
 // to true (and re-declare the employee-manager window in tauri.conf.json +
@@ -79,13 +80,10 @@ export default function App() {
   const reduceMotion = useSettingsStore((s) => s.reduceMotion);
   // Persist the active tab across reloads — users expect their last view
   // (Editor / Graph / Compile) to still be selected when they re-open.
-  const [view, setViewState] = useState<View>(() => {
-    try {
-      const v = localStorage.getItem("nv.view");
-      if (v === "editor" || v === "graph" || v === "employee") return v;
-    } catch { /* quota / disabled storage */ }
-    return "editor";
-  });
+  // Dath's choice (2026-07-12): the Home gallery is the front door on
+  // EVERY launch. Within a session the nav persists, but a fresh open
+  // always lands here so you consciously choose which mind to enter.
+  const [view, setViewState] = useState<View>("home");
   // Graph performance mode. "off" keeps the nav button but renders a
   // re-enable placeholder instead of mounting NeuralGraph (zero graph cost).
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
@@ -752,6 +750,20 @@ export default function App() {
             }}
           >
           <TabButton
+            active={view === "home"}
+            onClick={() => setView("home")}
+            label="Home"
+            theme={theme}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+            }
+          />
+          <TabButton
             active={view === "editor"}
             onClick={() => setView("editor")}
             label="Notes"
@@ -868,6 +880,7 @@ export default function App() {
           />
         )}
         <div className="flex-1 flex overflow-hidden">
+          {view === "home" && <Home onEnter={() => setView("editor")} />}
           {view === "editor" && <Editor />}
           {view === "graph" &&
             (graphMode === "off" ? (
@@ -912,7 +925,7 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         commands={commands}
-        currentView={view === "employee" ? undefined : view}
+        currentView={view === "employee" || view === "home" ? undefined : view}
       />
       <QuickCapture
         open={quickCaptureOpen}
