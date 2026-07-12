@@ -68,3 +68,19 @@ before the redesigned Memory Review was installed (15:18). Treatment:
   wording, and itself evidence for the action-model redesign.
 - The queue is now empty; window-1 labels begin with the next real
   proposals under the "Accurate / Not accurate" wording.
+
+## Window conduct (final, from Dath 2026-07-11)
+
+- Work normally; do not manufacture scenarios.
+- Review on observation accuracy only; no verdict recommendations
+  from Claude on individual cards.
+- Record false negatives promptly — an EMPTY QUEUE is not
+  automatically good: it is either appropriate silence or insufficient
+  sensitivity, and only false-negative reporting distinguishes them.
+- Note annoyance, ambiguity, and review burden as they occur.
+- Change nothing mid-window except genuine safety, corruption,
+  scope-leak or usability failures.
+- At the boundary: FREEZE THE DATASET BEFORE inspecting aggregate
+  results; then evaluate coverage, per-class precision, edits,
+  rejection patterns, false negatives, held-out performance and
+  review burden against the precommitted criteria.
