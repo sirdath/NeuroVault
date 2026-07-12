@@ -30,9 +30,15 @@ fn list_notes_is_brain_scoped() {
     let b = read_ops::list_notes(&beta).unwrap();
 
     assert!(a.iter().any(|n| n.title.contains("Alpha-only")));
-    assert!(!a.iter().any(|n| n.title.contains("Beta-only")), "alpha leaked beta");
+    assert!(
+        !a.iter().any(|n| n.title.contains("Beta-only")),
+        "alpha leaked beta"
+    );
     assert!(b.iter().any(|n| n.title.contains("Beta-only")));
-    assert!(!b.iter().any(|n| n.title.contains("Alpha-only")), "beta leaked alpha");
+    assert!(
+        !b.iter().any(|n| n.title.contains("Alpha-only")),
+        "beta leaked alpha"
+    );
 
     std::env::remove_var("NEUROVAULT_HOME");
     let _ = std::fs::remove_dir_all(&home);
