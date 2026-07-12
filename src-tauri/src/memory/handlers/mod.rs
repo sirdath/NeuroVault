@@ -1153,8 +1153,21 @@ fn walk_and_delete_md(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub async fn notes_list(_s: State<ServerState>) -> Result<Json<Vec<NoteListRow>>, ApiError> {
-    let id = resolve_brain_id(None)?;
+#[derive(Deserialize)]
+pub struct NotesListQuery {
+    /// Optional brain to scope to; None = active brain. Without this,
+    /// `?brain=` was silently ignored and every caller got the active
+    /// brain's notes — a scope leak the Home gallery's per-card
+    /// most-used hover tripped on (2026-07-12).
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+}
+
+pub async fn notes_list(
+    Query(q): Query<NotesListQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<Vec<NoteListRow>>, ApiError> {
+    let id = resolve_brain_id(q.brain_id.as_deref())?;
     let db = open_brain(&id)?;
     Ok(Json(list_notes(&db)?))
 }

@@ -170,7 +170,7 @@ function useTopNotes(brainId: string | null) {
 
 // ---- card -----------------------------------------------------------------
 
-function Card({ b, onEnter }: { b: BrainCard; onEnter: (id: string) => void }) {
+function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string) => void; entering: boolean }) {
   const [hover, setHover] = useState(false);
   const top = useTopNotes(hover ? b.id : null);
   const notes = b.stats?.note_count ?? 0;
@@ -246,10 +246,10 @@ function Card({ b, onEnter }: { b: BrainCard; onEnter: (id: string) => void }) {
         </div>
 
         <div
-          className="mt-auto pt-2 text-[12px] font-medium opacity-0 group-hover:opacity-100 transition-opacity"
+          className={`mt-auto pt-2 text-[12px] font-medium transition-opacity ${entering ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
           style={{ color: T.accent }}
         >
-          Open {b.name || b.id} →
+          {entering ? "Opening…" : `Open ${b.name || b.id} →`}
         </div>
       </div>
     </button>
@@ -285,16 +285,28 @@ export default function Home({ onEnter }: { onEnter: () => void }) {
     return { minds: brains?.length ?? 0, notes };
   }, [brains]);
 
+  const [entering, setEntering] = useState<string | null>(null);
   const enter = useCallback(
     async (id: string) => {
-      if (id !== activeBrainId) {
-        try {
-          await switchBrain(id);
-        } catch {
-          /* switch handles its own errors; enter anyway */
-        }
+      if (id === activeBrainId) {
+        onEnter();
+        return;
       }
-      onEnter();
+      // On switch FAILURE, stay on Home and surface the error — never
+      // enter the editor showing the previous brain while the user
+      // believes they opened a new one (scope-safety, 2026-07-12).
+      setEntering(id);
+      setError(null);
+      try {
+        await switchBrain(id);
+        onEnter();
+      } catch (e) {
+        setError(
+          `Couldn't open that brain${e instanceof Error ? `: ${e.message}` : ""}. You're still on your current one.`
+        );
+      } finally {
+        setEntering(null);
+      }
     },
     [activeBrainId, switchBrain, onEnter]
   );
@@ -328,7 +340,7 @@ export default function Home({ onEnter }: { onEnter: () => void }) {
 
         <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
           {(brains ?? []).map((b) => (
-            <Card key={b.id} b={b} onEnter={enter} />
+            <Card key={b.id} b={b} onEnter={enter} entering={entering === b.id} />
           ))}
         </div>
       </div>
