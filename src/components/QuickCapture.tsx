@@ -98,7 +98,7 @@ export function QuickCapture({ open, onClose }: QuickCaptureProps) {
         >
           <span
             className="text-[10px] uppercase tracking-wider font-semibold font-[Geist,sans-serif]"
-            style={{ color: "var(--color-amber)" }}
+            style={{ color: "var(--color-brand)" }}
           >
             Quick Capture
           </span>

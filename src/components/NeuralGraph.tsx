@@ -456,7 +456,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         import("three"),
       ]);
       if (cancelled) return;
-      // Tuned so "fresh" (amber) and "connected" (teal) nodes bleed light
+      // Tuned so "fresh" (brand blue) and "connected" (teal) nodes bleed light
       // without drowning the rest of the scene. resolution scales with
       // the container; strength/radius/threshold are the classic UE4
       // bloom knobs (threshold 0.85 ≈ only bright colors bloom).
@@ -1586,7 +1586,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   //   - Dormant state desaturates the base colour (true grey-shift,
   //     not just alpha) so the canvas reads "live vs. archived" at a
   //     glance instead of "bright vs. dim".
-  //   - Fresh state gets a 1-px amber halo — same brand colour as the
+  //   - Fresh state gets a 1-px brand-blue halo — same brand colour as the
   //     status pill — so newly-arrived notes pop without screaming.
   //   - 0.5-px dark rim still drawn last so light nodes separate from
   //     light edges.

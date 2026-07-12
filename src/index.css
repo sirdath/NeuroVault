@@ -26,8 +26,8 @@
   --color-raised: #1a1a28;
 
   /* Accents — your brand identity, kept */
-  --color-amber: #568cfa;            /* primary accent / fresh state */
-  --color-amber-dim: rgba(86, 140, 250, 0.12);
+  --color-brand: #568cfa;            /* primary accent / fresh state */
+  --color-brand-dim: rgba(86, 140, 250, 0.12);
   --color-teal: #00c9b1;             /* AI / connected state */
   --color-purple: #8b7cf8;           /* entities, code */
   --color-coral: #ff6b6b;             /* danger / contradictions */
@@ -141,10 +141,10 @@ button, a, .transition {
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-/* Focus states — solid amber ring meets WCAG AA against every surface tier.
+/* Focus states — solid brand-blue ring meets WCAG AA against every surface tier.
    The previous rgba(86,140,250,0.4) failed AA on --color-surface-elevated. */
 input:focus, textarea:focus, button:focus-visible {
-  outline: 2px solid var(--color-amber);
+  outline: 2px solid var(--color-brand);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -286,14 +286,14 @@ html[data-density="compact"] {
   min-height: 16px;
 }
 .nv-kbd-active {
-  color: var(--color-amber);
+  color: var(--color-brand);
   border-color: rgba(86, 140, 250, 0.35);
   background: rgba(86, 140, 250, 0.08);
 }
 
 /* Fuzzy-match highlight — wrap matching chars in <mark class="nv-hl">. */
 .nv-hl {
-  color: var(--color-amber);
+  color: var(--color-brand);
   background: transparent;
   font-weight: 600;
 }

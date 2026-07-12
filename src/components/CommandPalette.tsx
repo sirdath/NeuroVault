@@ -380,7 +380,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
                     }}
                     style={{
                       backgroundColor: selected ? "var(--color-surface-elevated)" : "transparent",
-                      borderLeft: selected ? "2px solid var(--color-amber)" : "2px solid transparent",
+                      borderLeft: selected ? "2px solid var(--color-brand)" : "2px solid transparent",
                       boxShadow: selected ? "inset 0 0 24px -8px rgba(240, 165, 0, 0.18)" : "none",
                       // Density-aware row padding — keeps result rows in
                       // sync with the sidebar's row height.
@@ -410,8 +410,8 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
                       <span
                         className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-medium font-[Geist,sans-serif] flex-shrink-0"
                         style={{
-                          backgroundColor: "var(--color-amber-dim)",
-                          color: "var(--color-amber)",
+                          backgroundColor: "var(--color-brand-dim)",
+                          color: "var(--color-brand)",
                         }}
                       >
                         {item.badge}
@@ -452,7 +452,7 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
 function SectionIcon({ kind }: { kind: SectionKind }) {
   const color =
     kind === "command"
-      ? "var(--color-amber)"
+      ? "var(--color-brand)"
       : kind === "note"
         ? "var(--color-teal)"
         : "var(--color-purple)";
