@@ -152,6 +152,7 @@ fn router() -> Router {
         .route("/api/proposals/:proposal_id/reject", post(proposal_reject))
         .route("/api/consolidation_metrics", get(consolidation_metrics))
         .route("/api/journal_events", get(journal_events_by_id))
+        .route("/api/home_brief", get(home_brief))
         .route(
             "/api/consolidation_false_negative",
             post(consolidation_false_negative),

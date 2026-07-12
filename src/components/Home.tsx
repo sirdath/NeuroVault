@@ -1,32 +1,38 @@
 /**
- * Home — the "choose your mind" gallery shown on every launch.
+ * Home — a living memory briefing, then brain navigation.
  *
- * NeuroVault holds many brains; the app used to drop you straight into
- * one. This is the front door: a card per brain with a deterministic
- * constellation "fingerprint" (denser = more notes, so relative size
- * reads at a glance), live stats, and the brain's most-used notes
- * revealed on hover. Pick a mind → it activates and you enter it.
+ * Hierarchy (Dath, 2026-07-12): (1) is memory operating? (2) what
+ * should I continue? (3) what changed? (4) does anything need
+ * attention? (5) which brain do I explore? So the screen leads with a
+ * status line + a "continue where you left off" hero + a "since you
+ * were away" digest, and the brain gallery sits below.
  *
- * Data: GET /api/brains (stats included) for the grid; GET /api/notes
- * lazily per-card on hover for the most-used list. Theming via CSS
- * vars, so it follows whatever theme is active.
+ * Data: GET /api/home_brief (one read-only call assembling the
+ * briefing across brains) + GET /api/brains for the grid + lazy
+ * per-card open-task counts on hover. Constellations remain a
+ * decorative per-brain fingerprint (density = note count) — noted as
+ * "make it reflect real clusters" future work, not real structure yet.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_HOST } from "../lib/config";
 import { useBrainStore } from "../stores/brainStore";
 
-type BrainStats = {
-  note_count: number;
-  total_bytes: number;
-  last_modified_secs: number;
-};
-type BrainCard = {
-  id: string;
-  name: string;
-  description?: string;
-  is_active: boolean;
-  stats?: BrainStats;
+type BrainStats = { note_count: number; total_bytes: number; last_modified_secs: number };
+type BrainCard = { id: string; name: string; is_active: boolean; stats?: BrainStats };
+type Brief = {
+  needs_review: number;
+  sessions_today: number;
+  continue: null | {
+    brain: string;
+    brain_name: string;
+    current_task?: string | null;
+    next_step?: string | null;
+    last_files?: string[];
+    updated_at?: string | null;
+    stale: boolean;
+  };
+  since: { brain: string; text: string; ts: string }[];
 };
 
 const T = {
@@ -34,13 +40,13 @@ const T = {
   dim: "var(--nv-text-dim)",
   muted: "var(--nv-text-muted)",
   accent: "var(--nv-accent, #568cfa)",
+  glow: "var(--nv-accent-glow, rgba(86,140,250,0.16))",
   surface: "var(--nv-surface)",
   border: "var(--nv-border)",
 };
 
-// ---- deterministic per-brain constellation -------------------------------
+// ---- deterministic per-brain constellation (decorative) ------------------
 
-/** Small seeded PRNG (mulberry32) — a brain always draws the same. */
 function seededRng(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -59,9 +65,6 @@ function hashStr(s: string): number {
   }
   return h >>> 0;
 }
-
-/** Paint a constellation whose point count scales with note_count, so
- *  a big brain visibly reads as denser than a small one. */
 function Constellation({ id, notes }: { id: string; notes: number }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
@@ -76,27 +79,17 @@ function Constellation({ id, notes }: { id: string; notes: number }) {
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
-
     const rng = seededRng(hashStr(id));
     const n = Math.max(6, Math.min(48, Math.round(Math.sqrt(notes) * 3)));
     const pts: { x: number; y: number; r: number }[] = [];
-    for (let i = 0; i < n; i++) {
-      pts.push({
-        x: 10 + rng() * (W - 20),
-        y: 10 + rng() * (H - 20),
-        r: 1 + rng() * 1.8,
-      });
-    }
-    const accent = getComputedStyle(document.documentElement)
-      .getPropertyValue("--nv-accent")
-      .trim() || "#568cfa";
-    // faint links between near neighbours
+    for (let i = 0; i < n; i++)
+      pts.push({ x: 10 + rng() * (W - 20), y: 10 + rng() * (H - 20), r: 1 + rng() * 1.8 });
+    const accent =
+      getComputedStyle(document.documentElement).getPropertyValue("--nv-accent").trim() || "#568cfa";
     ctx.lineWidth = 0.6;
-    for (let i = 0; i < pts.length; i++) {
+    for (let i = 0; i < pts.length; i++)
       for (let j = i + 1; j < pts.length; j++) {
-        const dx = pts[i]!.x - pts[j]!.x;
-        const dy = pts[i]!.y - pts[j]!.y;
-        const d = Math.hypot(dx, dy);
+        const d = Math.hypot(pts[i]!.x - pts[j]!.x, pts[i]!.y - pts[j]!.y);
         if (d < 46) {
           ctx.strokeStyle = accent;
           ctx.globalAlpha = 0.12 * (1 - d / 46);
@@ -106,8 +99,6 @@ function Constellation({ id, notes }: { id: string; notes: number }) {
           ctx.stroke();
         }
       }
-    }
-    // nodes
     for (const p of pts) {
       ctx.globalAlpha = 0.55 + rng() * 0.4;
       ctx.fillStyle = accent;
@@ -122,57 +113,60 @@ function Constellation({ id, notes }: { id: string; notes: number }) {
 
 // ---- helpers --------------------------------------------------------------
 
-const mb = (b?: number) => (b ? (b / 1e6 >= 1 ? `${(b / 1e6).toFixed(0)} MB` : `${(b / 1e3).toFixed(0)} KB`) : "—");
-function ago(secs?: number): string {
-  if (!secs) return "—";
-  const d = Date.now() / 1000 - secs;
-  if (d < 3600) return "just now";
-  if (d < 86400) return "today";
+const mb = (b?: number) =>
+  b ? (b / 1e6 >= 1 ? `${(b / 1e6).toFixed(0)} MB` : `${(b / 1e3).toFixed(0)} KB`) : "—";
+function agoMs(ms: number): string {
+  const d = ms / 1000;
+  if (d < 120) return "just now";
+  if (d < 3600) return `${Math.floor(d / 60)} min ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
   if (d < 172800) return "yesterday";
   if (d < 2592000) return `${Math.floor(d / 86400)}d ago`;
-  return new Date(secs * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(Date.now() - ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+const agoSecs = (secs?: number) => (secs ? agoMs(Date.now() - secs * 1000) : "—");
+function agoIso(iso?: string | null): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? "—" : agoMs(Date.now() - t);
 }
 function greeting(): string {
   const h = new Date().getHours();
   return h < 5 ? "Still awake" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
-// ---- most-used-on-hover ---------------------------------------------------
+// ---- per-card open-task count on hover ------------------------------------
 
-function useTopNotes(brainId: string | null) {
-  const [notes, setNotes] = useState<{ id: string; title: string; access_count: number }[] | null>(null);
+function useOpenTasks(brainId: string | null) {
+  const [n, setN] = useState<number | null>(null);
   useEffect(() => {
     if (!brainId) return;
     let alive = true;
-    setNotes(null);
+    setN(null);
     (async () => {
       try {
-        // /api/notes reads the ACTIVE brain; scope with ?brain when the
-        // hovered card isn't active. (Server accepts the alias.)
-        const r = await fetch(`${API_HOST}/api/notes?brain=${encodeURIComponent(brainId)}`, {
-          signal: AbortSignal.timeout(4000),
-        });
-        const rows = (await r.json()) as { id: string; title: string; access_count: number }[];
-        if (alive)
-          setNotes(
-            [...rows].sort((a, b) => (b.access_count ?? 0) - (a.access_count ?? 0)).slice(0, 3)
-          );
+        const r = await fetch(
+          `${API_HOST}/api/todos?brain=${encodeURIComponent(brainId)}&status=open`,
+          { signal: AbortSignal.timeout(4000) }
+        );
+        const rows = (await r.json()) as unknown[];
+        if (alive) setN(Array.isArray(rows) ? rows.length : 0);
       } catch {
-        if (alive) setNotes([]);
+        if (alive) setN(0);
       }
     })();
     return () => {
       alive = false;
     };
   }, [brainId]);
-  return notes;
+  return n;
 }
 
-// ---- card -----------------------------------------------------------------
+// ---- brain card -----------------------------------------------------------
 
 function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string) => void; entering: boolean }) {
   const [hover, setHover] = useState(false);
-  const top = useTopNotes(hover ? b.id : null);
+  const openTasks = useOpenTasks(hover ? b.id : null);
   const notes = b.stats?.note_count ?? 0;
   return (
     <button
@@ -183,15 +177,16 @@ function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string) =>
       style={{
         background: T.surface,
         border: `1px solid ${b.is_active ? "var(--nv-accent, #568cfa)" : T.border}`,
-        boxShadow: b.is_active ? "0 0 0 1px var(--nv-accent-glow, rgba(86,140,250,0.16))" : "none",
-        minHeight: 190,
+        boxShadow: hover ? `0 8px 30px -12px ${T.glow}` : "none",
+        minHeight: 176,
       }}
     >
-      {/* constellation fills the top */}
-      <div className="absolute inset-0 h-24 overflow-hidden" style={{ maskImage: "linear-gradient(to bottom, #000 55%, transparent)" }}>
+      <div
+        className="absolute inset-0 h-24 overflow-hidden"
+        style={{ maskImage: "linear-gradient(to bottom, #000 55%, transparent)" }}
+      >
         <Constellation id={b.id} notes={notes} />
       </div>
-
       <div className="relative p-4 pt-24 flex flex-col h-full">
         <div className="flex items-baseline gap-2">
           <span className="text-[15px] font-semibold truncate" style={{ color: T.text }}>
@@ -200,77 +195,61 @@ function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string) =>
           {b.is_active && (
             <span
               className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-              style={{ background: "var(--nv-accent-glow, rgba(86,140,250,0.16))", color: T.accent }}
+              style={{ background: T.glow, color: T.accent }}
             >
               active
             </span>
           )}
         </div>
         <div className="text-[12px] mt-0.5" style={{ color: T.dim }}>
-          {notes.toLocaleString()} {notes === 1 ? "memory" : "memories"} · {mb(b.stats?.total_bytes)} · {ago(b.stats?.last_modified_secs)}
+          {notes.toLocaleString()} {notes === 1 ? "memory" : "memories"} · {mb(b.stats?.total_bytes)} ·{" "}
+          {agoSecs(b.stats?.last_modified_secs)}
         </div>
-
-        {/* most-used, revealed on hover */}
-        <div className="mt-3 min-h-[54px]">
-          {hover ? (
-            top === null ? (
-              <div className="text-[11px]" style={{ color: T.dim, opacity: 0.7 }}>
-                loading most-used…
-              </div>
-            ) : top.length === 0 ? (
-              <div className="text-[11px]" style={{ color: T.dim, opacity: 0.7 }}>
-                no notes used yet
-              </div>
+        <div className="mt-3 min-h-[20px] text-[11px]" style={{ color: T.dim }}>
+          {entering ? (
+            <span style={{ color: T.accent }}>Opening…</span>
+          ) : hover ? (
+            openTasks === null ? (
+              "…"
+            ) : openTasks > 0 ? (
+              <span>
+                {openTasks} open {openTasks === 1 ? "task" : "tasks"}
+              </span>
             ) : (
-              <div className="space-y-1">
-                {top.map((n) => (
-                  <div key={n.id} className="flex items-center gap-2 text-[11px]">
-                    <span className="tabular-nums shrink-0" style={{ color: T.accent }}>
-                      {n.access_count}×
-                    </span>
-                    <span className="truncate" style={{ color: T.muted }}>
-                      {n.title}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              "no open tasks"
             )
           ) : (
-            <div
-              className="text-[11px] opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ color: T.dim }}
-            >
-              hover for most-used
-            </div>
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity">Open →</span>
           )}
-        </div>
-
-        <div
-          className={`mt-auto pt-2 text-[12px] font-medium transition-opacity ${entering ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-          style={{ color: T.accent }}
-        >
-          {entering ? "Opening…" : `Open ${b.name || b.id} →`}
         </div>
       </div>
     </button>
   );
 }
 
-// ---- gallery --------------------------------------------------------------
+// ---- the briefing + gallery ----------------------------------------------
+
+type SortKey = "recent" | "largest" | "az";
 
 export default function Home({ onEnter }: { onEnter: () => void }) {
   const [brains, setBrains] = useState<BrainCard[] | null>(null);
+  const [brief, setBrief] = useState<Brief | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [entering, setEntering] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>("recent");
   const switchBrain = useBrainStore((s) => s.switchBrain);
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${API_HOST}/api/brains`, { signal: AbortSignal.timeout(6000) });
-      const d = await r.json();
-      const list: BrainCard[] = Array.isArray(d) ? d : d.brains ?? [];
-      list.sort((a, b) => (b.stats?.note_count ?? 0) - (a.stats?.note_count ?? 0));
-      setBrains(list);
+      const [br, bf] = await Promise.all([
+        fetch(`${API_HOST}/api/brains`, { signal: AbortSignal.timeout(6000) }).then((r) => r.json()),
+        fetch(`${API_HOST}/api/home_brief`, { signal: AbortSignal.timeout(8000) })
+          .then((r) => r.json())
+          .catch(() => null),
+      ]);
+      setBrains(Array.isArray(br) ? br : br.brains ?? []);
+      setBrief(bf);
       setError(null);
     } catch {
       setError("Can't reach NeuroVault — is the app running?");
@@ -280,21 +259,12 @@ export default function Home({ onEnter }: { onEnter: () => void }) {
     load();
   }, [load]);
 
-  const totals = useMemo(() => {
-    const notes = (brains ?? []).reduce((s, b) => s + (b.stats?.note_count ?? 0), 0);
-    return { minds: brains?.length ?? 0, notes };
-  }, [brains]);
-
-  const [entering, setEntering] = useState<string | null>(null);
   const enter = useCallback(
     async (id: string) => {
       if (id === activeBrainId) {
         onEnter();
         return;
       }
-      // On switch FAILURE, stay on Home and surface the error — never
-      // enter the editor showing the previous brain while the user
-      // believes they opened a new one (scope-safety, 2026-07-12).
       setEntering(id);
       setError(null);
       try {
@@ -311,15 +281,46 @@ export default function Home({ onEnter }: { onEnter: () => void }) {
     [activeBrainId, switchBrain, onEnter]
   );
 
+  const sorted = useMemo(() => {
+    const list = [...(brains ?? [])];
+    if (sort === "largest") list.sort((a, b) => (b.stats?.note_count ?? 0) - (a.stats?.note_count ?? 0));
+    else if (sort === "az") list.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    else
+      // recent: active first, then by last-modified (where the user is
+      // likely to return — not the largest archive).
+      list.sort((a, b) => {
+        if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
+        return (b.stats?.last_modified_secs ?? 0) - (a.stats?.last_modified_secs ?? 0);
+      });
+    return list;
+  }, [brains, sort]);
+
+  const totals = useMemo(
+    () => ({
+      minds: brains?.length ?? 0,
+      notes: (brains ?? []).reduce((s, b) => s + (b.stats?.note_count ?? 0), 0),
+    }),
+    [brains]
+  );
+
+  const cont = brief?.continue ?? null;
+
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto px-8 py-10" style={{ maxWidth: 1040 }}>
-        <div className="mb-8">
+      <div className="mx-auto px-8 py-9" style={{ maxWidth: 1040 }}>
+        {/* 1. Is memory operating? */}
+        <div className="mb-6">
           <h1 className="text-[26px] font-semibold tracking-tight" style={{ color: T.text }}>
             {greeting()}
           </h1>
-          <p className="text-[14px] mt-1" style={{ color: T.dim }}>
-            {totals.minds} {totals.minds === 1 ? "mind" : "minds"} · {totals.notes.toLocaleString()} memories · choose one to open
+          <p className="text-[13.5px] mt-1 flex items-center gap-2" style={{ color: T.dim }}>
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ background: "#4ade80", boxShadow: "0 0 6px #4ade80" }}
+            />
+            Memory active
+            {brief ? ` · ${brief.sessions_today} session${brief.sessions_today === 1 ? "" : "s"} observed today` : ""}
+            {brief && brief.needs_review > 0 ? ` · ${brief.needs_review} to review` : ""}
           </p>
         </div>
 
@@ -332,14 +333,89 @@ export default function Home({ onEnter }: { onEnter: () => void }) {
           </div>
         )}
 
+        {/* 2. What should I continue? */}
+        {cont && (cont.current_task || cont.next_step) && (
+          <div
+            className="rounded-2xl p-6 mb-5"
+            style={{ background: T.surface, border: `1px solid ${T.accent}`, boxShadow: `0 0 0 1px ${T.glow}` }}
+          >
+            <div className="text-[11px] font-semibold tracking-wider uppercase mb-2" style={{ color: T.accent }}>
+              Continue where you left off
+            </div>
+            <div className="text-[13px] mb-0.5" style={{ color: T.dim }}>
+              {cont.brain_name}
+              {cont.stale ? " · may be stale" : ""} · last active {agoIso(cont.updated_at)}
+            </div>
+            {cont.current_task && (
+              <div className="text-[17px] font-medium mb-1" style={{ color: T.text }}>
+                {cont.current_task}
+              </div>
+            )}
+            {cont.next_step && (
+              <div className="text-[13.5px]" style={{ color: T.muted }}>
+                Next: {cont.next_step}
+              </div>
+            )}
+            <div className="mt-4">
+              <button
+                onClick={() => enter(cont.brain)}
+                className="text-[13px] px-5 py-2 rounded-lg font-semibold hover:opacity-90"
+                style={{ background: T.glow, color: T.accent, border: `1px solid ${T.accent}` }}
+              >
+                {entering === cont.brain ? "Opening…" : `Continue in ${cont.brain_name} →`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 3. What changed? */}
+        {brief && brief.since.length > 0 && (
+          <div className="mb-6">
+            <div className="text-[11px] font-semibold tracking-wider uppercase mb-2" style={{ color: T.dim }}>
+              Since you were away
+            </div>
+            <div className="space-y-1">
+              {brief.since.map((s, i) => (
+                <div key={i} className="text-[13px] flex items-center gap-2" style={{ color: T.muted }}>
+                  <span style={{ color: T.accent }}>·</span>
+                  {s.text}
+                  <span style={{ color: T.dim, opacity: 0.7 }}>· {agoIso(s.ts)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 5. Which brain? */}
+        <div className="flex items-baseline mb-3">
+          <div className="text-[13px] font-semibold" style={{ color: T.text }}>
+            Your minds
+            <span className="font-normal ml-2" style={{ color: T.dim }}>
+              {totals.minds} · {totals.notes.toLocaleString()} memories
+            </span>
+          </div>
+          <div className="ml-auto flex items-center gap-1 text-[12px]">
+            {(["recent", "largest", "az"] as const).map((k) => (
+              <button
+                key={k}
+                onClick={() => setSort(k)}
+                className="px-2 py-0.5 rounded-md"
+                style={{ color: sort === k ? T.accent : T.dim, background: sort === k ? T.glow : "transparent" }}
+              >
+                {k === "recent" ? "Recent" : k === "largest" ? "Largest" : "A–Z"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {brains === null && !error && (
           <div className="text-[13px]" style={{ color: T.dim }}>
             Loading your minds…
           </div>
         )}
 
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
-          {(brains ?? []).map((b) => (
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(228px, 1fr))" }}>
+          {sorted.map((b) => (
             <Card key={b.id} b={b} onEnter={enter} entering={entering === b.id} />
           ))}
         </div>

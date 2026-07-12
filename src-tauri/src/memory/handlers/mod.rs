@@ -1804,7 +1804,103 @@ pub async fn ambient_log(
     Ok(Json(out))
 }
 
-/// GET /api/working_state — the per-scope hot buffer behind the
+/// GET /api/home_brief — the living-memory briefing for the Home
+/// screen (read-only). Assembles, across ALL brains: the freshest
+/// "continue where you left off" candidate (from each brain's
+/// WorkingState), the total review backlog, how many sessions were
+/// observed today, and a short "since you were away" digest of
+/// meaningful recent changes. One call so Home stays snappy; touches
+/// no memory semantics (pure read of state the system already keeps).
+pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        use time::OffsetDateTime;
+        let now = OffsetDateTime::now_utc();
+        let day_ago = now - time::Duration::hours(24);
+        let midnight = now.replace_time(time::Time::MIDNIGHT);
+
+        let brains = super::read_ops::list_brains_with_stats()?;
+        let mut needs_review = 0usize;
+        let mut sessions_today = 0usize;
+        let mut best_continue: Option<serde_json::Value> = None;
+        let mut best_updated = String::new();
+        let mut since: Vec<serde_json::Value> = Vec::new();
+
+        for b in &brains {
+            let scope = super::adaptive::Scope {
+                brain_id: b.id.clone(),
+                room: None,
+            };
+            // Continue candidate: freshest non-empty working state.
+            let ws = super::adaptive::types::load_working_state(&scope);
+            if !ws.is_empty() {
+                if let Some(ts) = &ws.updated_at {
+                    if ts.as_str() > best_updated.as_str() {
+                        best_updated = ts.clone();
+                        best_continue = Some(serde_json::json!({
+                            "brain": b.id,
+                            "brain_name": b.name,
+                            "current_task": ws.current_task,
+                            "next_step": ws.next_step,
+                            "last_files": ws.last_files,
+                            "updated_at": ws.updated_at,
+                            "stale": ws.is_stale(now),
+                        }));
+                    }
+                }
+            }
+            // Review backlog (unreviewed proposals) across brains.
+            needs_review += super::adaptive::proposals::load_all(&b.id)
+                .values()
+                .filter(|p| {
+                    matches!(
+                        p.review_status,
+                        super::adaptive::proposals::ReviewStatus::Unreviewed
+                    )
+                })
+                .count();
+            // Recent journal → sessions today + a change digest.
+            let events = super::journal::read_window(&b.id, day_ago, now, None);
+            let mut seen_sessions = std::collections::HashSet::new();
+            for e in &events {
+                if let (Some(sid), Ok(ts)) = (
+                    e.session_id.as_deref(),
+                    time::OffsetDateTime::parse(&e.ts, &time::format_description::well_known::Rfc3339),
+                ) {
+                    if ts >= midnight {
+                        seen_sessions.insert(sid.to_string());
+                    }
+                }
+                let text = match e.event_type.as_str() {
+                    "playbook_rule_added" => Some(format!("A correction became a rule in {}", b.name)),
+                    "note_superseded" => Some(format!("A note was replaced in {}", b.name)),
+                    "task_completed" => Some(format!("A task was completed in {}", b.name)),
+                    "working_state_updated" => Some(format!("Working state moved in {}", b.name)),
+                    _ => None,
+                };
+                if let Some(t) = text {
+                    since.push(serde_json::json!({ "brain": b.id, "text": t, "ts": e.ts }));
+                }
+            }
+            sessions_today += seen_sessions.len();
+        }
+        // newest changes first, capped
+        since.sort_by(|a, b| b["ts"].as_str().unwrap_or("").cmp(a["ts"].as_str().unwrap_or("")));
+        since.truncate(5);
+
+        Ok(serde_json::json!({
+            "needs_review": needs_review,
+            "sessions_today": sessions_today,
+            "continue": best_continue,
+            "since": since,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+/// GET /api/working_state — the per-scope hot buffer behind the/// GET /api/working_state — the per-scope hot buffer behind the
 /// `continue_work` intent (docs/specs/adaptive-memory.md §3.2.3).
 pub async fn working_state_get(
     Query(q): Query<WorkingStateQuery>,
