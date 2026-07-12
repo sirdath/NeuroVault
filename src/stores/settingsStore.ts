@@ -18,6 +18,21 @@ export interface Theme {
 
 export const THEMES: Theme[] = [
   {
+    id: "neurovault",
+    name: "NeuroVault",
+    description: "The brand: icon blue on deep indigo-black",
+    bg: "#05070e",
+    surface: "rgba(120,160,255,0.045)",
+    border: "rgba(120,160,255,0.10)",
+    text: "rgba(235,240,255,0.92)",
+    textMuted: "rgba(200,214,245,0.64)",
+    textDim: "rgba(180,196,235,0.42)",
+    accent: "#568cfa",
+    accentGlow: "rgba(86,140,250,0.16)",
+    positive: "#4ade80",
+    negative: "#ff6b6b",
+  },
+  {
     id: "midnight",
     name: "Midnight",
     description: "Deep dark with violet accents",
@@ -134,7 +149,7 @@ interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
-  themeId: "midnight",
+  themeId: "neurovault",
   fontSize: "medium",
   showPreviewSnippets: true,
   showTimestamps: true,
@@ -145,7 +160,17 @@ const DEFAULTS: AppSettings = {
 function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem("nv.settings");
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+    if (raw) {
+      const saved = { ...DEFAULTS, ...JSON.parse(raw) } as AppSettings;
+      // One-time brand migration (2026-07-12): the app identity moved
+      // to the icon's blue. Flip everyone to the NeuroVault theme ONCE;
+      // any theme picked afterwards is respected forever.
+      if (!localStorage.getItem("nv.theme-migrated-blue")) {
+        localStorage.setItem("nv.theme-migrated-blue", "1");
+        saved.themeId = "neurovault";
+      }
+      return saved;
+    }
   } catch { /* corrupt */ }
   return DEFAULTS;
 }

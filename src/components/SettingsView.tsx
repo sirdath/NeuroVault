@@ -484,7 +484,7 @@ function InspectorSection() {
         <button
           onClick={() => setOpen(true)}
           className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-accent, #f0a500)" }}
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-accent, #568cfa)" }}
         >
           Open Inspector
         </button>

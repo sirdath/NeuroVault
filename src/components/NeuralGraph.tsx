@@ -1680,14 +1680,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // carries category). Ring COLOUR encodes state; ring WIDTH + OPACITY
     // scale with node.strength so a strong, well-connected memory gets a
     // bold halo and a weak one barely a hairline. Colours match the
-    // status pills used elsewhere: dormant=dim grey, fresh=brand amber,
+    // status pills used elsewhere: dormant=dim grey, fresh=brand blue,
     // active/connected=teal, default=muted lilac.
     if (focusAlpha > 0.4) {
       const strength = Math.max(0, Math.min(1, node.strength ?? 0.5));
       const ringColor = isDormant
         ? "#6a6880"
         : isFresh
-        ? "#f0a500"
+        ? "#568cfa"
         : node.state === "active" || node.state === "connected"
         ? "#00c9b1"
         : "#8a88a0";
@@ -1701,7 +1701,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.strokeStyle = withAlpha(ringColor, ringAlpha);
       // Fresh nodes additionally get a soft glow to "pop" as just-added.
       if (isFresh) {
-        ctx.shadowColor = "rgba(240, 165, 0, 0.55)";
+        ctx.shadowColor = "rgba(86, 140, 250, 0.55)";
         ctx.shadowBlur = 4;
       }
       ctx.stroke();
@@ -1903,7 +1903,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           if (p2 > 0) {
             const r2 = baseR + 4 + p2 * 50;
             const a2 = Math.max(0, 0.6 * (1 - p2 / 0.7));
-            ctx.strokeStyle = withAlpha("#f0a500", a2);
+            ctx.strokeStyle = withAlpha("#568cfa", a2);
             ctx.lineWidth = 1.5 / globalScale;
             ctx.beginPath();
             ctx.arc(target.x, target.y, r2 / globalScale + baseR, 0, Math.PI * 2);
@@ -2439,7 +2439,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             <span
               className={`text-[9px] font-[Geist,sans-serif] px-1.5 py-0.5 rounded flex-shrink-0 ${
                 hoverCard.node.state === "active" || hoverCard.node.state === "fresh"
-                  ? "bg-[#f0a500]/15 text-[#f0a500]"
+                  ? "bg-[#568cfa]/15 text-[#568cfa]"
                   : hoverCard.node.state === "connected"
                     ? "bg-[#00c9b1]/15 text-[#00c9b1]"
                     : "[background-color:var(--nv-surface)] [color:var(--nv-text-muted)]"
@@ -2474,7 +2474,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           not theme chrome) so stay as fixed hex values. */}
       <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] pointer-events-none" style={{ color: "var(--nv-text-muted)" }}>
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#f0a500]" /> strong
+          <span className="w-2 h-2 rounded-full bg-[#568cfa]" /> strong
         </span>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-[#00c9b1]" /> linked

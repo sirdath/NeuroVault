@@ -34,7 +34,7 @@ interface GraphLegendProps {
  *  NeuralGraph.paintNode2D so the legend can't drift from the canvas. */
 const RING_KEY: { label: string; color: string; hint: string }[] = [
   { label: "Active", color: "#00c9b1", hint: "Well-connected, healthy memory" },
-  { label: "Fresh", color: "#f0a500", hint: "Recently added" },
+  { label: "Fresh", color: "#568cfa", hint: "Recently added" },
   { label: "Dormant", color: "#6a6880", hint: "Fading — rarely accessed" },
 ];
 

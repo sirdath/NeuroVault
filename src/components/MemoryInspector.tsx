@@ -81,7 +81,7 @@ function Chip({ text, tone }: { text: string; tone: "ok" | "dim" | "warn" | "acc
     ok: { bg: "rgba(74,222,128,0.12)", fg: "#4ade80" },
     dim: { bg: "rgba(255,255,255,0.06)", fg: "var(--nv-text-dim)" },
     warn: { bg: "rgba(248,113,113,0.12)", fg: "#f87171" },
-    accent: { bg: "rgba(240,165,0,0.12)", fg: "var(--nv-accent, #f0a500)" },
+    accent: { bg: "rgba(86,140,250,0.12)", fg: "var(--nv-accent, #568cfa)" },
   };
   const c = colors[tone] ?? colors.dim!;
   return (
@@ -102,7 +102,7 @@ function Bar({ label, value }: { label: string; value: number }) {
       <div className="h-1.5 w-24 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
         <div
           className="h-full rounded-full"
-          style={{ width: `${Math.round(value * 100)}%`, background: "var(--nv-accent, #f0a500)", opacity: 0.85 }}
+          style={{ width: `${Math.round(value * 100)}%`, background: "var(--nv-accent, #568cfa)", opacity: 0.85 }}
         />
       </div>
       <span className="w-8 tabular-nums">{value.toFixed(2)}</span>
@@ -123,7 +123,7 @@ function ItemRow({ item }: { item: SectionItem }) {
         className="flex items-center gap-2 w-full text-left py-0.5 hover:opacity-80"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="font-mono text-[11px]" style={{ color: "var(--nv-accent, #f0a500)" }}>
+        <span className="font-mono text-[11px]" style={{ color: "var(--nv-accent, #568cfa)" }}>
           [{item.id}]
         </span>
         {item.ce_prob != null && (
@@ -241,7 +241,7 @@ function RecordCard({ r }: { r: LogRecord }) {
               <div className="text-[11px] font-semibold mb-1">Candidates (classic pipeline)</div>
               {r.candidates.map((c) => (
                 <div key={c.engram_id} className="pl-3 text-[11px] flex gap-2" style={{ color: "var(--nv-text-dim)" }}>
-                  <span className="font-mono" style={{ color: "var(--nv-accent, #f0a500)" }}>
+                  <span className="font-mono" style={{ color: "var(--nv-accent, #568cfa)" }}>
                     [{c.engram_id.slice(0, 8)}]
                   </span>
                   <span>ce {pct(c.scores?.ce_prob)}</span>
@@ -374,9 +374,9 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
               onClick={() => setTab(id)}
               className="text-[12px] px-3 py-1.5 rounded-md"
               style={{
-                background: tab === id ? "rgba(240,165,0,0.12)" : "transparent",
-                color: tab === id ? "var(--nv-accent, #f0a500)" : "var(--nv-text-dim)",
-                border: `1px solid ${tab === id ? "rgba(240,165,0,0.3)" : "transparent"}`,
+                background: tab === id ? "rgba(86,140,250,0.12)" : "transparent",
+                color: tab === id ? "var(--nv-accent, #568cfa)" : "var(--nv-text-dim)",
+                border: `1px solid ${tab === id ? "rgba(86,140,250,0.3)" : "transparent"}`,
               }}
             >
               {label}
@@ -426,7 +426,7 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
           <button
             onClick={onClose}
             className="text-[11px] px-2.5 py-1 rounded-md hover:opacity-80"
-            style={{ ...selectStyle, color: "var(--nv-accent, #f0a500)" }}
+            style={{ ...selectStyle, color: "var(--nv-accent, #568cfa)" }}
           >
             Close (Esc)
           </button>

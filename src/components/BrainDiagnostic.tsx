@@ -32,14 +32,14 @@ function gradeColor(grade: string): string {
   const g = grade[0];
   if (g === "A") return "#00c9b1";
   if (g === "B") return "#5fd1a8";
-  if (g === "C") return "#f0a500";
+  if (g === "C") return "#568cfa";
   if (g === "D") return "#ff8c42";
   if (g === "F") return "#ff5d5d";
   return "var(--nv-text-muted)";
 }
 function barColor(score: number): string {
   if (score >= 0.8) return "#00c9b1";
-  if (score >= 0.6) return "#f0a500";
+  if (score >= 0.6) return "#568cfa";
   return "#ff5d5d";
 }
 
@@ -149,7 +149,7 @@ export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brai
                 <li key={i} className="flex items-start gap-2 text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
                   <span
                     className="mt-[5px] w-1.5 h-1.5 rounded-full flex-shrink-0"
-                    style={{ background: is.severity === "high" ? "#ff5d5d" : is.severity === "medium" ? "#f0a500" : "var(--nv-text-dim)" }}
+                    style={{ background: is.severity === "high" ? "#ff5d5d" : is.severity === "medium" ? "#568cfa" : "var(--nv-text-dim)" }}
                   />
                   <span>{is.label}</span>
                 </li>

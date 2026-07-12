@@ -70,7 +70,7 @@ type JournalEvent = {
 const T = {
   text: "var(--nv-text)",
   dim: "var(--nv-text-dim)",
-  accent: "var(--nv-accent, #f0a500)",
+  accent: "var(--nv-accent, #568cfa)",
   surface: "var(--nv-surface)",
   border: "var(--nv-border)",
 };

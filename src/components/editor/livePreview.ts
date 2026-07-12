@@ -105,5 +105,5 @@ export const livePreviewPlugin = ViewPlugin.fromClass(
  * highlightStyle; this base theme only gives headings a little breathing room.
  */
 export const livePreviewTheme = EditorView.baseTheme({
-  ".cm-content": { caretColor: "var(--nv-accent, #f0a500)" },
+  ".cm-content": { caretColor: "var(--nv-accent, #568cfa)" },
 });

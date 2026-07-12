@@ -8,7 +8,7 @@ const colors = {
   surface: "#12121c",
   raised: "#1a1a28",
   border: "#1f1f2e",
-  amber: "#f0a500",
+  amber: "#568cfa",
   teal: "#00c9b1",
   purple: "#8b7cf8",
   coral: "#ff6b6b",
@@ -37,7 +37,7 @@ const neurovaultEditorTheme = EditorView.theme(
     },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
       {
-        backgroundColor: "rgba(240, 165, 0, 0.15)",
+        backgroundColor: "rgba(86, 140, 250, 0.15)",
       },
     ".cm-panels": {
       backgroundColor: colors.surface,
@@ -50,11 +50,11 @@ const neurovaultEditorTheme = EditorView.theme(
       borderTop: `1px solid ${colors.border}`,
     },
     ".cm-searchMatch": {
-      backgroundColor: "rgba(240, 165, 0, 0.25)",
+      backgroundColor: "rgba(86, 140, 250, 0.25)",
       outline: `1px solid ${colors.amber}`,
     },
     ".cm-searchMatch.cm-searchMatch-selected": {
-      backgroundColor: "rgba(240, 165, 0, 0.4)",
+      backgroundColor: "rgba(86, 140, 250, 0.4)",
     },
     ".cm-activeLine": {
       backgroundColor: "rgba(255, 255, 255, 0.03)",

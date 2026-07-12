@@ -26,8 +26,8 @@
   --color-raised: #1a1a28;
 
   /* Accents — your brand identity, kept */
-  --color-amber: #f0a500;            /* primary accent / fresh state */
-  --color-amber-dim: rgba(240, 165, 0, 0.12);
+  --color-amber: #568cfa;            /* primary accent / fresh state */
+  --color-amber-dim: rgba(86, 140, 250, 0.12);
   --color-teal: #00c9b1;             /* AI / connected state */
   --color-purple: #8b7cf8;           /* entities, code */
   --color-coral: #ff6b6b;             /* danger / contradictions */
@@ -142,7 +142,7 @@ button, a, .transition {
 }
 
 /* Focus states — solid amber ring meets WCAG AA against every surface tier.
-   The previous rgba(240,165,0,0.4) failed AA on --color-surface-elevated. */
+   The previous rgba(86,140,250,0.4) failed AA on --color-surface-elevated. */
 input:focus, textarea:focus, button:focus-visible {
   outline: 2px solid var(--color-amber);
   outline-offset: 2px;
@@ -217,7 +217,7 @@ html[data-density="compact"] {
   transition: opacity 180ms ease;
   background: radial-gradient(
     160px circle at var(--mx, 50%) var(--my, 50%),
-    rgba(240, 165, 0, 0.10),
+    rgba(86, 140, 250, 0.10),
     transparent 55%
   );
   z-index: 0;
@@ -230,7 +230,7 @@ html[data-density="compact"] {
   opacity: 1;
   background: radial-gradient(
     200px circle at 30% 50%,
-    rgba(240, 165, 0, 0.14),
+    rgba(86, 140, 250, 0.14),
     transparent 60%
   );
 }
@@ -238,15 +238,15 @@ html[data-density="compact"] {
 /* Soft peach glow — for focus rings, pulsing indicators, accent badges.
    Use with `box-shadow: var(--nv-glow-peach)` or as a class. */
 :root {
-  --nv-glow-amber: 0 0 0 1px rgba(240, 165, 0, 0.35),
-                   0 0 18px -2px rgba(240, 165, 0, 0.35);
+  --nv-glow-brand: 0 0 0 1px rgba(86, 140, 250, 0.35),
+                   0 0 18px -2px rgba(86, 140, 250, 0.35);
   --nv-glow-teal:  0 0 0 1px rgba(0, 201, 177, 0.35),
                    0 0 18px -2px rgba(0, 201, 177, 0.35);
   --nv-glow-purple: 0 0 0 1px rgba(139, 124, 248, 0.35),
                     0 0 18px -2px rgba(139, 124, 248, 0.35);
-  --nv-ring-amber: 0 0 0 2px rgba(240, 165, 0, 0.18);
+  --nv-ring-brand: 0 0 0 2px rgba(86, 140, 250, 0.18);
 }
-.nv-glow-amber { box-shadow: var(--nv-glow-amber); }
+.nv-glow-brand { box-shadow: var(--nv-glow-brand); }
 .nv-glow-teal  { box-shadow: var(--nv-glow-teal); }
 .nv-glow-purple { box-shadow: var(--nv-glow-purple); }
 
@@ -287,8 +287,8 @@ html[data-density="compact"] {
 }
 .nv-kbd-active {
   color: var(--color-amber);
-  border-color: rgba(240, 165, 0, 0.35);
-  background: rgba(240, 165, 0, 0.08);
+  border-color: rgba(86, 140, 250, 0.35);
+  background: rgba(86, 140, 250, 0.08);
 }
 
 /* Fuzzy-match highlight — wrap matching chars in <mark class="nv-hl">. */
