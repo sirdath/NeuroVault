@@ -1864,14 +1864,19 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
             for e in &events {
                 if let (Some(sid), Ok(ts)) = (
                     e.session_id.as_deref(),
-                    time::OffsetDateTime::parse(&e.ts, &time::format_description::well_known::Rfc3339),
+                    time::OffsetDateTime::parse(
+                        &e.ts,
+                        &time::format_description::well_known::Rfc3339,
+                    ),
                 ) {
                     if ts >= midnight {
                         seen_sessions.insert(sid.to_string());
                     }
                 }
                 let text = match e.event_type.as_str() {
-                    "playbook_rule_added" => Some(format!("A correction became a rule in {}", b.name)),
+                    "playbook_rule_added" => {
+                        Some(format!("A correction became a rule in {}", b.name))
+                    }
                     "note_superseded" => Some(format!("A note was replaced in {}", b.name)),
                     "task_completed" => Some(format!("A task was completed in {}", b.name)),
                     "working_state_updated" => Some(format!("Working state moved in {}", b.name)),
@@ -1884,7 +1889,12 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
             sessions_today += seen_sessions.len();
         }
         // newest changes first, capped
-        since.sort_by(|a, b| b["ts"].as_str().unwrap_or("").cmp(a["ts"].as_str().unwrap_or("")));
+        since.sort_by(|a, b| {
+            b["ts"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(a["ts"].as_str().unwrap_or(""))
+        });
         since.truncate(5);
 
         Ok(serde_json::json!({
