@@ -66,7 +66,7 @@ jobs:
             bin-name: neurovault-server
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Tauri's Linux apt list. The neurovault-server bin does not
       # use Tauri itself, but the crate it lives in does — cargo will
@@ -85,14 +85,14 @@ jobs:
             libssl-dev \
             patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: ${{ matrix.rust-target }}
 
       # Cache Cargo's target dir per platform. Release profile uses
       # lto=fat + codegen-units=1, so a cold build is 4-6 minutes.
       # With this cache, incremental rebuilds drop to ~90s.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.rust-target }}-server
@@ -107,7 +107,7 @@ jobs:
       # mode. We upload as a single-file artifact and chmod +x in the
       # downstream package step.
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: server-bin-${{ matrix.platform }}
           path: src-tauri/target/${{ matrix.rust-target }}/release/${{ matrix.bin-name }}
@@ -124,9 +124,9 @@ jobs:
     permissions:
       contents: write   # needed by softprops/action-gh-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -151,7 +151,7 @@ jobs:
         run: npm run build
 
       - name: Download all server binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           pattern: server-bin-*
@@ -200,7 +200,7 @@ jobs:
         run: npx vsce package --out "neurovault-${{ steps.version.outputs.version }}.vsix"
 
       - name: Upload .vsix as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: neurovault-vscode-${{ steps.version.outputs.version }}
           path: vscode-extension/*.vsix
@@ -210,7 +210,7 @@ jobs:
       # workflow_dispatch runs publish only the workflow artifact above.
       - name: Attach .vsix to draft GitHub Release
         if: startsWith(github.ref, 'refs/tags/vscode-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "NeuroVault for VS Code ${{ github.ref_name }}"

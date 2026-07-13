@@ -71,6 +71,19 @@ export interface ServerStatus {
   indexing: string[];
 }
 
+export interface BrainSummary {
+  id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  vault_path?: string;
+  stats?: {
+    note_count: number;
+    total_bytes: number;
+    last_modified_secs: number;
+  };
+}
+
 export interface SessionContext {
   l0: string;
   l1: string;
@@ -160,6 +173,7 @@ export const fetchStatus = () => get<ServerStatus>("/api/status");
  *  returns 200 whenever the server is up — so it's the correct signal for
  *  the "connected / offline" indicator. */
 export const fetchHealth = () => get<{ service: string; status: string }>("/api/health");
+export const fetchBrains = () => get<BrainSummary[]>("/api/brains");
 export const fetchSessionContext = () => get<SessionContext>("/api/session-context");
 export const fetchNote = (id: string) =>
   preferNv<NoteDetail>(
@@ -225,6 +239,56 @@ export interface AuditEntry {
   status_code?: number;
 }
 
+/** A consumer-facing receipt for one automatic context decision.
+ * Prompt text is absent by default; the backend stores a hash unless the
+ * user explicitly opts into prompt logging. Candidate titles and the
+ * injected ids let Activity explain exactly which local memories were used. */
+export interface ContextReceipt {
+  event_id: string;
+  ts: string;
+  brain: string;
+  host?: string | null;
+  session_id?: string | null;
+  decision: "inject" | "silent";
+  reason: string;
+  intent?: string | null;
+  injected: string[];
+  tokens: number;
+  ms?: number;
+  context_block_head?: string | null;
+  candidates?: Array<{
+    engram_id: string;
+    title: string;
+    signals?: string[];
+  }>;
+}
+
+export type ContextReceiptFeedback = "useful" | "wrong_project" | "outdated";
+
 export const activityApi = {
   recent: (limit = 50) => jsonReq<AuditEntry[]>(`/api/audit/recent?limit=${limit}`),
+  contextReceipts: (limit = 50) =>
+    jsonReq<{ records: ContextReceipt[]; count: number }>(`/api/ambient_log?limit=${limit}`).then(
+      (data) => data.records ?? [],
+    ),
+  /** Append-only correction evidence for a delivered context receipt. This
+   * never rewrites or deletes a memory; consolidation can later learn from
+   * the human label with the exact decision event as provenance. */
+  contextFeedback: (receipt: ContextReceipt, feedback: ContextReceiptFeedback) =>
+    jsonReq<{ event_id: string; written: boolean }>("/api/journal_event", {
+      method: "POST",
+      body: JSON.stringify({
+        brain_id: receipt.brain,
+        event_type: "context_receipt_feedback",
+        object_type: "context_decision",
+        object_id: receipt.event_id,
+        session_id: receipt.session_id ?? undefined,
+        host: receipt.host ?? undefined,
+        title: feedback === "useful" ? "Useful context" : feedback === "wrong_project" ? "Wrong vault" : "Outdated context",
+        after: feedback,
+        source_refs: [receipt.event_id],
+        idempotency_key: `context-feedback:${receipt.event_id}:${feedback}`,
+        capture_method: "review",
+      }),
+    }),
 };

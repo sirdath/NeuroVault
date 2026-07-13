@@ -2,7 +2,10 @@ use serde::Serialize;
 use slug::slugify;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use std::time::SystemTime;
 use tauri_plugin_shell::process::CommandChild;
 use uuid::Uuid;
@@ -15,6 +18,10 @@ use crate::memory;
 
 /// Shared state holding the Python sidecar child process (if running).
 struct ServerState(Mutex<Option<CommandChild>>);
+
+// Explicit Quit is a two-phase handshake: ExitRequested asks the frontend to
+// flush its revisioned note buffer; only `quit_after_save` opens this gate.
+static ALLOW_EXIT_AFTER_SAVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize, Clone)]
 pub struct NoteMeta {
@@ -663,14 +670,26 @@ fn nv_auto_recall_status() -> bool {
     memory::hooks::hooks_installed_at(&memory::hooks::claude_settings_path())
 }
 
+fn set_automatic_context_menu_state(app: &tauri::AppHandle, enabled: bool) {
+    use tauri::menu::MenuItemKind;
+    let Some(menu) = app.menu() else { return };
+    let Some(MenuItemKind::Submenu(application_menu)) = menu.get("neurovault-menu") else {
+        return;
+    };
+    let Some(MenuItemKind::Check(item)) = application_menu.get("automatic-context") else {
+        return;
+    };
+    let _ = item.set_checked(enabled);
+}
+
 /// Install or remove the automatic-recall hooks in the user's Claude
 /// Code settings. Install points the hook entries at the bundled
 /// `neurovault-server` sidecar; idempotent (re-install refreshes the
 /// path). The hooks themselves fail open when the app isn't running.
 #[tauri::command]
-fn nv_auto_recall_set(enabled: bool) -> std::result::Result<String, String> {
+fn nv_auto_recall_set(app: tauri::AppHandle, enabled: bool) -> std::result::Result<String, String> {
     let settings = memory::hooks::claude_settings_path();
-    if enabled {
+    let result = if enabled {
         let sidecar = mcp_sidecar_path();
         if sidecar.is_empty() {
             return Err("sidecar binary not found next to the app".into());
@@ -679,7 +698,11 @@ fn nv_auto_recall_set(enabled: bool) -> std::result::Result<String, String> {
             .map_err(|e| e.to_string())
     } else {
         memory::hooks::uninstall_hooks_at(&settings).map_err(|e| e.to_string())
+    };
+    if result.is_ok() {
+        set_automatic_context_menu_state(&app, enabled);
     }
+    result
 }
 
 /// Return the resolved absolute path to the `neurovault-server` sidecar
@@ -907,6 +930,12 @@ fn hide_to_background(window: tauri::Window) -> Result<(), String> {
     window.hide().map_err(|e| format!("hide: {e}"))
 }
 
+#[tauri::command]
+fn quit_after_save(app: tauri::AppHandle) {
+    ALLOW_EXIT_AFTER_SAVE.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
 /// Minimise the *main* window to the Dock / taskbar. Targets the main window
 /// by label (not the calling window) so it works from the minitab too, and
 /// uses the Rust window API directly so it needs no `core:window` ACL grant.
@@ -931,6 +960,34 @@ fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
         w.show().map_err(|e| format!("show main: {e}"))?;
         let _ = w.set_focus();
     }
+    Ok(())
+}
+
+/// Open the dedicated Settings window. Keeping Settings out of the editor
+/// shell matches macOS convention and prevents a long technical panel from
+/// obscuring an unsaved note.
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.unminimize();
+        window.show().map_err(|e| format!("show settings: {e}"))?;
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html?view=settings".into()),
+    )
+    .title("NeuroVault Settings")
+    .inner_size(900.0, 720.0)
+    .min_inner_size(720.0, 560.0)
+    .resizable(true)
+    .center()
+    .build()
+    .map_err(|e| format!("create settings: {e}"))?;
+    let _ = window.set_focus();
     Ok(())
 }
 
@@ -1190,11 +1247,15 @@ fn nv_get_graph(
 // and the ingest can be run asynchronously (via file watcher) if
 // needed. The Phase-5 variants are the path the frontend migrates to.
 //
-// Brain resolution: always the active brain (from brains.json). The
-// `brain_id` parameter is accepted for forwards-compat but the vault
-// path resolution still reads from `vault_dir()` which tracks the
-// active brain. Writing to a non-active brain needs a brain switch
-// first — same contract the Python API had.
+// Brain resolution binds the DB and vault path to the same explicit id. This
+// matters during a UI vault switch: an old buffered write must never resolve
+// its filesystem destination from the newly-active process-global brain.
+
+fn write_context(brain_id: Option<&str>) -> std::result::Result<memory::BrainContext, String> {
+    let id = memory::resolve_brain_id(brain_id).map_err(|e| e.to_string())?;
+    let vault = memory::resolve_vault_path(&id).map_err(|e| e.to_string())?;
+    memory::BrainContext::resolve(Some(&id), vault).map_err(|e| e.to_string())
+}
 
 /// Write `content` to `filename` under the active brain's vault and
 /// run the ingest pipeline. Returns the engram id + status.
@@ -1204,8 +1265,7 @@ fn nv_save_note(
     content: String,
     brain_id: Option<String>,
 ) -> std::result::Result<memory::WriteResult, String> {
-    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
-        .map_err(|e| e.to_string())?;
+    let ctx = write_context(brain_id.as_deref())?;
     memory::save_note(&ctx, &filename, &content).map_err(|e| e.to_string())
 }
 
@@ -1217,8 +1277,7 @@ fn nv_create_note(
     title: String,
     brain_id: Option<String>,
 ) -> std::result::Result<memory::WriteResult, String> {
-    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
-        .map_err(|e| e.to_string())?;
+    let ctx = write_context(brain_id.as_deref())?;
     memory::create_note(&ctx, &title).map_err(|e| e.to_string())
 }
 
@@ -1230,9 +1289,26 @@ fn nv_delete_note(
     filename: String,
     brain_id: Option<String>,
 ) -> std::result::Result<memory::WriteResult, String> {
-    let ctx = memory::BrainContext::resolve(brain_id.as_deref(), vault_dir())
-        .map_err(|e| e.to_string())?;
+    let ctx = write_context(brain_id.as_deref())?;
     memory::delete_note(&ctx, &filename).map_err(|e| e.to_string())
+}
+
+/// List recoverable Markdown notes in the active brain's trash folder.
+#[tauri::command]
+fn nv_list_trash(brain_id: Option<String>) -> std::result::Result<Vec<memory::TrashEntry>, String> {
+    let ctx = write_context(brain_id.as_deref())?;
+    memory::list_trash(&ctx).map_err(|e| e.to_string())
+}
+
+/// Restore one trash leaf to its original vault-relative path (or a safe
+/// collision-suffixed path) and rebuild its searchable memory representation.
+#[tauri::command]
+fn nv_restore_note(
+    trashed_filename: String,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::WriteResult, String> {
+    let ctx = write_context(brain_id.as_deref())?;
+    memory::restore_note(&ctx, &trashed_filename).map_err(|e| e.to_string())
 }
 
 /// Copy dropped files into the active brain's drop-folder inbox. Called
@@ -1578,6 +1654,91 @@ pub fn run() {
                 })
                 .build(),
         )
+        .menu(|app| {
+            use tauri::menu::{
+                CheckMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+            };
+
+            let settings = MenuItemBuilder::with_id("open-settings", "Settings…")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
+            let automatic_context = CheckMenuItem::with_id(
+                app,
+                "automatic-context",
+                "Automatic Context",
+                true,
+                nv_auto_recall_status(),
+                None::<&str>,
+            )?;
+            let application_menu = SubmenuBuilder::with_id(app, "neurovault-menu", "NeuroVault")
+                .about(None)
+                .separator()
+                .item(&settings)
+                .item(&automatic_context)
+                .separator()
+                .services()
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+            let edit_menu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+            let window_menu = SubmenuBuilder::new(app, "Window")
+                .minimize()
+                .close_window()
+                .build()?;
+
+            MenuBuilder::new(app)
+                .items(&[&application_menu, &edit_menu, &window_menu])
+                .build()
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "open-settings" {
+                let _ = open_settings_window(app.clone());
+                return;
+            }
+            if event.id() != "automatic-context" {
+                return;
+            }
+
+            use tauri::menu::MenuItemKind;
+            use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+            let check_item = app.menu().and_then(|menu| {
+                let MenuItemKind::Submenu(application_menu) = menu.get("neurovault-menu")? else {
+                    return None;
+                };
+                let MenuItemKind::Check(item) = application_menu.get("automatic-context")? else {
+                    return None;
+                };
+                Some(item)
+            });
+            let enabled = check_item
+                .as_ref()
+                .and_then(|item| item.is_checked().ok())
+                .unwrap_or_else(|| !nv_auto_recall_status());
+
+            if let Err(error) = nv_auto_recall_set(app.clone(), enabled) {
+                if let Some(item) = check_item {
+                    let _ = item.set_checked(!enabled);
+                }
+                app.dialog()
+                    .message(format!("NeuroVault could not change Automatic Context.\n\n{error}"))
+                    .title("Automatic Context")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        })
         .setup(move |app| {
             // Register the shortcut at startup. If another app already owns
             // the combo we log and move on — the in-app Ctrl+Shift+Space
@@ -1710,8 +1871,15 @@ pub fn run() {
         // runs the ExitRequested cleanup below (checkpoint + close DBs).
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                if window.label() == "settings" {
                     api.prevent_close();
+                    let _ = window.hide();
+                } else if window.label() == "main" {
+                    api.prevent_close();
+                    // Closing hides rather than exits, so the flush may finish
+                    // while hidden. On failure the frontend reopens the window
+                    // and presents the retained buffer + Retry state.
+                    let _ = window.emit("neurovault-save-requested", "window-close");
                     let _ = window.hide();
                     // One-time hint, delivered as a SYSTEM notification —
                     // an in-app toast would render into the window we just
@@ -1725,8 +1893,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
-            hide_to_background, brain_storage_stats,
-            open_main_window, show_minitab, hide_minitab, set_minitab_collapsed,
+            hide_to_background, quit_after_save, brain_storage_stats,
+            open_main_window, open_settings_window, show_minitab, hide_minitab, set_minitab_collapsed,
             minimize_main, shrink_to_widget,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
             nv_auto_recall_status, nv_auto_recall_set,
@@ -1738,7 +1906,7 @@ pub fn run() {
             nv_list_notes, nv_get_note, nv_list_brains, nv_brain_stats, nv_get_graph,
             // Phase-5 write-path commands. Run the full ingest pipeline
             // (chunk → embed → entities → links → BM25) in-process.
-            nv_save_note, nv_create_note, nv_delete_note,
+            nv_save_note, nv_create_note, nv_delete_note, nv_list_trash, nv_restore_note,
             // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
             // is the in-process Tauri path; the HTTP server serves
             // MCP proxy + external HTTP clients.
@@ -1765,7 +1933,12 @@ pub fn run() {
                 // Kill the sidecar when the app exits so it doesn't linger as
                 // an orphan process holding port 8765. Without this the user
                 // sees "already running" errors on next launch.
-                tauri::RunEvent::ExitRequested { .. } => {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    if !ALLOW_EXIT_AFTER_SAVE.load(Ordering::SeqCst) {
+                        api.prevent_exit();
+                        let _ = app.emit("neurovault-save-requested", "quit");
+                        return;
+                    }
                     if let Some(state) = app.try_state::<ServerState>() {
                         if let Ok(mut guard) = state.0.lock() {
                             if let Some(child) = guard.take() {

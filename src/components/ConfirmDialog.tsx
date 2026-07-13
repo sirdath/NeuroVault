@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 
 /** Styled in-app confirmation dialog — the replacement for
  *  `window.confirm()`.
@@ -42,24 +42,62 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   // Focus the Cancel button on open so accidental Enter doesn't
   // trigger a destructive action.
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+
   useEffect(() => {
-    if (open) {
-      const id = window.setTimeout(() => cancelRef.current?.focus(), 0);
-      return () => window.clearTimeout(id);
-    }
+    if (!open) return;
+
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const id = window.setTimeout(() => cancelRef.current?.focus(), 0);
+
+    return () => {
+      window.clearTimeout(id);
+      previouslyFocusedRef.current?.focus();
+      previouslyFocusedRef.current = null;
+    };
   }, [open]);
 
-  // Esc cancels, Enter confirms only when focus is on the confirm
-  // button — we don't want any random Enter press to trigger it.
+  // Esc cancels. Tab is kept inside the modal so keyboard and VoiceOver
+  // users cannot accidentally move into controls hidden behind it.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         onCancel();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((node) => node.getAttribute("aria-hidden") !== "true");
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !dialog.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+        e.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -78,23 +116,27 @@ export function ConfirmDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="w-[420px] max-w-[90vw] rounded-xl shadow-2xl p-5"
         style={{
           background: "var(--nv-surface)",
           border: "1px solid var(--nv-border)",
         }}
-        role="dialog"
+        role={destructive ? "alertdialog" : "dialog"}
         aria-modal="true"
-        aria-labelledby="confirm-dialog-title"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
       >
         <h2
-          id="confirm-dialog-title"
+          id={titleId}
           className="text-base font-semibold font-[Geist,sans-serif] mb-2"
           style={{ color: "var(--nv-text)" }}
         >
           {title}
         </h2>
         <p
+          id={descriptionId}
           className="text-[13px] leading-relaxed font-[Geist,sans-serif] mb-5"
           style={{ color: "var(--nv-text-muted)" }}
         >

@@ -24,12 +24,24 @@ FAILED=$(echo "$SUMMARY" | awk '{f+=$6} END{print f+0}')
 [ "$FAILED" -eq 0 ] || { echo "$TEST_OUT" | sed -n '/^failures:$/,/^test result/p'; fail "$FAILED test(s) failed"; }
 echo "   $PASSED passed, 0 failed"
 
-echo "── cargo clippy -D warnings (all targets)"
+echo "── cargo clippy -D warnings (headless targets)"
 cargo clippy --all-targets --no-default-features -- -D warnings 2>&1 | tail -1 | grep -q "Finished" || fail "clippy"
+
+# The headless engine intentionally excludes src/app.rs. Compile the actual
+# desktop feature as a separate gate so native window/menu code cannot ship
+# unchecked while the server-only build stays green.
+echo "── cargo clippy -D warnings (desktop GUI)"
+cargo clippy --all-targets -- -D warnings 2>&1 | tail -1 | grep -q "Finished" || fail "desktop GUI clippy"
 
 if [ "${GATES_FRONTEND:-1}" = "1" ]; then
   echo "── tsc --noEmit"
   (cd .. && npx tsc --noEmit) || fail "tsc"
+
+  echo "── release hardening invariants"
+  (cd .. && npm run test:hardening) || fail "release hardening"
+
+  echo "── component accessibility tests"
+  (cd .. && npm run test:ui) || fail "component accessibility"
 fi
 
 echo "ALL GATES GREEN ($PASSED tests)"

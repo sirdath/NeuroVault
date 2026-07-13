@@ -20,6 +20,9 @@ import type {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Atlas owns its cached ForceAtlas layout and pattern transforms; classic
+   *  modes expose the live d3-force sliders below. */
+  viewMode?: "atlas" | "classic";
   /** Total node count + isolated count, surfaced in the Filters
    *  section so the user knows how many orphans are around without
    *  having to count rings. */
@@ -56,7 +59,7 @@ const LAYOUT_LABELS: { value: GraphLayoutShape; label: string; hint: string }[] 
 
 const GRAPHMODE_LABELS: { value: GraphMode; label: string; hint: string }[] = [
   { value: "full", label: "Full", hint: "Every effect (default)" },
-  { value: "lite", label: "Lite", hint: "Low-power preset for big brains" },
+  { value: "lite", label: "Lite", hint: "Low-power preset for large vaults" },
   { value: "off", label: "Off", hint: "Disable the graph entirely" },
 ];
 
@@ -248,6 +251,7 @@ function ColorMapEditor({
 export function GraphFilterPanel({
   open,
   onClose,
+  viewMode = "classic",
   nodeCount,
   orphanCount,
   semanticEdgeCount,
@@ -375,13 +379,13 @@ export function GraphFilterPanel({
             label={`Show orphans (${orphanCount})`}
             checked={s.showOrphans}
             onChange={s.setShowOrphans}
-            hint="Isolated nodes (no edges) — render them in a halo around the connected brain."
+            hint="Isolated nodes (no edges) — render them in a halo around the connected vault."
           />
           <Toggle
             label={`Semantic edges (${semanticEdgeCount})`}
             checked={s.showSemanticEdges}
             onChange={s.setShowSemanticEdges}
-            hint="Auto-computed cosine similarity edges. Off by default — they create a hairball at brain scale."
+            hint="Auto-computed cosine similarity edges. Off by default — they create a hairball at vault scale."
           />
           <Toggle
             label="Manual links only"
@@ -397,12 +401,14 @@ export function GraphFilterPanel({
               hint="Graphified source files (gold nodes) and their call edges. Hide to see only your notes."
             />
           )}
-          <Toggle
-            label="Show arrows"
-            checked={s.showArrows}
-            onChange={s.setShowArrows}
-            hint="Draw arrowheads on directed edges (manual wikilinks)."
-          />
+          {viewMode === "classic" && (
+            <Toggle
+              label="Show arrows"
+              checked={s.showArrows}
+              onChange={s.setShowArrows}
+              hint="Draw arrowheads on directed edges (manual wikilinks)."
+            />
+          )}
         </Section>
 
         {/* Display */}
@@ -429,27 +435,29 @@ export function GraphFilterPanel({
             onChange={s.setLinkThicknessScale}
             formatter={(v) => `${v.toFixed(2)}×`}
           />
-          <Slider
-            label="Show labels at zoom"
-            value={s.labelZoomThreshold}
-            min={0.5}
-            max={8.0}
-            step={0.1}
-            onChange={s.setLabelZoomThreshold}
-            formatter={(v) => `≥ ${v.toFixed(1)}`}
-          />
-          <Toggle
-            label="Show all folder labels"
-            checked={s.showClusterLabels}
-            onChange={s.setShowClusterLabels}
-          />
-          <Toggle
-            label="Animations"
-            checked={s.animations}
-            onChange={s.setAnimations}
-            hint="Off freezes the 3D particle flow and skips the bloom glow pass — saves GPU, especially in the 3D view."
-          />
-          <div className="space-y-2">
+          {viewMode === "classic" && (
+            <>
+              <Slider
+                label="Show labels at zoom"
+                value={s.labelZoomThreshold}
+                min={0.5}
+                max={8.0}
+                step={0.1}
+                onChange={s.setLabelZoomThreshold}
+                formatter={(v) => `≥ ${v.toFixed(1)}`}
+              />
+              <Toggle
+                label="Show all folder labels"
+                checked={s.showClusterLabels}
+                onChange={s.setShowClusterLabels}
+              />
+              <Toggle
+                label="Animations"
+                checked={s.animations}
+                onChange={s.setAnimations}
+                hint="Off freezes the 3D particle flow and skips the bloom glow pass — saves GPU, especially in the 3D view."
+              />
+              <div className="space-y-2">
             <div
               className="text-[11px] font-[Geist,sans-serif]"
               style={{ color: "var(--nv-text-muted)" }}
@@ -489,7 +497,9 @@ export function GraphFilterPanel({
             >
               Venn draws a soft outlined region around each folder/category — visible at a zoomed-out overview.
             </p>
-          </div>
+              </div>
+            </>
+          )}
         </Section>
 
         {/* Appearance — palette / shape / colour overrides */}
@@ -540,7 +550,7 @@ export function GraphFilterPanel({
               })}
             </div>
           </div>
-          <div className="space-y-2">
+          {viewMode === "classic" && <div className="space-y-2">
             <div
               className="text-[11px] font-[Geist,sans-serif]"
               style={{ color: "var(--nv-text-muted)" }}
@@ -570,7 +580,7 @@ export function GraphFilterPanel({
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
           <ColorMapEditor
             title="Folder colours"
             entries={folderEntries}
@@ -578,21 +588,39 @@ export function GraphFilterPanel({
             onClear={s.clearFolderColors}
             emptyHint="No folder overrides yet. Right-click a folder cluster on the canvas to pick a colour."
           />
-          <ColorMapEditor
-            title="Cluster colours"
-            entries={clusterEntries}
-            onSet={s.setClusterColor}
-            onClear={s.clearClusterColors}
-            emptyHint="Name some clusters via /name-clusters first, then customise their tints."
-          />
+          {viewMode === "classic" && (
+            <ColorMapEditor
+              title="Cluster colours"
+              entries={clusterEntries}
+              onSet={s.setClusterColor}
+              onClear={s.clearClusterColors}
+              emptyHint="Name some clusters via /name-clusters first, then customise their tints."
+            />
+          )}
         </Section>
 
         {/* Layout */}
-        <Section
-          title="Layout"
-          open={openSections.forces}
-          setOpen={() => toggleSection("forces")}
-        >
+        {viewMode === "atlas" ? (
+          <div className="px-4 py-3 border-b" style={{ borderColor: "var(--nv-border)" }}>
+            <div
+              className="text-[12px] font-[Geist,sans-serif] font-medium uppercase tracking-wider mb-1.5"
+              style={{ color: "var(--nv-text-muted)" }}
+            >
+              Atlas layout
+            </div>
+            <p
+              className="text-[10px] font-[Geist,sans-serif] leading-snug"
+              style={{ color: "var(--nv-text-dim)" }}
+            >
+              Atlas computes a stable layout off the UI thread and caches it per vault. Choose Atlas, Neural, Galaxy, or Time Rings from the canvas pattern menu.
+            </p>
+          </div>
+        ) : (
+          <Section
+            title="Layout"
+            open={openSections.forces}
+            setOpen={() => toggleSection("forces")}
+          >
           <Slider
             label="Spread"
             value={s.spread}
@@ -668,7 +696,8 @@ export function GraphFilterPanel({
             onChange={s.setLinkDistance}
             formatter={(v) => `${v.toFixed(0)} px`}
           />
-        </Section>
+          </Section>
+        )}
 
         {/* Time-lapse */}
         <Section

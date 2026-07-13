@@ -1,23 +1,24 @@
 # Troubleshooting & data
 
-Everything NeuroVault stores lives on your machine under `~/.neurovault/`.
-Nothing is sent to a server you don't control. This page covers the common
-"why isn't it working?" cases and how to back up / move your data.
+NeuroVault stores its local vaults, index, receipts, and settings under
+`~/.neurovault/` unless you choose an external Markdown folder. Selected
+context reaches only AI providers you deliberately connect; model and update
+downloads are listed in `PRIVACY.md`. This page covers common recovery and
+backup cases.
 
 ---
 
-## First launch: "damaged" / SmartScreen warnings
+## First launch: signature or SmartScreen warnings
 
-The builds aren't code-signed (open-source, no paid signing cert), so the OS
-warns on first launch. This is expected — it's not a real malware detection.
+Do not bypass a platform security warning for a file presented as an official
+release. Verify its SHA-256 checksum against the GitHub release, delete the
+download if the values differ, and report the release URL through
+`SECURITY.md`. Unsigned development builds stay draft-only and should be run
+through the documented source-development workflow.
 
-- **macOS** — *"NeuroVault is damaged and can't be opened"*: right-click
-  `NeuroVault.app` → **Open** → **Open Anyway**. If that doesn't stick, run once:
-  ```bash
-  xattr -cr /Applications/NeuroVault.app
-  ```
-- **Windows** — *"Windows protected your PC"*: click **More info → Run anyway**.
-- **Linux** — AppImage: `chmod +x NeuroVault_*.AppImage` if it won't launch.
+On Linux, an AppImage may need its normal executable bit set with
+`chmod +x NeuroVault_*.AppImage`; this changes file permissions and does not
+disable signature or quarantine checks.
 
 ## The app opens but "offline" / memory won't connect
 

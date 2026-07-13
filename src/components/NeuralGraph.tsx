@@ -8,8 +8,11 @@ import { useNoteStore } from "../stores/noteStore";
 import { useBrainStore } from "../stores/brainStore";
 import {
   PALETTE_NEUTRAL,
+  PALETTES,
   folderColor,
   useGraphSettingsStore,
+  type GraphConnectionMode,
+  type GraphLabelMode,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
@@ -18,21 +21,38 @@ import { GraphLegend } from "./GraphLegend";
 import { BrainDiagnostic } from "./BrainDiagnostic";
 import { nvSetPagerank, nvSetClusters, nvGetClusterNames, readNote, type NvClusterSummary } from "../lib/tauri";
 import { extractPreview } from "../lib/utils";
+import type { AtlasGraphHandle } from "./AtlasGraph";
+import { buildAtlasVisualModel } from "../lib/atlasVisualModel";
+import { graphSnapshot2D, graphSnapshot3D } from "../lib/graphSnapshots";
+import { canvasToPngBlob, copyPngToClipboard, downloadBlob, graphImageFilename } from "../lib/graphExport";
+import { toast } from "../stores/toastStore";
 
-// Minimal shape of the ForceGraph3D ref handle we actually touch. The real
-// type (ForceGraphMethods) exposes 20+ methods; we only need the composer
-// accessor, so we cast through a narrow slice to keep bloom wiring readable.
 type Composer = { addPass: (pass: unknown) => void; passes: unknown[] };
 type ForceGraph3DComposerAccess = { postProcessingComposer(): Composer };
 
+// Everyday views are snapshots. These explicit gates keep the legacy force
+// and bloom wiring inert while the Graph Engine remains independently rich.
+const ENABLE_EVERYDAY_LIVE_LAYOUT = false;
+const ENABLE_EVERYDAY_BLOOM = false;
+const GRAPH_3D_RENDERER_CONFIG = {
+  antialias: true,
+  alpha: false,
+  // WebGL clears its drawing buffer by default. Preserving it makes the
+  // current fixed 3D snapshot exportable without running a second renderer.
+  preserveDrawingBuffer: true,
+};
+
 // react-force-graph ships heavy ThreeJS deps in its 3D variant. Lazy-load so
-// the 2D mode (which is the default) doesn't pull in the whole 3D bundle until
+// the 2D/Atlas modes don't pull in the whole 3D bundle until
 // the user actually toggles into 3D view. Cuts initial bundle size ~600 KB.
 const ForceGraph2D = lazy(() =>
   import("react-force-graph-2d").then((m) => ({ default: m.default }))
 );
 const ForceGraph3D = lazy(() =>
   import("react-force-graph-3d").then((m) => ({ default: m.default }))
+);
+const AtlasGraph = lazy(() =>
+  import("./AtlasGraph").then((m) => ({ default: m.AtlasGraph }))
 );
 
 // STATE_COLORS + STATE_GLOW were removed in the graph-aesthetic
@@ -368,7 +388,7 @@ function createClusterForce(strength: number = 0.08) {
 // as "2d" (pan/zoom/hover/click all work) but with the d3-force simulation
 // disabled, so there is no per-frame physics loop burning CPU. It exists for
 // large graphs that are too heavy to animate continuously.
-type Mode = "2d" | "3d" | "static";
+type GraphViewMode = "2d" | "3d" | "engine";
 
 interface HoverCard {
   node: SimNode;
@@ -386,11 +406,13 @@ interface NeuralGraphProps {
 export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
-  const [mode, setMode] = useState<Mode>(() => {
+  const [mode, setMode] = useState<GraphViewMode>(() => {
     try {
       const v = localStorage.getItem("nv.graph.mode");
-      // Accept the three known modes; anything else falls back to "2d".
-      return v === "3d" ? "3d" : v === "static" ? "static" : "2d";
+      // Product split migration: old Atlas/Static/2D all become the calm 2D
+      // snapshot. Only an explicit old 3D choice remains 3D.
+      if (v === "3d") return "3d";
+      return "2d";
     } catch { return "2d"; }
   });
   // Ref to the 3D force-graph instance so we can attach an UnrealBloomPass
@@ -398,27 +420,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // to ForceGraph3D as-is; we narrow at the use site.
   const fg3dRef = useRef<unknown>(undefined);
   const fg2dRef = useRef<unknown>(undefined);
-  // Static-mode layout cache. When the 2D sim settles (onEngineStop) we
-  // snapshot each node's resting {x,y} here AND to localStorage, so that
-  // entering "static" mode can pin every node to its last-settled spot (via
-  // fx/fy) without ever running the physics loop. Keyed by node id.
-  const staticPosRef = useRef<Record<string, [number, number]>>(
-    (() => {
-      try {
-        const raw = localStorage.getItem("nv.graph.static-pos");
-        if (!raw) return {};
-        const parsed = JSON.parse(raw) as unknown;
-        return parsed && typeof parsed === "object"
-          ? (parsed as Record<string, [number, number]>)
-          : {};
-      } catch { return {}; }
-    })(),
-  );
+  const cameraFrameTokenRef = useRef(0);
+  const atlasRef = useRef<AtlasGraphHandle>(null);
+  const lastSnapshotModeRef = useRef<"2d" | "3d">(mode === "3d" ? "3d" : "2d");
   const bloomAttachedRef = useRef(false);
   const clusterAttachedRef = useRef(false);
-  // Declared early (before the bloom effect below references it) to avoid
-  // a temporal-dead-zone error in the effect's dependency array.
-  const animationsRaw = useGraphSettingsStore((s) => s.animations);
   // Master performance switch. "lite" derives a low-power preset at read
   // time — the individual settings below are shadowed when lite is on, so
   // the user's real preferences are preserved and restored on switch back.
@@ -426,7 +432,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // renders in that mode.)
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
   const lite = graphMode === "lite";
-  const animations = lite ? false : animationsRaw;
+  const animations = false;
   // Live snapshot the d3-force collide+link callbacks read on every
   // tick. Keeping it in a ref avoids re-attaching the forces (which
   // would restart the simulation) every time analytics state flips.
@@ -440,7 +446,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // composer. Kept separate from the 2D path so the bloom module (and its
   // Three.js addons) only ship in the already-lazy 3D chunk.
   useEffect(() => {
-    if (mode !== "3d") return;
+    if (!ENABLE_EVERYDAY_BLOOM || mode !== "3d") return;
     // Animations off → skip the bloom pass entirely. Bloom is the single
     // biggest GPU cost in the 3D view; honouring the toggle here is the
     // main "save compute" win the user asked for.
@@ -509,7 +515,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // to a smaller radius than we actually draw) — this fixes the
   // "nodes intertwine" symptom.
   useEffect(() => {
-    if (mode !== "2d") return;
+    if (!ENABLE_EVERYDAY_LIVE_LAYOUT || mode !== "2d") return;
     if (clusterAttachedRef.current) return;
     let cancelled = false;
 
@@ -610,6 +616,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const { nodes: rawNodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
   const focusRequest = useGraphStore((s) => s.focusRequest);
   const selectNote = useNoteStore((s) => s.selectNote);
+  const createNote = useNoteStore((s) => s.createNote);
   const allNotes = useNoteStore((s) => s.notes);
 
   // User-pickable graph appearance: palette, node shape, cluster-label
@@ -638,7 +645,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const showCodeRaw = useGraphSettingsStore((s) => s.showCode);
   const nodeSizeScale = useGraphSettingsStore((s) => s.nodeSizeScale);
   const linkThicknessScale = useGraphSettingsStore((s) => s.linkThicknessScale);
-  const labelZoomThresholdRaw = useGraphSettingsStore((s) => s.labelZoomThreshold);
   const showArrows = useGraphSettingsStore((s) => s.showArrows);
   const centeringStrength = useGraphSettingsStore((s) => s.centeringStrength);
   const chargeStrengthRaw = useGraphSettingsStore((s) => s.chargeStrength);
@@ -646,6 +652,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const layoutShape = useGraphSettingsStore((s) => s.layoutShape);
   const timelapseSpeedSec = useGraphSettingsStore((s) => s.timelapseSpeedSec);
   const groupingStyleRaw = useGraphSettingsStore((s) => s.groupingStyle);
+  const labelMode = useGraphSettingsStore((s) => s.labelMode);
+  const setLabelMode = useGraphSettingsStore((s) => s.setLabelMode);
+  const connectionMode = useGraphSettingsStore((s) => s.connectionMode);
+  const setConnectionMode = useGraphSettingsStore((s) => s.setConnectionMode);
 
   // Lite preset: derive the cheap overrides from `lite` so the user's
   // persisted choices are untouched and snap back when they pick Full again.
@@ -658,7 +668,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const showCode = lite ? false : showCodeRaw;
   const showClusterLabels = lite ? false : showClusterLabelsRaw;
   const analyticsMode = lite ? false : analyticsModeRaw;
-  const labelZoomThreshold = lite ? 5.0 : labelZoomThresholdRaw;
   const chargeStrength = lite ? -50 : chargeStrengthRaw;
   const linkDistanceCfg = lite ? 18 : linkDistanceCfgRaw;
   const groupingStyle = lite ? "soft" : groupingStyleRaw;
@@ -704,7 +713,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // .strength() / .distance() on the already-attached force keeps
   // positions and just retunes the gradient.
   useEffect(() => {
-    if (mode !== "2d") return;
+    if (!ENABLE_EVERYDAY_LIVE_LAYOUT || mode !== "2d") return;
     type ForceWithSetters = {
       strength?: (n: number) => unknown;
       distance?: (n: number) => unknown;
@@ -743,41 +752,48 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     fg.d3ReheatSimulation?.();
   }, [mode, centeringStrength, chargeStrength, linkDistanceCfg, layoutShape]);
 
-  // Screenshot the current 2D canvas to a transparent PNG. The
-  // ForceGraph2D component renders into a <canvas> with
-  // `backgroundColor="rgba(0,0,0,0)"`, so the canvas is already
-  // transparent except where nodes / edges are drawn — toBlob()
-  // gives us a clean PNG with no backdrop. 3D mode uses a WebGL
-  // renderer that needs a different capture path; for now the
-  // button shows a polite message in 3D.
-  const handleScreenshot = useCallback(() => {
+  // Every visible mode exports an actual PNG. Atlas renders a temporary Sigma
+  // image; 2D and 3D capture their fixed canvases (3D preserves its WebGL
+  // drawing buffer via GRAPH_3D_RENDERER_CONFIG below).
+  const captureGraphPng = useCallback(async (): Promise<Blob | null> => {
     const container = containerRef.current;
-    if (!container) return;
-    if (mode === "3d") {
-      window.alert("Screenshot is currently 2D-only. Switch to 2D to capture.");
-      return;
+    if (!container) return null;
+    if (mode === "engine") {
+      const blob = await atlasRef.current?.exportPng();
+      return blob ?? null;
     }
     const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
-    if (!canvas) {
-      window.alert("Canvas not ready yet — try again in a second.");
-      return;
-    }
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `neurovault-graph-${ts}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // Revoke after a tick so the browser actually finishes the
-      // download — Chrome occasionally aborts if we revoke
-      // synchronously while it's still resolving the blob.
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }, "image/png");
+    if (!canvas) return null;
+    return canvasToPngBlob(canvas);
   }, [mode]);
+
+  const handleSaveImage = useCallback(async () => {
+    try {
+      const blob = await captureGraphPng();
+      if (!blob) {
+        toast.warning("The graph is still preparing. Try Save image again in a moment.");
+        return;
+      }
+      downloadBlob(blob, graphImageFilename());
+      toast.success("Graph saved as a PNG image");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't save the graph image");
+    }
+  }, [captureGraphPng]);
+
+  const handleCopyImage = useCallback(async () => {
+    try {
+      const blob = await captureGraphPng();
+      if (!blob) {
+        toast.warning("The graph is still preparing. Try Copy image again in a moment.");
+        return;
+      }
+      await copyPngToClipboard(blob);
+      toast.success("Graph image copied");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't copy the graph image");
+    }
+  }, [captureGraphPng]);
 
   // Filter the raw edges from the store BEFORE anything else consumes
   // them. Three layers stack:
@@ -898,6 +914,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     },
     [tlActive, tlFractions, tlProgress],
   );
+  const atlasVisibleNodeIds = useMemo<Set<string> | null>(() => {
+    if (!tlActive) return null;
+    return new Set(nodes.filter((node) => isNodeVisibleAtTl(node.id)).map((node) => node.id));
+  }, [isNodeVisibleAtTl, nodes, tlActive]);
 
   // Cmd+Shift+A toggles analytics. Cmd+A is select-all in editor
   // contexts, hence the Shift disambiguator. Skipped if focus is in
@@ -920,7 +940,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const brains = useBrainStore((s) => s.brains);
   const notesList = useNoteStore((s) => s.notes);
-  const brainName = brains.find((b) => b.id === activeBrainId)?.name ?? "brain";
+  const brainName = brains.find((b) => b.id === activeBrainId)?.name ?? "vault";
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   // Reload immediately when the brain switches. Note edits are handled by
   // the debounced effect below: re-fetching the whole graph + re-heating the
@@ -962,6 +982,25 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (!focusRequest) return;
     if (focusRequest.at === lastHandledAtRef.current) return;
     lastHandledAtRef.current = focusRequest.at;
+    if (mode === "engine") {
+      // Atlas is lazy-loaded. A command-palette focus can arrive while its
+      // chunk is still resolving, so retry briefly instead of losing the
+      // one-shot request after marking its timestamp handled.
+      let attempts = 0;
+      const focusAtlas = (): boolean => {
+        const atlas = atlasRef.current;
+        if (!atlas) return false;
+        atlas.focusNode(focusRequest.nodeId);
+        atlas.pulse(focusRequest.nodeId);
+        return true;
+      };
+      if (focusAtlas()) return;
+      const retry = window.setInterval(() => {
+        attempts += 1;
+        if (focusAtlas() || attempts >= 20) window.clearInterval(retry);
+      }, 100);
+      return () => window.clearInterval(retry);
+    }
     // Static shares the ForceGraph2D ref + d3-zoom camera, so it tweens
     // exactly like 2d. Only 3D needs a different (camera-position) API.
     if (mode === "3d") return;
@@ -986,59 +1025,59 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     return () => window.clearTimeout(id);
   }, [focusRequest, mode, nodes]);
 
-  // Camera control handlers used by the +/− /fit toolbar buttons.
-  // 2D goes through d3-zoom (multiplicative steps); 3D nudges the
-  // camera distance via cameraPosition() since OrbitControls don't
-  // expose a clean dolly. `zoomToFit` reframes the whole graph.
-  const handleZoomIn = useCallback(() => {
-    // Static uses the same ForceGraph2D ref + d3-zoom as 2d; only 3d dollies
-    // the Three.js camera.
-    if (mode !== "3d") {
-      type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
-      const fg = fg2dRef.current as CamApi | undefined;
-      if (!fg) return;
-      const cur = (fg.zoom() as number) ?? 1;
-      fg.zoom(Math.min(50, cur * 1.4), 220);
-    } else {
+  // Fit is the only permanent camera control; wheel/pinch/drag handle the
+  // rest without adding a row of chrome to the snapshot.
+  const frame3DSnapshot = useCallback((duration = 0) => {
+    const token = ++cameraFrameTokenRef.current;
+    const baseRadius = Math.max(90, Math.min(220, 9 * Math.sqrt(Math.max(1, nodes.length))));
+    const distance = baseRadius * 3.62 + 44;
+    let attempts = 0;
+    const apply = (): void => {
+      if (cameraFrameTokenRef.current !== token) return;
       type Cam3 = {
-        cameraPosition: (p: Partial<{x: number; y: number; z: number}>, lookAt?: unknown, ms?: number) => unknown;
+        cameraPosition: (
+          position: { x: number; y: number; z: number },
+          lookAt?: { x: number; y: number; z: number },
+          ms?: number,
+        ) => unknown;
       };
       const fg = fg3dRef.current as Cam3 | undefined;
-      const pos = fg?.cameraPosition({}) as { x: number; y: number; z: number } | undefined;
-      if (!fg || !pos) return;
-      fg.cameraPosition({ x: pos.x * 0.75, y: pos.y * 0.75, z: pos.z * 0.75 }, undefined, 220);
-    }
-  }, [mode]);
-  const handleZoomOut = useCallback(() => {
-    // Static uses the 2d d3-zoom path; only 3d dollies the camera.
-    if (mode !== "3d") {
-      type CamApi = { zoom: (s?: number, ms?: number) => unknown | number };
-      const fg = fg2dRef.current as CamApi | undefined;
-      if (!fg) return;
-      const cur = (fg.zoom() as number) ?? 1;
-      fg.zoom(Math.max(0.05, cur / 1.4), 220);
-    } else {
-      type Cam3 = {
-        cameraPosition: (p: Partial<{x: number; y: number; z: number}>, lookAt?: unknown, ms?: number) => unknown;
-      };
-      const fg = fg3dRef.current as Cam3 | undefined;
-      const pos = fg?.cameraPosition({}) as { x: number; y: number; z: number } | undefined;
-      if (!fg || !pos) return;
-      fg.cameraPosition({ x: pos.x / 0.75, y: pos.y / 0.75, z: pos.z / 0.75 }, undefined, 220);
-    }
-  }, [mode]);
+      if (fg?.cameraPosition) {
+        fg.cameraPosition({ x: 0, y: 0, z: distance }, { x: 0, y: 0, z: 0 }, duration);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 24) window.setTimeout(apply, 75);
+    };
+    apply();
+  }, [nodes.length]);
+
   const handleZoomFit = useCallback(() => {
+    if (mode === "engine") {
+      atlasRef.current?.fit();
+      return;
+    }
     // Static reframes via the 2d zoomToFit; only 3d uses the 3d ref.
     if (mode !== "3d") {
       type CamApi = { zoomToFit: (ms?: number, padding?: number) => unknown };
       const fg = fg2dRef.current as CamApi | undefined;
       fg?.zoomToFit?.(400, 80);
     } else {
-      type Cam3 = { zoomToFit: (ms?: number, padding?: number) => unknown };
-      const fg = fg3dRef.current as Cam3 | undefined;
-      fg?.zoomToFit?.(400, 80);
+      // ForceGraph3D's bbox can still be origin-sized while its lazy Three
+      // renderer is mounting. Frame the known fixed shell directly instead
+      // of letting an early zoomToFit place the camera inside the sphere.
+      frame3DSnapshot(400);
     }
-  }, [mode]);
+  }, [frame3DSnapshot, mode]);
+
+  useEffect(() => {
+    if (mode === "engine" || nodes.length === 0) return;
+    const timeout = window.setTimeout(handleZoomFit, 320);
+    return () => {
+      window.clearTimeout(timeout);
+      cameraFrameTokenRef.current += 1;
+    };
+  }, [edges.length, handleZoomFit, mode, nodes.length]);
 
   // Fly the camera to fit a single community's nodes. `zoomToFit` takes
   // an optional node-filter as its 3rd arg, so we reuse it rather than
@@ -1048,11 +1087,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const handleFocusCluster = useCallback((comId: number) => {
     const com = focusClusterRef.current;
     const inCluster = (n: unknown) => com?.get((n as SimNode).id) === comId;
+    if (mode === "engine") {
+      atlasRef.current?.fitNodes(nodes.filter((node) => inCluster(node)).map((node) => node.id));
+      return;
+    }
     type CamApi = { zoomToFit: (ms?: number, padding?: number, filter?: (n: unknown) => boolean) => unknown };
     // Static and 2d both drive the ForceGraph2D ref; only 3d uses fg3dRef.
     const fg = (mode === "3d" ? fg3dRef.current : fg2dRef.current) as CamApi | undefined;
     fg?.zoomToFit?.(500, 120, inCluster);
-  }, [mode]);
+  }, [mode, nodes]);
 
   // During the pulse window, kick a per-frame repaint so the ring
   // actually animates. force-graph's internal render loop goes idle
@@ -1199,70 +1242,78 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     };
   }, [nodes, edges, showSemanticEdges]);
 
-  // Static-mode graph data. Same nodes/links/bidi/adjacency as the live 2D
-  // `graphData`, but every node is *pinned* via fx/fy so ForceGraph2D
-  // (rendered with cooldownTicks=0) draws it at a fixed spot and never moves
-  // it. Position source, in priority order:
-  //   1. cached settled position (from a prior 2D render's onEngineStop),
-  //   2. the node's current live x/y if it already has one,
-  //   3. a deterministic phyllotaxis ("sunflower") spiral seat — pure math,
-  //      no simulation — so a graph that has never been viewed in 2D is still
-  //      readable instead of collapsing onto the origin.
-  // Only recomputed when graphData or the mode changes, so 2D/3D pay nothing.
-  const staticGraphData = useMemo(() => {
-    if (mode !== "static") return graphData;
-    const cache = staticPosRef.current;
-    const liveNodes = graphData.nodes as Array<
-      SimNode & { x?: number; y?: number; fx?: number; fy?: number }
-    >;
-    // Phyllotaxis spiral: golden-angle placement gives an even, gap-free disc
-    // whose radius scales with sqrt(count) — matching the density d3-force
-    // would settle into. Used only for nodes with no known spot.
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    const spread = Math.max(150, Math.sqrt(Math.max(1, liveNodes.length)) * 26);
-    let spiralIdx = 0;
-    const pinned = liveNodes.map((n) => {
-      const cached = cache[n.id];
-      let fx: number;
-      let fy: number;
-      if (cached && Number.isFinite(cached[0]) && Number.isFinite(cached[1])) {
-        [fx, fy] = cached;
-      } else if (n.x != null && n.y != null && Number.isFinite(n.x) && Number.isFinite(n.y)) {
-        fx = n.x; fy = n.y;
-      } else {
-        const k = spiralIdx++;
-        const r = spread * Math.sqrt(k + 0.5);
-        const a = k * golden;
-        fx = r * Math.cos(a);
-        fy = r * Math.sin(a);
-      }
-      return { ...n, fx, fy };
-    });
-    return { ...graphData, nodes: pinned };
-  }, [mode, graphData]);
+  // Both everyday views consume one sparse, deterministic visual model.
+  // Positions are pure functions of graph content: no warm-up, no settling,
+  // and no layout drift between visits. The snapshot only changes when the
+  // underlying notes or relationships change.
+  const snapshotModel = useMemo(
+    () => buildAtlasVisualModel({ nodes: [...nodes], edges: [...edges] }),
+    [nodes, edges],
+  );
 
-  // Snapshot the settled 2D layout when the simulation stops. ForceGraph2D
-  // fires onEngineStop after it cools down; at that point each node object
-  // carries its resting x/y. We persist a {id: [x,y]} map to localStorage so
-  // a later switch into "static" mode can pin nodes to these exact spots.
-  // Guards against empty graphs and NaN coords so we never clobber a good
-  // cache with garbage.
-  const handleEngineStop = useCallback(() => {
-    const liveNodes = graphData.nodes as Array<SimNode & { x?: number; y?: number }>;
-    if (liveNodes.length === 0) return;
-    const next: Record<string, [number, number]> = {};
-    let wrote = 0;
-    for (const n of liveNodes) {
-      if (n.x == null || n.y == null) continue;
-      if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
-      next[n.id] = [n.x, n.y];
-      wrote += 1;
-    }
-    if (wrote === 0) return; // nothing valid settled — keep the old cache
-    staticPosRef.current = next;
-    try { localStorage.setItem("nv.graph.static-pos", JSON.stringify(next)); }
-    catch { /* quota / private mode — in-memory cache still serves static */ }
-  }, [graphData]);
+  const snapshotLinks = useMemo(() => {
+    if (connectionMode === "off") return [];
+    // The visual model already reduces thousands of relations to a truthful
+    // connectivity backbone. Do not sparsify it a second time: that turns a
+    // coherent snapshot into disconnected confetti.
+    const visibleEdges = connectionMode === "featured"
+      ? snapshotModel.edges.filter((edge) => edge.tier !== "detail")
+      : snapshotModel.edges;
+    return visibleEdges.map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      from: edge.source,
+      to: edge.target,
+      similarity: edge.maxSimilarity,
+      link_type: edge.primaryType,
+      tier: edge.tier,
+    }));
+  }, [connectionMode, snapshotModel.edges, snapshotModel.nodes]);
+
+  const snapshot2DData = useMemo(() => {
+    const positions = graphSnapshot2D(snapshotModel);
+    return {
+      ...graphData,
+      nodes: snapshotModel.nodes.map((node) => {
+        const point = positions[node.id] ?? { x: 0, y: 0 };
+        return {
+          ...node,
+          x: point.x,
+          y: point.y,
+          fx: point.x,
+          fy: point.y,
+          vx: 0,
+          vy: 0,
+          pinned: true,
+        };
+      }),
+      links: snapshotLinks,
+    };
+  }, [graphData, snapshotLinks, snapshotModel]);
+
+  const snapshot3DData = useMemo(() => {
+    const positions = graphSnapshot3D(snapshotModel);
+    return {
+      ...graphData,
+      nodes: snapshotModel.nodes.map((node) => {
+        const point = positions[node.id] ?? { x: 0, y: 0, z: 0 };
+        return {
+          ...node,
+          x: point.x,
+          y: point.y,
+          z: point.z,
+          fx: point.x,
+          fy: point.y,
+          fz: point.z,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          pinned: true,
+        };
+      }),
+      links: snapshotLinks,
+    };
+  }, [graphData, snapshotLinks, snapshotModel]);
 
   // Cache key for analytics computations — same brain state = same key.
   // Used by the analyticsData memo below so toggling analytics off and
@@ -1313,8 +1364,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       applyPRBoost: analyticsMode && analyticsResizeByImportance,
       prMap: analyticsData?.pr ?? null,
     };
-    const fg = fg2dRef.current as { d3ReheatSimulation?: () => void } | undefined;
-    fg?.d3ReheatSimulation?.();
   }, [analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   // (Hover-driven tip bar copy lives further down, after focusedNodeId
@@ -1421,13 +1470,32 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [cancelClose, setSelected, allNotes, selectNote, onOpenNote]);
 
-  // Select an explicit mode and persist it. Replaces the old 2-way
-  // `toggleMode` swap now that there are three modes (a swap can't express a
-  // 3-way pick); the toolbar buttons call this with the clicked mode.
-  const setModePersist = useCallback((next: Mode) => {
+  // Persist the calm snapshot choice separately from the temporary Graph
+  // Engine workspace, so closing the engine always returns the user to the
+  // exact everyday view they came from.
+  const setModePersist = useCallback((next: GraphViewMode) => {
+    if (next !== "engine") lastSnapshotModeRef.current = next;
     setMode(next);
-    try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
+    if (next !== "engine") {
+      try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
+    }
   }, []);
+
+  const openGraphEngine = useCallback(() => {
+    if (mode !== "engine") lastSnapshotModeRef.current = mode;
+    setModePersist("engine");
+  }, [mode, setModePersist]);
+
+  const closeGraphEngine = useCallback(() => {
+    setModePersist(lastSnapshotModeRef.current);
+  }, [setModePersist]);
+
+  const [atlasFallbackNotice, setAtlasFallbackNotice] = useState<string | null>(null);
+  const handleAtlasRuntimeError = useCallback((error: Error) => {
+    console.error("Graph Engine renderer unavailable; returning to the snapshot", error);
+    setAtlasFallbackNotice("Graph Engine could not start on this graphics device. Your 2D snapshot is still available.");
+    closeGraphEngine();
+  }, [closeGraphEngine]);
 
   // Hover-focus state. When set, `paintNode2D` dims every node that
   // isn't the hovered node or one of its 1-hop neighbours. Same story
@@ -1570,7 +1638,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         : `Core note · ${pr.toFixed(1)}× the average reference rate`;
     }
     if (size >= 3) return `In ${clusterLabel}`;
-    if (pr <= 0.5) return `Peripheral note · few links to the rest of your brain`;
+    if (pr <= 0.5) return `Peripheral note · few links to the rest of this vault`;
     return null;
   }, [analyticsMode, analyticsData, focusedNodeId, clusterNames]);
 
@@ -1591,8 +1659,67 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   //   - 0.5-px dark rim still drawn last so light nodes separate from
   //     light edges.
   const paintNode2D = useCallback((rawNode: unknown, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
+    const node = rawNode as SimNode & {
+      x?: number;
+      y?: number;
+      degree?: number;
+      labelRank?: number;
+      communityId?: number | null;
+    };
     if (node.x == null || node.y == null) return;
+    if (mode === "2d") {
+      const degree = Math.max(0, node.degree ?? 0);
+      const orphan = degree === 0;
+      if ((orphan && !showOrphans) || !isNodeVisibleAtTl(node.id)) return;
+
+      const keyLimit = Math.max(6, Math.ceil(nodes.length * 0.025));
+      const keyNode = (node.labelRank ?? Number.POSITIVE_INFINITY) < keyLimit;
+      const communityColors = PALETTES[palette];
+      const communityColor = node.communityId == null
+        ? folderColor(node.folder ?? "", palette, folderColors)
+        : communityColors[Math.abs(node.communityId) % communityColors.length]!;
+      const color = folderColors[node.folder ?? ""] ?? communityColor;
+      const searchAlpha = searchMatches && !searchMatches.has(node.id) ? 0.12 : 1;
+      const neighbours = focusedNodeId ? graphData.adjacency.get(focusedNodeId) : null;
+      const inFocus = !focusedNodeId || focusedNodeId === node.id || neighbours?.has(node.id) === true;
+      const stateAlpha = node.state === "dormant" ? 0.5 : 0.9;
+      const alpha = stateAlpha * searchAlpha * (inFocus ? 1 : 0.08) * (orphan ? 0.55 : 1);
+      const radius = Math.min(4.8, (keyNode ? 3.2 : 1.65 + Math.sqrt(degree) * 0.24)) * nodeSizeScale;
+
+      ctx.save();
+      if (keyNode && inFocus) {
+        ctx.shadowColor = withAlpha(color, 0.55);
+        ctx.shadowBlur = 7;
+      }
+      drawNodeShape(ctx, node.x, node.y, radius, nodeShape);
+      ctx.fillStyle = withAlpha(color, alpha);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      if (keyNode || node.state === "fresh") {
+        drawNodeShape(ctx, node.x, node.y, radius + 1.7 / Math.max(1, globalScale), nodeShape);
+        ctx.lineWidth = 0.7 / Math.max(1, globalScale);
+        ctx.strokeStyle = withAlpha(color, alpha * 0.68);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      const focusedLabel = focusedNodeId === node.id;
+      const showName = labelMode === "key"
+        ? keyNode
+        : labelMode === "all" && (globalScale >= 1.2 || keyNode);
+      if (labelMode !== "off" && (showName || focusedLabel)) {
+        const fontSize = (focusedLabel ? 11 : 9.5) / Math.max(1, globalScale);
+        const label = node.title.length > 30 ? `${node.title.slice(0, 28)}…` : node.title;
+        ctx.save();
+        ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = withAlpha("#d8d7e5", inFocus ? 0.86 : 0.35);
+        ctx.fillText(label, node.x, node.y + radius + 4 / Math.max(1, globalScale));
+        ctx.restore();
+      }
+      return;
+    }
     // Orphan = degree 0 = pinned to a ring around the connected
     // brain by the graphData layout. Render them smaller and with
     // muted alpha so the eye reads them as peripheral satellites,
@@ -1615,6 +1742,9 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       analyticsData?.pr ?? null,
       analyticsMode && analyticsResizeByImportance,
     ) * orphanScale * nodeSizeScale;
+    const keyLabelLimit = Math.max(10, Math.ceil(nodes.length * 0.035));
+    const isKeyLabel = (node.labelRank ?? Number.POSITIVE_INFINITY) < keyLabelLimit;
+    const nameEnabled = labelMode === "all" || (labelMode === "key" && isKeyLabel);
 
     const isDormant = node.state === "dormant";
     const isFresh = node.state === "fresh";
@@ -1655,6 +1785,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       drawNodeShape(ctx, node.x, node.y, r, nodeShape);
       ctx.fillStyle = withAlpha(baseColor, alpha);
       ctx.fill();
+      if (nameEnabled) {
+        const fontSize = 10 / Math.max(1, globalScale);
+        ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = withAlpha("#c7c5dc", Math.max(0.45, focusAlpha));
+        const title = node.title.length > 28 ? `${node.title.slice(0, 26)}…` : node.title;
+        ctx.fillText(title, node.x, node.y + r + 5 / globalScale);
+      }
       return;
     }
 
@@ -1726,7 +1865,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     // Threshold is user-tunable in the Filters panel (Display →
     // "Show labels at zoom"). Default 3.2. Hovering / focus-mode
     // still surface the label early via focusLabelBoost regardless.
-    if (globalScale >= labelZoomThreshold || focusLabelBoost) {
+    if (nameEnabled || (labelMode !== "off" && focusLabelBoost)) {
       const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
       ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
       ctx.textAlign = "center";
@@ -1758,7 +1897,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fillStyle = withAlpha("#c7c5dc", labelAlpha);
       ctx.fillText(truncated, node.x, labelY);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, labelZoomThreshold, clusterColors, lite, nodes.length]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -2030,14 +2169,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // orbiting the scene, you see folders as clearly-colored clouds of
   // nodes rather than a monochromatic swarm.
   const nodeColor = useCallback((rawNode: unknown) => {
-    const n = rawNode as SimNode;
-    return folderColor(n.folder ?? "", palette, folderColors);
+    const n = rawNode as SimNode & { communityId?: number | null };
+    const folder = n.folder ?? "";
+    if (folderColors[folder]) return folderColors[folder]!;
+    if (n.communityId != null) {
+      const colors = PALETTES[palette];
+      return colors[Math.abs(n.communityId) % colors.length]!;
+    }
+    return folderColor(folder, palette, folderColors);
   }, [palette, folderColors]);
   const nodeVal = useCallback((rawNode: unknown) => {
-    const n = rawNode as SimNode;
-    // nodeVal is an area (2D) / volume (3D) multiplier — map our 6-20px
-    // radius curve onto a 1-10 range.
-    return 1 + Math.min(9, n.access_count * 0.6);
+    const n = rawNode as SimNode & { degree?: number; labelRank?: number };
+    const anchor = (n.labelRank ?? Number.POSITIVE_INFINITY) < 8;
+    return anchor ? 3.4 : Math.min(2.6, 0.75 + Math.sqrt(Math.max(0, n.degree ?? 0)) * 0.22);
   }, []);
   // Precompute edgeConfidence per edge once (it depends only on the edge
   // fields + the bidi set). The per-frame linkColor / linkWidth callbacks
@@ -2079,7 +2223,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
         { bidi: graphData.bidi },
       );
-    const baseAlpha = Math.max(0.08, Math.min(0.55, conf * 0.55));
+    const baseAlpha = Math.max(0.025, Math.min(0.14, conf * 0.13));
     // Dim non-neighbourhood edges when hover-focus is on. (react-force-
     // graph mutates source/target into node objects once the simulation
     // starts, hence the union type.)
@@ -2114,7 +2258,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         { from: l.from ?? fromId, to: l.to ?? toId, similarity: l.similarity, link_type: l.link_type },
         { bidi: graphData.bidi },
       );
-    const base = (0.25 + conf * 0.7) * linkThicknessScale * (searchOk ? 1 : 0.25);
+    const base = (0.1 + conf * 0.28) * linkThicknessScale * (searchOk ? 1 : 0.22);
     if (focusedNodeId) {
       if (fromId === focusedNodeId || toId === focusedNodeId) return base * 2.4;
     }
@@ -2151,157 +2295,101 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       onMouseMove={handleContainerMouseMove}
       onMouseLeave={() => scheduleClose()}
     >
-      {/* Toolbar: 2D/3D mode + Analytics pill */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-        <div className="flex gap-1 rounded-lg p-0.5"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
-        >
-          {(["2d", "3d", "static"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => { if (mode !== m) setModePersist(m); }}
-              className="px-3 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors"
-              style={{
-                background: mode === m ? "var(--nv-accent)" : "transparent",
-                color: mode === m ? "var(--nv-bg)" : "var(--nv-text-muted)",
-              }}
-              aria-pressed={mode === m}
-              aria-label={`Switch to ${m.toUpperCase()} graph view`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-        {/* Zoom controls — work in both 2D (d3-zoom) and 3D (camera
-            dolly). Wheel-zoom on the canvas still works in parallel;
-            these are a discoverable fallback for users who don't
-            realise wheel works, and a guaranteed path on devices
-            where wheel events get intercepted. */}
-        <div className="flex gap-0.5 rounded-lg p-0.5"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
-        >
+      {/* The everyday surface is deliberately quiet. Secondary actions stay in
+          one native menu; the Graph Engine owns the richer visual controls. */}
+      {mode === "engine" ? (
+        <div className="absolute top-4 right-4 z-30 flex items-center gap-1 rounded-xl p-1"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          <button onClick={handleZoomFit} className="rounded-lg px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--nv-text-muted)" }}>
+            Fit
+          </button>
+          <button onClick={handleSaveImage} className="rounded-lg px-2.5 py-1 text-[10px] font-medium" style={{ color: "var(--nv-text-muted)" }}>
+            Save image
+          </button>
+          <button onClick={handleCopyImage} className="rounded-lg px-2.5 py-1 text-[10px] font-medium" style={{ color: "var(--nv-text-muted)" }}>
+            Copy image
+          </button>
           <button
-            onClick={handleZoomOut}
-            className="px-2 py-1 text-[12px] font-[Geist,sans-serif] font-medium rounded transition-colors hover:bg-white/5"
-            style={{ color: "var(--nv-text-muted)" }}
-            aria-label="Zoom out"
-            title="Zoom out"
-          >−</button>
-          <button
-            onClick={handleZoomFit}
-            className="px-2 py-1 text-[10px] font-[Geist,sans-serif] font-medium rounded uppercase tracking-wider transition-colors hover:bg-white/5"
-            style={{ color: "var(--nv-text-muted)" }}
-            aria-label="Fit to screen"
-            title="Fit graph to screen"
-          >Fit</button>
-          <button
-            onClick={handleZoomIn}
-            className="px-2 py-1 text-[12px] font-[Geist,sans-serif] font-medium rounded transition-colors hover:bg-white/5"
-            style={{ color: "var(--nv-text-muted)" }}
-            aria-label="Zoom in"
-            title="Zoom in"
-          >+</button>
-        </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
-          style={{
-            background: "var(--nv-surface)",
-            color: "var(--nv-text-muted)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-label="Refresh graph"
-          title="Re-pull the graph from the vault (picks up newly-indexed notes)"
-        >
-          <svg
-            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
-            strokeLinecap="round" strokeLinejoin="round"
-            className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`}
+            onClick={() => setFilterPanelOpen((open) => !open)}
+            className="rounded-lg px-2.5 py-1 text-[10px] font-medium"
+            style={{ color: filterPanelOpen ? "var(--nv-accent)" : "var(--nv-text-muted)" }}
+            aria-pressed={filterPanelOpen}
           >
-            <path d="M23 4v6h-6" />
-            <path d="M1 20v-6h6" />
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-          </svg>
-          Refresh
-        </button>
-        <button
-          onClick={() => setDiagnosticOpen(true)}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
-          style={{
-            background: "var(--nv-surface)",
-            color: "var(--nv-text-muted)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-label="Run brain diagnostic"
-          title="Brain diagnostic — a health scorecard for this brain"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-            <path d="M3 12h4l2 5 4-12 2 7h6" />
-          </svg>
-          Diagnostic
-        </button>
-        <button
-          onClick={toggleAnalyticsMode}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
-          style={{
-            background: analyticsMode ? "var(--nv-accent)" : "var(--nv-surface)",
-            color: analyticsMode ? "var(--nv-bg)" : "var(--nv-text-muted)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-pressed={analyticsMode}
-          aria-label="Toggle analytics overlay"
-          title={analyticsMode ? "Analytics on (Cmd+Shift+A)" : "Show analytics (Cmd+Shift+A)"}
-        >
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: analyticsMode ? "var(--nv-bg)" : "var(--nv-text-dim)" }}
-          />
-          Analytics
-        </button>
-        {/* Filters panel toggle. Replaces the old standalone Semantic
-            pill — Semantic, Orphans, sliders, time-lapse, etc. all
-            live inside the panel now. */}
-        <button
-          onClick={() => setFilterPanelOpen((o) => !o)}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
-          style={{
-            background: filterPanelOpen ? "var(--nv-accent)" : "var(--nv-surface)",
-            color: filterPanelOpen ? "var(--nv-bg)" : "var(--nv-text-muted)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-pressed={filterPanelOpen}
-          aria-label="Toggle graph filters panel"
-          title={filterPanelOpen ? "Close filters" : "Filters · Display · Time-lapse"}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-            <line x1="4" y1="6" x2="20" y2="6" />
-            <line x1="7" y1="12" x2="17" y2="12" />
-            <line x1="10" y1="18" x2="14" y2="18" />
-          </svg>
-          Filters
-        </button>
-        {/* Screenshot button — exports the current 2D canvas to PNG
-            with transparent background (the canvas itself is already
-            transparent thanks to backgroundColor="rgba(0,0,0,0)"). */}
-        <button
-          onClick={handleScreenshot}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-medium rounded-lg tracking-wide transition-colors"
-          style={{
-            background: "var(--nv-surface)",
-            color: "var(--nv-text-muted)",
-            border: "1px solid var(--nv-border)",
-          }}
-          aria-label="Save graph as PNG"
-          title="Save graph as transparent PNG"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-            <circle cx="12" cy="13" r="4" />
-          </svg>
-          Save
-        </button>
-      </div>
+            Filters
+          </button>
+        </div>
+      ) : (
+        <div className="absolute top-4 right-4 z-30 flex items-center gap-1 rounded-xl p-1 font-[Geist,sans-serif]"
+          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 12px 34px rgba(0,0,0,0.22)" }}>
+          <div className="flex gap-0.5 rounded-lg p-0.5" style={{ background: "var(--nv-bg)" }}>
+            {(["2d", "3d"] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                onClick={() => setModePersist(view)}
+                className="rounded-md px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider"
+                style={{
+                  background: mode === view ? "var(--nv-accent)" : "transparent",
+                  color: mode === view ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                }}
+                aria-pressed={mode === view}
+              >
+                {view}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
+            Names
+            <select value={labelMode} onChange={(event) => setLabelMode(event.target.value as GraphLabelMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }}>
+              <option value="off">Off</option>
+              <option value="key">Key</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
+            Lines
+            <select value={connectionMode} onChange={(event) => setConnectionMode(event.target.value as GraphConnectionMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }}>
+              <option value="off">Off</option>
+              <option value="featured">Featured</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <button onClick={handleZoomFit} className="rounded-lg px-2 py-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--nv-text-muted)" }}>
+            Fit
+          </button>
+          <button
+            type="button"
+            onClick={openGraphEngine}
+            className="rounded-lg px-3 py-1 text-[10px] font-semibold tracking-wide"
+            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+          >
+            Open Graph Engine
+          </button>
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded-lg px-2 py-1 text-[12px] [&::-webkit-details-marker]:hidden" style={{ color: "var(--nv-text-muted)" }} aria-label="More graph actions">
+              •••
+            </summary>
+            <div className="absolute right-0 mt-2 grid min-w-[150px] gap-0.5 rounded-xl p-1.5"
+              style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 18px 42px rgba(0,0,0,0.35)" }}>
+              <button onClick={handleRefresh} disabled={refreshing} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+                {refreshing ? "Updating…" : "Update snapshot"}
+              </button>
+              <button onClick={() => setDiagnosticOpen(true)} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+                Vault diagnostic
+              </button>
+              <button onClick={toggleAnalyticsMode} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: analyticsMode ? "var(--nv-accent)" : "var(--nv-text-muted)" }}>
+                {analyticsMode ? "Hide analytics" : "Show analytics"}
+              </button>
+              <button onClick={handleSaveImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+                Save PNG image
+              </button>
+              <button onClick={handleCopyImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+                Copy image
+              </button>
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* Analytics tip bar — appears below the toolbar when analytics
           mode is on. Idle copy + per-hover swap + dismiss-for-session. */}
@@ -2324,9 +2412,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           from the right when the toolbar's Filters pill is on.
           Reads + writes the graph settings store, which the render
           paths above subscribe to. */}
-      <GraphFilterPanel
+      {mode === "engine" && <GraphFilterPanel
         open={filterPanelOpen}
         onClose={() => setFilterPanelOpen(false)}
+        viewMode="atlas"
         nodeCount={nodes.length}
         orphanCount={nodes.filter((n) => (graphData.adjacency.get(n.id)?.size ?? 0) === 0).length}
         semanticEdgeCount={semanticEdgeCount}
@@ -2334,7 +2423,29 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         onTimelapseStart={startTimelapse}
         onTimelapseStop={stopTimelapse}
         timelapseActive={tlActive}
-      />
+      />}
+
+      {atlasFallbackNotice && (
+        <div
+          className="absolute top-14 right-4 z-20 flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-[Geist,sans-serif]"
+          style={{
+            background: "var(--nv-surface)",
+            border: "1px solid var(--nv-border)",
+            color: "var(--nv-text-muted)",
+          }}
+          role="status"
+        >
+          <span>{atlasFallbackNotice}</span>
+          <button
+            type="button"
+            onClick={() => setAtlasFallbackNotice(null)}
+            aria-label="Dismiss Graph Engine fallback message"
+            style={{ color: "var(--nv-text-dim)" }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <Suspense fallback={
         <div className="absolute inset-0 flex items-center justify-center">
@@ -2343,15 +2454,30 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           </p>
         </div>
       }>
-        {mode !== "3d" ? (
-          // Both "2d" and "static" render the same ForceGraph2D canvas so they
-          // look identical; "static" just freezes the simulation (cooldown /
-          // warmup = 0, drag off) and feeds pre-pinned positions. All the
-          // read-only interactions (zoom/pan/hover/click) stay on.
+        {mode === "engine" ? (
+          <AtlasGraph
+            ref={atlasRef}
+            brainId={activeBrainId ?? "default"}
+            nodes={nodes}
+            edges={edges}
+            palette={palette}
+            folderColors={folderColors}
+            nodeSizeScale={nodeSizeScale}
+            linkThicknessScale={linkThicknessScale}
+            lite={lite}
+            searchMatches={searchMatches}
+            visibleNodeIds={atlasVisibleNodeIds}
+            showOrphans={showOrphans}
+            onNodeHover={handleNodeHover}
+            onNodeClick={handleNodeClick}
+            onRuntimeError={handleAtlasRuntimeError}
+            onCloseEngine={closeGraphEngine}
+          />
+        ) : mode !== "3d" ? (
           <ForceGraph2D
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ref={fg2dRef as any}
-            graphData={mode === "static" ? staticGraphData : graphData}
+            graphData={snapshot2DData}
             width={size.w}
             height={size.h}
             backgroundColor="rgba(0,0,0,0)"
@@ -2371,20 +2497,12 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkDirectionalArrowRelPos={0.92}
             onRenderFramePre={lite ? undefined : paintBackgroundTints}
             onRenderFramePost={lite ? undefined : paintClusterLabels}
-            // Static kills the physics loop entirely (no warmup, no cooldown
-            // ticks) so nodes sit exactly where fx/fy pin them and the CPU
-            // stays idle between interactions. 2D keeps its settle (25 in lite,
-            // else 100). onEngineStop (non-static only) captures the settled
-            // layout for static to reuse later.
-            cooldownTicks={mode === "static" ? 0 : lite ? 25 : 100}
-            cooldownTime={mode === "static" ? 0 : undefined}
-            warmupTicks={mode === "static" ? 0 : undefined}
-            onEngineStop={mode === "static" ? undefined : handleEngineStop}
+            cooldownTicks={0}
+            cooldownTime={0}
+            warmupTicks={0}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
-            // Dragging a node requires the live simulation to relax around it;
-            // with physics off in static there's nothing to drag against.
-            enableNodeDrag={mode !== "static"}
+            enableNodeDrag={false}
             enableZoomInteraction={true}
             enablePanInteraction={true}
             minZoom={0.05}
@@ -2394,12 +2512,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           <ForceGraph3D
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ref={fg3dRef as any}
-            graphData={graphData}
+            graphData={snapshot3DData}
             width={size.w}
             height={size.h}
             backgroundColor="#0b0b12"
-            nodeLabel={(n: unknown) => (n as SimNode).title}
-            nodeRelSize={5}
+            rendererConfig={GRAPH_3D_RENDERER_CONFIG}
+            nodeLabel={labelMode === "off" ? "" : (n: unknown) => (n as SimNode).title}
+            nodeRelSize={2.5}
             nodeVal={nodeVal}
             nodeColor={nodeColor}
             nodeOpacity={0.9}
@@ -2407,13 +2526,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             linkColor={linkColor}
             linkWidth={linkWidth}
             linkCurvature={linkCurvature}
-            linkOpacity={0.55}
-            linkDirectionalParticles={animations ? 1 : 0}
-            linkDirectionalParticleSpeed={0.006}
-            linkDirectionalParticleWidth={1.6}
+            linkOpacity={0.38}
+            linkDirectionalParticles={0}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
-            enableNodeDrag={true}
+            enableNodeDrag={false}
+            cooldownTicks={0}
+            cooldownTime={0}
+            warmupTicks={0}
             showNavInfo={false}
           />
         )}
@@ -2470,28 +2590,45 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         </div>
       )}
 
-      {/* Legend — color swatches match node state colors (semantic,
-          not theme chrome) so stay as fixed hex values. */}
-      <div className="absolute bottom-4 left-4 flex gap-4 text-[10px] font-[Geist,sans-serif] pointer-events-none" style={{ color: "var(--nv-text-muted)" }}>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#568cfa]" /> strong
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#00c9b1]" /> linked
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: "var(--nv-text-dim)" }} /> fading
-        </span>
-        <span className="flex items-center gap-1 ml-2" style={{ color: "var(--nv-text-dim)" }}>
-          {mode === "3d" ? "drag to rotate · scroll to zoom · click a node to open" : "click a node to open"}
-        </span>
-      </div>
+      {mode !== "engine" && (
+        <div
+          className="absolute bottom-4 right-4 pointer-events-none text-[10px] font-[Geist,sans-serif] tabular-nums"
+          style={{ color: "var(--nv-text-dim)" }}
+        >
+          Fixed {mode.toUpperCase()} snapshot · {nodes.length.toLocaleString()} memories
+        </div>
+      )}
 
       {nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <p className="text-sm font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-            Create a few notes to see your knowledge graph
-          </p>
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
+          <div
+            className="max-w-sm rounded-2xl p-6 text-center font-[Geist,sans-serif]"
+            style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
+          >
+            <h2 className="text-base font-semibold" style={{ color: "var(--nv-text)" }}>Your graph will grow here</h2>
+            <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+              Create or import Markdown notes, then NeuroVault will update this snapshot when their connections change.
+            </p>
+            <div className="mt-5 flex justify-center gap-2">
+              <button
+                type="button"
+                onClick={async () => { await createNote("Untitled"); onOpenNote?.(); }}
+                className="rounded-lg px-4 py-2 text-xs font-semibold"
+                style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+              >
+                Create a note
+              </button>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="rounded-lg px-4 py-2 text-xs font-medium"
+                style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
+              >
+                {refreshing ? "Updating…" : "Check again"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -110,13 +110,13 @@ single `latest.json` attached to the release.
 
 1. Bump `version` in `tauri.conf.json` + `src-tauri/Cargo.toml`, tag, and let CI publish a release with `latest.json`.
 2. Install the *previous* version locally.
-3. Launch it — the top-bar **Update** pill should appear within a few seconds. Click it: the new version downloads, installs, and the pill becomes **Restart to update**.
+3. Launch it, open **Settings → General**, enable **Automatic update checks**, then relaunch. The top-bar **Update** pill should appear within a few seconds. Click it: the new version downloads, installs, and the pill becomes **Restart to update**.
 
 ## How the UI behaves before vs after
 
 | | Before (today) | After this setup |
 |---|---|---|
-| Launch check | Queries GitHub API, compares version | Same (plus native `check()`) |
+| Launch check | Off by default; manual or explicit opt-in | Same (plus native `check()`) |
 | Update pill | Opens the **release page** to download | **Downloads + installs** in place |
 | Settings → Updates | "Update" opens release page | "Update" installs; then "Restart now" |
 

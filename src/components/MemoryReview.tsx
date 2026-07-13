@@ -17,6 +17,7 @@ import {
   eventSentence,
   fieldLabel,
   memoryTypeLabel,
+  proposalNeedsAttention,
   projectFromEvents,
   relativeTime,
   REJECT_REASONS,
@@ -467,7 +468,7 @@ function FocusedProposal({
 export default function MemoryReview({
   tab,
 }: {
-  tab: "needs" | "approved" | "rejected";
+  tab: "needs" | "observations" | "approved" | "rejected";
 }) {
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -478,7 +479,7 @@ export default function MemoryReview({
 
   const load = useCallback(async () => {
     try {
-      const status = tab === "needs" ? "unreviewed" : tab === "approved" ? "" : "rejected";
+      const status = tab === "needs" || tab === "observations" ? "unreviewed" : tab === "approved" ? "" : "rejected";
       const params = new URLSearchParams({ limit: "200" });
       if (status) params.set("decision", status);
       const r = await fetch(`${API_HOST}/api/proposals?${params}`, {
@@ -486,6 +487,8 @@ export default function MemoryReview({
       });
       const data = (await r.json()) as { proposals: Proposal[] };
       let list = data.proposals ?? [];
+      if (tab === "needs") list = list.filter((p) => proposalNeedsAttention(p.action));
+      if (tab === "observations") list = list.filter((p) => !proposalNeedsAttention(p.action));
       if (tab === "approved") list = list.filter((p) => p.review_status === "approved" || p.review_status === "edited");
       list.sort((a, b) => a.proposed_at.localeCompare(b.proposed_at));
       setProposals(list);
@@ -503,7 +506,7 @@ export default function MemoryReview({
 
   const queue = useMemo(() => {
     if (!proposals) return [];
-    if (tab !== "needs") return proposals;
+    if (tab !== "needs" && tab !== "observations") return proposals;
     // Skipped items move to the back but stay reviewable.
     const active = proposals.filter((p) => !skipped.has(p.proposal_id));
     const parked = proposals.filter((p) => skipped.has(p.proposal_id));
@@ -539,9 +542,9 @@ export default function MemoryReview({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "ArrowRight") setIndex((i) => Math.min(i + 1, Math.max(queue.length - 1, 0)));
       else if (e.key === "ArrowLeft") setIndex((i) => Math.max(i - 1, 0));
-      else if (tab === "needs" && (e.key === "a" || e.key === "A")) keyActions.current.approve?.();
-      else if (tab === "needs" && (e.key === "e" || e.key === "E")) keyActions.current.edit?.();
-      else if (tab === "needs" && (e.key === "r" || e.key === "R")) keyActions.current.reject?.();
+      else if ((tab === "needs" || tab === "observations") && (e.key === "a" || e.key === "A")) keyActions.current.approve?.();
+      else if ((tab === "needs" || tab === "observations") && (e.key === "e" || e.key === "E")) keyActions.current.edit?.();
+      else if ((tab === "needs" || tab === "observations") && (e.key === "r" || e.key === "R")) keyActions.current.reject?.();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -606,16 +609,18 @@ export default function MemoryReview({
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-3 max-w-sm">
           <div className="text-[16px] font-medium" style={{ color: T.text }}>
-            {tab === "needs" ? "You're all caught up" : "Nothing here yet"}
+            {tab === "needs" ? "Nothing needs attention" : tab === "observations" ? "No learning checks" : "Nothing here yet"}
           </div>
           <div className="text-[13px] leading-relaxed" style={{ color: T.dim }}>
             {tab === "needs"
-              ? "NeuroVault has nothing waiting for your review."
+              ? "No proposed memory changes are waiting for you."
+              : tab === "observations"
+                ? "NeuroVault has no optional accuracy checks right now."
               : tab === "approved"
                 ? "Memories you approve will appear here."
                 : "Suggestions you reject will appear here."}
           </div>
-          {tab === "needs" && (
+          {(tab === "needs" || tab === "observations") && (
             <button
               onClick={checkForNew}
               className="text-[13px] px-4 py-2 rounded-lg"
@@ -638,10 +643,12 @@ export default function MemoryReview({
       <div className="mx-auto" style={{ maxWidth: 660 }}>
         <div className="flex items-center mb-4">
           <div className="text-[13px]" style={{ color: T.dim }}>
-            {similar > 1 && tab === "needs"
+            {similar > 1 && (tab === "needs" || tab === "observations")
               ? `${similar} similar observations — reviewing them one at a time`
               : tab === "needs"
-                ? "NeuroVault noticed something worth remembering."
+                ? "NeuroVault wants to change memory. Nothing happens until you decide."
+                : tab === "observations"
+                  ? "Optional accuracy check — this does not change memory."
                 : ""}
           </div>
           <div className="ml-auto text-[13px] tabular-nums" style={{ color: T.dim }}>
@@ -669,7 +676,7 @@ export default function MemoryReview({
           >
             ← Previous
           </button>
-          {tab === "needs" && current && (
+          {(tab === "needs" || tab === "observations") && current && (
             <button
               onClick={() => {
                 setSkipped((s) => new Set(s).add(current.proposal_id));
@@ -696,7 +703,7 @@ export default function MemoryReview({
             {note}
           </div>
         )}
-        {tab === "needs" && (
+        {(tab === "needs" || tab === "observations") && (
           <div className="text-center mt-6 text-[11px]" style={{ color: T.dim, opacity: 0.7 }}>
             A approve · E edit · R reject · ←/→ navigate
           </div>

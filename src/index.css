@@ -1,7 +1,3 @@
-/* Google Fonts — must be first */
-@import url("https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap");
-@import url("https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/style.min.css");
-
 @import "tailwindcss";
 
 /* NeuroVault Design System — Vault Noir
@@ -80,7 +76,7 @@ html, body, #root {
   padding: 0;
   background-color: var(--color-bg);
   color: var(--color-txt);
-  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 13px;            /* UI default */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -126,13 +122,13 @@ html, body, #root {
   background: #3a3a55;
 }
 
-/* Disable text selection on UI chrome */
-body {
+/* Ordinary copy must keep working in a trust/evidence product. Only controls
+   opt out of selection; page copy, receipts, errors, and source text do not. */
+button, nav, [role="button"], [role="tab"] {
   user-select: none;
 }
 
-/* Re-enable in editor */
-.cm-editor {
+.cm-editor, input, textarea, pre, code, [data-selectable="true"] {
   user-select: text;
 }
 
@@ -141,9 +137,25 @@ button, a, .transition {
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
+@keyframes nv-toast-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.nv-toast-enter { animation: nv-toast-enter 160ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nv-toast-enter { animation: none; }
+}
+
 /* Focus states — solid brand-blue ring meets WCAG AA against every surface tier.
    The previous rgba(86,140,250,0.4) failed AA on --color-surface-elevated. */
-input:focus, textarea:focus, button:focus-visible {
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
   border-radius: 2px;
@@ -191,6 +203,30 @@ html[data-density="compact"] {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
+}
+
+/* Respect the OS preference before app settings have hydrated, and in the
+   minitab / crash boundary where the app-level class may not be present. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visually hidden, still exposed to assistive technology. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════

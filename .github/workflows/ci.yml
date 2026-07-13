@@ -11,11 +11,12 @@ jobs:
     name: TypeScript Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -23,22 +24,63 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Component accessibility tests
+        run: npm run test:ui
+
+      - name: Release hardening invariants
+        run: npm run test:hardening
+
+      - name: Production frontend build
+        run: npm run build
+
+  browser-smoke:
+    name: Browser smoke + accessibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Consumer shell smoke test
+        run: npm run test:e2e
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+
   rust:
     name: Rust fmt + clippy + tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri
 
@@ -46,12 +88,15 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
 
-      # The tree is clippy-clean as of 2026-07-05; keep it that way.
-      # --no-default-features matches the headless test/build config used
-      # everywhere else (no Tauri GUI linkage needed for the check).
-      - name: Clippy (deny warnings)
+      - name: Clippy — headless engine (deny warnings)
         working-directory: src-tauri
         run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      # The headless check deliberately excludes src/app.rs. Keep a second
+      # gate for the real Tauri target so native menu/window code is compiled.
+      - name: Clippy — desktop GUI (deny warnings)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests
         working-directory: src-tauri

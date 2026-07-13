@@ -102,6 +102,7 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
           activeBrainId: active?.id ?? null,
           activeBrainName: active?.name ?? "Default",
         });
+        useNoteStore.setState({ brainId: active?.id ?? null });
         return;
       }
     } catch {
@@ -132,6 +133,7 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
         activeBrainId: active?.id ?? null,
         activeBrainName: active?.name ?? "Default",
       });
+      useNoteStore.setState({ brainId: active?.id ?? null });
     } catch {
       // Neither server nor Tauri fs worked — probably running in a browser
       // build. Leave the list empty rather than throwing.
@@ -139,6 +141,14 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   },
 
   switchBrain: async (brainId: string) => {
+    if (brainId === get().activeBrainId) return;
+
+    const noteStore = useNoteStore.getState();
+    // The backend resolves note writes against a process-global active brain.
+    // Drain and lock the old buffer before activation starts, otherwise an
+    // in-flight autosave can land in the newly-active vault.
+    if (!(await noteStore.beginBrainSwitch())) return;
+
     set({ loading: true, ingest: { phase: "starting", files_done: 0, files_total: 0, current_file: "" } });
 
     // The activate call blocks on ingest (30-60s for a fresh Obsidian
@@ -162,13 +172,16 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       // filesystem switch (rewrite brains.json) so brain switching still
       // works offline for read / edit flows.
       let usedServer = false;
+      let activatedBrainId = brainId;
+      let activatedBrainName = get().brains.find((brain) => brain.id === brainId)?.name ?? brainId;
       try {
         const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
           method: "POST",
         });
         if (res.ok) {
           const data = await res.json();
-          set({ activeBrainId: data.brain_id, activeBrainName: data.name });
+          activatedBrainId = data.brain_id;
+          activatedBrainName = data.name;
           usedServer = true;
         }
       } catch {
@@ -179,25 +192,21 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke<string>("set_active_brain_offline", { brainId });
         const target = get().brains.find((b) => b.id === brainId);
-        set({
-          activeBrainId: brainId,
-          activeBrainName: target?.name ?? brainId,
-          // No live ingest in offline mode — graph fallback handles it
-          ingest: { phase: "ready", files_done: 0, files_total: 0, current_file: "" },
-        });
+        activatedBrainName = target?.name ?? brainId;
       }
 
-      // Clear state from the previous brain before loading the new one —
-      // the previously-open note, search, and dirty buffer all belong to
-      // a different vault now. Without this, switching could show an
-      // old title with empty content or cross-contaminate the save buffer.
-      useNoteStore.setState({
-        activeFilename: null,
-        activeContent: "",
-        isDirty: false,
-        searchQuery: "",
-        notes: [],
+      // Clear the old brain while its id is still current, then publish the
+      // new id. This ordering prevents even a one-render flash of old content
+      // under the new brain name and invalidates late list/search requests.
+      useNoteStore.getState().resetForBrainSwitch();
+      set({
+        activeBrainId: activatedBrainId,
+        activeBrainName: activatedBrainName,
+        ingest: usedServer
+          ? get().ingest
+          : { phase: "ready", files_done: 0, files_total: 0, current_file: "" },
       });
+      useNoteStore.setState({ brainId: activatedBrainId });
 
       // Small delay so the server's brains.json write flushes to disk
       // before Rust reads it via get_vault_path().
@@ -209,6 +218,7 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
     } finally {
       window.clearInterval(poller);
       set({ loading: false, ingest: null });
+      useNoteStore.getState().finishBrainSwitch();
     }
   },
 
@@ -224,8 +234,13 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       if (!res.ok) return null;
       const data = await res.json();
       if (data.error) return null;
+      // The Rust endpoint historically returned `id`; older Python builds
+      // returned `brain_id`. Normalize at the transport boundary so every UI
+      // caller can reliably activate the vault it just created.
+      const brainId = data.brain_id ?? data.id;
+      if (typeof brainId !== "string" || !brainId) return null;
       await get().loadBrains();
-      return data;
+      return { ...data, brain_id: brainId };
     } catch {
       return null;
     }

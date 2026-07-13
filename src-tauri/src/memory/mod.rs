@@ -98,6 +98,6 @@ pub use source_mirror::{sync as source_sync, SourceStatus, SyncReport};
 pub use summaries::{generate_summaries, generate_summaries_default};
 pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result, SourceFolder};
 pub use write_ops::{
-    create_note, delete_note, save_note, set_source_folders, supersede_note, BrainContext,
-    WriteResult,
+    create_note, delete_note, list_trash, restore_note, save_note, set_source_folders,
+    supersede_note, BrainContext, TrashEntry, WriteResult,
 };

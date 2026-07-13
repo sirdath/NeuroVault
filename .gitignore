@@ -5,6 +5,8 @@ node_modules/
 dist/
 dist-mac/
 src-tauri/target/
+test-results/
+playwright-report/
 
 # Environment
 .env

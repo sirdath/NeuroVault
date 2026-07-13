@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 import { useUpdateStore } from "../stores/updateStore";
 import MemoryInspector from "./MemoryInspector";
+import { BrainSelector } from "./BrainSelector";
+import { toast } from "../stores/toastStore";
+import { useConsumerHealthStore } from "../stores/consumerHealthStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 
 const FONT_SIZES = [
@@ -25,68 +29,15 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 
 const SERVER_URL = API_HOST;
 
-function useServerStatus() {
-  // null = first probe hasn't completed yet. We treat that as "still
-  // checking" in the UI rather than flashing "Server offline" before
-  // the backend has had a chance to bind.
-  const [online, setOnline] = useState<boolean | null>(null);
-  // Spinner state is only true on initial mount or an explicit user-
-  // triggered re-check. Background polls run silently — flipping
-  // "Checking..." into the status row every 3 s reads as a glitch
-  // and was the visible flicker the user reported.
-  const [checking, setChecking] = useState(true);
-  // Hysteresis: a single failed probe (transient socket close, GC
-  // pause, brief overload) flipped `online` to false in the previous
-  // implementation, then snapped back to true on the next 3 s tick.
-  // Now we require N consecutive failures before declaring offline.
-  // Successful probes reset the counter immediately.
-  const failures = useRef(0);
-  const FAIL_THRESHOLD = 2;
-
-  const probe = useCallback(async (silent: boolean) => {
-    if (!silent) setChecking(true);
-    try {
-      const r = await fetch(`${SERVER_URL}/api/brains/active`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (r.ok) {
-        failures.current = 0;
-        setOnline(true);
-      } else {
-        failures.current += 1;
-        if (failures.current >= FAIL_THRESHOLD) setOnline(false);
-      }
-    } catch {
-      failures.current += 1;
-      if (failures.current >= FAIL_THRESHOLD) setOnline(false);
-    } finally {
-      if (!silent) setChecking(false);
-    }
-  }, []);
-
-  const check = useCallback(() => probe(false), [probe]);
-
-  // First-launch boot can take 5-10 s (ONNX load, vault scan), so we
-  // need to keep polling. 5 s cadence + silent polls + threshold-2
-  // flip-flop is the right balance of "live" vs "stable".
-  useEffect(() => {
-    check();
-    const id = setInterval(() => probe(true), 5000);
-    return () => clearInterval(id);
-  }, [check, probe]);
-
-  // Outside this hook we expose `online` as a definite boolean.
-  // Pre-first-probe state (null) reads as "not yet known offline",
-  // which we surface as `true` so the UI defaults to optimistic and
-  // the `checking` flag drives the spinner.
-  return { online: online !== false, checking, check };
-}
-
 export function SettingsView() {
-  const { themeId, fontSize, update } = useSettingsStore();
+  const [settingsTab, setSettingsTab] = useState<"general" | "connections" | "memory" | "vaults" | "privacy" | "advanced">("general");
+  const { themeId, fontSize, checkForUpdatesAutomatically, update } = useSettingsStore();
   const density = useDensityStore((s) => s.density);
   const setDensity = useDensityStore((s) => s.setDensity);
-  const { online, checking, check: recheckServer } = useServerStatus();
+  const healthSignals = useConsumerHealthStore((state) => state.signals);
+  const checking = useConsumerHealthStore((state) => state.refreshing) || healthSignals.service === "checking";
+  const recheckServer = useConsumerHealthStore((state) => state.refresh);
+  const online = healthSignals.service === "online";
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
   const [stopping, setStopping] = useState(false);
 
@@ -120,7 +71,7 @@ export function SettingsView() {
         setStarting(false);
         return;
       }
-      alert(`Failed to start server: ${e}`);
+      toast.error(`Failed to start the local memory service: ${String(e)}`);
       setStarting(false);
       return;
     }
@@ -141,7 +92,7 @@ export function SettingsView() {
         setTimeout(poll, 2000);
       } else {
         setStarting(false);
-        alert("Server didn't start within 60 seconds. Check the log or try again.");
+        toast.error("The local memory service did not start within 60 seconds. Restart NeuroVault or open Advanced diagnostics.");
       }
     };
     setTimeout(poll, 1000);
@@ -181,13 +132,39 @@ export function SettingsView() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto" style={{ background: "var(--nv-bg)" }}>
-      <div className="mx-auto max-w-[580px] px-8 py-12">
-        <h1 className="text-[20px] font-semibold font-[Geist,sans-serif] mb-8" style={{ color: "var(--nv-text)" }}>
-          Settings
-        </h1>
+    <div className="flex min-h-full" style={{ background: "var(--nv-bg)" }}>
+      <aside className="sticky top-0 h-full min-h-[80vh] w-[190px] shrink-0 px-4 py-10" style={{ borderRight: "1px solid var(--nv-border)" }} aria-label="Settings sections">
+        <h1 className="mb-5 px-2 text-[18px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>Settings</h1>
+        <nav className="space-y-1">
+          {([
+            ["general", "General"],
+            ["connections", "Connections"],
+            ["memory", "Memory"],
+            ["vaults", "Vaults"],
+            ["privacy", "Privacy & Trust"],
+            ["advanced", "Advanced"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setSettingsTab(id)}
+              aria-current={settingsTab === id ? "page" : undefined}
+              className="w-full rounded-lg px-3 py-2 text-left text-[12px] font-medium"
+              style={{ color: settingsTab === id ? "var(--nv-accent)" : "var(--nv-text-muted)", background: settingsTab === id ? "var(--nv-accent-glow)" : "transparent" }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-[720px] px-9 py-12">
+        <h2 className="text-[20px] font-semibold font-[Geist,sans-serif] mb-8" style={{ color: "var(--nv-text)" }}>
+          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "memory" ? "Memory" : settingsTab === "vaults" ? "Vaults" : settingsTab === "privacy" ? "Privacy & Trust" : "Advanced"}
+        </h2>
 
         {/* Theme */}
+        {settingsTab === "general" && <>
         <Section title="Theme">
           <div className="grid grid-cols-2 gap-3">
             {THEMES.map((t) => (
@@ -260,14 +237,40 @@ export function SettingsView() {
             </div>
           </SettingRow>
 
+          <SettingRow
+            label="Automatic update checks"
+            description="Off by default. When enabled, NeuroVault asks GitHub Releases for the latest version after launch; no vault content or install identifier is sent."
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-checked={checkForUpdatesAutomatically}
+              onClick={() => update({ checkForUpdatesAutomatically: !checkForUpdatesAutomatically })}
+              className="relative h-6 w-11 rounded-full transition-colors"
+              style={{ background: checkForUpdatesAutomatically ? "var(--nv-accent)" : "var(--nv-border)" }}
+            >
+              <span
+                className="absolute top-1 h-4 w-4 rounded-full transition-transform"
+                style={{
+                  left: 4,
+                  background: checkForUpdatesAutomatically ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                  transform: checkForUpdatesAutomatically ? "translateX(20px)" : "translateX(0)",
+                }}
+              />
+              <span className="sr-only">Automatically check GitHub for new releases</span>
+            </button>
+          </SettingRow>
+
         </Section>
+        </>}
 
         {/* Graph appearance settings (palette, node shape, analytics
             overlay layers) moved to the in-graph Filters panel in
             v0.1.8 — open the graph view and click the Filters pill in
             the top-right toolbar. */}
 
-        {/* Server */}
+        {settingsTab === "advanced" && <>
+        {/* Local service */}
         <Section title="Server">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2.5">
@@ -301,7 +304,7 @@ export function SettingsView() {
 
           {serverInfo && (
             <div className="grid grid-cols-3 gap-3 mb-4">
-              <InfoCard label="Brain" value={serverInfo.brain} />
+              <InfoCard label="Vault" value={serverInfo.brain} />
               <InfoCard label="Notes" value={String(serverInfo.notes)} />
               <InfoCard label="Connections" value={String(serverInfo.connections)} />
             </div>
@@ -314,25 +317,24 @@ export function SettingsView() {
             <span className="text-[12px] font-mono font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>~/.neurovault/</span>
           </SettingRow>
         </Section>
+        </>}
 
-        <McpSection />
-        <ClaudeCodeMcpSection />
-        <AutoRecallSection />
-        <InspectorSection />
-        <MCPTierSection />
-        <RerankSection />
-        <APIGatewaySection />
-        <APIAccessSection />
+        {settingsTab === "connections" && <><AutoRecallSection /><McpSection /><ClaudeCodeMcpSection /></>}
+        {settingsTab === "memory" && <><AutoRecallSection /><InspectorSection /></>}
+        {settingsTab === "vaults" && <VaultSettings />}
+        {settingsTab === "privacy" && <PrivacySettings />}
+        {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
 
         {/* Shortcuts */}
+        {settingsTab === "general" && <>
         <Section title="Keyboard Shortcuts">
           <div className="space-y-2">
-            <ShortcutRow keys="Ctrl+K" action="Command palette" />
-            <ShortcutRow keys="Ctrl+N" action="New note" />
-            <ShortcutRow keys="Ctrl+P" action="Cycle views" />
-            <ShortcutRow keys="Ctrl+S" action="Save note" />
-            <ShortcutRow keys="Ctrl+/" action="Focus search" />
-            <ShortcutRow keys="Ctrl+Shift+Space" action="Quick capture" />
+            <ShortcutRow keys="⌘K" action="Command palette" />
+            <ShortcutRow keys="⌘N" action="New note" />
+            <ShortcutRow keys="⌘P" action="Cycle Memories and Graph" />
+            <ShortcutRow keys="⌘S" action="Save note" />
+            <ShortcutRow keys="⌘/" action="Search memory" />
+            <ShortcutRow keys="⌘⇧Space" action="Quick capture" />
             <ShortcutRow keys="Escape" action="Exit edit mode" />
             <ShortcutRow keys="?" action="Show all shortcuts" />
           </div>
@@ -366,12 +368,78 @@ export function SettingsView() {
             <div>
               <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
-                Local-first AI memory system. Your data never leaves your machine.
+                Your vault and index stay on this Mac. Selected context is shared only with AI providers you connect.
               </p>
             </div>
           </div>
         </Section>
+        </>}
       </div>
+      </div>
+    </div>
+  );
+}
+
+function VaultSettings() {
+  return (
+    <>
+      <Section title="Active vault">
+        <p className="mb-4 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+          Vaults are hard project boundaries. NeuroVault saves, searches, and shares context only from the active vault unless you explicitly switch.
+        </p>
+        <div className="rounded-xl p-4" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          <BrainSelector />
+        </div>
+      </Section>
+      <Section title="Ownership & backup">
+        <div className="space-y-3 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+          <p>Your notes are ordinary Markdown. Internal vaults, their index, and supporting memory data live under <span className="font-mono">~/.neurovault/</span>.</p>
+          <p>Use the vault menu above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
+          <p>Deleting a note moves its Markdown to NeuroVault Trash. Restore it from Memories or Privacy & Trust; restoring rebuilds its search index.</p>
+        </div>
+      </Section>
+    </>
+  );
+}
+
+function PrivacySettings() {
+  return (
+    <>
+      <Section title="The exact privacy contract">
+        <div className="rounded-xl p-4" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          <p className="text-[13px] font-medium leading-relaxed" style={{ color: "var(--nv-text)" }}>
+            Your vault and index stay on this Mac. NeuroVault shares selected context only with AI providers you connect.
+          </p>
+          <p className="mt-2 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+            Local storage is plaintext unless the volume is encrypted. Enable FileVault in macOS Settings if other people could access this Mac or its drive.
+          </p>
+        </div>
+      </Section>
+      <Section title="Possible outbound connections">
+        <div className="space-y-2">
+          <PrivacyFlow name="Connected AI provider" condition="Only while you use that connection" detail="Receives the small set of memories chosen for context, plus the prompt handled by the AI client itself." />
+          <PrivacyFlow name="GitHub Releases" condition="Only when you check, or opt in to launch checks" detail="Receives an ordinary update request; it does not receive vault contents or a stable install identifier." />
+          <PrivacyFlow name="Optional model provider" condition="Only when you deliberately enable a provider-backed compile feature" detail="May receive the content shown in that feature's confirmation." />
+          <PrivacyFlow name="Fonts and interface" condition="Never" detail="The interface uses local system fonts; opening NeuroVault does not fetch fonts from a CDN." />
+        </div>
+      </Section>
+      <Section title="Controls">
+        <p className="text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+          Pause automatic context under Connections. Review every delivery in Activity. Revoke external API keys under Advanced. Trash, export, and correction remain available without an account.
+        </p>
+      </Section>
+    </>
+  );
+}
+
+function PrivacyFlow({ name, condition, detail }: { name: string; condition: string; detail: string }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+      <div className="flex items-baseline gap-3">
+        <p className="text-[12px] font-medium" style={{ color: "var(--nv-text)" }}>{name}</p>
+        <p className="ml-auto text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--nv-accent)" }}>{condition}</p>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>{detail}</p>
     </div>
   );
 }
@@ -1026,7 +1094,7 @@ function AutoRecallSection() {
   return (
     <Section title="Automatic Memory (Claude Code)">
       <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-        Injects relevant memories into every Claude Code prompt automatically — no recall tool call needed. A session brief loads at startup, and each prompt is matched against this brain in the background. If NeuroVault isn&apos;t running, the hooks stay silent and Claude Code is unaffected.
+        Injects relevant memories into every Claude Code prompt automatically — no recall tool call needed. A session brief loads at startup, and each prompt is matched against this vault in the background. If NeuroVault isn&apos;t running, the hooks stay silent and Claude Code is unaffected.
       </p>
       <button
         onClick={onToggle}
@@ -1298,7 +1366,7 @@ function APIGatewaySection() {
             className="text-[11px] font-[Geist,sans-serif] mt-2 p-2 rounded"
             style={{ background: "rgba(239,68,68,0.1)", color: "var(--nv-negative, #ef4444)", border: "1px solid var(--nv-negative, #ef4444)" }}
           >
-            ⚠ LAN bind: anyone on your network with a valid API key can read or write your brain. Use API keys with tight scopes + brain allowlists.
+            ⚠ LAN bind: anyone on your network with a valid API key can read or write your vault. Use API keys with tight scopes and vault allowlists.
           </p>
         )}
       </div>
@@ -1366,8 +1434,8 @@ type ApiKeyPublic = {
 
 const SCOPE_LABELS: { value: ApiKeyScope; label: string; description: string }[] = [
   { value: "read", label: "Read", description: "recall, list, view — no writes." },
-  { value: "write", label: "Write", description: "Read + create/update/delete engrams + edit links + bulk metadata." },
-  { value: "admin", label: "Admin", description: "Write + reindex_embeddings + optimize_disk + brain creation." },
+  { value: "write", label: "Write", description: "Read + create, update, or delete memories + edit links and metadata." },
+  { value: "admin", label: "Admin", description: "Write access plus indexing, storage maintenance, and vault creation." },
 ];
 
 function APIAccessSection() {
@@ -1376,6 +1444,7 @@ function APIAccessSection() {
   const [showCreate, setShowCreate] = useState(false);
   const [newPlaintext, setNewPlaintext] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
 
   const loadKeys = useCallback(async () => {
     try {
@@ -1391,19 +1460,21 @@ function APIAccessSection() {
 
   useEffect(() => { loadKeys(); }, [loadKeys]);
 
-  const onRevoke = useCallback(async (id: string) => {
-    if (!confirm(`Revoke API key ${id}? Existing requests using it will fail with 401 immediately. This can't be undone.`)) return;
+  const confirmRevoke = useCallback(async () => {
+    const id = pendingRevoke;
+    if (!id) return;
+    setPendingRevoke(null);
     setRevoking(id);
     try {
       const r = await fetch(`${SERVER_URL}/api/api_keys/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await loadKeys();
     } catch (e) {
-      alert(`Couldn't revoke: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Couldn't revoke API key: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setRevoking(null);
     }
-  }, [loadKeys]);
+  }, [loadKeys, pendingRevoke]);
 
   const activeKeys = (keys ?? []).filter((k) => !k.revoked_at);
   const revokedKeys = (keys ?? []).filter((k) => !!k.revoked_at);
@@ -1411,7 +1482,7 @@ function APIAccessSection() {
   return (
     <Section title="API Access (External Agents)">
       <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-        Generate API keys for external agents (LangChain, n8n, custom scripts) that call NeuroVault over HTTP. Each key has a scope and an optional brain allowlist. <strong>Plaintext is shown exactly once at creation</strong> — copy it then; you can't recover it later.
+        Generate API keys for external agents (LangChain, n8n, custom scripts) that call NeuroVault over HTTP. Each key has a scope and an optional vault allowlist. <strong>Plaintext is shown exactly once at creation</strong> — copy it then; you can't recover it later.
       </p>
 
       {loadError && (
@@ -1437,12 +1508,12 @@ function APIAccessSection() {
         <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>Loading…</p>
       ) : activeKeys.length === 0 && revokedKeys.length === 0 ? (
         <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-          No API keys yet. Create one to let an external agent call this brain.
+          No API keys yet. Create one to let an external agent call this vault.
         </p>
       ) : (
         <div className="space-y-2">
           {activeKeys.map((k) => (
-            <APIKeyRow key={k.id} k={k} revoking={revoking === k.id} onRevoke={() => onRevoke(k.id)} />
+            <APIKeyRow key={k.id} k={k} revoking={revoking === k.id} onRevoke={() => setPendingRevoke(k.id)} />
           ))}
           {revokedKeys.length > 0 && (
             <details className="mt-3">
@@ -1476,6 +1547,16 @@ function APIAccessSection() {
           onClose={() => setNewPlaintext(null)}
         />
       )}
+      <ConfirmDialog
+        open={pendingRevoke !== null}
+        title="Revoke this API key?"
+        message={`Existing requests using ${pendingRevoke ?? "this key"} will fail immediately. The revocation is retained in the local audit history.`}
+        confirmLabel="Revoke key"
+        cancelLabel="Keep key"
+        destructive
+        onConfirm={() => { void confirmRevoke(); }}
+        onCancel={() => setPendingRevoke(null)}
+      />
     </Section>
   );
 }
@@ -1508,7 +1589,7 @@ function APIKeyRow({ k, revoking, onRevoke }: { k: ApiKeyPublic; revoking: boole
           </div>
           <p className="text-[13px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>{k.label}</p>
           <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
-            Brains: {k.brain_allowlist.length === 0 ? "all" : k.brain_allowlist.join(", ")}
+            Vaults: {k.brain_allowlist.length === 0 ? "all" : k.brain_allowlist.join(", ")}
             {" · "}
             Last used: {k.last_used_at ? formatRelative(k.last_used_at) : "never"}
             {" · "}
@@ -1610,11 +1691,11 @@ function APIKeyCreateModal({ onClose, onCreated }: { onClose: () => void; onCrea
         </div>
 
         <label className="block mb-4">
-          <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Brain allowlist (optional)</span>
+          <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Vault allowlist (optional)</span>
           <input
             value={allowlistText}
             onChange={(e) => setAllowlistText(e.target.value)}
-            placeholder="Empty = all brains. Comma-separated brain ids to restrict."
+            placeholder="Empty = all vaults. Enter comma-separated vault IDs to restrict access."
             className="mt-1 w-full px-3 py-2 rounded-lg text-[13px] font-[Geist,sans-serif] outline-none"
             style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
           />

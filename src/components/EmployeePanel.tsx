@@ -30,6 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { API_HOST } from "../lib/config";
 import { toast } from "../stores/toastStore";
 import { CuratorOrb, type CuratorMode } from "./CuratorOrb";
+import { meetingsDropClaim } from "../lib/meetingsDropClaim";
 
 const SERVER_URL = API_HOST;
 
@@ -42,8 +43,6 @@ const SERVER_URL = API_HOST;
  * `meetingsDropClaim.over`; App.tsx checks it and yields, so a dropped
  * transcript lands ONLY in the meetings inbox, never also in raw/.
  * ------------------------------------------------------------------ */
-export const meetingsDropClaim = { over: false };
-
 /* ------------------------------------------------------------------ *
  * Contract types — mirror the backend. The v2 status fields are typed
  * optional so an older backend (or a still-booting one) degrades to
@@ -335,10 +334,10 @@ function StateSentence({ status, ready, ticking }: { status: EmployeeStatus | nu
     live = true;
     const base = Date.parse(lastTick ?? "");
     if (Number.isNaN(base)) {
-      text = "Watching your brain. First sweep is due.";
+      text = "Watching your vault. First sweep is due.";
     } else {
       const ms = base + wake * 60_000 - Date.now();
-      text = ms <= 0 ? "Watching your brain. Sweep due now." : `Watching your brain. Next sweep in ${fmtUntil(ms)}.`;
+      text = ms <= 0 ? "Watching your vault. Sweep due now." : `Watching your vault. Next sweep in ${fmtUntil(ms)}.`;
     }
   }
 

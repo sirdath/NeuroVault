@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { API_HOST } from "../lib/config";
-import logo from "../assets/vault-logo.png";
+import logo from "../assets/vault-mark.png";
 
 type State = "on" | "off" | "busy";
 

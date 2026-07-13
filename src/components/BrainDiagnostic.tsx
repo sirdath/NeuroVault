@@ -43,7 +43,7 @@ function barColor(score: number): string {
   return "#ff5d5d";
 }
 
-export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brain", brainId }: BrainDiagnosticProps) {
+export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "vault", brainId }: BrainDiagnosticProps) {
   const [diag, setDiag] = useState<Diagnostic | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -77,7 +77,7 @@ export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brai
           className="px-8 py-7 rounded-2xl text-[13px] font-[Geist,sans-serif]"
           style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
         >
-          Analyzing your brain…
+          Analyzing your vault…
         </div>
       </div>
     );
@@ -100,13 +100,13 @@ export function BrainDiagnostic({ open, onClose, nodes, edges, brainName = "brai
       <div
         className="w-[560px] max-w-[94vw] max-h-[88vh] overflow-y-auto rounded-2xl p-6"
         style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 24px 80px -16px rgba(0,0,0,0.7)" }}
-        role="dialog" aria-modal="true" aria-label="Brain diagnostic"
+        role="dialog" aria-modal="true" aria-label="Vault diagnostic"
       >
         {/* Header: grade + score */}
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <p className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              Brain diagnostic
+              Vault diagnostic
             </p>
             <p className="text-[15px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
               {brainName}

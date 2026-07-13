@@ -16,7 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { API_HOST } from "../lib/config";
 import MemoryReview, { LearningReport } from "./MemoryReview";
-import { decisionSentence, intentLabel, TRACE_EXPLAINER } from "../lib/inspectorCopy";
+import { decisionSentence, intentLabel, proposalNeedsAttention, TRACE_EXPLAINER } from "../lib/inspectorCopy";
 
 type ItemTrace = {
   kind?: string;
@@ -188,7 +188,7 @@ function RecordCard({ r }: { r: LogRecord }) {
             <summary className="cursor-pointer">Technical detail</summary>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
               <span>decision: {r.reason}</span>
-              <span>brain: {r.brain}</span>
+              <span>vault: {r.brain}</span>
               {r.host && <span>host: {r.host}</span>}
               {r.intent && <span>intent: {r.intent}</span>}
               {r.intent_confidence != null && <span>router confidence: {pct(r.intent_confidence)}</span>}
@@ -266,9 +266,18 @@ function RecordCard({ r }: { r: LogRecord }) {
   );
 }
 
-export default function MemoryInspector({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<"needs" | "approved" | "rejected" | "trace" | "learning">("needs");
+type InspectorTab = "needs" | "observations" | "approved" | "rejected" | "trace" | "learning";
+
+export default function MemoryInspector({
+  onClose,
+  initialTab = "needs",
+}: {
+  onClose: () => void;
+  initialTab?: InspectorTab;
+}) {
+  const [tab, setTab] = useState<InspectorTab>(initialTab);
   const [needsCount, setNeedsCount] = useState<number | null>(null);
+  const [observationCount, setObservationCount] = useState<number | null>(null);
   const [records, setRecords] = useState<LogRecord[]>([]);
   const [decision, setDecision] = useState<string>("");
   const [intent, setIntent] = useState<string>("");
@@ -280,10 +289,13 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
       const r = await fetch(`${API_HOST}/api/proposals?decision=unreviewed&limit=200`, {
         signal: AbortSignal.timeout(4000),
       });
-      const data = (await r.json()) as { count: number };
-      setNeedsCount(data.count ?? 0);
+      const data = (await r.json()) as { proposals?: Array<{ action: string }> };
+      const proposals = data.proposals ?? [];
+      setNeedsCount(proposals.filter((proposal) => proposalNeedsAttention(proposal.action)).length);
+      setObservationCount(proposals.filter((proposal) => !proposalNeedsAttention(proposal.action)).length);
     } catch {
       setNeedsCount(null);
+      setObservationCount(null);
     }
   }, []);
   useEffect(() => {
@@ -362,7 +374,8 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1 ml-3">
           {(
             [
-              ["needs", needsCount != null && needsCount > 0 ? `Needs review (${needsCount})` : "Needs review"],
+              ["needs", needsCount != null && needsCount > 0 ? `Needs attention (${needsCount})` : "Needs attention"],
+              ["observations", observationCount != null && observationCount > 0 ? `Learning checks (${observationCount})` : "Learning checks"],
               ["approved", "Approved"],
               ["rejected", "Rejected"],
               ["trace", "Activity"],
@@ -388,7 +401,11 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
             ? "what NeuroVault added to your conversations, and why"
             : tab === "learning"
               ? "how well it's learning from you"
-              : "review what NeuroVault thinks is worth remembering"}
+              : tab === "observations"
+                ? "optional accuracy labels — these do not change memory"
+                : tab === "needs"
+                  ? "review a proposed memory change before anything happens"
+                  : "your immutable review history"}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {tab === "trace" && (
@@ -433,7 +450,7 @@ export default function MemoryInspector({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {tab === "needs" || tab === "approved" || tab === "rejected" ? (
+      {tab === "needs" || tab === "observations" || tab === "approved" || tab === "rejected" ? (
         <MemoryReview key={tab} tab={tab} />
       ) : tab === "learning" ? (
         <LearningReport />

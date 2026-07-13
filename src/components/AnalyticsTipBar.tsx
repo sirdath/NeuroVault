@@ -174,7 +174,7 @@ function AnalyticsHelpModal({ onClose }: { onClose: () => void }) {
           <p>
             <strong>Bigger nodes</strong> are notes that lots of other notes
             point to. They tend to be your core concepts — the ideas your
-            brain orbits around.
+            vault orbits around.
           </p>
           <p>
             <strong>The ring</strong> around each node shows its health:
@@ -191,7 +191,7 @@ function AnalyticsHelpModal({ onClose }: { onClose: () => void }) {
             NeuroVault found, biggest first — click one to fly the camera to
             it. All of this runs locally; nothing is sent anywhere. The math
             (PageRank for sizing, Louvain for clusters) recomputes only when
-            your brain changes.
+            your vault changes.
           </p>
         </div>
         <div className="flex justify-end mt-5">

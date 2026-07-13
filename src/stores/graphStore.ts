@@ -25,6 +25,9 @@ export interface FocusRequest {
 interface GraphStore {
   nodes: SimNode[];
   edges: GraphEdge[];
+  /** Canonical graph payload identity. Identical refreshes keep the existing
+   * arrays and therefore do not disturb a settled snapshot renderer. */
+  contentFingerprint: string;
   hoveredNode: string | null;
   selectedNode: string | null;
   loading: boolean;
@@ -42,15 +45,51 @@ interface GraphStore {
   requestFocus: (nodeId: string) => void;
 }
 
+let graphRequestGeneration = 0;
+
+function fnv1a(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function stableUnit(value: string, salt: string): number {
+  return Number.parseInt(fnv1a(`${salt}:${value}`), 16) / 0xffffffff;
+}
+
+function graphContentFingerprint(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): string {
+  const nodeRows = nodes
+    .map((node) => [
+      node.id,
+      node.title,
+      node.state,
+      node.strength,
+      node.access_count,
+      node.folder ?? "",
+      node.created_at ?? "",
+      node.kind ?? "",
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const edgeRows = edges
+    .map((edge) => [edge.from, edge.to, edge.link_type, edge.similarity])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return `graph-${nodes.length}-${edges.length}-${fnv1a(JSON.stringify([nodeRows, edgeRows]))}`;
+}
+
 export const useGraphStore = create<GraphStore>((set) => ({
   nodes: [],
   edges: [],
+  contentFingerprint: "graph-0-0",
   hoveredNode: null,
   selectedNode: null,
   loading: false,
   focusRequest: null,
 
   loadGraph: async (excludeTypes?: string[]) => {
+    const requestGeneration = ++graphRequestGeneration;
     set({ loading: true });
 
     // Normalise a GraphData-like payload into sim nodes, backfilling the
@@ -60,17 +99,31 @@ export const useGraphStore = create<GraphStore>((set) => ({
       nodes.map((n) => ({
         ...n,
         folder: n.folder ?? (filenameById ? folderOf(filenameById.get(n.id) ?? "") : ""),
-        x: 0.1 + Math.random() * 0.8,
-        y: 0.1 + Math.random() * 0.8,
+        // Legacy renderers still read these fields. Seed them from the id so
+        // a refresh cannot randomly reshuffle a user's graph.
+        x: 0.1 + stableUnit(n.id, "x") * 0.8,
+        y: 0.1 + stableUnit(n.id, "y") * 0.8,
         vx: 0,
         vy: 0,
         pinned: false,
       }));
 
+    const commit = (rawNodes: GraphNode[], nextEdges: GraphEdge[], filenameById?: Map<string, string>) => {
+      if (requestGeneration !== graphRequestGeneration) return false;
+      const nextNodes = toSimNodes(rawNodes, filenameById);
+      const fingerprint = graphContentFingerprint(nextNodes, nextEdges);
+      set((state) =>
+        state.contentFingerprint === fingerprint
+          ? { loading: false }
+          : { nodes: nextNodes, edges: nextEdges, contentFingerprint: fingerprint, loading: false },
+      );
+      return true;
+    };
+
     try {
       const data = await fetchGraph(excludeTypes);
       if (data.nodes.length > 0) {
-        set({ nodes: toSimNodes(data.nodes), edges: data.edges, loading: false });
+        commit(data.nodes, data.edges);
         return;
       }
       // Server up but empty index (cold start, reingest in flight). Fall
@@ -81,10 +134,10 @@ export const useGraphStore = create<GraphStore>((set) => ({
 
     try {
       const disk = await buildGraphFromDisk();
-      set({ nodes: toSimNodes(disk.nodes), edges: disk.edges, loading: false });
+      commit(disk.nodes, disk.edges);
     } catch {
       // Disk read also failed (running in browser without Tauri, perhaps).
-      set({ loading: false });
+      if (requestGeneration === graphRequestGeneration) set({ loading: false });
     }
   },
 

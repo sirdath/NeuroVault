@@ -6,6 +6,7 @@ interface DensityStore {
   density: Density;
   setDensity: (d: Density) => void;
   cycle: () => void;
+  syncFromStorage: () => void;
 }
 
 const STORAGE_KEY = "nv.density";
@@ -47,5 +48,10 @@ export const useDensityStore = create<DensityStore>((set, get) => ({
     const cur = get().density;
     const next = ORDER[(ORDER.indexOf(cur) + 1) % ORDER.length]!;
     get().setDensity(next);
+  },
+  syncFromStorage: () => {
+    const next = loadInitial();
+    applyToDOM(next);
+    set({ density: next });
   },
 }));

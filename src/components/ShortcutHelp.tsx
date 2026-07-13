@@ -12,8 +12,8 @@ const SHORTCUTS: Array<{
   {
     category: "General",
     items: [
-      { keys: "Ctrl+K", description: "Open command palette" },
-      { keys: "Ctrl+Shift+Space", description: "Quick capture (works even when window isn't focused)" },
+      { keys: "⌘K", description: "Open command palette" },
+      { keys: "⌘⇧Space", description: "Quick capture (works even when window isn't focused)" },
       { keys: "?", description: "Show this help" },
       { keys: "Esc", description: "Close modals / exit edit mode" },
     ],
@@ -21,17 +21,18 @@ const SHORTCUTS: Array<{
   {
     category: "Notes",
     items: [
-      { keys: "Ctrl+N", description: "Create new note" },
-      { keys: "Ctrl+S", description: "Save current note" },
-      { keys: "Ctrl+/", description: "Focus sidebar search" },
+      { keys: "⌘N", description: "Create new note" },
+      { keys: "⌘S", description: "Save current note" },
+      { keys: "⌘/", description: "Search memory" },
     ],
   },
   {
     category: "Views",
     items: [
-      { keys: "Ctrl+1", description: "Switch to Editor" },
-      { keys: "Ctrl+2", description: "Switch to Graph" },
-      { keys: "Ctrl+P", description: "Cycle views" },
+      { keys: "⌘1", description: "Open Today" },
+      { keys: "⌘2", description: "Open Memories" },
+      { keys: "⌘3", description: "Open Graph" },
+      { keys: "⌘P", description: "Cycle Memories and Graph" },
     ],
   },
   {
@@ -39,7 +40,7 @@ const SHORTCUTS: Array<{
     items: [
       { keys: "/", description: "Open slash command menu" },
       { keys: "[[", description: "Open wikilink autocomplete" },
-      { keys: "Ctrl+Click", description: "Follow a wikilink" },
+      { keys: "⌘Click", description: "Follow a wikilink" },
     ],
   },
   {

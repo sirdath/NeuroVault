@@ -1,33 +1,42 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useNoteStore } from "./stores/noteStore";
 import { nvInboxAdd } from "./lib/tauri";
 import { Sidebar } from "./components/Sidebar";
-import { Editor } from "./components/Editor";
-import { NeuralGraph } from "./components/NeuralGraph";
 import { useGraphSettingsStore } from "./stores/graphSettingsStore";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ContextMenu, type ContextMenuEntry } from "./components/ContextMenu";
 import { QuickCapture } from "./components/QuickCapture";
 import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
-import { ShortcutHelp } from "./components/ShortcutHelp";
-import { Onboarding } from "./components/Onboarding";
-import { SettingsView } from "./components/SettingsView";
 import Home from "./components/Home";
-import { EmployeePanel, meetingsDropClaim } from "./components/EmployeePanel";
 import { ActivityBar } from "./components/ActivityBar";
-import { ActivityPanel } from "./components/ActivityPanel";
 import { UpdateButton } from "./components/UpdateButton";
+import { ConsumerNavigation, type ConsumerDestination } from "./components/ConsumerNavigation";
+import { TrashPanel } from "./components/TrashPanel";
 import { useUpdateStore } from "./stores/updateStore";
-import { useSettingsStore, type Theme } from "./stores/settingsStore";
+import { useSettingsStore } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
 import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
-import { fetchStatus, fetchHealth } from "./lib/api";
+import { useConsumerHealthStore } from "./stores/consumerHealthStore";
+import { healthToneColor } from "./lib/consumerHealth";
+import { meetingsDropClaim } from "./lib/meetingsDropClaim";
+import { useDensityStore } from "./stores/densityStore";
 
-type View = "home" | "editor" | "graph" | "employee";
+const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
+const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
+const ActivityPanel = lazy(() => import("./components/ActivityPanel").then((module) => ({ default: module.ActivityPanel })));
+const SearchView = lazy(() => import("./components/SearchView").then((module) => ({ default: module.SearchView })));
+const AttentionCenter = lazy(() => import("./components/AttentionCenter").then((module) => ({ default: module.AttentionCenter })));
+const TrustCenter = lazy(() => import("./components/TrustCenter").then((module) => ({ default: module.TrustCenter })));
+const SettingsView = lazy(() => import("./components/SettingsView").then((module) => ({ default: module.SettingsView })));
+const Onboarding = lazy(() => import("./components/Onboarding").then((module) => ({ default: module.Onboarding })));
+const ShortcutHelp = lazy(() => import("./components/ShortcutHelp").then((module) => ({ default: module.ShortcutHelp })));
+const EmployeePanel = lazy(() => import("./components/EmployeePanel").then((module) => ({ default: module.EmployeePanel })));
+
+type View = ConsumerDestination | "employee";
 
 // The AI Employees feature is excluded from the public base build. Flip this
 // to true (and re-declare the employee-manager window in tauri.conf.json +
@@ -76,25 +85,35 @@ function GraphOffPlaceholder({ onEnable }: { onEnable: () => void }) {
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
+  const flushPendingSave = useNoteStore((s) => s.flushPendingSave);
+  const loadBrains = useBrainStore((s) => s.loadBrains);
   const theme = useSettingsStore((s) => s.theme);
   const reduceMotion = useSettingsStore((s) => s.reduceMotion);
-  // Persist the active tab across reloads — users expect their last view
-  // (Editor / Graph / Compile) to still be selected when they re-open.
-  // Dath's choice (2026-07-12): the Home gallery is the front door on
-  // EVERY launch. Within a session the nav persists, but a fresh open
-  // always lands here so you consciously choose which mind to enter.
-  const [view, setViewState] = useState<View>("home");
+  const syncSettingsFromStorage = useSettingsStore((s) => s.syncFromStorage);
+  const syncDensityFromStorage = useDensityStore((s) => s.syncFromStorage);
+  const checkForUpdatesAutomatically = useSettingsStore((s) => s.checkForUpdatesAutomatically);
+  // Today is the front door on every launch. The durable editor buffer is
+  // flushed before navigating away from Memories, so destinations can never
+  // become a data-loss shortcut.
+  const [view, setViewState] = useState<View>("today");
+  const viewRef = useRef<View>("today");
   // Graph performance mode. "off" keeps the nav button but renders a
   // re-enable placeholder instead of mounting NeuralGraph (zero graph cost).
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
   const setGraphMode = useGraphSettingsStore((s) => s.setGraphMode);
-  const setView = useCallback((v: View | ((prev: View) => View)) => {
-    setViewState((prev) => {
-      const next = typeof v === "function" ? (v as (p: View) => View)(prev) : v;
-      try { localStorage.setItem("nv.view", next); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
+  const setView = useCallback(async (next: View): Promise<boolean> => {
+    if (viewRef.current === "memories" && next !== "memories") {
+      const saved = await flushPendingSave();
+      if (!saved) {
+        toast.error("Your note is still open because it could not be saved. Retry or copy the text before leaving.");
+        return false;
+      }
+    }
+    viewRef.current = next;
+    setViewState(next);
+    try { localStorage.setItem("nv.view", next); } catch { /* ignore */ }
+    return true;
+  }, [flushPendingSave]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // True while files are being dragged over the window — drives the
   // drop-to-inbox overlay.
@@ -131,18 +150,48 @@ export default function App() {
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [triggerNewNote, setTriggerNewNote] = useState(0);
-  const [triggerSearch, setTriggerSearch] = useState(0);
-  const [serverDown, setServerDown] = useState(false);
-  const [serverUp, setServerUp] = useState(false);
-  const [noteCount, setNoteCount] = useState(0);
   const [starting, setStarting] = useState(false);
   const [startElapsed, setStartElapsed] = useState(0);
-  const failCountRef = useRef(0);
-  const everConnectedRef = useRef(false);
+  const health = useConsumerHealthStore((state) => state.health);
+  const healthSignals = useConsumerHealthStore((state) => state.signals);
+  const refreshHealth = useConsumerHealthStore((state) => state.refresh);
+  const serverUp = healthSignals.service === "online";
+  const serverDown = healthSignals.service === "offline";
+  const noteCount = healthSignals.memories ?? 0;
 
   useEffect(() => {
-    initVault();
-  }, [initVault]);
+    void loadBrains();
+    void initVault();
+  }, [initVault, loadBrains]);
+
+  // Rust owns native window/quit lifecycle, but the active text buffer lives
+  // here. Closing the main window asks for a best-effort hidden flush; explicit
+  // Quit is a strict handshake and only exits after this barrier succeeds.
+  useEffect(() => {
+    const unlistenPromise = listen<string>("neurovault-save-requested", (event) => {
+      void (async () => {
+        const saved = await flushPendingSave();
+        if (saved && event.payload === "quit") {
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("quit_after_save");
+          } catch (error) {
+            toast.error(`Couldn't finish quitting: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          return;
+        }
+        if (!saved) {
+          // A hidden error is not actionable. Bring the retained buffer and its
+          // visible Retry affordance back before telling the user what happened.
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("open_main_window");
+          } catch { /* browser build */ }
+        }
+      })();
+    });
+    return () => { unlistenPromise.then((unlisten) => unlisten()).catch(() => {}); };
+  }, [flushPendingSave]);
 
   // --- Deep-link handler ----------------------------------------------
   //
@@ -181,13 +230,13 @@ export default function App() {
           const noteList = useNoteStore.getState().notes;
           const match = graphNodes.find((g) => g.id === id);
           if (!match) {
-            toast.warning(`deep link: engram ${id.slice(0, 8)}… not found (graph may still be loading)`);
+            toast.warning(`Memory ${id.slice(0, 8)}… was not found. The graph may still be loading.`);
             continue;
           }
           const note = noteList.find((n) => n.title === match.title);
 
           if (preferredView === "graph") {
-            setView("graph");
+            void setView("graph");
             // requestFocus after view switch so the tween lands on
             // the graph view, not a hidden canvas. A 50ms tick is
             // enough for the view state to propagate.
@@ -195,8 +244,9 @@ export default function App() {
               useGraphStore.getState().requestFocus(id);
             }, 50);
           } else {
-            setView("editor");
-            if (note) useNoteStore.getState().selectNote(note.filename);
+            void setView("memories").then((moved) => {
+              if (moved && note) void useNoteStore.getState().selectNote(note.filename);
+            });
           }
           toast.info(`opened: ${match.title}`);
         } catch (e) {
@@ -211,9 +261,9 @@ export default function App() {
   //
   // Global webview file-drop. When the user drags files from their OS
   // file manager onto the NeuroVault window, we copy them into the
-  // active brain's `raw/` folder and surface a toast. The connected
-  // Claude agent then reads them over MCP (`list_inbox` / `read_inbox_file`)
-  // and turns them into clean indexed notes — no converters bundled.
+  // active vault's Import inbox and surface a receipt. The underlying
+  // `raw/` folder remains for adapter compatibility, but it is not the
+  // consumer-facing workflow.
   //
   // We track a drag-over state to show a full-window drop overlay, and
   // ignore the in-app note→folder drags (those carry no OS file paths;
@@ -221,7 +271,18 @@ export default function App() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    getCurrentWebview()
+    // `getCurrentWebview()` reads injected Tauri metadata synchronously; in a
+    // browser preview that access throws before a promise `.catch()` can run.
+    // Keep previews, tests, and recovery pages bootable without native APIs.
+    const tauriAvailable = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
+    if (!tauriAvailable) return;
+    let webview: ReturnType<typeof getCurrentWebview>;
+    try {
+      webview = getCurrentWebview();
+    } catch {
+      return;
+    }
+    webview
       .onDragDropEvent((event) => {
         const p = event.payload;
         // The Curator's meetings drop zone (EmployeePanel) claims drags
@@ -247,10 +308,10 @@ export default function App() {
               }
               const n = added.length;
               toast.success(
-                `${n} file${n === 1 ? "" : "s"} added to raw/ — ask your connected agent to "process the raw folder".`,
+                `${n} file${n === 1 ? "" : "s"} added to the Import inbox. Originals were left unchanged.`,
               );
             })
-            .catch((e) => toast.error(`Couldn't add to raw/: ${(e as Error).message}`));
+            .catch((e) => toast.error(`Couldn't add to the Import inbox: ${(e as Error).message}`));
         }
       })
       .then((fn) => {
@@ -265,59 +326,28 @@ export default function App() {
   }, []);
 
 
-  // Check for a newer release shortly after launch. Silent (no toast on
-  // failure) and one-shot — the result drives the top-bar Update pill via
-  // the update store. Delayed a few seconds so it never competes with the
-  // server boot / first paint.
+  // Optional release check. It is off by default because even a request that
+  // contains no vault data is outbound network activity. Settings names the
+  // destination before the user opts in.
   useEffect(() => {
+    if (!checkForUpdatesAutomatically) return;
     const t = window.setTimeout(() => {
       useUpdateStore.getState().check(true);
     }, 4000);
     return () => window.clearTimeout(t);
-  }, []);
+  }, [checkForUpdatesAutomatically]);
 
-  // Server health monitor — polls faster while booting for snappy feedback
+  // One product-level health state feeds Today, navigation, Trust, and the
+  // top bar. No screen is allowed to invent its own green dot.
   useEffect(() => {
-    const check = () => {
-      // Liveness must NOT depend on an active brain. /api/status opens the
-      // active brain's DB and 500s on a fresh install (no brain yet), which
-      // made the top-bar dot read "offline" while Settings (which probes
-      // /api/brains/active) read "online". Probe the brain-independent
-      // /api/health for liveness; fetch /api/status only for the note count
-      // and tolerate its failure.
-      fetchHealth()
-        .then(() => {
-          failCountRef.current = 0;
-          setServerDown(false);
-          setServerUp(true);
-          setStarting(false); // server is up, clear starting state
-          everConnectedRef.current = true;
-          // Best-effort stats — absent an active brain this 500s, but the
-          // server is still up, so don't let it flip the connected dot.
-          fetchStatus()
-            .then((s) => setNoteCount(s.memories))
-            .catch(() => {});
-        })
-        .catch(() => {
-          failCountRef.current += 1;
-          // Hysteresis: a single failed probe (transient socket close,
-          // GC pause, dev-server reload blip) used to flip serverUp to
-          // false immediately, then snap back to true on the next 5 s
-          // tick. That caused a visible flicker on the connected /
-          // offline dot. Now the dot only flips AFTER the same
-          // threshold the banner uses, so transient hiccups are
-          // invisible to the user.
-          const threshold = everConnectedRef.current ? 3 : 1;
-          if (failCountRef.current >= threshold) {
-            setServerUp(false);
-            setServerDown(true);
-          }
-        });
-    };
-    check();
-    const id = setInterval(check, starting ? 1500 : 5000);
-    return () => clearInterval(id);
-  }, [starting]);
+    void refreshHealth();
+    const id = window.setInterval(() => void refreshHealth(), starting ? 1500 : 5000);
+    return () => window.clearInterval(id);
+  }, [refreshHealth, starting]);
+
+  useEffect(() => {
+    if (serverUp) setStarting(false);
+  }, [serverUp]);
 
   // Tick an elapsed-seconds counter while starting so the banner can show it
   useEffect(() => {
@@ -347,26 +377,48 @@ export default function App() {
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [attentionInitial, setAttentionInitial] = useState<"needs" | "observations">("needs");
+
+  // Settings lives in its own native window in the packaged app. Storage
+  // events keep appearance/density changes in sync with the main webview.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "nv.settings") syncSettingsFromStorage();
+      if (event.key === "nv.density") syncDensityFromStorage();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [syncDensityFromStorage, syncSettingsFromStorage]);
+
+  const openSettings = useCallback(async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_settings_window");
+    } catch {
+      // Browser/Vite preview has no native window; keep a complete fallback.
+      setSettingsOpen(true);
+    }
+  }, []);
 
   // Escape closes any of the top-level overlays. Modals that own an
   // input (QuickCapture, CommandPalette, edit forms) handle Escape
   // internally; this only covers the dismiss-only slide-overs.
   useEffect(() => {
-    if (!settingsOpen && !activityOpen && !shortcutHelpOpen) return;
+    if (!settingsOpen && !trashOpen && !shortcutHelpOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (shortcutHelpOpen) setShortcutHelpOpen(false);
-      else if (activityOpen) setActivityOpen(false);
+      else if (trashOpen) setTrashOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, activityOpen, shortcutHelpOpen]);
+  }, [settingsOpen, trashOpen, shortcutHelpOpen]);
 
   const toggleView = useCallback(() => {
-    setView((v) => (v === "editor" ? "graph" : "editor"));
-  }, []);
+    void setView(viewRef.current === "memories" ? "graph" : "memories");
+  }, [setView]);
 
   // Window-mode control (top-bar). One affordance, three ways to get the
   // app out of the way: minimise to the Dock/taskbar, hide in the
@@ -449,60 +501,84 @@ export default function App() {
         id: "quick-capture",
         title: "Quick capture",
         category: "Action",
-        shortcut: "Ctrl+Shift+Space",
+        shortcut: "⌘⇧Space",
         action: () => setQuickCaptureOpen(true),
       },
       {
         id: "new-note",
         title: "Create new note",
         category: "Action",
-        shortcut: "Ctrl+N",
-        action: () => setTriggerNewNote((n) => n + 1),
+        shortcut: "⌘N",
+        action: () => { void setView("memories").then((moved) => { if (moved) setTriggerNewNote((n) => n + 1); }); },
       },
       {
         id: "save",
         title: "Save current note",
         category: "Action",
-        shortcut: "Ctrl+S",
+        shortcut: "⌘S",
         action: () => saveNote(),
       },
       {
-        id: "view-editor",
-        title: "Switch to Editor",
+        id: "view-today",
+        title: "Open Today",
         category: "View",
-        action: () => setView("editor"),
+        action: () => { void setView("today"); },
+      },
+      {
+        id: "view-memories",
+        title: "Open Memories",
+        category: "View",
+        action: () => { void setView("memories"); },
       },
       {
         id: "view-graph",
         title: "Switch to Graph",
         category: "View",
-        action: () => setView("graph"),
+        action: () => { void setView("graph"); },
       },
       {
         id: "toggle-view",
         title: "Cycle views",
         category: "View",
-        shortcut: "Ctrl+P",
+        shortcut: "⌘P",
         action: toggleView,
       },
       {
         id: "search",
-        title: "Focus search",
+        title: "Search memory",
         category: "Action",
-        shortcut: "Ctrl+/",
-        action: () => setTriggerSearch((n) => n + 1),
+        shortcut: "⌘/",
+        action: () => { void setView("search"); },
+      },
+      {
+        id: "view-activity",
+        title: "Open Activity receipts",
+        category: "View",
+        action: () => { void setView("activity"); },
+      },
+      {
+        id: "view-attention",
+        title: "Open Needs attention",
+        category: "View",
+        action: () => { setAttentionInitial("needs"); void setView("attention"); },
+      },
+      {
+        id: "view-trust",
+        title: "Open Privacy & Trust",
+        category: "View",
+        action: () => { void setView("trust"); },
       },
       {
         id: "open-settings",
         title: "Open settings",
         category: "Action",
-        action: () => setSettingsOpen(true),
+        action: () => { void openSettings(); },
       },
       {
         id: "mcp-setup",
-        title: "Connect Claude Desktop (MCP setup)",
+        title: "Connect Claude Desktop",
         category: "Action",
-        action: () => setSettingsOpen(true),
+        action: () => { void openSettings(); },
       },
       {
         id: "window-minimize",
@@ -538,10 +614,10 @@ export default function App() {
           id: `switch-brain-${b.id}`,
           title: `Switch to ${b.name}`,
           category: "Vault",
-          action: () => { void switchBrain(b.id); },
+          action: () => { void switchBrain(b.id).then(() => setView("memories")); },
         })),
     ],
-    [saveNote, toggleView, brains, activeBrainId, switchBrain, winInvoke]
+    [saveNote, toggleView, brains, activeBrainId, switchBrain, winInvoke, setView, openSettings]
   );
 
   // Global keyboard shortcuts
@@ -560,7 +636,7 @@ export default function App() {
       }
       if (ctrl && e.key === "n") {
         e.preventDefault();
-        setTriggerNewNote((n) => n + 1);
+        void setView("memories").then((moved) => { if (moved) setTriggerNewNote((n) => n + 1); });
       }
       if (ctrl && e.key === "s") {
         e.preventDefault();
@@ -575,13 +651,14 @@ export default function App() {
       // is fine; don't trigger when a modifier chord collides with a
       // browser shortcut (e.g. Ctrl+Shift+1).
       if (ctrl && !e.shiftKey && !e.altKey) {
-        if (e.key === "1") { e.preventDefault(); setView("editor"); return; }
-        if (e.key === "2") { e.preventDefault(); setView("graph"); return; }
-        if (EMPLOYEES_ENABLED && e.key === "3") { e.preventDefault(); setView("employee"); return; }
+        if (e.key === "1") { e.preventDefault(); void setView("today"); return; }
+        if (e.key === "2") { e.preventDefault(); void setView("memories"); return; }
+        if (e.key === "3") { e.preventDefault(); void setView("graph"); return; }
+        if (EMPLOYEES_ENABLED && e.key === "4") { e.preventDefault(); void setView("employee"); return; }
       }
       if (ctrl && e.key === "/") {
         e.preventDefault();
-        setTriggerSearch((n) => n + 1);
+        void setView("search");
       }
       if (
         e.key === "?" &&
@@ -598,7 +675,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [saveNote, toggleView]);
+  }, [saveNote, toggleView, setView]);
 
   // Inject theme as CSS custom properties so every component can read them
   const themeVars: React.CSSProperties & Record<string, string> = {
@@ -674,7 +751,6 @@ export default function App() {
                 try {
                   const { invoke } = await import("@tauri-apps/api/core");
                   setStarting(true);
-                  failCountRef.current = 0;
                   // In-process Rust backend — the Python sidecar was
                   // retired. `port: null` lets the Rust side default
                   // to 8765.
@@ -692,11 +768,7 @@ export default function App() {
                     return;
                   }
                   setStarting(false);
-                  alert(
-                    `Failed to start server: ${e}\n\n` +
-                    "If this keeps happening, restart the NeuroVault app — " +
-                    "the in-process backend auto-starts at boot."
-                  );
+                  toast.error(`Couldn't start local memory: ${String(e)}. Restart NeuroVault if it keeps happening.`);
                 }
               }}
               className="text-[11px] font-medium px-3 py-1 rounded-lg transition-all"
@@ -721,12 +793,10 @@ export default function App() {
           boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
         }}
       >
-        <div className="flex items-center gap-2">
-          {/* Sidebar toggle — collapses / restores the left sidebar.
-              VS Code's chord (Ctrl+B) also bound globally. */}
+        <div className="flex items-center gap-3">
           <button
             onClick={() => setSidebarCollapsed((v) => !v)}
-            title={sidebarCollapsed ? "Show sidebar (Ctrl+B)" : "Hide sidebar (Ctrl+B)"}
+            title={sidebarCollapsed ? "Show navigation (⌘B)" : "Hide navigation (⌘B)"}
             aria-label="Toggle sidebar"
             className="w-7 h-7 flex items-center justify-center rounded-md transition-colors"
             style={{
@@ -742,76 +812,14 @@ export default function App() {
               {!sidebarCollapsed && <line x1="6" y1="9" x2="6" y2="9.01" />}
             </svg>
           </button>
-          <div
-            className="flex items-center gap-0.5 rounded-xl p-1"
-            style={{
-              background: theme.surface,
-              border: `1px solid ${theme.border}`,
-              boxShadow: "inset 0 1px 1px rgba(255,255,255,0.05)",
-            }}
-          >
-          <TabButton
-            active={view === "home"}
-            onClick={() => setView("home")}
-            label="Home"
-            theme={theme}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-                <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          <div className="flex items-center gap-2" aria-label="NeuroVault">
+            <span className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: theme.accentGlow, color: theme.accent }} aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                <path d="M5 6.5c2.2-2.8 5-2.8 7 0v11c-2 2.8-4.8 2.8-7 0-1.8-2.2-1.8-4.3 0-5.8-1.5-1.5-1.5-3.5 0-5.2Z" />
+                <path d="m12 5 7 4.2v5.6L12 19" />
               </svg>
-            }
-          />
-          <TabButton
-            active={view === "editor"}
-            onClick={() => setView("editor")}
-            label="Notes"
-            theme={theme}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="8" y1="13" x2="16" y2="13" />
-                <line x1="8" y1="17" x2="13" y2="17" />
-              </svg>
-            }
-          />
-          <TabButton
-            active={view === "graph"}
-            onClick={() => setView("graph")}
-            label="Graph"
-            theme={theme}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-                <circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
-                <circle cx="18" cy="6" r="2" fill="currentColor" stroke="none" />
-                <circle cx="12" cy="18" r="2" fill="currentColor" stroke="none" />
-                <line x1="7.4" y1="7.4" x2="10.6" y2="16.6" />
-                <line x1="16.6" y1="7.4" x2="13.4" y2="16.6" />
-                <line x1="8" y1="6" x2="16" y2="6" />
-              </svg>
-            }
-          />
-          {EMPLOYEES_ENABLED && (
-          <TabButton
-            active={view === "employee"}
-            onClick={() => setView("employee")}
-            label="Curator"
-            theme={theme}
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-                <rect x="5" y="8" width="14" height="11" rx="2.5" />
-                <path d="M12 8V5.2" />
-                <circle cx="12" cy="4" r="1.3" fill="currentColor" stroke="none" />
-                <circle cx="9.5" cy="13" r="1.15" fill="currentColor" stroke="none" />
-                <circle cx="14.5" cy="13" r="1.15" fill="currentColor" stroke="none" />
-                <path d="M9.5 16.4h5" />
-              </svg>
-            }
-          />
-          )}
+            </span>
+            <span className="text-[12px] font-semibold tracking-wide" style={{ color: theme.text }}>NeuroVault</span>
           </div>
         </div>
 
@@ -819,19 +827,19 @@ export default function App() {
           <UpdateButton theme={theme} />
           {noteCount > 0 && (
             <span className="text-[11px]" style={{ color: theme.textDim }}>
-              {noteCount} {noteCount === 1 ? "note" : "notes"}
+              {noteCount.toLocaleString()} {noteCount === 1 ? "memory" : "memories"}
             </span>
           )}
           <div className="flex items-center gap-1.5">
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{
-                backgroundColor: serverUp ? theme.positive : theme.negative,
-                boxShadow: serverUp ? `0 0 6px ${theme.positive}66` : undefined,
+                backgroundColor: healthToneColor(health.tone),
+                boxShadow: health.tone === "positive" ? `0 0 6px ${theme.positive}66` : undefined,
               }}
             />
             <span className="text-[11px]" style={{ color: theme.textDim }}>
-              {serverUp ? "connected" : "offline"}
+              {health.headline}
             </span>
           </div>
           {/* Window mode — minimise / hide / shrink-to-widget. Replaces the
@@ -872,40 +880,86 @@ export default function App() {
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        {!sidebarCollapsed && (
-          <Sidebar
-            triggerNewNote={triggerNewNote}
-            triggerSearch={triggerSearch}
-            onNoteSelect={() => { if (view !== "editor") setView("editor"); }}
-            onSettingsOpen={() => setSettingsOpen(true)}
-          />
-        )}
-        <div className="flex-1 flex overflow-hidden">
-          {view === "home" && <Home onEnter={() => setView("editor")} />}
-          {view === "editor" && <Editor />}
+        <ConsumerNavigation
+          active={view === "employee" ? "today" : view}
+          collapsed={sidebarCollapsed}
+          onNavigate={(destination) => { void setView(destination); }}
+          onOpenSettings={() => { void openSettings(); }}
+        />
+        <div className="min-w-0 flex-1 flex overflow-hidden">
+          <Suspense fallback={<ViewLoading />}>
+          {view === "today" && (
+            <Home
+              onEnter={(filename) => {
+                void setView("memories").then((moved) => {
+                  if (moved && filename) void useNoteStore.getState().selectNote(filename);
+                });
+              }}
+              onOpenReview={(kind) => {
+                setAttentionInitial(kind === "attention" ? "needs" : "observations");
+                void setView("attention");
+              }}
+              onOpenActivity={() => { void setView("activity"); }}
+            />
+          )}
+          {view === "search" && (
+            <SearchView
+              onOpenNote={(filename) => {
+                void setView("memories").then((moved) => {
+                  if (moved) void useNoteStore.getState().selectNote(filename);
+                });
+              }}
+              onOpenMemory={(engramId) => {
+                void setView("graph").then((moved) => {
+                  if (moved) useGraphStore.getState().requestFocus(engramId);
+                });
+              }}
+            />
+          )}
+          {view === "memories" && (
+            <>
+              <Sidebar
+                triggerNewNote={triggerNewNote}
+                onNoteSelect={() => { /* already in Memories */ }}
+                onSettingsOpen={() => { void openSettings(); }}
+                onTrashOpen={() => setTrashOpen(true)}
+              />
+              <Editor />
+            </>
+          )}
+          {view === "activity" && <ActivityPanel open onClose={() => { void setView("today"); }} presentation="page" />}
           {view === "graph" &&
             (graphMode === "off" ? (
               <GraphOffPlaceholder onEnable={() => setGraphMode("full")} />
             ) : (
-              <NeuralGraph onOpenNote={() => setView("editor")} />
+              <NeuralGraph onOpenNote={() => { void setView("memories"); }} />
             ))}
+          {view === "attention" && <AttentionCenter key={attentionInitial} initialTab={attentionInitial} />}
+          {view === "trust" && (
+            <TrustCenter
+              onOpenActivity={() => { void setView("activity"); }}
+              onOpenTrash={() => setTrashOpen(true)}
+              onOpenSettings={() => { void openSettings(); }}
+            />
+          )}
           {EMPLOYEES_ENABLED && view === "employee" && <EmployeePanel />}
+          </Suspense>
         </div>
       </div>
 
-      {/* Activity bar (bottom status pill, LangSmith-style) */}
-      <ActivityBar onExpand={() => setActivityOpen(true)} serverUp={serverUp} />
+      {/* A compact live receipt shortcut; full Activity is a destination. */}
+      <ActivityBar onExpand={() => { void setView("activity"); }} serverUp={serverUp} />
 
-      {/* Activity panel (slide-up from bottom) */}
-      <ActivityPanel open={activityOpen} onClose={() => setActivityOpen(false)} />
-
-      {/* Settings slide-over */}
+      {/* Settings window surface. Engineering controls live under Advanced. */}
       {settingsOpen && (
         <>
-          <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSettingsOpen(false)} />
+          <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setSettingsOpen(false)} />
           <div
-            className="fixed top-0 right-0 h-full w-[420px] z-50 overflow-y-auto"
-            style={{ background: theme.bg, borderLeft: `1px solid ${theme.border}` }}
+            className="fixed inset-x-[7vw] inset-y-[5vh] z-50 overflow-y-auto rounded-2xl"
+            style={{ background: theme.bg, border: `1px solid ${theme.border}`, boxShadow: "0 30px 90px rgba(0,0,0,0.5)" }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Settings"
           >
             <button
               onClick={() => setSettingsOpen(false)}
@@ -916,7 +970,7 @@ export default function App() {
             >
               ×
             </button>
-            <SettingsView />
+            <Suspense fallback={<ViewLoading compact />}><SettingsView /></Suspense>
           </div>
         </>
       )}
@@ -926,21 +980,26 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         commands={commands}
-        currentView={view === "employee" || view === "home" ? undefined : view}
+        currentView={view === "graph" ? "graph" : view === "memories" ? "editor" : undefined}
+        onOpenNote={() => { void setView("memories"); }}
+        onOpenMemory={(engramId) => {
+          void setView("graph").then((moved) => {
+            if (moved) useGraphStore.getState().requestFocus(engramId);
+          });
+        }}
       />
       <QuickCapture
         open={quickCaptureOpen}
         onClose={() => setQuickCaptureOpen(false)}
       />
       <HoverPreview />
-      <ShortcutHelp
-        open={shortcutHelpOpen}
-        onClose={() => setShortcutHelpOpen(false)}
-      />
-      <Onboarding
-        onOpenSettings={() => setSettingsOpen(true)}
-        onCreateFirstNote={() => setTriggerNewNote((n) => n + 1)}
-      />
+      {shortcutHelpOpen && (
+        <Suspense fallback={null}>
+          <ShortcutHelp open onClose={() => setShortcutHelpOpen(false)} />
+        </Suspense>
+      )}
+      <Suspense fallback={null}><Onboarding onOpenSettings={() => { void openSettings(); }} /></Suspense>
+      <TrashPanel open={trashOpen} onClose={() => setTrashOpen(false)} />
       <Toasts />
 
       {/* Drop-to-inbox overlay — shown while external files are dragged
@@ -965,14 +1024,25 @@ export default function App() {
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
             <p className="text-[15px] font-semibold font-[Geist,sans-serif]" style={{ color: theme.text }}>
-              Drop files into your raw folder
+              Add files to the Import inbox
             </p>
             <p className="text-[12px] font-[Geist,sans-serif] text-center max-w-[280px]" style={{ color: theme.textDim }}>
-              Your connected agent turns them into clean, indexed notes.
+              NeuroVault copies them into a private staging area. Your originals stay untouched.
             </p>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ViewLoading({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`${compact ? "min-h-[240px]" : "flex-1"} flex items-center justify-center`} role="status" aria-live="polite">
+      <div className="flex items-center gap-2 text-[12px]" style={{ color: "var(--nv-text-dim)" }}>
+        <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--nv-accent)" }} />
+        Loading…
+      </div>
     </div>
   );
 }
@@ -1036,26 +1106,5 @@ function IngestBanner() {
         </span>
       )}
     </div>
-  );
-}
-
-function TabButton({ active, onClick, label, theme, icon }: { active: boolean; onClick: () => void; label: string; theme: Theme; icon?: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1.5 px-3.5 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all duration-200"
-      style={active ? {
-        background: theme.surface,
-        color: theme.text,
-        border: `1px solid ${theme.border}`,
-        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.3)",
-      } : {
-        color: theme.textDim,
-        border: "1px solid transparent",
-      }}
-    >
-      {icon && <span className="flex-shrink-0">{icon}</span>}
-      {label}
-    </button>
   );
 }

@@ -28,7 +28,9 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 
 <br>
 
-NeuroVault is a **local-first memory layer for AI agents**. It sits between your markdown notes and any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, Codex) and gives it a callable `recall()` + `remember()` surface that survives across sessions. Everything runs on your machine — your notes are plain `.md` files, the database is a rebuildable cache over them, and nothing is sent to a server you don't control.
+NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Your notes stay as plain `.md` files and the local database is rebuildable; selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
+
+The open local core follows the [Core Covenant](CORE-COVENANT.md): no required account, no remote kill switch, durable Markdown ownership, and no sale or model training on vault data.
 
 > Not RAG-in-a-trenchcoat. A structured, updatable, inspectable knowledge base an AI can read, write, and challenge. [Why this is not RAG ↓](#why-this-is-not-rag)
 
@@ -48,51 +50,33 @@ Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github
 1. Download the installer for your platform and run it.
 2. Notes are saved as plain markdown in `~/.neurovault/`.
 
-### First launch — clearing the OS warning
+### Verify the download before first launch
 
-NeuroVault is open-source and **not code-signed** (Apple/Microsoft signing certificates cost hundreds of dollars a year). The installers are built in public from this repo — the warning is about the **missing certificate, not malware**. Here's how to get past it on each OS.
+Official public installers are published only after the release checklist records their signature status, checksums, build provenance, and clean-install result. Compare the downloaded file with the SHA-256 checksum in its release before opening it.
 
-#### 🍎 macOS — "NeuroVault is damaged and can't be opened"
-
-That message just means macOS quarantined an app downloaded outside the App Store. Drag **NeuroVault.app** into your **Applications** folder, then run this **one command** in Terminal:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/NeuroVault.app
-```
-
-Now open NeuroVault normally — the warning is gone for good. One line, one time. (On Claude Code or any terminal? Just paste it.)
-
-<details>
-<summary>Prefer not to use the Terminal?</summary>
-
-Right-click **NeuroVault.app → Open → Open**. If macOS still refuses (common on Sonoma/Sequoia/Tahoe), open **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the NeuroVault message — then launch the app again.
-</details>
-
-#### 🪟 Windows — "Windows protected your PC"
-
-Click **More info → Run anyway**. SmartScreen flags any installer without a paid EV certificate.
+If macOS or Windows reports that an official artifact is damaged, has an unknown publisher, or cannot be verified, **do not disable quarantine or bypass the warning**. Delete the file and report the release URL and checksum through the project security process. Unverified development artifacts remain draft-only; contributors should run them from the documented source-build workflow instead.
 
 #### 🐧 Linux
 
 The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` first if your file manager doesn't mark it executable.
 
-> **Updates** — from **v0.5.1** on, NeuroVault **auto-updates in place**: it checks for a newer *signed* release on launch, and the top-bar **Update** button downloads, installs, and relaunches it — no manual re-download. Your data lives in `~/.neurovault/` and is never touched by an update.
+> **Updates** — NeuroVault installs signed updates in place from the top-bar **Update** button. Checks are manual by default; you can explicitly enable a launch check in **Settings → General**. Update requests never include vault content or a stable install identifier, and updates never touch data under `~/.neurovault/`.
 
 ## What you get
 
-- **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your brain: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your agent can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. Your source never leaves the machine.
+- **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your active vault: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your connected AI can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. NeuroVault does not upload source while building the graph.
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
-- **Drop-folder ingest** — drag any file onto the window; your connected agent reads it and turns it into a clean, indexed note. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
+- **Import inbox** — drag a file onto the window to copy it into a private staging area without changing the original. Connected workflows can turn staged material into indexed notes. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
 - **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them. (Optional Claude Code hook; the one feature that uses a tiny Python script.)
-- **Multiple brains** — separate vaults/databases per project; switch via the dropdown or `Ctrl+K`.
-- **Per-folder brains** — drop a `.neurovault` file in a project directory to scope that folder's agent memory to its own brain (opt-in).
+- **Multiple vaults** — separate files and databases per project; switch from the vault picker or command palette.
+- **Per-folder boundaries** — drop a `.neurovault` file in a project directory to scope that folder's connected memory to its own vault (opt-in).
 - **Agent auto-start** — your MCP agent starts the memory backend for you on first use; no need to open the app first.
 - **Floating minitab + window modes** — shrink the whole app to a tiny always-on-top widget (status · start/pause · open), or **Minimize / Hide / Shrink to widget** from the top bar; bring it back with `Ctrl/Cmd+Shift+Space`.
 - **Open a folder as a vault** — point NeuroVault at an existing Obsidian vault; the folder stays in place.
 - **Notes-tree + graph share colours**, themes, resizable panels, and **signed one-click auto-update**.
-- **100% local. No telemetry, no account, no cloud.** Loopback-only server on `127.0.0.1:8765`, CORS-scoped to the app's own origins.
+- **Local-first, with an exact network contract.** No NeuroVault account or telemetry. The server is loopback-only on `127.0.0.1:8765`; selected context leaves the Mac only through AI providers you deliberately connect, and model/update downloads are disclosed in [PRIVACY.md](PRIVACY.md).
 
 ## Connect your agent (MCP)
 
@@ -129,7 +113,7 @@ neurovault-server hook status
 neurovault-server hook uninstall
 ```
 
-How it works: Claude Code [hooks](https://code.claude.com/docs/en/hooks) run NeuroVault on every prompt (`UserPromptSubmit`) and at session open (`SessionStart`). Each prompt goes through **Ambient Recall**: the full hybrid retriever (semantic + BM25 + graph, fused, then a cross-encoder reranker) followed by a precision gate that decides whether anything is trustworthy enough to inject. Injected memories arrive as compact, sanitized background context with IDs, source paths, and a one-line "why". At session start you get a one-shot brain brief: core memory, top memories, open todos.
+How it works: Claude Code [hooks](https://code.claude.com/docs/en/hooks) run NeuroVault on every prompt (`UserPromptSubmit`) and at session open (`SessionStart`). Each prompt goes through **Ambient Recall**: the full hybrid retriever (semantic + BM25 + graph, fused, then a cross-encoder reranker) followed by a precision gate that decides whether anything is trustworthy enough to inject. Injected memories arrive as compact, sanitized background context with IDs, source paths, and a one-line "why". At session start you get a one-shot vault brief: core memory, top memories, open tasks.
 
 **Ambient Recall prefers silence over weak context.** Vector search always has *some* nearest neighbor, so an ungated injector would decorate every prompt with plausible-but-useless notes. The gate requires an absolute cross-encoder score floor (raised further for vague prompts, relaxed slightly for exact file/symbol/error matches) and a margin over the runner-up — when confidence is low it injects **nothing**, and that's a success, not a failure. Every decision (inject or silent, with all scores) is logged to `~/.neurovault/logs/ambient_recall.jsonl`.
 
@@ -138,7 +122,7 @@ Design guarantees:
 - **Fail-open.** If NeuroVault isn't running, the hooks print nothing and exit 0 — your Claude Code session is never blocked or slowed (hard 3.5 s budget). The installed hook command is wrapped so even a broken or stale binary can't block a prompt.
 - **Signal only.** Trivial prompts are skipped before any network call, gated memories need real relevance scores, and a memory is never injected twice in the same session.
 - **Reversible.** Install is idempotent and edits only NeuroVault's own entries in `settings.json` (a backup is written first); uninstall removes exactly those.
-- **Tunable.** Thresholds, budgets, strict mode, and per-brain overrides live in `~/.neurovault/ambient.json`; debug any prompt with `neurovault-server ambient test "your prompt"` — it prints the candidate table, every score, and the gate's reasoning. Details: [docs/ambient-recall.md](docs/ambient-recall.md).
+- **Tunable.** Thresholds, budgets, strict mode, and per-vault overrides live in `~/.neurovault/ambient.json`; debug any prompt with `neurovault-server ambient test "your prompt"` — it prints the candidate table, every score, and the gate's reasoning. Details: [docs/ambient-recall.md](docs/ambient-recall.md).
 
 ## Screenshots
 
@@ -192,7 +176,7 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 ## Features
 
-**Multiple brains** — separate memory spaces, each with its own vault, database, and graph. Switch instantly via the dropdown or MCP.
+**Multiple vaults** — separate memory spaces, each with its own Markdown boundary, database, and graph. Switch instantly via the dropdown or a connected agent.
 
 **Hybrid retrieval** — three signals merged via Reciprocal Rank Fusion: semantic vector similarity (50%), BM25 keywords (30%), knowledge-graph traversal (20%). A cross-encoder reranker runs by default for extra precision (toggle off in Settings).
 
@@ -200,16 +184,16 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 **Graph view** — force-directed visualization. Fill encodes category, a ring encodes health/strength, size encodes importance (Analytics mode). Click a node to open, drag to pin, click a cluster in the legend to frame it.
 
-**Drop-folder ingest** — a per-brain **`raw/`** folder (with a `README.md` guide inside); paste documents there and the connected agent converts them into clean notes (no bundled converters — the agent is the converter). Originals are kept in `raw/_done/`.
+**Drop-folder ingest** — a per-vault **`raw/`** folder (with a `README.md` guide inside); paste documents there and the connected agent converts them into clean notes (no bundled converters — the agent is the converter). Originals are kept in `raw/_done/`.
 
 **Silent fact capture** — a UserPromptSubmit hook pipes prompts through a regex extractor recognising 8 patterns (preferences, decisions, stacks, deadlines, identity, anti-preferences, deploy targets, explicit "remember that…"). Microseconds, no LLM call, bounded to 3 extractions/message, `<private>` blocks stripped.
 
 **Session wake-up** — `session_start` returns layered context: L0 (~100 tokens, identity), L1 (~300 tokens, top active memories), L2 (on demand via `recall()`).
 
-**Brain diagnostic** — a one-click health scorecard for your vault. Distils the graph into five graded categories + a headline grade and a worst-first list of fixes. "Copy report" emits a plain-text scorecard you can paste to your agent, so it acts on the issues — the maintenance loop the agent is meant to own.
+**Vault diagnostic** — a one-click health scorecard for your vault. Distils the graph into five graded categories + a headline grade and a worst-first list of fixes. "Copy report" emits a plain-text scorecard you can paste to your agent, so it acts on the issues — the maintenance loop the agent is meant to own.
 
 ```
-NeuroVault brain diagnostic — work
+NeuroVault vault diagnostic — work
 Overall: B  (84/100, 412 notes)
 
 Connectivity  ██████████████████████░░  88%
@@ -304,7 +288,7 @@ External:
     mcp_proxy.py is the deprecated former (Python) MCP bridge.
 ```
 
-Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your brain. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
+Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your memories. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
 
 ## Tech stack
 
@@ -338,19 +322,22 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 
 > The right memory lands in the **top 5 results 97% of the time**, in the top 10 **99%** — running entirely on your machine, no cloud, no API keys. This is retrieval recall (was the right memory retrieved), not end-to-end QA accuracy. Reproducible: full harness + a per-question receipt in [`docs/benchmarks/`](docs/benchmarks/), plus the isolated reranker A/B in [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
 
-**Cost** — running locally, embeddings and retrieval cost effectively nothing (your own machine, no per-call API), versus hosted memory services that bill monthly. 100% local and open source.
+**Cost** — on-device embeddings and retrieval cost effectively nothing (your own machine, no per-call API). The retrieval engine and application are open source; the exact optional network flows are documented in [PRIVACY.md](PRIVACY.md).
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+N` | New note |
-| `Ctrl+S` | Save |
-| `Ctrl+1` / `Ctrl+2` | Editor / Graph |
-| `Ctrl+P` | Cycle views |
-| `Ctrl+B` | Toggle sidebar |
-| `Ctrl+K` | Command palette |
+| `⌘N` | New note |
+| `⌘S` | Save |
+| `⌘K` | Command palette |
+| `⌘⇧Space` | Quick capture |
+| `⌘/` | Search memory |
+| `⌘1` / `⌘2` / `⌘3` | Today / Memories / Graph |
+| `⌘P` | Cycle Memories and Graph |
 | `?` | All shortcuts |
+
+On Windows and Linux, use `Ctrl` in place of `⌘`.
 
 ---
 
@@ -371,4 +358,4 @@ Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) 
 
 [MIT](LICENSE) © NeuroVault contributors.
 
-<div align="center"><sub>Built with Claude. Remembers everything.</sub></div>
+<div align="center"><sub>Automatic enough to disappear. Transparent enough to trust.</sub></div>

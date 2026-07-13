@@ -381,7 +381,7 @@ Three primary views, togglable via the tab bar or `Ctrl+1/2/3`:
 - `Ctrl+N` — new note
 - `Ctrl+S` — save
 - `Ctrl+P` — cycle views
-- `Ctrl+1/2/3` — editor / graph / compile
+- `⌘1/2/3` — Today / Memories / Graph on macOS (`Ctrl` on Windows/Linux)
 - `Ctrl+/` — focus search
 - `?` — shortcut help modal
 - `Esc` — close overlays

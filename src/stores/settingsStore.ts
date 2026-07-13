@@ -26,7 +26,7 @@ export const THEMES: Theme[] = [
     border: "rgba(120,160,255,0.10)",
     text: "rgba(235,240,255,0.92)",
     textMuted: "rgba(200,214,245,0.64)",
-    textDim: "rgba(180,196,235,0.42)",
+    textDim: "rgba(200,214,245,0.72)",
     accent: "#568cfa",
     accentGlow: "rgba(86,140,250,0.16)",
     positive: "#4ade80",
@@ -41,7 +41,7 @@ export const THEMES: Theme[] = [
     border: "rgba(255,255,255,0.06)",
     text: "rgba(255,255,255,0.9)",
     textMuted: "rgba(255,255,255,0.62)",
-    textDim: "rgba(255,255,255,0.42)",
+    textDim: "rgba(255,255,255,0.68)",
     accent: "#b592ff",
     accentGlow: "rgba(181,146,255,0.15)",
     positive: "#4ade80",
@@ -56,7 +56,7 @@ export const THEMES: Theme[] = [
     border: "rgba(255,245,230,0.08)",
     text: "rgba(255,245,230,0.9)",
     textMuted: "rgba(255,245,230,0.62)",
-    textDim: "rgba(255,245,230,0.42)",
+    textDim: "rgba(255,245,230,0.68)",
     accent: "#d4a574",
     accentGlow: "rgba(212,165,116,0.15)",
     positive: "#7dcea0",
@@ -71,7 +71,7 @@ export const THEMES: Theme[] = [
     border: "rgba(255,255,255,0.07)",
     text: "rgba(255,255,255,0.88)",
     textMuted: "rgba(255,255,255,0.62)",
-    textDim: "rgba(255,255,255,0.42)",
+    textDim: "rgba(255,255,255,0.68)",
     accent: "#10a37f",
     accentGlow: "rgba(16,163,127,0.15)",
     positive: "#10a37f",
@@ -86,7 +86,7 @@ export const THEMES: Theme[] = [
     border: "rgba(200,220,255,0.08)",
     text: "rgba(230,237,243,0.9)",
     textMuted: "rgba(200,220,255,0.62)",
-    textDim: "rgba(200,220,255,0.42)",
+    textDim: "rgba(200,220,255,0.68)",
     accent: "#58a6ff",
     accentGlow: "rgba(88,166,255,0.15)",
     positive: "#3fb950",
@@ -101,7 +101,7 @@ export const THEMES: Theme[] = [
     border: "rgba(224,206,235,0.08)",
     text: "rgba(224,222,244,0.9)",
     textMuted: "rgba(170,165,200,0.78)",
-    textDim: "rgba(140,135,175,0.62)",
+    textDim: "rgba(190,184,220,0.82)",
     accent: "#c4a7e7",
     accentGlow: "rgba(196,167,231,0.15)",
     positive: "#9ccfd8",
@@ -116,7 +116,7 @@ export const THEMES: Theme[] = [
     border: "rgba(180,200,230,0.08)",
     text: "rgba(216,222,233,0.9)",
     textMuted: "rgba(216,222,233,0.62)",
-    textDim: "rgba(216,222,233,0.42)",
+    textDim: "rgba(216,222,233,0.68)",
     accent: "#88c0d0",
     accentGlow: "rgba(136,192,208,0.15)",
     positive: "#a3be8c",
@@ -131,7 +131,7 @@ export const THEMES: Theme[] = [
     border: "rgba(255,255,255,0.12)",
     text: "rgba(220,221,222,0.95)",
     textMuted: "rgba(153,153,153,0.9)",
-    textDim: "rgba(102,102,102,0.8)",
+    textDim: "rgba(190,190,190,0.9)",
     accent: "#7f6df2",
     accentGlow: "rgba(127,109,242,0.15)",
     positive: "#4ade80",
@@ -146,6 +146,7 @@ interface AppSettings {
   showTimestamps: boolean;
   editorMaxWidth: number;
   reduceMotion: boolean;
+  checkForUpdatesAutomatically: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -155,6 +156,8 @@ const DEFAULTS: AppSettings = {
   showTimestamps: true,
   editorMaxWidth: 720,
   reduceMotion: false,
+  // Launching the app should not create an unexpected network request.
+  checkForUpdatesAutomatically: false,
 };
 
 function loadSettings(): AppSettings {
@@ -178,13 +181,20 @@ function loadSettings(): AppSettings {
 interface SettingsStore extends AppSettings {
   theme: Theme;
   update: (partial: Partial<AppSettings>) => void;
+  syncFromStorage: () => void;
+}
+
+function withTheme(settings: AppSettings) {
+  return {
+    ...settings,
+    theme: THEMES.find((theme) => theme.id === settings.themeId) ?? THEMES[0]!,
+  };
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => {
   const initial = loadSettings();
   return {
-    ...initial,
-    theme: THEMES.find((t) => t.id === initial.themeId) ?? THEMES[0]!,
+    ...withTheme(initial),
     update: (partial) =>
       set((state) => {
         const next = { ...state, ...partial };
@@ -196,8 +206,10 @@ export const useSettingsStore = create<SettingsStore>((set) => {
           showTimestamps: next.showTimestamps,
           editorMaxWidth: next.editorMaxWidth,
           reduceMotion: next.reduceMotion,
+          checkForUpdatesAutomatically: next.checkForUpdatesAutomatically,
         }));
         return { ...next, theme };
       }),
+    syncFromStorage: () => set(withTheme(loadSettings())),
   };
 });

@@ -1,149 +1,194 @@
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useBrainStore } from "../stores/brainStore";
+import { useNoteStore } from "../stores/noteStore";
+import { useConsumerHealthStore } from "../stores/consumerHealthStore";
+import { healthToneColor } from "../lib/consumerHealth";
+import { API_HOST } from "../lib/config";
 
 const STORAGE_KEY = "nv.onboarding.done";
 
 interface OnboardingProps {
   onOpenSettings: () => void;
-  onCreateFirstNote: () => void;
 }
 
-interface Slide {
-  title: string;
-  body: React.ReactNode;
-  cta?: { label: string; action: "next" | "createNote" | "openSettings" };
-}
-
-export function Onboarding({ onOpenSettings, onCreateFirstNote }: OnboardingProps) {
+/**
+ * Setup, not a product tour. Completion means the user has a real active
+ * vault. Automatic memory remains optional, but declining it leaves a
+ * visible limited-state receipt on Home rather than pretending setup is
+ * complete.
+ */
+export function Onboarding({ onOpenSettings }: OnboardingProps) {
   const [open, setOpen] = useState(false);
-  const [index, setIndex] = useState(0);
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState("My Vault");
+  const [folder, setFolder] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dismissedThisSession = useRef(false);
+
+  const createBrain = useBrainStore((s) => s.createBrain);
+  const switchBrain = useBrainStore((s) => s.switchBrain);
+  const signals = useConsumerHealthStore((s) => s.signals);
+  const health = useConsumerHealthStore((s) => s.health);
+  const refreshHealth = useConsumerHealthStore((s) => s.refresh);
+  const setAutomaticRecall = useConsumerHealthStore((s) => s.setAutomaticRecall);
 
   useEffect(() => {
+    refreshHealth();
     try {
       if (localStorage.getItem(STORAGE_KEY) !== "true") setOpen(true);
-    } catch { /* storage disabled — skip onboarding quietly */ }
+    } catch {
+      setOpen(true);
+    }
+  }, [refreshHealth]);
+
+  // If a user later deletes their only vault, setup becomes relevant again.
+  // A session-level dismissal prevents an immediate reopen loop.
+  useEffect(() => {
+    if (health.kind === "setup_required" && !dismissedThisSession.current) {
+      setOpen(true);
+      setStep(1);
+    }
+  }, [health.kind]);
+
+  useEffect(() => {
+    const reopen = () => {
+      dismissedThisSession.current = false;
+      setError(null);
+      setStep(signals.activeBrainId ? 2 : 1);
+      setOpen(true);
+      refreshHealth();
+    };
+    window.addEventListener("nv:open-onboarding", reopen);
+    return () => window.removeEventListener("nv:open-onboarding", reopen);
+  }, [refreshHealth, signals.activeBrainId]);
+
+  const closeForNow = useCallback(() => {
+    dismissedThisSession.current = true;
+    setOpen(false);
   }, []);
 
-  const dismiss = () => {
-    try { localStorage.setItem(STORAGE_KEY, "true"); } catch { /* ignore */ }
+  const finish = useCallback(() => {
+    if (!signals.activeBrainId) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, "true");
+    } catch {
+      /* setup remains valid even when storage is disabled */
+    }
+    dismissedThisSession.current = true;
     setOpen(false);
-  };
+  }, [signals.activeBrainId]);
 
-  // Escape dismisses the tour at any slide — matches the "Skip" affordance.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") dismiss();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeForNow();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, closeForNow]);
 
-  const slides: Slide[] = [
-    {
-      title: "Welcome to NeuroVault",
-      body: (
-        <>
-          <div className="flex justify-center mb-5">
-            <svg
-              viewBox="0 0 24 24"
-              className="w-20 h-20"
-              style={{ color: "var(--nv-accent)" }}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-label="NeuroVault"
-            >
-              <circle cx="12" cy="12" r="9.5" />
-              <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
-              <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
-              <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
-              <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="12"   cy="12.8" r="1.4" />
-              <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
-            </svg>
-          </div>
-          <p className="text-sm leading-relaxed" style={{ color: "var(--nv-text)" }}>
-            Claude forgets you after every conversation. NeuroVault doesn't.
-          </p>
-          <p className="text-xs leading-relaxed mt-3" style={{ color: "var(--nv-text-dim)" }}>
-            A local-first memory layer that runs on your machine. Notes, decisions, people, projects —
-            captured once, recalled whenever any AI asks.
-          </p>
-        </>
-      ),
-      cta: { label: "Show me around", action: "next" },
-    },
-    {
-      title: "Everything starts with Ctrl+K",
-      body: (
-        <>
-          <p className="text-sm leading-relaxed" style={{ color: "var(--nv-text)" }}>
-            The command palette is your home base.
-          </p>
-          <p className="text-xs leading-relaxed mt-3" style={{ color: "var(--nv-text-dim)" }}>
-            Create notes, search memory, switch brains, jump between views — all from one prompt.
-            Press <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono mx-0.5" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>?</kbd>
-            anywhere to see every shortcut.
-          </p>
-        </>
-      ),
-      cta: { label: "Next", action: "next" },
-    },
-    {
-      title: "Write your first note",
-      body: (
-        <>
-          <p className="text-sm leading-relaxed" style={{ color: "var(--nv-text)" }}>
-            Notes are plain Markdown with <code className="px-1 rounded text-[11px]" style={{ background: "var(--nv-surface)" }}>[[wikilinks]]</code> and
-            tags. Ideas become a graph as you link them.
-          </p>
-          <p className="text-xs leading-relaxed mt-3" style={{ color: "var(--nv-text-dim)" }}>
-            NeuroVault indexes everything in the background — semantic search, entity extraction, and
-            spreading-activation recall all run locally.
-          </p>
-        </>
-      ),
-      cta: { label: "Create a note", action: "createNote" },
-    },
-    {
-      title: "Connect Claude Desktop",
-      body: (
-        <>
-          <p className="text-sm leading-relaxed" style={{ color: "var(--nv-text)" }}>
-            The last step: wire Claude Desktop (or any MCP client) to this brain so every answer is
-            grounded in what you've saved.
-          </p>
-          <p className="text-xs leading-relaxed mt-3" style={{ color: "var(--nv-text-dim)" }}>
-            Settings has a one-click config generator — paste it into Claude's MCP config and you're done.
-          </p>
-        </>
-      ),
-      cta: { label: "Open Settings", action: "openSettings" },
-    },
-  ];
-
-  const slide = slides[index] ?? slides[0]!;
-  const isLast = index === slides.length - 1;
-
-  const handleCta = () => {
-    const cta = slide.cta;
-    if (!cta) return;
-    if (cta.action === "next") {
-      if (isLast) dismiss();
-      else setIndex((i) => i + 1);
-    } else if (cta.action === "createNote") {
-      dismiss();
-      onCreateFirstNote();
-    } else if (cta.action === "openSettings") {
-      dismiss();
-      onOpenSettings();
+  const chooseFolder = useCallback(async () => {
+    setError(null);
+    try {
+      const chosen = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose your Markdown folder",
+      });
+      if (typeof chosen === "string") setFolder(chosen);
+    } catch {
+      setError("Folder selection is available in the installed desktop app.");
     }
-  };
+  }, []);
+
+  const createFirstBrain = useCallback(async () => {
+    if (signals.service !== "online") {
+      setError("The local memory service must be running before setup can continue.");
+      return;
+    }
+    if (!name.trim()) {
+      setError("Give this vault a short name.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createBrain(name.trim(), "", folder || undefined);
+      if (!created) throw new Error("The vault could not be created.");
+      await switchBrain(created.brain_id);
+      await refreshHealth();
+      setStep(2);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Setup failed. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }, [createBrain, folder, name, refreshHealth, signals.service, switchBrain]);
+
+  const createSampleVault = useCallback(async () => {
+    if (signals.service !== "online") {
+      setError("The local memory service is still starting. Check again in a moment.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createBrain(
+        "NeuroVault Sample",
+        "A removable sample that demonstrates boundaries, sources, and automatic context.",
+      );
+      if (!created) throw new Error("The sample vault could not be created.");
+      await switchBrain(created.brain_id);
+
+      const examples = [
+        {
+          title: "Project Northstar",
+          content: "A sample launch project. The current goal is to ship a calm, local-first memory experience. Keep its context inside this sample vault.",
+        },
+        {
+          title: "Decision — offline by default",
+          content: "The team chose local Markdown and an on-device index. Network actions must be disclosed and user initiated unless the user explicitly opts in.",
+        },
+        {
+          title: "Next useful step",
+          content: "Review the activity receipt after a connected AI uses this context, then open the graph to see how the three sample notes relate.",
+        },
+      ];
+      for (const example of examples) {
+        const response = await fetch(`${API_HOST}/api/notes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...example, brain: created.brain_id, folder: "sample" }),
+        });
+        if (!response.ok) throw new Error(`A sample note could not be created (HTTP ${response.status}).`);
+      }
+      await useNoteStore.getState().initVault();
+      await refreshHealth();
+      setStep(2);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The sample vault could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }, [createBrain, refreshHealth, signals.service, switchBrain]);
+
+  const enableAutomaticMemory = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setAutomaticRecall(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Automatic memory could not be enabled.");
+    } finally {
+      setBusy(false);
+    }
+  }, [setAutomaticRecall]);
+
+  const hasBrain = Boolean(signals.activeBrainId);
+  const recallOn = signals.automaticRecall === "on";
 
   return (
     <AnimatePresence>
@@ -154,80 +199,225 @@ export function Onboarding({ onOpenSettings, onCreateFirstNote }: OnboardingProp
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100]"
-            style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(6px)" }}
+            style={{ background: "rgba(0,0,0,0.68)", backdropFilter: "blur(8px)" }}
+            onClick={closeForNow}
           />
           <motion.div
-            key={index}
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
+            initial={{ opacity: 0, scale: 0.97, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 10 }}
-            transition={{ type: "spring", damping: 22, stiffness: 300 }}
-            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[480px] max-w-[92vw] rounded-xl shadow-2xl z-[110] flex flex-col overflow-hidden"
+            exit={{ opacity: 0, scale: 0.97, y: 12 }}
+            transition={{ type: "spring", damping: 24, stiffness: 300 }}
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] rounded-2xl shadow-2xl z-[110] overflow-hidden"
             style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)" }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Set up NeuroVault"
           >
-            <div className="px-6 pt-6 pb-2 flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-wider font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-accent)" }}>
-                Getting started · {index + 1} / {slides.length}
-              </div>
+            <div className="px-7 pt-6 flex items-center gap-2">
+              {[0, 1, 2].map((item) => (
+                <span
+                  key={item}
+                  className="h-1 rounded-full flex-1"
+                  style={{ background: item <= step ? "var(--nv-accent)" : "var(--nv-border)" }}
+                />
+              ))}
               <button
-                onClick={dismiss}
-                className="text-[11px] font-[Geist,sans-serif] transition-colors"
+                onClick={closeForNow}
+                className="ml-3 text-[11px]"
                 style={{ color: "var(--nv-text-dim)" }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = "var(--nv-text)")}
-                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--nv-text-dim)")}
               >
-                Skip
+                Not now
               </button>
             </div>
 
-            <div className="px-6 py-4">
-              <h2 className="text-lg font-semibold font-[Geist,sans-serif] mb-3" style={{ color: "var(--nv-text)" }}>
-                {slide.title}
-              </h2>
-              <div className="font-[Geist,sans-serif]">{slide.body}</div>
-            </div>
+            <div className="px-8 pt-7 pb-8">
+              {step === 0 && (
+                <div>
+                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-5" style={{ background: "var(--nv-accent-glow)", color: "var(--nv-accent)" }}>
+                    <MemoryIcon />
+                  </div>
+                  <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--nv-accent)" }}>
+                    Private memory for your AI
+                  </p>
+                  <h2 className="text-[24px] font-semibold tracking-tight mt-2" style={{ color: "var(--nv-text)" }}>
+                    Let your AI remember the work, not just the chat
+                  </h2>
+                  <p className="text-[13.5px] leading-relaxed mt-3" style={{ color: "var(--nv-text-muted)" }}>
+                    NeuroVault keeps a plain-Markdown memory on this Mac, finds relevant context before each Claude Code prompt, and shows you a receipt afterward.
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 mt-6">
+                    <Promise label="Local files" detail="You choose the folder" />
+                    <Promise label="No telemetry" detail="No NeuroVault analytics" />
+                    <Promise label="Reviewable" detail="See what context was used" />
+                  </div>
+                  <div className="mt-7 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setStep(hasBrain ? 2 : 1)}
+                      className="py-2.5 rounded-xl text-[13px] font-semibold"
+                      style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+                    >
+                      Choose my files
+                    </button>
+                    <button
+                      onClick={() => void createSampleVault()}
+                      disabled={busy || signals.service !== "online" || hasBrain}
+                      className="py-2.5 rounded-xl text-[13px] font-semibold disabled:opacity-40"
+                      style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}
+                      title={hasBrain ? "A vault is already configured" : undefined}
+                    >
+                      {busy ? "Creating sample…" : "Try a sample vault"}
+                    </button>
+                  </div>
+                  {signals.service !== "online" && (
+                    <p className="mt-2 text-center text-[10.5px]" style={{ color: "var(--nv-text-dim)" }}>The sample becomes available when the local service is ready.</p>
+                  )}
+                </div>
+              )}
 
-            <div className="px-6 py-4 flex items-center justify-between" style={{ borderTop: "1px solid var(--nv-border)" }}>
-              <div className="flex gap-1.5">
-                {slides.map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setIndex(i)}
-                    className="w-1.5 h-1.5 rounded-full transition-all"
-                    style={{
-                      background: i === index ? "var(--nv-accent)" : "var(--nv-border)",
-                      width: i === index ? "16px" : "6px",
-                    }}
-                    aria-label={`Go to slide ${i + 1}`}
-                  />
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                {index > 0 && (
-                  <button
-                    onClick={() => setIndex((i) => i - 1)}
-                    className="px-3 py-1.5 text-xs rounded-md font-[Geist,sans-serif] transition-colors"
-                    style={{ color: "var(--nv-text-dim)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = "var(--nv-text)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = "var(--nv-text-dim)")}
-                  >
-                    Back
-                  </button>
-                )}
-                {slide.cta && (
-                  <button
-                    onClick={handleCta}
-                    className="px-4 py-1.5 text-xs rounded-md font-[Geist,sans-serif] font-medium transition-opacity hover:opacity-90"
-                    style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
-                  >
-                    {slide.cta.label}
-                  </button>
-                )}
-              </div>
+              {step === 1 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--nv-accent)" }}>
+                    Step 1 · Choose a vault
+                  </p>
+                  <h2 className="text-[22px] font-semibold mt-2" style={{ color: "var(--nv-text)" }}>
+                    Keep each project in its own boundary
+                  </h2>
+                  <p className="text-[13px] leading-relaxed mt-2" style={{ color: "var(--nv-text-muted)" }}>
+                    Choose an existing Markdown folder, or let NeuroVault create a private local vault. Memories from one vault are never used while another vault is active.
+                  </p>
+
+                  <label className="block mt-6">
+                    <span className="text-[11px] uppercase tracking-wider" style={{ color: "var(--nv-text-dim)" }}>Vault name</span>
+                    <input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      className="w-full mt-1.5 px-3 py-2.5 rounded-lg text-[13px] outline-none"
+                      style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+                      autoFocus
+                    />
+                  </label>
+
+                  <div className="mt-4">
+                    <span className="text-[11px] uppercase tracking-wider" style={{ color: "var(--nv-text-dim)" }}>Markdown folder · optional</span>
+                    <button
+                      onClick={chooseFolder}
+                      className="w-full mt-1.5 px-3 py-2.5 rounded-lg text-left text-[12px] flex items-center gap-2"
+                      style={{ background: "var(--nv-surface)", color: folder ? "var(--nv-text)" : "var(--nv-text-dim)", border: "1px solid var(--nv-border)" }}
+                    >
+                      <FolderIcon />
+                      <span className="truncate">{folder || "Choose an existing Markdown folder…"}</span>
+                    </button>
+                    {folder && (
+                      <button onClick={() => setFolder("")} className="text-[11px] mt-1" style={{ color: "var(--nv-text-dim)" }}>
+                        Use a new private library instead
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-7">
+                    <button onClick={() => setStep(0)} className="text-[12px] px-3 py-2" style={{ color: "var(--nv-text-dim)" }}>Back</button>
+                    <button
+                      onClick={createFirstBrain}
+                      disabled={busy || signals.service !== "online"}
+                      className="ml-auto px-5 py-2.5 rounded-lg text-[13px] font-semibold disabled:opacity-40"
+                      style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+                    >
+                      {busy ? "Creating…" : signals.service === "online" ? "Create vault" : "Waiting for local service…"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {step === 2 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--nv-accent)" }}>
+                    Step 2 · Automatic context
+                  </p>
+                  <h2 className="text-[22px] font-semibold mt-2" style={{ color: "var(--nv-text)" }}>
+                    Make memory automatic
+                  </h2>
+                  <p className="text-[13px] leading-relaxed mt-2" style={{ color: "var(--nv-text-muted)" }}>
+                    NeuroVault can check each Claude Code prompt locally and add only the memories relevant enough to help. Claude does not need to call a recall tool.
+                  </p>
+
+                  <div className="rounded-xl p-4 mt-6" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+                    <CheckRow ok={signals.service === "online"} label="Local memory service is running" />
+                    <CheckRow ok={hasBrain} label={hasBrain ? `${signals.activeBrainName ?? "Vault"} is active` : "An active vault is required"} />
+                    <CheckRow ok={recallOn} label={recallOn ? "Automatic recall is installed" : "Automatic recall is not enabled"} />
+                  </div>
+
+                  <div className="rounded-xl px-4 py-3 mt-4 text-[11.5px] leading-relaxed" style={{ background: "rgba(86,140,250,0.08)", color: "var(--nv-text-muted)", border: "1px solid rgba(86,140,250,0.2)" }}>
+                    Prompt text is used in memory for matching. The decision log stores a hash by default, not the prompt. Selected note excerpts are handed to Claude Code, so Anthropic&apos;s privacy terms apply to that injected context.
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-7">
+                    <button
+                      onClick={() => { finish(); onOpenSettings(); }}
+                      className="text-[11px]"
+                      style={{ color: "var(--nv-text-dim)" }}
+                    >
+                      Advanced settings
+                    </button>
+                    {!recallOn && (
+                      <button onClick={finish} disabled={!hasBrain} className="ml-auto text-[12px] px-3 py-2" style={{ color: "var(--nv-text-dim)" }}>
+                        Do this later
+                      </button>
+                    )}
+                    <button
+                      onClick={recallOn ? finish : enableAutomaticMemory}
+                      disabled={busy || !hasBrain}
+                      className={`${recallOn ? "ml-auto" : ""} px-5 py-2.5 rounded-lg text-[13px] font-semibold disabled:opacity-40`}
+                      style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+                    >
+                      {busy ? "Enabling…" : recallOn ? "Finish setup" : "Enable automatic memory"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="rounded-lg px-3 py-2 mt-4 text-[12px]" style={{ background: "rgba(248,113,113,0.08)", color: "var(--nv-negative)", border: "1px solid rgba(248,113,113,0.25)" }}>
+                  {error}
+                </div>
+              )}
+
+              {step > 0 && (
+                <div className="flex items-center gap-2 mt-5 pt-4" style={{ borderTop: "1px solid var(--nv-border)" }}>
+                  <span className="w-2 h-2 rounded-full" style={{ background: healthToneColor(health.tone) }} />
+                  <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>{health.headline}</span>
+                  <button onClick={refreshHealth} className="ml-auto text-[11px]" style={{ color: "var(--nv-accent)" }}>Check again</button>
+                </div>
+              )}
             </div>
           </motion.div>
         </>
       )}
     </AnimatePresence>
   );
+}
+
+function Promise({ label, detail }: { label: string; detail: string }) {
+  return (
+    <div className="rounded-xl p-3" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+      <p className="text-[11px] font-semibold" style={{ color: "var(--nv-text)" }}>{label}</p>
+      <p className="text-[10px] mt-1 leading-snug" style={{ color: "var(--nv-text-dim)" }}>{detail}</p>
+    </div>
+  );
+}
+
+function CheckRow({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 py-1.5 text-[12px]" style={{ color: ok ? "var(--nv-text)" : "var(--nv-text-dim)" }}>
+      <span className="w-4 h-4 rounded-full flex items-center justify-center text-[10px]" style={{ background: ok ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.05)", color: ok ? "var(--nv-positive)" : "var(--nv-text-dim)" }}>{ok ? "✓" : "·"}</span>
+      {label}
+    </div>
+  );
+}
+
+function MemoryIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="w-7 h-7"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="7" r="1.5" fill="currentColor" /><circle cx="7" cy="15.5" r="1.5" fill="currentColor" /><circle cx="17" cy="15.5" r="1.5" fill="currentColor" /><path d="M12 8.5v3.5M8.3 14.8l2.4-1.5M15.7 14.8l-2.4-1.5" /></svg>;
+}
+
+function FolderIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className="w-4 h-4 shrink-0"><path d="M3 6.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>;
 }

@@ -85,6 +85,9 @@ First run downloads the embedding model (BGE-small-en-v1.5, ~130 MB) to
 ```bash
 cd src-tauri && cargo test --no-default-features    # Rust unit + integration
 npx tsc --noEmit                                     # TypeScript typecheck
+npm run test:ui                                      # component + accessibility tests
+npm run test:hardening                               # CSP/capability/release invariants
+npm run test:e2e                                     # Chromium consumer-shell smoke test
 npm run build                                        # frontend build (catches more)
 ```
 
@@ -92,10 +95,11 @@ npm run build                                        # frontend build (catches m
 > parallel execution; `cargo test --no-default-features -- --test-threads=1`
 > is the deterministic run.
 
-Tests are part of every deliverable. If you change an MCP tool, add/adjust a
+Install the Playwright browser once before the first local e2e run with
+`npx playwright install chromium`. Tests are part of every deliverable. If you change an MCP tool, add/adjust a
 test for the new shape (the tool count is asserted in
 `src-tauri/src/memory/mcp/registry.rs`). If you change the UI, at minimum make
-`npm run build` and `tsc` pass.
+`npm run test:ui`, `npm run build`, and `tsc` pass.
 
 ## Adding an MCP tool
 

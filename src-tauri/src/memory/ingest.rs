@@ -205,19 +205,19 @@ pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Resul
     let existing_id: Option<String>;
     {
         let conn = db.lock();
-        let found: Option<(String, String)> = conn
+        let found: Option<(String, String, String)> = conn
             .query_row(
-                "SELECT id, content_hash FROM engrams WHERE filename = ?1",
+                "SELECT id, content_hash, COALESCE(state, 'fresh') FROM engrams WHERE filename = ?1",
                 [filename],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
             )
             .ok();
-        if let Some((_, ref h)) = found {
-            if h == &new_hash {
+        if let Some((_, ref h, ref state)) = found {
+            if h == &new_hash && state != "dormant" {
                 return Ok(None);
             }
         }
-        existing_id = found.map(|(id, _)| id);
+        existing_id = found.map(|(id, _, _)| id);
     }
 
     let engram_id = existing_id
@@ -285,6 +285,7 @@ pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Resul
                title=excluded.title,
                content=excluded.content,
                content_hash=excluded.content_hash,
+               state='fresh',
                updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')",
             params![&engram_id, filename, &title, content, &new_hash],
         )?;

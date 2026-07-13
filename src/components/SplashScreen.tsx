@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import logo from "../assets/vault-logo.png";
+import logo from "../assets/vault-mark.png";
 
 /**
  * Fast, futuristic app-open animation: the NeuroVault mark fades in, two

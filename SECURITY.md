@@ -98,9 +98,13 @@ we'll prioritize the fix regardless and appreciate your patience.
 
 - The HTTP server binds `127.0.0.1` explicitly — not `0.0.0.0` — so
   misconfigured routers / accidentally-shared wifi don't expose it.
-- Tauri capability scoping: the sidecar spawn is limited to
-  `neurovault-server` / `binaries/neurovault-server` by name; it can't
-  be redirected to an arbitrary executable by injection.
+- Tauri capability scoping: the main webview can open user-selected files,
+  save exports, open normal web links, check signed updates, and restart after
+  an update. It has no generic filesystem, shell execute/spawn, shell kill,
+  deep-link registration, or global-shortcut plugin permission.
+- The legacy Rust sidecar command (not a webview shell permission) can only
+  resolve the bundled `neurovault-server` binary; arbitrary executable paths
+  and arbitrary argument vectors are not accepted.
 - Filename validation on rename/move: absolute paths and `..`
   components are rejected.
 - NeuroVault executes no agent-supplied code. The optional Python
@@ -119,9 +123,11 @@ we'll prioritize the fix regardless and appreciate your patience.
 - **No vault encryption at rest** — documented in
   [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
   on the research roadmap.
-- **No automated dependency vulnerability scanning** in CI — planned
-  as a pre-release item.
+- **Dependency scanning is automated**: pull requests receive GitHub
+  dependency review, weekly npm production and RustSec audits run in Actions,
+  Dependabot covers npm/Cargo/Actions, and release bundles publish SPDX SBOMs
+  plus Sigstore-backed GitHub build-provenance attestations.
 
 ---
 
-*Last updated: 2026-04-19.*
+*Last updated: 2026-07-13.*

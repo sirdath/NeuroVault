@@ -1,158 +1,224 @@
-# Handoff: improving the NeuroVault graph view
+# Handoff: NeuroVault graph snapshots and Graph Engine
 
-> Self-contained brief for an agent (Codex) picking up the graph view
-> cold. Everything you need to be productive without spelunking. Read
-> this fully before editing; the graph file is large and easy to
-> regress. Last updated 2026-07-12.
+> Self-contained brief for the next agent. Last updated 2026-07-13 after the
+> Graph Engine V2 redesign. Read this before editing: `NeuralGraph.tsx` still
+> contains legacy code paths and is easy to regress accidentally.
 
-## What the graph view is
+## Product contract
 
-The "neural graph" is NeuroVault's flagship visual: an interactive,
-force-directed map of the user's memory. Each node is a note (engram);
-each edge is a semantic/graph link between two notes. It's the second
-main view of the desktop app (editor is the first), reachable from the
-activity bar. It must feel alive and legible, and stay smooth on a
-real brain of hundreds-to-thousands of nodes.
+The graph has two deliberately different jobs:
 
-## Where it lives
+1. **Everyday Graph View** is a calm visual receipt of the user's collected
+   memory. It offers only a fixed **2D snapshot** and fixed **3D snapshot**.
+   Their coordinates never settle or drift; they change only when graph
+   content changes.
+2. **Graph Engine** is the optional aesthetic playground. It opens from the
+   snapshot toolbar, supplies curated compositions, and returns to the exact
+   snapshot the user came from. Engine is never persisted as the startup mode.
 
-| File | Lines | Role |
-|---|---|---|
-| `src/components/NeuralGraph.tsx` | ~2500 | The whole renderer. Canvas paint, force config, modes, interaction, camera, time-lapse, search, hover/focus. This is 90% of the work surface. |
-| `src/components/GraphFilterPanel.tsx` | ~700 | The Filters side panel (layout presets, folder colors, toggles, label-zoom threshold, node size). |
-| `src/components/GraphLegend.tsx` | ~145 | On-canvas legend for Analytics mode. |
-| `src/stores/graphStore.ts` | ~110 | Zustand store: nodes/edges/hover/selection/focus + `loadGraph`. |
-| `src/stores/graphSettingsStore.ts` | — | Persisted graph UI settings (`graphMode`, toggles, thresholds). Search for `useGraphSettingsStore`. |
-| `src/lib/api.ts` | — | `GraphNode`, `GraphEdge`, `GraphData`, `fetchGraph`. |
-| `src/lib/graphFromDisk.ts` | — | Disk-fallback graph builder (when the HTTP server is down). |
+The everyday page must stay understandable. Experimental styling, filters,
+pattern import/export, and image export belong in Graph Engine.
 
-Server side (Rust): `src-tauri/src/memory/handlers/mod.rs` → `pub async fn graph(...)` → `get_graph(db, include_observations, min_similarity, exclude_types)`. Returns `GraphData { nodes, edges }`. **You almost certainly do not need to touch Rust** — the frontend is where the graph experience lives.
+## Current user-facing surface
 
-## Tech stack
+Snapshot toolbar:
 
-- **`react-force-graph-2d` and `react-force-graph-3d` (v1.29.1)** — the renderer. 2D is canvas-based (the default and the important one); 3D is ThreeJS and **lazy-loaded** (`lazy(() => import(...))`) so its heavy deps don't bloat the 2D path. Don't un-lazy it.
-- **`d3-force` (v3)** — the physics. Custom forces are attached via the force-graph ref's `d3Force(name, force)` escape hatch (see `NeuralGraph.tsx` ~line 508–575: link, collide, a custom cluster force, centerX/centerY).
-- Plain Canvas 2D API for all node/link/label painting (`nodeCanvasObject={paintNode2D}`, `nodeCanvasObjectMode="replace"`).
-- Zustand for state, Tailwind for the surrounding chrome, CSS variables for theming.
+- `2D | 3D`
+- Names: `Off | Key | All`
+- Connections: `Off | Featured | All`
+- `Fit`
+- `Open Graph Engine`
+- a small overflow menu for refresh/diagnostics/analytics/save actions
 
-## Data flow
+Graph Engine:
 
-```
-NeuralGraph mounts
-  → useGraphStore().loadGraph(excludeTypes)   [on mount, brain switch, +3s settle refresh]
-  → fetchGraph()  (src/lib/api.ts)
-      → GET http://127.0.0.1:8765/api/graph?exclude_types=...   (preferred)
-      → falls back to buildGraphFromDisk() if the server is down
-  → store holds SimNode[] (GraphNode + {x,y,vx,vy,pinned}) + GraphEdge[]
-  → NeuralGraph reads them into a memoized `graphData` and hands it to <ForceGraph2D graphData=...>
-```
+- compact composition description and `← Snapshots`
+- Names and Connections controls
+- safe declarative pattern import/export
+- Fit, Save image, Filters
+- six composition gallery: **Time Rings, Constellation Islands, Neural Arbor,
+  Connectome Halo, Memory Flow, Knowledge Globe**
 
-`loadGraph` is also re-fired 3s after mount (a settle refresh) and on `activeBrainId` change. The GET is uncached server-side.
+The bottom count is honest: it reports relationships shown and total
+relationships separately.
 
-## Data shapes (from `src/lib/api.ts`)
+## Files
 
-```ts
-interface GraphNode {
-  id: string;
-  title: string;
-  state: string;          // "fresh" | "active" | "connected" | "dormant" | ...
-  strength: number;       // 0..1 usage/recency — drives the health ring
-  access_count: number;
-  folder?: string;        // top-level folder ("projects", "agent", "") for cluster color/layout
-  created_at?: string;    // SQLite TEXT — drives the time-lapse ordering
-  kind?: string;          // "note" | "source" | "code" | ... ; kind="code" gets gold styling + its own layer
-}
-interface GraphEdge {
-  from: string; to: string;
-  similarity: number;     // 0..1
-  link_type: string;      // "similar" | "uses" (gold) | ... ; shown in the hover tooltip "type · 0.87"
-}
-```
+| File | Role |
+|---|---|
+| `src/components/NeuralGraph.tsx` | Shared shell, fixed snapshot renderers, toolbar, camera, hover/focus, Engine handoff and fallback. |
+| `src/components/AtlasGraph.tsx` | Sigma/WebGL Graph Engine, style-aware curved relationships, six-style gallery, controls, export and failure fallback. |
+| `src/lib/graphSnapshots.ts` | Pure deterministic 2D community packing and 3D Fibonacci-shell coordinates. |
+| `src/lib/atlasVisualModel.ts` | Deterministic row collapse, relationship tiers, communities, importance and fingerprint. |
+| `src/lib/atlasPatterns.ts` | Pure composition geometry plus bounded declarative custom-pattern parser. |
+| `src/lib/atlasLayoutCache.ts` | IndexedDB cache retained for imported legacy transforms that still consume a ForceAtlas base layout. |
+| `src/workers/atlasLayout.worker.ts` | Deterministic fixed-iteration ForceAtlas worker for legacy/custom transforms only. Built-ins do not run it. |
+| `src/stores/graphStore.ts` | Graph fetch/state. Preserves node/edge references when the content fingerprint is unchanged and ignores stale requests. |
+| `src/stores/graphSettingsStore.ts` | Persisted Names, Connections, palette and other graph settings. |
+| `src/components/GraphFilterPanel.tsx` | Advanced filters. Mounted only in Graph Engine. |
 
-## The scale you're optimizing for (measured live, 2026-07-12)
+Server data remains read-only here:
+`src-tauri/src/memory/handlers/mod.rs` → `/api/graph`.
 
-Active brain (`ml-ai`): **616 nodes, 7063 edges** — ~11 edges/node. This is the real target and the core problem: **the graph is edge-dense (a hairball)**, not node-heavy. The server already raised `min_similarity` 0.75 → 0.85 to cut edges, but a topic-focused brain (all ML notes) still scores densely. Node paint is largely solved (see below); **edge legibility and edge rendering cost are the biggest open problems.**
+## Rendering architecture
 
-## Performance work ALREADY done — do NOT redo these
-
-1. **Node sprite cache** (`getNodeSprite`, `spriteCache`, `SPRITE_SS=6`, ~line 200–265). The glassy orb (drop shadow + 3-stop radial gradient + specular) is baked once per `(color, size-bucket, shape)` into a 6×-supersampled offscreen canvas and stamped with `drawImage`. Was the dominant per-frame cost (two gradients + shadowBlur per node per frame); now ~10–30× cheaper. Alpha (focus/orphan/search dims) applied via `globalAlpha` over the stamp. Cache bounded at 512 entries.
-2. **Auto-lite** (`lite || nodes.length > 800`, ~line 1654). Past 800 nodes the paint falls back to a flat fill (no gradient/ring/label). User's explicit "Lite" preset (`graphMode === "lite"`) forces it at any size.
-3. **Static mode** (`mode === "static"`): physics loop fully off (`cooldownTicks/Time/warmupTicks = 0`), nodes pinned to `fx/fy` from the last settled layout captured on `onEngineStop`. Idle CPU between interactions.
-4. **Lazy 3D**, cluster labels only in non-lite (`onRenderFramePost={lite ? undefined : paintClusterLabels}`), background tints only non-lite (`onRenderFramePre`).
-
-## The render call (NeuralGraph.tsx ~2355)
-
-```tsx
-<ForceGraph2D
-  ref={fg2dRef}
-  graphData={graphData}
-  width={size.w} height={size.h}
-  backgroundColor="rgba(0,0,0,0)"
-  nodeRelSize={5}
-  nodeVal={nodeVal} nodeColor={nodeColor}
-  nodeCanvasObject={paintNode2D} nodeCanvasObjectMode={() => "replace"}
-  nodePointerAreaPaint={paintPointerArea2D}
-  linkLabel={linkLabel} linkColor={linkColor} linkWidth={linkWidth} linkCurvature={linkCurvature}
-  linkDirectionalArrowLength={showArrows ? 3.5 : 0}
-  onRenderFramePre={lite ? undefined : paintBackgroundTints}
-  onRenderFramePost={lite ? undefined : paintClusterLabels}
-  cooldownTicks={mode === "static" ? 0 : lite ? 25 : 100}
-  onNodeHover={handleNodeHover} onNodeClick={handleNodeClick}
-  enableNodeDrag={mode !== "static"}
-  minZoom={0.05} maxZoom={50}
-/>
+```text
+/api/graph
+  → graphStore canonical content fingerprint
+  → NeuralGraph
+      ├─ 2D snapshot
+      │    buildAtlasVisualModel → graphSnapshot2D
+      │    fixed fx/fy → ForceGraph2D, zero warmup/cooldown
+      ├─ 3D snapshot
+      │    buildAtlasVisualModel → graphSnapshot3D
+      │    fixed fx/fy/fz → lazy ForceGraph3D, zero warmup/cooldown
+      │    deterministic camera distance (never early zoomToFit)
+      └─ Graph Engine
+           buildAtlasVisualModel → selected pure composition
+           → Sigma WebGL nodes + @sigma/edge-curve relationships
 ```
 
-Modes: `"2d" | "3d" | "static"` (in `graphSettingsStore` as `graphMode`, plus a `"lite"` value that sets `lite=true`). Layout presets ("organic" vs clustered) are wired through the `d3Force` block.
+The built-in Engine compositions are deterministic O(N + E) or O(E log E)
+presentation passes. They do not simulate physics and therefore have no
+visible settling or idle layout work.
 
-## Highest-value improvement targets (pick from these)
+## Snapshot behavior
 
-These are opportunities, not prescriptions — use judgment:
+### Fixed 2D
 
-1. **Edge rendering & legibility (biggest win).** 7k edges on 616 nodes reads as a hairball and costs the most per frame.
-   - Consider: edge bundling, opacity/width scaled by `similarity`, hiding weak edges below a user threshold, drawing only edges touching the hovered/selected node + its neighbors at full strength and dimming the rest, or a per-frame edge budget with LOD (draw fewer edges when zoomed out).
-   - The adjacency map already exists (search `adjacency`) — reuse it.
-2. **Link paint cost.** Links are drawn by the library every frame. At 7k edges that's the new hot path now that nodes are cached. Profile it (Chrome perf tab against the live app) before optimizing.
-3. **Initial layout settling.** Big/dense graphs can look chaotic on first load and take time to settle. Consider a better initial seeding, stronger early cooling, or a "settling…" affordance.
-4. **Visual polish (brand just went blue — 2026-07-12).** The accent is now `#568cfa` on deep indigo-black (`--nv-accent`, theme id `neurovault`). Node state colors: fresh = brand blue ring, active/connected = teal `#00c9b1`, dormant = grey, `kind="code"` = gold `#f5c350`. Make sure any new visuals read against the blue identity and both look intentional.
-5. **Labels.** Currently zoom-gated (`labelZoomThreshold`, default ~3.2) + shown for hover-focus neighbors. Overlap/decluttering at mid-zoom is an open problem.
-6. **Empty / tiny / huge states.** Verify 0-node, ~10-node, and 2000+-node all look deliberate.
+- Communities are packed on a deterministic golden-angle spiral.
+- Notes use compact phyllotaxis inside their community.
+- Orphans occupy outer rings.
+- Coordinates are normalized to a stable extent and pinned through `fx/fy`.
+- Featured connections use the visual model's full non-detail connectivity
+  backbone; do not sparsify it again or the snapshot becomes confetti.
 
-## Hard constraints — respect these
+### Fixed 3D
 
-- **Do not touch backend/consolidation/memory semantics.** The project is mid-"observation window" (a frozen evaluation of the memory-review feature). Graph work is pure frontend and unrelated; keep it that way. Do not modify `src-tauri/src/memory/adaptive/**`, the journal, or consolidation. `/api/graph` is stable — treat it as read-only contract.
-- **Theming via CSS vars, never hardcode.** Use `var(--nv-accent)`, `var(--nv-text)`, `var(--nv-surface)`, `var(--nv-border)`, etc. There are 8 themes; the graph must work in all. (A recent pass removed 20 hardcoded amber values — don't reintroduce hardcoded colors.)
-- **TypeScript strict, no `any`** (the 3D ref has one grandfathered `any` with an eslint-disable; don't add more).
-- **Preserve the existing perf machinery** (sprite cache, auto-lite, static mode). Build on it.
-- **Keep it a single canvas** — no DOM-per-node overlays (they don't scale and break zoom transforms). Canvas paint + `onRenderFramePre/Post` is the pattern.
+- Notes occupy a deterministic Fibonacci shell with real depth.
+- Radius scales with `sqrt(nodeCount)` and is bounded for tiny/large brains.
+- Coordinates are pinned through `fx/fy/fz`; the user may orbit but nodes do
+  not move.
+- Initial framing and Fit call `cameraPosition` using the known shell bound.
+  Do not replace this with an early `zoomToFit`: while the lazy Three renderer
+  is mounting its bounding box can still be at the origin, putting the camera
+  inside the globe and producing giant clipped spheres.
 
-## How to run and verify
+## Graph Engine composition contract
+
+A credible style owns more than coordinates. Each built-in controls:
+
+- silhouette/layout
+- node emphasis
+- which real relationships appear in Featured mode
+- curve amount and relationship colour
+- atmosphere/background
+- fit and gallery identity
+
+All relationships are real model edges. Decorative rings, lanes and glows are
+atmosphere only and are never represented as evidence.
+
+Current styles:
+
+- **Time Rings:** chronological spiral with a few authored long-range arcs and
+  a local relationship skeleton.
+- **Constellation Islands:** up to ten substantial communities packed as
+  islands; tiny groups become an outer dust field instead of fake anchors.
+- **Neural Arbor:** up to eight substantial communities become radial spanning
+  trees built from actual relationships. Tiny groups remain peripheral dust.
+- **Connectome Halo:** community arcs around a circle plus a curated mix of
+  cross-community chords and local perimeter relationships.
+- **Memory Flow:** five centred chronological currents; largest community is in
+  the central lane and subtle SVG streams are atmosphere only.
+- **Knowledge Globe:** interleaved community ordering projected as an orb with
+  curved relationships and a restrained depth atmosphere.
+
+Featured budgets are deliberately small and style-specific. `All` still makes
+the full collapsed evidence graph available. Edges use Sigma's official
+`@sigma/edge-curve` WebGL renderer. Colours are pre-blended with the theme
+background because low-alpha WebGL line compositing varies across GPUs.
+
+## Controls and persistence
+
+- Default is Names Off, Connections Featured.
+- Off genuinely removes labels/relationships from rendering.
+- Key names are community anchors only, and singleton/tiny communities do not
+  become oversized anchors.
+- Engine pattern selection persists; Engine itself does not persist as the
+  startup view.
+- Custom JSON patterns are schema-versioned, size-bounded, numeric-bounded,
+  allowlisted transforms only, and reject URLs/callbacks/shaders/code.
+
+## Scale and performance target
+
+Latest live QA brain on 2026-07-13: **247 memories, 4,111 raw relationships**.
+The system must also remain comfortable at roughly 2,000 nodes and tens of
+thousands of raw relationship rows.
+
+Important performance rules:
+
+- Never add one DOM element per note.
+- Keep 3D lazy-loaded.
+- Keep built-in compositions simulation-free.
+- Preserve graph-store identical-refresh reference reuse.
+- Preserve deterministic fingerprints and replay tests.
+- Do not materialize extra copies of all raw edges inside render callbacks.
+- All-mode may be visually dense by explicit user choice; default Featured
+  must remain sparse.
+
+## Verification
+
+Pure graph suite:
 
 ```bash
-# from repo root
-npm install                       # if fresh
-npm run dev -- --port 1420        # Vite dev (CORS allows :1420). BUT the app
-                                  # needs the Tauri runtime; see note below.
+npm run test:graph
+# or: ./node_modules/.bin/tsx src/lib/graph.test.ts
 ```
 
-**Important:** the full app boots inside Tauri and calls Tauri APIs, so a
-plain browser at `/` crashes with "Cannot read properties of undefined
-(reading 'metadata')". Two ways to see the graph in a browser:
-- Run the real desktop app: `npm run tauri dev` (hot-reloads the frontend), OR
-- Use the preview harness pattern already in the repo (`preview.html` + `src/preview-main.tsx` render a single component against the live API on :8765) — copy that approach for a `<NeuralGraph>`-only preview if useful. The backend must be running (open the installed NeuroVault.app, or `neurovault-server --http-only`) so `/api/graph` answers on 127.0.0.1:8765.
+It covers model correctness, replay, safe pattern parsing, six finite/distinct
+composition silhouettes, row-order independence, fixed snapshot replay,
+metadata-only stability, mutation isolation, tiny/empty brains and true 3D
+depth.
 
-**The gate (must pass before committing):**
+Frontend checks:
+
 ```bash
-cd src-tauri && GATES_FRONTEND=1 ../scripts/gates.sh    # runs: cargo fmt/test/clippy + tsc + vite build
+npx tsc --noEmit
+npm run build
 ```
-For a frontend-only change you mainly need `npx tsc --noEmit` and `npm run build` green; the full gate also runs the Rust suite (should stay green since you didn't touch Rust).
 
-Commit style: small, conventional (`feat(graph): ...`, `perf(graph): ...`, `fix(graph): ...`), no `Co-Authored-By` trailer. Branch is `feat/headless-mcp`; PR into `main`.
+For visual QA without booting the full Tauri app, `graph-preview.html` and
+`src/graph-preview-main.tsx` render `NeuralGraph` against the live API on
+`127.0.0.1:8765`. Inspect all eight states at desktop size:
 
-## Suggested first move
+- fixed 2D
+- fixed 3D
+- every Engine composition with Names Off / Connections Featured
+- at least one style with Names Key and Connections Off
 
-Profile the live app (616 nodes / 7063 edges) with Chrome's Performance
-tab while panning/zooming, confirm links are now the hot path, then
-tackle edge LOD + similarity-weighted opacity + neighbor-focus dimming.
-That single change should improve both frame rate and legibility — the
-two things a user actually feels.
+The production gate remains:
+
+```bash
+cd src-tauri && GATES_FRONTEND=1 ../scripts/gates.sh
+```
+
+## Hard constraints
+
+- Do not touch journal, consolidation, adaptive-memory or observation-window
+  behavior for graph work.
+- Keep all palette choices theme-derived.
+- TypeScript strict; do not add `any`.
+- Preserve exact replay. A graph refresh with unchanged content must not move a
+  single note.
+- Do not claim a decorative connection is memory evidence.
+- Judge styles on the user's real brain screenshots, not only synthetic data.
+
+## Honest follow-ups
+
+- Engine PNG export captures Sigma and a solid background but not every CSS/SVG
+  atmosphere layer yet; a future export compositor should make the saved image
+  pixel-match the viewport.
+- ForceGraph3D has fixed physics but still owns a Three render loop. A bespoke
+  on-demand renderer could further reduce idle GPU use later.
+- If a new composition cannot produce a genuinely different, polished
+  silhouette, do not add it merely to increase the gallery count.

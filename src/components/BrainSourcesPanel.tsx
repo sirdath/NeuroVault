@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useBrainStore, type BrainSource, type SyncPlan } from "../stores/brainStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface BrainSourcesPanelProps {
   brainId: string;
@@ -21,11 +22,16 @@ function formatLastSynced(iso: string | null): string {
   });
 }
 
+function editableSourceSignature(sources: BrainSource[]): string {
+  return JSON.stringify(sources.map(({ path, enabled }) => ({ path, enabled })));
+}
+
 export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesPanelProps) {
   const { listSources, setSources, previewSources, syncSources, graphifyFolder } = useBrainStore();
 
   // --- local state ----------------------------------------------------------
   const [sources, setSourcesToState] = useState<BrainSource[]>([]);
+  const [savedSources, setSavedSources] = useState<BrainSource[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
 
@@ -45,6 +51,7 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
   // Inline action results
   const [saveError, setSaveError] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const newPathInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +65,10 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
       setLoadError(null);
       try {
         const list = await listSources(brainId);
-        if (!cancelled) setSourcesToState(list);
+        if (!cancelled) {
+          setSourcesToState(list);
+          setSavedSources(list);
+        }
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -68,16 +78,29 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
     return () => { cancelled = true; };
   }, [brainId, listSources]);
 
+  const dirty = useMemo(
+    () => editableSourceSignature(sources) !== editableSourceSignature(savedSources),
+    [sources, savedSources],
+  );
+
+  const requestClose = useCallback(() => {
+    if (saving || syncing || previewing || indexing) return;
+    if (dirty) setConfirmDiscard(true);
+    else onClose();
+  // `busy` is declared below from the individual operation flags; listing the
+  // flags directly keeps this callback above the render-only aggregate.
+  }, [dirty, onClose, saving, syncing, previewing, indexing]);
+
   // -------------------------------------------------------------------------
-  // Keyboard: Escape closes
+  // Keyboard: Escape requests close, preserving unsaved source changes.
   // -------------------------------------------------------------------------
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !confirmDiscard) requestClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [confirmDiscard, requestClose]);
 
   // -------------------------------------------------------------------------
   // Local list mutations (toggle, remove) — do NOT call the API yet.
@@ -153,6 +176,7 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
       const payload = sources.map(({ path, enabled }) => ({ path, enabled }));
       const updated = await setSources(brainId, payload);
       setSourcesToState(updated);
+      setSavedSources(updated);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -243,10 +267,11 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
   // Render
   // -------------------------------------------------------------------------
   return createPortal(
+    <>
     <div
       className="fixed inset-0 flex items-center justify-center z-[100] pointer-events-auto"
       style={{ background: "rgba(0,0,0,0.66)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
     >
       <div
         className="rounded-2xl flex flex-col"
@@ -284,7 +309,7 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
             </p>
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="w-7 h-7 flex items-center justify-center rounded-md flex-shrink-0 transition-colors"
             style={{ color: "var(--nv-text-dim)" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-text)"; e.currentTarget.style.background = "var(--nv-bg)"; }}
@@ -507,7 +532,7 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
                     <li>+ add {plan.to_add.length} file{plan.to_add.length === 1 ? "" : "s"}</li>
                     <li>~ update {plan.to_update.length}</li>
                     <li>− remove {plan.to_remove.length}</li>
-                    <li>skip {plan.duplicates.length} duplicate{plan.duplicates.length === 1 ? "" : "s"} already in this brain</li>
+                    <li>skip {plan.duplicates.length} duplicate{plan.duplicates.length === 1 ? "" : "s"} already in this vault</li>
                     <li style={{ color: "var(--nv-text-dim)" }}>{plan.unchanged} unchanged (untouched)</li>
                   </ul>
                 </>
@@ -612,12 +637,12 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               disabled={busy}
               className="text-[12px] font-[Geist,sans-serif] px-3 py-2 rounded-lg transition-colors"
               style={{ color: "var(--nv-text-muted)", opacity: busy ? 0.5 : 1 }}
             >
-              Cancel
+              {dirty ? "Discard changes" : "Close"}
             </button>
             <button
               type="button"
@@ -645,7 +670,18 @@ export function BrainSourcesPanel({ brainId, brainName, onClose }: BrainSourcesP
           </div>
         </div>
       </div>
-    </div>,
+    </div>
+    <ConfirmDialog
+      open={confirmDiscard}
+      title="Discard source-folder changes?"
+      message="The folders you added, removed, or disabled have not been saved. Closing now will discard those changes."
+      confirmLabel="Discard changes"
+      cancelLabel="Keep editing"
+      destructive
+      onCancel={() => setConfirmDiscard(false)}
+      onConfirm={onClose}
+    />
+    </>,
     document.body,
   );
 }

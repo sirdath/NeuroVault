@@ -123,6 +123,13 @@ export const actionCopy = (action: string): ActionCopy =>
     executable: false,
   };
 
+/** Only executable proposals deserve the urgent "Needs attention" label.
+ * Accuracy-only observations remain reviewable learning checks, but they do
+ * not imply that the user's memory is at risk or waiting on a change. */
+const ACCURACY_ONLY_ACTIONS = new Set(["working_state_refresh", "room_summary_refresh"]);
+export const proposalNeedsAttention = (action: string): boolean =>
+  !ACCURACY_ONLY_ACTIONS.has(action);
+
 /** Review-status chips. */
 export const reviewLabel = (s: string): string =>
   ({

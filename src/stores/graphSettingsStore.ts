@@ -17,6 +17,8 @@ import { create } from "zustand";
 
 export type GraphPalette = "warm" | "cool" | "mono" | "vivid";
 export type GraphNodeShape = "circle" | "square" | "hex";
+export type GraphLabelMode = "off" | "key" | "all";
+export type GraphConnectionMode = "off" | "featured" | "all";
 /** Master performance switch for the graph view. */
 export type GraphMode = "full" | "lite" | "off";
 
@@ -191,6 +193,9 @@ interface GraphSettings {
    *  and restored when they switch back. "off" = the graph view never mounts
    *  (zero cost); the nav button shows a re-enable placeholder instead. */
   graphMode: GraphMode;
+  /** Presentation-only visibility. These never invalidate a snapshot layout. */
+  labelMode: GraphLabelMode;
+  connectionMode: GraphConnectionMode;
 }
 
 export type GraphGroupingStyle = "soft" | "hull";
@@ -226,6 +231,8 @@ const DEFAULTS: GraphSettings = {
   animations: true,
   groupingStyle: "soft",
   graphMode: "full",
+  labelMode: "off",
+  connectionMode: "featured",
 };
 
 /** Tight `#rrggbb` validator. We only persist colours that match this
@@ -266,6 +273,12 @@ function load(): GraphSettings {
       };
       const layoutShape: GraphLayoutShape =
         parsed.layoutShape === "circle" ? "circle" : "organic";
+      const labelMode: GraphLabelMode =
+        parsed.labelMode === "key" || parsed.labelMode === "all" ? parsed.labelMode : "off";
+      const connectionMode: GraphConnectionMode =
+        parsed.connectionMode === "off" || parsed.connectionMode === "all"
+          ? parsed.connectionMode
+          : "featured";
       return {
         palette,
         nodeShape,
@@ -296,6 +309,8 @@ function load(): GraphSettings {
           parsed.graphMode === "lite" || parsed.graphMode === "off"
             ? parsed.graphMode
             : "full",
+        labelMode,
+        connectionMode,
       };
     }
   } catch { /* corrupt / private mode */ }
@@ -338,6 +353,8 @@ interface GraphSettingsStore extends GraphSettings {
   toggleAnimations: () => void;
   setGroupingStyle: (v: GraphGroupingStyle) => void;
   setGraphMode: (m: GraphMode) => void;
+  setLabelMode: (m: GraphLabelMode) => void;
+  setConnectionMode: (m: GraphConnectionMode) => void;
 }
 
 function persist(s: GraphSettings) {
@@ -444,4 +461,6 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   toggleAnimations: () => { const next = !get().animations; set({ animations: next }); persist({ ...get(), animations: next }); },
   setGroupingStyle: (groupingStyle) => { set({ groupingStyle }); persist({ ...get(), groupingStyle }); },
   setGraphMode: (graphMode) => { set({ graphMode }); persist({ ...get(), graphMode }); },
+  setLabelMode: (labelMode) => { set({ labelMode }); persist({ ...get(), labelMode }); },
+  setConnectionMode: (connectionMode) => { set({ connectionMode }); persist({ ...get(), connectionMode }); },
 }));

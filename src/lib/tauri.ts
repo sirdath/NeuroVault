@@ -7,6 +7,14 @@ export interface NoteMeta {
   size: number;
 }
 
+export interface TrashEntry {
+  trashed_filename: string;
+  original_filename: string;
+  title: string;
+  deleted_at: number;
+  size: number;
+}
+
 /**
  * Runtime detection: are we inside Tauri's webview, or a plain browser?
  *
@@ -127,24 +135,31 @@ export const readNote = (filename: string) =>
  *  Callers treat this as "save and have it indexed" — they don't
  *  need to know which path ran. */
 
-export const saveNote = async (filename: string, content: string) => {
+function isMissingTauriCommand(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unknown command|command .* not found|not registered/i.test(message);
+}
+
+export const saveNote = async (filename: string, content: string, brainId?: string | null) => {
   if (IS_TAURI) {
     try {
-      await invoke<NvWriteResult>("nv_save_note", { filename, content, brainId: null });
-    } catch {
+      await invoke<NvWriteResult>("nv_save_note", { filename, content, brainId: brainId ?? null });
+    } catch (error) {
+      if (!isMissingTauriCommand(error)) throw error;
       await invoke<void>("save_note", { filename, content });
     }
     return;
   }
-  await httpJsonSend<NvWriteResult>("/api/notes", "PUT", { filename, content });
+  await httpJsonSend<NvWriteResult>("/api/notes", "PUT", { filename, content, brain: brainId });
 };
 
-export const createNote = async (title: string): Promise<string> => {
+export const createNote = async (title: string, brainId?: string | null): Promise<string> => {
   if (IS_TAURI) {
     try {
-      const res = await invoke<NvWriteResult>("nv_create_note", { title, brainId: null });
+      const res = await invoke<NvWriteResult>("nv_create_note", { title, brainId: brainId ?? null });
       return res.filename;
-    } catch {
+    } catch (error) {
+      if (!isMissingTauriCommand(error)) throw error;
       return await invoke<string>("create_note", { title });
     }
   }
@@ -156,21 +171,32 @@ export const createNote = async (title: string): Promise<string> => {
   const res = await httpJsonSend<NvWriteResult & { filename?: string }>(
     "/api/notes",
     "POST",
-    { title, content: seed },
+    { title, content: seed, brain: brainId },
   );
   return res.filename ?? "";
 };
 
-export const deleteNote = async (filename: string) => {
+export const deleteNote = async (filename: string, brainId?: string | null) => {
   if (IS_TAURI) {
     try {
-      await invoke<NvWriteResult>("nv_delete_note", { filename, brainId: null });
-    } catch {
+      await invoke<NvWriteResult>("nv_delete_note", { filename, brainId: brainId ?? null });
+    } catch (error) {
+      if (!isMissingTauriCommand(error)) throw error;
       await invoke<void>("delete_note", { filename });
     }
     return;
   }
-  await httpJsonSend<NvWriteResult>("/api/notes", "DELETE", { filename });
+  await httpJsonSend<NvWriteResult>("/api/notes", "DELETE", { filename, brain: brainId });
+};
+
+export const listTrash = async (brainId?: string | null): Promise<TrashEntry[]> => {
+  if (!IS_TAURI) return [];
+  return invoke<TrashEntry[]>("nv_list_trash", { brainId: brainId ?? null });
+};
+
+export const restoreNote = async (trashedFilename: string, brainId?: string | null): Promise<NvWriteResult> => {
+  if (!IS_TAURI) throw new Error("Restore is available in the NeuroVault desktop app.");
+  return invoke<NvWriteResult>("nv_restore_note", { trashedFilename, brainId: brainId ?? null });
 };
 
 // --- Phase-4 Rust memory commands ------------------------------------------

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { useBrainStore } from "../stores/brainStore";
 import { BrainSourcesPanel } from "./BrainSourcesPanel";
 import { API_HOST } from "../lib/config";
+import { toast } from "../stores/toastStore";
 
 const API = API_HOST;
 
@@ -150,14 +151,14 @@ export function BrainSelector() {
       // internal DB. Deleting this brain later leaves the folder untouched.
       const result = await createBrain(folderName, `External folder vault`, folderPath);
       if (!result) {
-        alert("Failed to open folder as vault. Is the server running?");
+        toast.error("Couldn't open that folder as a vault. Check the local memory service and try again.");
         return;
       }
 
       setOpen(false);
       await switchBrain(result.brain_id);
     } catch (e) {
-      alert(`Could not open folder: ${e}`);
+      toast.error(`Couldn't open folder: ${String(e)}`);
     }
   };
 
@@ -179,9 +180,9 @@ export function BrainSelector() {
         brainId,
         destPath: String(destPath),
       });
-      alert(`Exported ${count} file${count === 1 ? "" : "s"} to:\n${destPath}`);
+      toast.success(`Exported ${count} file${count === 1 ? "" : "s"} to ${String(destPath)}`);
     } catch (e) {
-      alert(`Export failed: ${e}`);
+      toast.error(`Export failed: ${String(e)}`);
     }
   };
 

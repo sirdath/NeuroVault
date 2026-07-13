@@ -18,97 +18,108 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useNoteStore } from "../stores/noteStore";
+import { useNoteStore, type SaveStatus } from "../stores/noteStore";
+import { useBrainStore } from "../stores/brainStore";
+import {
+  brainUiScope,
+  loadScopedTabOrder,
+  persistScopedTabOrder,
+} from "../lib/brainScopedUiState";
 import { ContextMenu } from "./ContextMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { neurovaultTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 
-const TAB_ORDER_KEY = "nv.tabs.order";
+export function Editor() {
+  const brainId = useBrainStore((state) => state.activeBrainId);
+  const vaultPath = useNoteStore((state) => state.vaultPath);
+  const scope = brainUiScope(brainId, vaultPath);
 
-function loadTabOrder(): string[] {
-  try {
-    const raw = localStorage.getItem(TAB_ORDER_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
-        return parsed as string[];
-      }
-    }
-  } catch { /* ignore */ }
-  return [];
+  // A filename such as `index.md` may exist in many brains. Remounting at
+  // this boundary prevents one brain from inheriting another's tabs.
+  return <BrainEditor key={scope} scope={scope} />;
 }
 
-export function Editor() {
+function BrainEditor({ scope }: { scope: string }) {
   const activeFilename = useNoteStore((s) => s.activeFilename);
   const activeContent = useNoteStore((s) => s.activeContent);
   const isDirty = useNoteStore((s) => s.isDirty);
+  const saveStatus = useNoteStore((s) => s.saveStatus);
+  const saveError = useNoteStore((s) => s.saveError);
+  const recoveryDraft = useNoteStore((s) => s.recoveryDraft);
+  const recoverDraft = useNoteStore((s) => s.recoverDraft);
+  const discardRecoveryDraft = useNoteStore((s) => s.discardRecoveryDraft);
+  const transitionLocked = useNoteStore((s) => s.transitionLocked);
+  const notesStatus = useNoteStore((s) => s.notesStatus);
+  const notesError = useNoteStore((s) => s.notesError);
   const updateContent = useNoteStore((s) => s.updateContent);
   const saveNote = useNoteStore((s) => s.saveNote);
+  const saveNoteAsCopy = useNoteStore((s) => s.saveNoteAsCopy);
+  const discardUnsavedChanges = useNoteStore((s) => s.discardUnsavedChanges);
   const selectNote = useNoteStore((s) => s.selectNote);
+  const closeActiveNote = useNoteStore((s) => s.closeActiveNote);
+  const loadNotes = useNoteStore((s) => s.loadNotes);
   const notes = useNoteStore((s) => s.notes);
   const createNote = useNoteStore((s) => s.createNote);
   const [creating, setCreating] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Tab system — track open tabs as filenames. Order is user-controllable
   // via drag-to-reorder (dnd-kit) and persisted to localStorage so the
   // tab strip looks the way the user left it after a reload.
-  const [openTabs, setOpenTabs] = useState<string[]>(() => loadTabOrder());
+  const [openTabs, setOpenTabs] = useState<string[]>(() =>
+    loadScopedTabOrder(localStorage, scope)
+  );
 
   // When a note is selected, add it to tabs if not already there.
   useEffect(() => {
-    if (activeFilename && !openTabs.includes(activeFilename)) {
-      setOpenTabs((t) => [...t, activeFilename]);
-    }
-  }, [activeFilename]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!activeFilename) return;
+    setOpenTabs((tabs) => tabs.includes(activeFilename) ? tabs : [...tabs, activeFilename]);
+  }, [activeFilename]);
 
   // Persist tab order across reloads.
   useEffect(() => {
     try {
-      localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(openTabs));
+      persistScopedTabOrder(localStorage, scope, openTabs);
     } catch { /* quota / private mode */ }
-  }, [openTabs]);
+  }, [openTabs, scope]);
 
   const closeTab = useCallback(
-    (filename: string) => {
-      setOpenTabs((tabs) => {
-        const next = tabs.filter((f) => f !== filename);
-        if (filename === activeFilename) {
-          if (next.length > 0) {
-            // Select the tab that was visually next-door (the one
-            // that slides into the closed tab's slot). Falls back
-            // to last.
-            const idx = tabs.indexOf(filename);
-            const replacement = next[Math.min(idx, next.length - 1)] ?? next[next.length - 1]!;
-            selectNote(replacement);
-          } else {
-            // Closed the last tab AND it was the active one → drop
-            // back to the editor's empty state. Without this the
-            // note's content keeps rendering even though the tab
-            // strip is empty, which reads as a bug.
-            useNoteStore.setState({ activeFilename: null, activeContent: "", isDirty: false });
-          }
-        }
-        return next;
-      });
+    async (filename: string) => {
+      const next = openTabs.filter((tab) => tab !== filename);
+      if (filename !== activeFilename) {
+        setOpenTabs(next);
+        return;
+      }
+
+      if (next.length > 0) {
+        const index = openTabs.indexOf(filename);
+        const replacement = next[Math.min(index, next.length - 1)] ?? next[next.length - 1]!;
+        if (!(await selectNote(replacement))) return;
+      } else if (!(await closeActiveNote())) {
+        return;
+      }
+      // A failed save leaves the active buffer and its tab untouched.
+      setOpenTabs(next);
     },
-    [activeFilename, selectNote]
+    [activeFilename, closeActiveNote, openTabs, selectNote]
   );
 
   // Close every other tab. The right-clicked one becomes active.
   const closeOthers = useCallback(
-    (keepFilename: string) => {
+    async (keepFilename: string) => {
+      if (keepFilename !== activeFilename && !(await selectNote(keepFilename))) return;
       setOpenTabs([keepFilename]);
-      if (keepFilename !== activeFilename) selectNote(keepFilename);
     },
     [activeFilename, selectNote]
   );
 
   // Close everything — empty tab strip AND empty editor body.
-  const closeAll = useCallback(() => {
+  const closeAll = useCallback(async () => {
+    if (!(await closeActiveNote())) return;
     setOpenTabs([]);
-    useNoteStore.setState({ activeFilename: null, activeContent: "", isDirty: false });
-  }, []);
+  }, [closeActiveNote]);
 
   // Right-click context menu state. Tracks which tab was clicked
   // so the close-others / close-all actions know the target.
@@ -147,19 +158,20 @@ export function Editor() {
     () => [
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
+      EditorView.editable.of(!transitionLocked),
       neurovaultTheme,
       livePreviewTheme,
       livePreviewPlugin,
       buildCompletions(() => notesRef.current.map((n) => n.title)),
     ],
-    []
+    [transitionLocked]
   );
 
   // Auto-save with 1-second debounce
   useEffect(() => {
     if (!isDirty) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => { saveNote(); }, 1000);
+    saveTimerRef.current = setTimeout(() => { void saveNote(); }, 1000);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [isDirty, activeContent, saveNote]);
 
@@ -169,6 +181,34 @@ export function Editor() {
   );
 
   if (!activeFilename) {
+    if (notesStatus === "loading" || notesStatus === "idle") {
+      return (
+        <div
+          className="flex-1 flex items-center justify-center"
+          style={{ backgroundColor: "var(--nv-bg)", color: "var(--nv-text-muted)" }}
+        >
+          <span className="text-[13px] font-[Geist,sans-serif]">Loading notes…</span>
+        </div>
+      );
+    }
+    if (notesStatus === "error" && notes.length === 0) {
+      return (
+        <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: "var(--nv-bg)" }}>
+          <div className="text-center max-w-sm px-6">
+            <p className="text-[15px] font-semibold" style={{ color: "var(--nv-text)" }}>Notes couldn’t be loaded</p>
+            <p className="text-[12px] mt-2" style={{ color: "var(--nv-text-dim)" }}>{notesError ?? "Unknown error"}</p>
+            <button
+              type="button"
+              onClick={() => { void loadNotes(); }}
+              className="mt-4 px-3 py-2 rounded-lg text-[12px] font-semibold"
+              style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
     const hasNotes = notes.length > 0;
     const onNewNote = async () => {
       if (creating) return;
@@ -214,7 +254,7 @@ export function Editor() {
             </button>
           </div>
           <p className="text-[12px] mt-4 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-            or press <kbd className="px-1.5 py-0.5 rounded-md text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>Ctrl+N</kbd>
+            or press <kbd className="px-1.5 py-0.5 rounded-md text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>⌘N</kbd>
           </p>
         </div>
       </div>
@@ -249,8 +289,8 @@ export function Editor() {
                       filename={filename}
                       title={title}
                       isActive={filename === activeFilename}
-                      onSelect={() => selectNote(filename)}
-                      onClose={() => closeTab(filename)}
+                      onSelect={() => { void selectNote(filename); }}
+                      onClose={() => { void closeTab(filename); }}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         setTabMenu({ open: true, x: e.clientX, y: e.clientY, filename });
@@ -260,6 +300,27 @@ export function Editor() {
                 })}
               </SortableContext>
             </DndContext>
+          </div>
+        )}
+
+        {recoveryDraft && (
+          <div
+            className="flex shrink-0 items-center gap-3 px-5 py-3"
+            style={{ background: "rgba(251,191,36,0.08)", borderBottom: "1px solid rgba(251,191,36,0.25)" }}
+            role="alert"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-semibold" style={{ color: "#fbbf24" }}>Unsaved work was recovered from the last session</p>
+              <p className="mt-0.5 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+                A newer draft from {new Date(recoveryDraft.updatedAt).toLocaleString()} differs from the Markdown file. Nothing has been overwritten.
+              </p>
+            </div>
+            <button type="button" onClick={discardRecoveryDraft} className="rounded-lg px-3 py-1.5 text-[11px]" style={{ color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>
+              Keep disk version
+            </button>
+            <button type="button" onClick={recoverDraft} className="rounded-lg px-3 py-1.5 text-[11px] font-semibold" style={{ color: "var(--nv-bg)", background: "#fbbf24" }}>
+              Restore draft
+            </button>
           </div>
         )}
 
@@ -278,9 +339,14 @@ export function Editor() {
                 activeFilename?.replace(/\.md$/, "") ??
                 "Untitled"}
             </span>
-            {isDirty && (
-              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--nv-accent)" }} title="Saving..." />
-            )}
+            <SaveIndicator
+              status={saveStatus}
+              error={saveError}
+              isDirty={isDirty}
+              onRetry={() => { void saveNote(); }}
+              onSaveCopy={() => { void saveNoteAsCopy(); }}
+              onDiscard={() => setConfirmDiscard(true)}
+            />
           </div>
         </div>
 
@@ -320,25 +386,71 @@ export function Editor() {
           {
             label: "Close",
             hint: "Middle-click",
-            onSelect: () => closeTab(tabMenu.filename),
+            onSelect: () => { void closeTab(tabMenu.filename); },
           },
           {
             label: "Close others",
             disabled: openTabs.length <= 1,
-            onSelect: () => closeOthers(tabMenu.filename),
+            onSelect: () => { void closeOthers(tabMenu.filename); },
           },
           { divider: true },
           {
             label: "Close all",
             destructive: true,
             disabled: openTabs.length === 0,
-            onSelect: () => closeAll(),
+            onSelect: () => { void closeAll(); },
           },
         ]}
         onClose={() => setTabMenu((m) => ({ ...m, open: false }))}
       />
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard unsaved changes?"
+        message="NeuroVault will reload the last saved Markdown file. The unsaved draft for this note will be permanently removed."
+        confirmLabel="Discard changes"
+        destructive
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          void discardUnsavedChanges();
+        }}
+      />
     </div>
   );
+}
+
+function SaveIndicator({
+  status,
+  error,
+  isDirty,
+  onRetry,
+  onSaveCopy,
+  onDiscard,
+}: {
+  status: SaveStatus;
+  error: string | null;
+  isDirty: boolean;
+  onRetry: () => void;
+  onSaveCopy: () => void;
+  onDiscard: () => void;
+}) {
+  if (status === "failed") {
+    return (
+      <div className="flex items-center gap-1.5" role="alert" title={error ?? "Save failed"}>
+        <span className="text-[11px] font-semibold" style={{ color: "var(--nv-negative)" }}>Save failed</span>
+        <button type="button" onClick={onRetry} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Retry</button>
+        <button type="button" onClick={onSaveCopy} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Save a copy</button>
+        <button type="button" onClick={onDiscard} className="rounded-md px-2 py-1 text-[11px] font-medium" style={{ color: "var(--nv-negative)", border: "1px solid color-mix(in srgb, var(--nv-negative) 45%, transparent)" }}>Discard</button>
+      </div>
+    );
+  }
+  if (status === "saving") {
+    return <span className="text-[11px]" style={{ color: "var(--nv-text-muted)" }}>Saving…</span>;
+  }
+  if (status === "dirty" || isDirty) {
+    return <span className="text-[11px]" style={{ color: "var(--nv-text-dim)" }}>Unsaved</span>;
+  }
+  return <span className="text-[11px]" style={{ color: "var(--nv-positive)" }}>Saved</span>;
 }
 
 /**
@@ -465,4 +577,3 @@ function SortableTab({
     </div>
   );
 }
-

@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, createRef, type ErrorInfo, type ReactNode } from "react";
 
 /**
  * Last-resort wrapper around the whole app tree. A single unhandled
@@ -13,6 +13,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 interface State {
   error: Error | null;
   info: ErrorInfo | null;
+  copyState: "idle" | "copied" | "failed";
 }
 
 interface Props {
@@ -20,7 +21,8 @@ interface Props {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, info: null };
+  state: State = { error: null, info: null, copyState: "idle" };
+  private headingRef = createRef<HTMLHeadingElement>();
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
@@ -30,7 +32,9 @@ export class ErrorBoundary extends Component<Props, State> {
     // Also logs to the dev console so the stack isn't lost to the UI —
     // the summary card just shows the message + first few frames.
     console.error("[neurovault] render crash:", error, info);
-    this.setState({ error, info });
+    this.setState({ error, info }, () => {
+      this.headingRef.current?.focus();
+    });
   }
 
   private reload = () => {
@@ -52,8 +56,9 @@ export class ErrorBoundary extends Component<Props, State> {
     ].join("\n");
     try {
       await navigator.clipboard.writeText(body);
+      this.setState({ copyState: "copied" });
     } catch {
-      /* clipboard may be blocked — user can still see the text on screen */
+      this.setState({ copyState: "failed" });
     }
   };
 
@@ -65,6 +70,9 @@ export class ErrorBoundary extends Component<Props, State> {
       <div
         className="fixed inset-0 flex items-center justify-center p-8"
         style={{ background: "var(--nv-bg, #0f0f14)", color: "var(--nv-text, #e5e5e5)" }}
+        role="alert"
+        aria-labelledby="render-error-title"
+        aria-describedby="render-error-summary"
       >
         <div
           className="w-full max-w-lg rounded-xl p-6 font-[Geist,sans-serif]"
@@ -73,13 +81,23 @@ export class ErrorBoundary extends Component<Props, State> {
             border: "1px solid var(--nv-border, #2a2a33)",
           }}
         >
-          <div className="text-[10px] uppercase tracking-wider mb-2" style={{ color: "var(--nv-negative, #ff6b6b)" }}>
+          <h1
+            ref={this.headingRef}
+            id="render-error-title"
+            tabIndex={-1}
+            className="text-sm font-semibold mb-2"
+            style={{ color: "var(--nv-negative, #ff6b6b)" }}
+          >
             Something crashed while rendering
-          </div>
-          <div className="text-sm mb-4" style={{ color: "var(--nv-text, #e5e5e5)" }}>
-            NeuroVault hit an unexpected error. Your notes are safe — they're plain
-            markdown on disk, untouched by this.
-          </div>
+          </h1>
+          <p
+            id="render-error-summary"
+            className="text-sm mb-4"
+            style={{ color: "var(--nv-text, #e5e5e5)" }}
+          >
+            NeuroVault hit an unexpected display error. Reloading may recover the
+            interface. This screen did not attempt to delete or rewrite your files.
+          </p>
           <pre
             className="text-[11px] font-mono overflow-auto max-h-48 p-3 rounded mb-4 whitespace-pre-wrap"
             style={{
@@ -87,6 +105,8 @@ export class ErrorBoundary extends Component<Props, State> {
               border: "1px solid var(--nv-border, #2a2a33)",
               color: "var(--nv-text-muted, #9b9b9b)",
             }}
+            aria-label="Error details"
+            data-selectable="true"
           >
             {error.name}: {error.message}
             {error.stack ? "\n\n" + error.stack.split("\n").slice(1, 5).join("\n") : ""}
@@ -101,7 +121,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 border: "1px solid var(--nv-border, #2a2a33)",
               }}
             >
-              Copy details
+              Copy diagnostic details
             </button>
             <button
               onClick={this.reload}
@@ -113,6 +133,13 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               Reload app
             </button>
+          </div>
+          <div className="sr-only" role="status" aria-live="polite">
+            {this.state.copyState === "copied"
+              ? "Diagnostic details copied."
+              : this.state.copyState === "failed"
+                ? "Could not access the clipboard. Select the visible error details to copy them."
+                : ""}
           </div>
         </div>
       </div>

@@ -114,7 +114,7 @@ export function computeDiagnostic(nodes: DiagNode[], edges: DiagEdge[]): Diagnos
       score: 0,
       total: 0,
       categories: [],
-      issues: [{ label: "This brain has no notes yet", count: 0, severity: "low" }],
+      issues: [{ label: "This vault has no notes yet", count: 0, severity: "low" }],
     };
   }
 
@@ -179,11 +179,11 @@ export function computeDiagnostic(nodes: DiagNode[], edges: DiagEdge[]): Diagnos
 
 /** Render the scorecard as a monospace ASCII report — the shareable,
  *  paste-to-your-agent form (and the same aesthetic shown in the docs). */
-export function diagnosticToAscii(d: Diagnostic, brainName = "brain"): string {
+export function diagnosticToAscii(d: Diagnostic, brainName = "vault"): string {
   if (d.total === 0) return `NeuroVault — ${brainName}\nNo notes yet.`;
   const barW = 24;
   const lines: string[] = [];
-  lines.push(`NeuroVault brain diagnostic — ${brainName}`);
+  lines.push(`NeuroVault vault diagnostic — ${brainName}`);
   lines.push(`Overall: ${d.grade}  (${d.score}/100, ${d.total} notes)`);
   lines.push("");
   for (const c of d.categories) {

@@ -15,8 +15,9 @@
 //! `BrainContext` bundles the handle + vault path so Tauri commands
 //! resolve the brain once up-front, then hand the context down.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use slug::slugify;
 
@@ -59,6 +60,176 @@ pub struct WriteResult {
     /// already in the DB (we still rewrote the file because the
     /// caller asked us to, but ingest was a no-op).
     pub status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrashEntry {
+    /// Current leaf name inside the per-brain trash directory.
+    pub trashed_filename: String,
+    /// Vault-relative path the note occupied before deletion. Legacy trash
+    /// entries without metadata fall back to the trash leaf at vault root.
+    pub original_filename: String,
+    pub title: String,
+    pub deleted_at: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct TrashMetadata {
+    original_filename: String,
+    deleted_at: u64,
+}
+
+fn trash_dir(ctx: &BrainContext) -> PathBuf {
+    ctx.vault
+        .parent()
+        .map(|p| p.join("trash"))
+        .unwrap_or_else(|| ctx.vault.join(".trash"))
+}
+
+fn unix_seconds_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn trash_metadata_path(note_path: &Path) -> PathBuf {
+    let leaf = note_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "note.md".to_string());
+    note_path.with_file_name(format!("{leaf}.neurovault-trash.json"))
+}
+
+fn safe_markdown_relative_path(filename: &str) -> bool {
+    let path = Path::new(filename);
+    !path.is_absolute()
+        && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+}
+
+fn title_from_markdown(content: &str, filename: &str) -> String {
+    content
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            Path::new(filename)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().replace('-', " "))
+                .unwrap_or_else(|| filename.to_string())
+        })
+}
+
+pub fn list_trash(ctx: &BrainContext) -> Result<Vec<TrashEntry>> {
+    let dir = trash_dir(ctx);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for item in std::fs::read_dir(&dir)? {
+        let item = item?;
+        let path = item.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") || !path.is_file() {
+            continue;
+        }
+        let trashed_filename = item.file_name().to_string_lossy().to_string();
+        let file_meta = item.metadata()?;
+        let fallback_deleted_at = file_meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let trash_meta: Option<TrashMetadata> = std::fs::read(trash_metadata_path(&path))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let original_filename = trash_meta
+            .as_ref()
+            .map(|meta| meta.original_filename.clone())
+            .filter(|name| safe_markdown_relative_path(name))
+            .unwrap_or_else(|| trashed_filename.clone());
+        let deleted_at = trash_meta
+            .as_ref()
+            .map(|meta| meta.deleted_at)
+            .unwrap_or(fallback_deleted_at);
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        entries.push(TrashEntry {
+            trashed_filename: trashed_filename.clone(),
+            original_filename: original_filename.clone(),
+            title: title_from_markdown(&content, &original_filename),
+            deleted_at,
+            size: file_meta.len(),
+        });
+    }
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.deleted_at));
+    Ok(entries)
+}
+
+pub fn restore_note(ctx: &BrainContext, trashed_filename: &str) -> Result<WriteResult> {
+    // Only a leaf may address the trash directory. This prevents traversal
+    // even if a compromised webview invokes the command directly.
+    if Path::new(trashed_filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(trashed_filename)
+        || Path::new(trashed_filename)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            != Some("md")
+    {
+        return Err(MemoryError::Other("invalid trash filename".to_string()));
+    }
+
+    let dir = trash_dir(ctx);
+    let source = dir.join(trashed_filename);
+    if !source.is_file() {
+        return Err(MemoryError::Other(format!(
+            "trash item not found: {trashed_filename}"
+        )));
+    }
+    let meta_path = trash_metadata_path(&source);
+    let trash_meta: Option<TrashMetadata> = std::fs::read(&meta_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let requested = trash_meta
+        .map(|meta| meta.original_filename)
+        .filter(|name| safe_markdown_relative_path(name))
+        .unwrap_or_else(|| trashed_filename.to_string());
+
+    let requested_path = Path::new(&requested);
+    let parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = requested_path
+        .file_stem()
+        .map(|part| part.to_string_lossy().to_string())
+        .unwrap_or_else(|| "restored-note".to_string());
+    let mut restored_filename = requested.clone();
+    let mut destination = ctx.vault.join(&restored_filename);
+    if destination.exists() {
+        let id = uuid::Uuid::new_v4().to_string();
+        restored_filename = parent
+            .join(format!("{stem}-restored-{}.md", &id[..8]))
+            .to_string_lossy()
+            .to_string();
+        destination = ctx.vault.join(&restored_filename);
+    }
+    if let Some(destination_parent) = destination.parent() {
+        std::fs::create_dir_all(destination_parent)?;
+    }
+    let content = std::fs::read_to_string(&source)?;
+    std::fs::rename(&source, &destination)?;
+    let _ = std::fs::remove_file(meta_path);
+
+    // save_note rebuilds chunks/embeddings and reactivates the dormant row.
+    // The file is already back in the user-owned vault if indexing fails, so
+    // no content is lost and the watcher can retry later.
+    let mut result = save_note(ctx, &restored_filename, &content)?;
+    result.status = "restored".to_string();
+    Ok(result)
 }
 
 /// Write `content` to `filename` under the brain's vault, then
@@ -159,11 +330,7 @@ pub fn delete_note(ctx: &BrainContext, filename: &str) -> Result<WriteResult> {
 
     let src = ctx.vault.join(filename);
     if src.exists() {
-        let trash_dir = ctx
-            .vault
-            .parent()
-            .map(|p| p.join("trash"))
-            .unwrap_or_else(|| ctx.vault.join(".trash"));
+        let trash_dir = trash_dir(ctx);
         std::fs::create_dir_all(&trash_dir)?;
         let leaf = Path::new(filename)
             .file_name()
@@ -181,6 +348,15 @@ pub fn delete_note(ctx: &BrainContext, filename: &str) -> Result<WriteResult> {
             dest = trash_dir.join(format!("{}-{}.md", stem, &id[..8]));
         }
         std::fs::rename(&src, &dest)?;
+        let trash_meta = TrashMetadata {
+            original_filename: filename.to_string(),
+            deleted_at: unix_seconds_now(),
+        };
+        if let Ok(bytes) = serde_json::to_vec_pretty(&trash_meta) {
+            if let Err(error) = std::fs::write(trash_metadata_path(&dest), bytes) {
+                eprintln!("[trash] could not persist restore metadata: {error}");
+            }
+        }
     }
 
     Ok(WriteResult {
@@ -279,4 +455,27 @@ pub fn supersede_note(
         return Ok(true);
     }
     Ok(n > 0)
+}
+
+#[cfg(test)]
+mod trash_tests {
+    use super::*;
+
+    #[test]
+    fn restore_paths_must_stay_inside_the_vault() {
+        assert!(safe_markdown_relative_path("note.md"));
+        assert!(safe_markdown_relative_path("projects/note.md"));
+        assert!(!safe_markdown_relative_path("../note.md"));
+        assert!(!safe_markdown_relative_path("/tmp/note.md"));
+        assert!(!safe_markdown_relative_path("note.txt"));
+    }
+
+    #[test]
+    fn trash_metadata_is_a_sidecar_not_a_markdown_note() {
+        let note = Path::new("/tmp/trash/example.md");
+        assert_eq!(
+            trash_metadata_path(note),
+            PathBuf::from("/tmp/trash/example.md.neurovault-trash.json")
+        );
+    }
 }

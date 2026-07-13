@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNoteStore } from "../stores/noteStore";
+import { useBrainStore } from "../stores/brainStore";
+import {
+  brainUiScope,
+  mergeScopedPreviews,
+  previewsForScope,
+  scopedStorageKey,
+  type ScopedPreviewCache,
+} from "../lib/brainScopedUiState";
 import { relativeTime, extractPreview } from "../lib/utils";
 import { readNote } from "../lib/tauri";
 import { BrainSelector } from "./BrainSelector";
@@ -25,18 +33,33 @@ const ESTIMATED_ROW_HEIGHT = 68;
 const VIRTUAL_OVERSCAN = 6;
 
 
-export function Sidebar({
-  triggerNewNote = 0,
-  triggerSearch = 0,
-  onNoteSelect,
-  onSettingsOpen,
-}: {
+interface SidebarProps {
   triggerNewNote?: number;
   triggerSearch?: number;
   onNoteSelect?: () => void;
   onSettingsOpen?: () => void;
-} = {}) {
+  onTrashOpen?: () => void;
+}
+
+export function Sidebar(props: SidebarProps = {}) {
+  const brainId = useBrainStore((state) => state.activeBrainId);
+  const vaultPath = useNoteStore((state) => state.vaultPath);
+  const scope = brainUiScope(brainId, vaultPath);
+  return <BrainSidebar key={scope} scope={scope} {...props} />;
+}
+
+function BrainSidebar({
+  scope,
+  triggerNewNote = 0,
+  triggerSearch = 0,
+  onNoteSelect,
+  onSettingsOpen,
+  onTrashOpen,
+}: SidebarProps & { scope: string }) {
   const notes = useNoteStore((s) => s.notes);
+  const notesStatus = useNoteStore((s) => s.notesStatus);
+  const notesError = useNoteStore((s) => s.notesError);
+  const loadNotes = useNoteStore((s) => s.loadNotes);
   const activeFilename = useNoteStore((s) => s.activeFilename);
   const searchQuery = useNoteStore((s) => s.searchQuery);
   const setSearchQuery = useNoteStore((s) => s.setSearchQuery);
@@ -45,8 +68,7 @@ export function Sidebar({
   // When a note is clicked, select it AND switch to editor view
   const selectNote = useCallback(
     async (filename: string) => {
-      await _selectNote(filename);
-      onNoteSelect?.();
+      if (await _selectNote(filename)) onNoteSelect?.();
     },
     [_selectNote, onNoteSelect]
   );
@@ -59,7 +81,8 @@ export function Sidebar({
   // an input instead of the title. Enter commits; Esc cancels.
   const [renamingFilename, setRenamingFilename] = useState<string | null>(null);
 
-  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [previewCache, setPreviewCache] = useState<ScopedPreviewCache>({});
+  const previews = previewsForScope(previewCache, scope);
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -67,23 +90,27 @@ export function Sidebar({
 
   // Load previews when notes change (NOT in render)
   useEffect(() => {
+    let cancelled = false;
     const loadPreviews = async () => {
       const newPreviews: Record<string, string> = {};
       for (const note of notes) {
         if (previews[note.filename]) continue;
         try {
           const content = await readNote(note.filename);
+          if (cancelled) return;
           newPreviews[note.filename] = extractPreview(content);
         } catch {
+          if (cancelled) return;
           newPreviews[note.filename] = "";
         }
       }
-      if (Object.keys(newPreviews).length > 0) {
-        setPreviews((prev) => ({ ...prev, ...newPreviews }));
+      if (!cancelled && Object.keys(newPreviews).length > 0) {
+        setPreviewCache((cache) => mergeScopedPreviews(cache, scope, newPreviews));
       }
     };
-    if (notes.length > 0) loadPreviews();
-  }, [notes]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (notes.length > 0) void loadPreviews();
+    return () => { cancelled = true; };
+  }, [notes, scope]); // previews are intentionally a per-run snapshot
 
 
   // Keyboard: Ctrl+N
@@ -130,15 +157,20 @@ export function Sidebar({
   // Expanded state persists in localStorage so collapses survive reloads.
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try {
-      const raw = localStorage.getItem("nv.folders.expanded");
+      const raw = localStorage.getItem(scopedStorageKey("nv.folders.expanded", scope));
       if (raw) return JSON.parse(raw);
     } catch { /* corrupt */ }
     return { agent: true, user: true };
   });
   useEffect(() => {
-    try { localStorage.setItem("nv.folders.expanded", JSON.stringify(expanded)); }
+    try {
+      localStorage.setItem(
+        scopedStorageKey("nv.folders.expanded", scope),
+        JSON.stringify(expanded),
+      );
+    }
     catch { /* quota */ }
-  }, [expanded]);
+  }, [expanded, scope]);
   const toggleFolder = useCallback((name: string) => {
     setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
   }, []);
@@ -231,8 +263,20 @@ export function Sidebar({
     : [];
 
   // Resizable sidebar width
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(scopedStorageKey("nv.sidebar.width", scope)));
+      if (Number.isFinite(saved) && saved >= 200 && saved <= 500) return saved;
+    } catch { /* corrupt / private mode */ }
+    return 280;
+  });
   const resizing = useRef(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(scopedStorageKey("nv.sidebar.width", scope), String(sidebarWidth));
+    } catch { /* quota / private mode */ }
+  }, [scope, sidebarWidth]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -354,39 +398,58 @@ export function Sidebar({
            the virtualizer measure each row after first paint via
            measureElement. The scroll container MUST have a fixed height
            (flex-1 + min-h-0 provides that inside the flex column). */}
-      <NoteList
-        rows={buildFolderRows(filtered, expanded)}
-        previews={previews}
-        activeFilename={activeFilename}
-        onSelect={(fn) => selectNote(fn)}
-        onDelete={handleDelete}
-        onOpenContextMenu={openContextMenu}
-        onToggleFolder={toggleFolder}
-        renamingFilename={renamingFilename}
-        onStartRename={setRenamingFilename}
-        onCommitRename={async (oldFn, newFn) => {
-          if (newFn.trim() === oldFn || !newFn.trim()) {
-            setRenamingFilename(null);
-            return;
-          }
-          const ok = await renameNoteAction(oldFn, newFn.trim());
-          if (ok) setRenamingFilename(null);
-        }}
-        onDropToFolder={async (fromFilename, folder) => {
-          // Derive target path by swapping the folder prefix. Folder of ""
-          // moves to root. Leaf name is preserved — rename-as-move.
-          const slash = fromFilename.indexOf("/");
-          const leaf = slash >= 0 ? fromFilename.slice(slash + 1) : fromFilename;
-          // If a note is inside nested folders (agent/sub/foo.md), we only
-          // replace the TOP-level folder since that's what the tree UI
-          // shows anyway. For root moves, we want the original leaf.
-          const lastSlash = fromFilename.lastIndexOf("/");
-          const tailLeaf = lastSlash >= 0 ? fromFilename.slice(lastSlash + 1) : fromFilename;
-          const target = folder ? `${folder}/${tailLeaf}` : leaf.includes("/") ? tailLeaf : leaf;
-          if (target === fromFilename) return;
-          await renameNoteAction(fromFilename, target);
-        }}
-      />
+      {notesStatus === "loading" && notes.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-[12px]" style={{ color: "var(--nv-text-dim)" }}>
+          Loading notes…
+        </div>
+      ) : notesStatus === "error" && notes.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-5">
+          <p className="text-[13px] font-medium" style={{ color: "var(--nv-text)" }}>Notes couldn’t be loaded</p>
+          <p className="text-[11px] mt-1 line-clamp-3" style={{ color: "var(--nv-text-dim)" }}>{notesError ?? "Unknown error"}</p>
+          <button type="button" onClick={() => { void loadNotes(); }} className="mt-3 px-3 py-1.5 rounded-md text-[11px]" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Retry</button>
+        </div>
+      ) : (
+        <NoteList
+          rows={buildFolderRows(filtered, expanded)}
+          previews={previews}
+          activeFilename={activeFilename}
+          onSelect={(fn) => { void selectNote(fn); }}
+          onDelete={handleDelete}
+          onOpenContextMenu={openContextMenu}
+          onToggleFolder={toggleFolder}
+          renamingFilename={renamingFilename}
+          onStartRename={setRenamingFilename}
+          onCommitRename={async (oldFn, newFn) => {
+            if (newFn.trim() === oldFn || !newFn.trim()) {
+              setRenamingFilename(null);
+              return;
+            }
+            const ok = await renameNoteAction(oldFn, newFn.trim());
+            if (ok) setRenamingFilename(null);
+          }}
+          onDropToFolder={async (fromFilename, folder) => {
+            const slash = fromFilename.indexOf("/");
+            const leaf = slash >= 0 ? fromFilename.slice(slash + 1) : fromFilename;
+            const lastSlash = fromFilename.lastIndexOf("/");
+            const tailLeaf = lastSlash >= 0 ? fromFilename.slice(lastSlash + 1) : fromFilename;
+            const target = folder ? `${folder}/${tailLeaf}` : leaf.includes("/") ? tailLeaf : leaf;
+            if (target === fromFilename) return;
+            await renameNoteAction(fromFilename, target);
+          }}
+        />
+      )}
+
+      {notesStatus === "error" && notes.length > 0 && (
+        <button
+          type="button"
+          onClick={() => { void loadNotes(); }}
+          className="mx-3 mb-2 px-2 py-1.5 rounded-md text-left text-[11px]"
+          style={{ color: "var(--nv-negative)", border: "1px solid color-mix(in srgb, var(--nv-negative) 35%, transparent)" }}
+          title={notesError ?? undefined}
+        >
+          Couldn’t refresh notes · Retry
+        </button>
+      )}
 
       {/* Empty states */}
       {filtered.length === 0 && notes.length > 0 && (
@@ -394,13 +457,13 @@ export function Sidebar({
           No results
         </p>
       )}
-      {notes.length === 0 && (
+      {notes.length === 0 && notesStatus === "ready" && (
         <div className="mt-12 text-center px-4">
           <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
             No notes yet
           </p>
           <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-            Press <kbd className="px-1 py-0.5 rounded text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-accent)" }}>Ctrl+N</kbd> to start
+            Press <kbd className="px-1 py-0.5 rounded text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-accent)" }}>⌘N</kbd> to start
           </p>
         </div>
       )}
@@ -411,6 +474,17 @@ export function Sidebar({
         style={{ borderTop: "1px solid var(--nv-border)" }}
       >
         <BrainSelector />
+        <button
+          onClick={() => onTrashOpen?.()}
+          className="w-7 h-7 flex items-center justify-center rounded-md transition-all hover:[color:var(--nv-text)]"
+          style={{ color: "var(--nv-text-muted)" }}
+          title="Trash"
+          aria-label="Open Trash"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 7h14M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5M14 11v5" />
+          </svg>
+        </button>
         {/* NeuroVault mark — outer ring, three nodes, key hub.
             Uses currentColor so the accent / dim state inherits
             cleanly. Mirrors media/activity-icon.svg in the VS Code
@@ -457,7 +531,7 @@ export function Sidebar({
         title="Delete this note?"
         message={
           pendingDelete
-            ? `"${pendingDelete.title}" will be moved to the brain's trash folder. The markdown file itself stays recoverable there, but the engram row (connections, entities, strength, access history) is removed from the graph and won't appear in recall results.`
+            ? `"${pendingDelete.title}" will be moved to this vault's Trash. The Markdown file stays recoverable there, while its indexed memory is removed from search and the graph until you restore it.`
             : ""
         }
         confirmLabel="Delete note"

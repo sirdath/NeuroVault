@@ -2,23 +2,19 @@
 #
 #  Triggered by pushing a tag matching `v*` (e.g. `git tag v0.1.2 &&
 #  git push --tags`) or manually via the Actions tab. Builds Windows +
-#  macOS (arm64 + Intel) + Linux in parallel and uploads the resulting
+#  macOS (Apple Silicon) + Linux in parallel and uploads the resulting
 #  installers to a draft GitHub Release.
 #
 #  Why a draft (not auto-publish): release notes get a human pass and we
 #  spot a broken artifact before users grab it. Edit + publish from the
 #  Releases UI when the matrix finishes green.
 #
-#  No code signing. Mac users hit Gatekeeper on first launch (right-click
-#  -> Open -> Open Anyway), Windows users hit SmartScreen. README
-#  documents both. Notarization + EV cert is a separate decision —
-#  Apple Dev = $99/yr, Windows EV = ~$200-400/yr; revisit if there's
-#  demand.
+#  macOS signing/notarization is automatically enabled when the Apple
+#  secrets documented in docs/MACOS-RELEASE.md are present. Until then,
+#  the draft remains an unsigned test artifact and must not be published.
 #
-#  Reproducibility note: SQLITE_VEC_VERSION resolves "latest" from the
-#  upstream releases API on every run. If asg017/sqlite-vec ever ships
-#  a breaking schema change we'd want to pin a known-good version
-#  here; for now floating-latest is the simpler default.
+#  Reproducibility note: sqlite-vec is pinned below. Bump it deliberately,
+#  never by resolving a floating "latest" release during a build.
 #
 #  Replaces the pre-v0.1.0 workflow that built a Python sidecar via
 #  PyInstaller. Sidecar was retired in the Rust migration; advanced
@@ -77,8 +73,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write   # creates / updates GitHub Releases
+      actions: read     # lets the SBOM action attach its release asset
+      id-token: write   # Sigstore certificate for build provenance
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # --- Linux system deps -------------------------------------------------
       # Tauri's canonical apt list. webkit2gtk = embedded webview;
@@ -97,19 +97,19 @@ jobs:
             patchelf
 
       # --- Toolchains --------------------------------------------------------
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: ${{ matrix.rust-target }}
 
       # Cache cargo's target dir per platform. The release profile uses
       # lto=fat + codegen-units=1, so a cold build is 4-6 minutes.
       # With this cache, incremental rebuilds drop to ~90s.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.rust-target }}
@@ -189,7 +189,7 @@ jobs:
       # .AppImage), creates / updates a single draft Release for the tag,
       # and attaches every matrix job's artifacts to it.
       - name: Build + upload to draft release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing. With these present `tauri build` emits a `.sig`
@@ -199,6 +199,15 @@ jobs:
           # Keys live only in repo secrets — see docs/UPDATER-SETUP.md.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Developer ID signing + Apple notarization. Empty secrets leave
+          # non-macOS jobs unchanged; the macOS draft must stay unpublished
+          # until scripts/verify-macos-release.sh passes.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           # `--config src-tauri/updater-ci.conf.json` turns on
           # createUpdaterArtifacts for the CI build ONLY (merged via the CLI
@@ -224,16 +233,45 @@ jobs:
             - **macOS (Intel)**: build from source — see the README
             - **Linux**: `neurovault_*_amd64.AppImage` or `neurovault_*_amd64.deb`
 
-            ### First-launch warnings
+            ### Verification status
 
-            The macOS and Windows builds aren't code-signed. You'll see a
-            warning the first time you open the app:
-
-            - **macOS** ("damaged, move to trash"): right-click the .app,
-              choose Open, click Open Anyway. Or run
-              `xattr -dr com.apple.quarantine /Applications/NeuroVault.app` once.
-            - **Windows SmartScreen**: click "More info", then "Run anyway".
+            This release stays a draft until its platform artifacts pass the
+            signing, notarization, checksum, provenance, and clean-install
+            checklist. Unsigned artifacts are development builds and must not
+            be presented as the public download.
 
             Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
+
+      - name: Verify Developer ID signature and notarization
+        if: matrix.os-label == 'macos-arm64'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "Apple signing secrets are not configured; leaving release as an unsigned draft."
+            exit 0
+          fi
+          APP_PATH=$(find "src-tauri/target/${{ matrix.rust-target }}/release/bundle/macos" -maxdepth 1 -name '*.app' -print -quit)
+          DMG_PATH=$(find "src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg" -maxdepth 1 -name '*.dmg' -print -quit)
+          bash scripts/verify-macos-release.sh "$APP_PATH" "$DMG_PATH"
+
+      - name: Attest installer provenance
+        uses: actions/attest@f6bf1532d7d6793fce74eac584813a8eee607999 # v4
+        with:
+          subject-path: |
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.deb
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: src-tauri/target/${{ matrix.rust-target }}/release/bundle
+          format: spdx-json
+          artifact-name: neurovault-${{ matrix.os-label }}.spdx.json
+          upload-release-assets: true

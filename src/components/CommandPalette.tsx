@@ -21,6 +21,8 @@ interface CommandPaletteProps {
    *  tweens the camera + pulses the node instead of opening the
    *  editor. On every other view, the default selectNote happens. */
   currentView?: "editor" | "graph" | "compile";
+  onOpenNote?: () => void;
+  onOpenMemory?: (engramId: string) => void;
 }
 
 // Per-section caps. The whole point of the rebuild is that you can scan the
@@ -71,7 +73,7 @@ function fuzzyScore(query: string, text: string): number {
   return score + maxConsecutive * 20;
 }
 
-export function CommandPalette({ open, onClose, commands, currentView }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, commands, currentView, onOpenNote, onOpenMemory }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [memoryHits, setMemoryHits] = useState<RecallResult[]>([]);
@@ -101,9 +103,11 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
           return;
         }
       }
-      selectNote(filename);
+      void selectNote(filename).then((selected) => {
+        if (selected) onOpenNote?.();
+      });
     },
-    [currentView, notes, graphNodes, requestGraphFocus, selectNote],
+    [currentView, notes, graphNodes, requestGraphFocus, selectNote, onOpenNote],
   );
   /** Same resolver but for memory hits that already carry an engram id
    *  directly — skip the title lookup when we have the id on hand. */
@@ -113,9 +117,15 @@ export function CommandPalette({ open, onClose, commands, currentView }: Command
         requestGraphFocus(engramId);
         return;
       }
-      if (filename) selectNote(filename);
+      if (filename) {
+        void selectNote(filename).then((selected) => {
+          if (selected) onOpenNote?.();
+        });
+      } else {
+        onOpenMemory?.(engramId);
+      }
     },
-    [currentView, requestGraphFocus, selectNote],
+    [currentView, requestGraphFocus, selectNote, onOpenNote, onOpenMemory],
   );
 
   // --- Local-only sections (commands + notes) -----------------------------
