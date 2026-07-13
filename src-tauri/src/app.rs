@@ -875,6 +875,30 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     }
 }
 
+/// Tell the user ONCE that closing the window did not stop memory.
+/// Delivered as an OS notification because the window is already hidden
+/// (an in-app toast would be invisible). Flag lives next to the other
+/// app state so it survives restarts; failures are silent — a missing
+/// hint must never break closing a window.
+fn notify_hidden_once() {
+    let flag = crate::memory::paths::nv_home().join(".close-hint-shown");
+    if flag.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(flag.parent().unwrap_or(&flag));
+    let _ = fs::write(&flag, "1");
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(
+                "display notification \"Memory keeps running in the background. \
+                 Reopen from the Dock, or quit to stop it.\" with title \"NeuroVault\"",
+            )
+            .spawn();
+    }
+}
+
 /// Hide the main window without quitting the app. The sidecar keeps running
 /// and the user can restore via Ctrl+Shift+Space (the quick-capture shortcut
 /// also unhides/focuses the window).
@@ -1666,6 +1690,35 @@ pub fn run() {
             }
 
             Ok(())
+        })
+        // WINDOW LIFECYCLE (docs/specs/window-lifecycle.md, Phase 1).
+        //
+        // NeuroVault is a memory SERVICE with a viewer attached: the HTTP
+        // server on :8765 that every Claude Code hook, the MCP server, and
+        // every other agent depends on runs INSIDE this process. So the
+        // window's lifecycle must be decoupled from the service's.
+        //
+        // Before this, the close button was completely unhandled: clicking
+        // the red X (or Cmd+W) DESTROYED the main window while the hidden
+        // `minitab` window kept the app alive — leaving an invisible zombie
+        // that still held :8765, with `Reopen` (Dock click) unable to find a
+        // "main" window to restore. The only way out was force-quit.
+        //
+        // Now: close HIDES. The window always exists, always restores (Dock
+        // click / Cmd+Shift+Space / the minitab), and memory never dies by
+        // accident. Only an explicit Quit stops the service — and that still
+        // runs the ExitRequested cleanup below (checkpoint + close DBs).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    // One-time hint, delivered as a SYSTEM notification —
+                    // an in-app toast would render into the window we just
+                    // hid, where nobody could read it. Once per install.
+                    notify_hidden_once();
+                }
+            }
         })
         .manage(ServerState(Mutex::new(None)))
         .manage(RustServerState(tokio::sync::Mutex::new(None)))

@@ -264,6 +264,7 @@ export default function App() {
     };
   }, []);
 
+
   // Check for a newer release shortly after launch. Silent (no toast on
   // failure) and one-shot — the result drives the top-bar Update pill via
   // the update store. Delayed a few seconds so it never competes with the
