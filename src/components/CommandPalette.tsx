@@ -307,7 +307,8 @@ export function CommandPalette({ open, onClose, commands, currentView, onOpenNot
   return (
     <>
       <div
-        className="fixed inset-0 bg-black/60 z-50 fade-in"
+        className="fixed inset-0 z-50 fade-in"
+        style={{ background: "var(--nv-overlay)" }}
         onClick={onClose}
       />
 

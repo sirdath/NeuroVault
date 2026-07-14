@@ -1,5 +1,5 @@
-import { useEffect, type CSSProperties } from "react";
-import { useSettingsStore } from "../stores/settingsStore";
+import { useEffect, useMemo, type CSSProperties } from "react";
+import { applyThemeToDocument, themeCssVars, useSettingsStore } from "../stores/settingsStore";
 import { SettingsView } from "./SettingsView";
 import { Toasts } from "./Toasts";
 
@@ -12,29 +12,21 @@ export function SettingsWindow() {
   const theme = useSettingsStore((state) => state.theme);
   const reduceMotion = useSettingsStore((state) => state.reduceMotion);
 
-  const themeVars = {
-    "--nv-bg": theme.bg,
-    "--nv-surface": theme.surface,
-    "--nv-border": theme.border,
-    "--nv-text": theme.text,
-    "--nv-text-muted": theme.textMuted,
-    "--nv-text-dim": theme.textDim,
-    "--nv-accent": theme.accent,
-    "--nv-accent-glow": theme.accentGlow,
-    "--nv-positive": theme.positive,
-    "--nv-negative": theme.negative,
-  } as CSSProperties & Record<string, string>;
+  const themeVars = useMemo(
+    () => themeCssVars(theme) as CSSProperties & Record<string, string>,
+    [theme],
+  );
 
   useEffect(() => {
-    const root = document.documentElement;
-    for (const [key, value] of Object.entries(themeVars)) {
-      root.style.setProperty(key, value);
-    }
+    applyThemeToDocument(theme);
+    void import("@tauri-apps/api/app")
+      .then(({ setTheme }) => setTheme(theme.mode))
+      .catch(() => undefined);
   }, [theme]);
 
   return (
     <main
-      className={`h-screen overflow-y-auto font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
+      className={`nv-app-shell h-screen overflow-y-auto font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
       style={{ ...themeVars, background: theme.bg, color: theme.text }}
     >
       <SettingsView />

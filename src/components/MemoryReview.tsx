@@ -250,8 +250,8 @@ function FocusedProposal({
           className="rounded-lg px-4 py-3 mb-5 text-[13px]"
           style={{
             background:
-              p.review_status === "rejected" ? "rgba(248,113,113,0.08)" : "rgba(74,222,128,0.08)",
-            color: p.review_status === "rejected" ? "#f87171" : "#4ade80",
+              p.review_status === "rejected" ? "color-mix(in srgb, var(--nv-negative) 8%, transparent)" : "color-mix(in srgb, var(--nv-positive) 8%, transparent)",
+            color: p.review_status === "rejected" ? "var(--nv-negative)" : "var(--nv-positive)",
           }}
         >
           {p.review_status === "approved" && "You approved this memory"}
@@ -267,7 +267,7 @@ function FocusedProposal({
               p.review_status !== "rejected" &&
               "Recorded. No data changes until NeuroVault can support this safely."}
             {p.application_status === "failed" && (
-              <span style={{ color: "#f87171" }}>
+              <span style={{ color: "var(--nv-negative)" }}>
                 NeuroVault couldn't apply the change ({p.application_error}) — your decision stands.
               </span>
             )}
@@ -317,7 +317,7 @@ function FocusedProposal({
       </div>
 
       {error && (
-        <div className="mb-4 text-[13px]" style={{ color: "#f87171" }}>
+        <div className="mb-4 text-[13px]" style={{ color: "var(--nv-negative)" }}>
           {error}{" "}
           <button className="underline" onClick={() => setError(null)}>
             dismiss
@@ -332,7 +332,7 @@ function FocusedProposal({
             disabled={busy}
             onClick={() => setMode("reject")}
             className="text-[13px] px-4 py-2 rounded-lg hover:opacity-80 disabled:opacity-40"
-            style={{ color: "#f87171", border: "1px solid rgba(248,113,113,0.35)" }}
+            style={{ color: "var(--nv-negative)", border: "1px solid color-mix(in srgb, var(--nv-negative) 35%, transparent)" }}
           >
             {copy.executable ? "Reject" : "Not accurate"}
           </button>
@@ -348,7 +348,7 @@ function FocusedProposal({
             disabled={busy}
             onClick={() => decide(true)}
             className="text-[13px] px-5 py-2 rounded-lg font-semibold hover:opacity-90 disabled:opacity-40 ml-auto"
-            style={{ background: "rgba(74,222,128,0.16)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.4)" }}
+            style={{ background: "color-mix(in srgb, var(--nv-positive) 14%, transparent)", color: "var(--nv-positive)", border: "1px solid color-mix(in srgb, var(--nv-positive) 40%, transparent)" }}
           >
             {copy.executable ? "Apply change" : "Accurate"}
           </button>
@@ -370,7 +370,7 @@ function FocusedProposal({
               </div>
               <input
                 className="w-full text-[13px] rounded-lg px-3 py-2"
-                style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${T.border}`, color: T.text }}
+                style={{ background: "var(--nv-surface-2)", border: `1px solid ${T.border}`, color: T.text }}
                 placeholder="your corrected value (leave empty to keep the proposal)"
                 value={edits[f.name] ?? ""}
                 onChange={(e) =>
@@ -396,7 +396,7 @@ function FocusedProposal({
               disabled={busy}
               onClick={() => decide(true)}
               className="text-[13px] px-5 py-2 rounded-lg font-semibold ml-auto disabled:opacity-40"
-              style={{ background: "rgba(74,222,128,0.16)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.4)" }}
+              style={{ background: "color-mix(in srgb, var(--nv-positive) 14%, transparent)", color: "var(--nv-positive)", border: "1px solid color-mix(in srgb, var(--nv-positive) 40%, transparent)" }}
             >
               {Object.keys(edits).length > 0
                 ? copy.executable
@@ -422,9 +422,9 @@ function FocusedProposal({
                 onClick={() => setRejectReason(r)}
                 className="text-[13px] px-3 py-1.5 rounded-lg"
                 style={{
-                  border: `1px solid ${rejectReason === r ? "rgba(248,113,113,0.5)" : T.border}`,
-                  background: rejectReason === r ? "rgba(248,113,113,0.1)" : "transparent",
-                  color: rejectReason === r ? "#f87171" : T.text,
+                  border: `1px solid ${rejectReason === r ? "color-mix(in srgb, var(--nv-negative) 50%, transparent)" : T.border}`,
+                  background: rejectReason === r ? "color-mix(in srgb, var(--nv-negative) 10%, transparent)" : "transparent",
+                  color: rejectReason === r ? "var(--nv-negative)" : T.text,
                 }}
               >
                 {r}
@@ -433,7 +433,7 @@ function FocusedProposal({
           </div>
           <input
             className="w-full text-[13px] rounded-lg px-3 py-2"
-            style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${T.border}`, color: T.text }}
+            style={{ background: "var(--nv-surface-2)", border: `1px solid ${T.border}`, color: T.text }}
             placeholder="optional detail"
             value={rejectDetail}
             onChange={(e) => setRejectDetail(e.target.value)}
@@ -450,7 +450,7 @@ function FocusedProposal({
               disabled={busy || !rejectReason}
               onClick={() => decide(false)}
               className="text-[13px] px-5 py-2 rounded-lg font-semibold ml-auto disabled:opacity-40"
-              style={{ background: "rgba(248,113,113,0.12)", color: "#f87171", border: "1px solid rgba(248,113,113,0.4)" }}
+              style={{ background: "color-mix(in srgb, var(--nv-negative) 12%, transparent)", color: "var(--nv-negative)", border: "1px solid color-mix(in srgb, var(--nv-negative) 40%, transparent)" }}
             >
               Reject
             </button>
@@ -583,7 +583,7 @@ export default function MemoryReview({
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-3">
-          <div className="text-[14px]" style={{ color: "#f87171" }}>
+          <div className="text-[14px]" style={{ color: "var(--nv-negative)" }}>
             {error}
           </div>
           <button
@@ -807,7 +807,7 @@ export function LearningReport() {
           </div>
           <textarea
             className="w-full text-[13px] rounded-lg px-3 py-2 h-20 resize-none"
-            style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${T.border}`, color: T.text }}
+            style={{ background: "var(--nv-surface-2)", border: `1px solid ${T.border}`, color: T.text }}
             placeholder="e.g. “I made a big decision today and it never suggested saving it”"
             value={fnText}
             onChange={(e) => setFnText(e.target.value)}

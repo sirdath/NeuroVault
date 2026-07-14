@@ -9,6 +9,7 @@ import { BrainSelector } from "./BrainSelector";
 import { toast } from "../stores/toastStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
+import vaultMark from "../assets/vault-mark.png";
 
 
 const FONT_SIZES = [
@@ -133,8 +134,11 @@ export function SettingsView() {
 
   return (
     <div className="flex min-h-full" style={{ background: "var(--nv-bg)" }}>
-      <aside className="sticky top-0 h-full min-h-[80vh] w-[190px] shrink-0 px-4 py-10" style={{ borderRight: "1px solid var(--nv-border)" }} aria-label="Settings sections">
-        <h1 className="mb-5 px-2 text-[18px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>Settings</h1>
+      <aside className="nv-main-navigation sticky top-0 h-full min-h-[80vh] w-[210px] shrink-0 px-4 py-10" aria-label="Settings sections">
+        <div className="mb-6 flex items-center gap-2.5 px-2">
+          <img src={vaultMark} alt="" className="h-8 w-8 object-contain" style={{ mixBlendMode: "lighten" }} />
+          <h1 className="font-[Georgia,serif] text-[19px] font-semibold" style={{ color: "var(--nv-nav-text)" }}>Settings</h1>
+        </div>
         <nav className="space-y-1">
           {([
             ["general", "General"],
@@ -149,8 +153,8 @@ export function SettingsView() {
               type="button"
               onClick={() => setSettingsTab(id)}
               aria-current={settingsTab === id ? "page" : undefined}
-              className="w-full rounded-lg px-3 py-2 text-left text-[12px] font-medium"
-              style={{ color: settingsTab === id ? "var(--nv-accent)" : "var(--nv-text-muted)", background: settingsTab === id ? "var(--nv-accent-glow)" : "transparent" }}
+              className="nv-nav-item w-full rounded-lg px-3 py-2 text-left text-[12px] font-medium"
+              style={{ color: settingsTab === id ? "var(--nv-nav-text)" : "var(--nv-nav-muted)", background: settingsTab === id ? "var(--nv-nav-active)" : "transparent" }}
             >
               {label}
             </button>
@@ -158,8 +162,8 @@ export function SettingsView() {
         </nav>
       </aside>
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-[720px] px-9 py-12">
-        <h2 className="text-[20px] font-semibold font-[Geist,sans-serif] mb-8" style={{ color: "var(--nv-text)" }}>
+      <div className="mx-auto max-w-[760px] px-10 py-12">
+        <h2 className="mb-8 font-[Georgia,serif] text-[28px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
           {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "memory" ? "Memory" : settingsTab === "vaults" ? "Vaults" : settingsTab === "privacy" ? "Privacy & Trust" : "Advanced"}
         </h2>
 
@@ -171,18 +175,17 @@ export function SettingsView() {
               <button
                 key={t.id}
                 onClick={() => update({ themeId: t.id })}
-                className="relative text-left rounded-xl p-3 transition-all border"
+                className="relative min-h-[132px] text-left rounded-2xl p-4 transition-all border"
                 style={{
                   background: t.bg,
                   borderColor: themeId === t.id ? t.accent : t.border,
-                  boxShadow: themeId === t.id ? `0 0 20px ${t.accentGlow}` : undefined,
+                  boxShadow: themeId === t.id ? `0 0 0 2px ${t.accentGlow}, ${t.shadow}` : undefined,
                 }}
               >
-                <div className="flex gap-1.5 mb-2.5">
-                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.accent }} />
-                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.positive }} />
-                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.negative }} />
-                  <div className="w-4 h-4 rounded-full border" style={{ background: t.surface, borderColor: t.border }} />
+                <div className="mb-3 flex h-8 overflow-hidden rounded-lg" style={{ border: `1px solid ${t.border}` }}>
+                  <div className="w-[28%]" style={{ background: t.navBg }} />
+                  <div className="flex-1" style={{ background: t.bg }} />
+                  <div className="w-[22%]" style={{ background: t.surface }} />
                 </div>
                 <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: t.text }}>{t.name}</p>
                 <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: t.textDim }}>{t.description}</p>
@@ -204,10 +207,10 @@ export function SettingsView() {
                   onClick={() => update({ fontSize: f.value })}
                   className="px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all"
                   style={fontSize === f.value ? {
-                    background: "var(--nv-surface)",
+                    background: "var(--nv-surface-elevated)",
                     color: "var(--nv-text)",
                     border: "1px solid var(--nv-border)",
-                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+                    boxShadow: "0 1px 2px color-mix(in srgb, var(--nv-text) 8%, transparent)",
                   } : { color: "var(--nv-text-dim)" }}
                 >
                   {f.label}
@@ -225,10 +228,10 @@ export function SettingsView() {
                   title={d.hint}
                   className="px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-all"
                   style={density === d.value ? {
-                    background: "var(--nv-surface)",
+                    background: "var(--nv-surface-elevated)",
                     color: "var(--nv-text)",
                     border: "1px solid var(--nv-border)",
-                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+                    boxShadow: "0 1px 2px color-mix(in srgb, var(--nv-text) 8%, transparent)",
                   } : { color: "var(--nv-text-dim)" }}
                 >
                   {d.label}
@@ -1337,7 +1340,7 @@ function APIGatewaySection() {
             { v: "lan"      as const, label: "LAN (0.0.0.0)",            hint: "Anyone on your local network can reach the gateway. Don't enable on untrusted WiFi." },
             { v: "specific" as const, label: "Specific IP",              hint: "Bind to a single network interface (e.g. WireGuard, Tailscale)." },
           ]).map((opt) => (
-            <label key={opt.v} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white/5">
+            <label key={opt.v} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:[background:var(--nv-surface-2)]">
               <input
                 type="radio"
                 name="api-gateway-bind"
@@ -1651,7 +1654,7 @@ function APIKeyCreateModal({ onClose, onCreated }: { onClose: () => void; onCrea
   return (
     <div
       className="fixed inset-0 flex items-center justify-center z-50 pointer-events-auto"
-      style={{ background: "rgba(0,0,0,0.5)" }}
+      style={{ background: "var(--nv-overlay)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="rounded-2xl p-6 w-[440px] max-w-[90vw]" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
@@ -1673,7 +1676,7 @@ function APIKeyCreateModal({ onClose, onCreated }: { onClose: () => void; onCrea
           <span className="text-[11px] uppercase tracking-wider font-[Geist,sans-serif] font-medium" style={{ color: "var(--nv-text-dim)" }}>Scope</span>
           <div className="mt-1 space-y-1">
             {SCOPE_LABELS.map((s) => (
-              <label key={s.value} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white/5">
+              <label key={s.value} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:[background:var(--nv-surface-2)]">
                 <input
                   type="radio"
                   name="api-scope"
@@ -1740,7 +1743,7 @@ function APIKeyPlaintextModal({ plaintext, onClose }: { plaintext: string; onClo
   return (
     <div
       className="fixed inset-0 flex items-center justify-center z-50 pointer-events-auto"
-      style={{ background: "rgba(0,0,0,0.5)" }}
+      style={{ background: "var(--nv-overlay)" }}
     >
       <div className="rounded-2xl p-6 w-[480px] max-w-[90vw]" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
         <h3 className="text-[15px] font-semibold font-[Geist,sans-serif] mb-2" style={{ color: "var(--nv-text)" }}>Save your API key</h3>
@@ -1805,7 +1808,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div className="mb-10">
       <h2 className="text-[11px] uppercase tracking-wider font-semibold font-[Geist,sans-serif] mb-4" style={{ color: "var(--nv-text-dim)" }}>{title}</h2>
-      <div className="rounded-2xl p-5 space-y-5" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "inset 0 1px 1px rgba(255,255,255,0.04)" }}>
+      <div className="rounded-2xl p-5 space-y-5" style={{ background: "var(--nv-surface-elevated)", border: "1px solid var(--nv-border)", boxShadow: "0 1px 2px color-mix(in srgb, var(--nv-text) 4%, transparent)" }}>
         {children}
       </div>
     </div>

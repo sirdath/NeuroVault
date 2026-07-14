@@ -16,7 +16,7 @@ import { UpdateButton } from "./components/UpdateButton";
 import { ConsumerNavigation, type ConsumerDestination } from "./components/ConsumerNavigation";
 import { TrashPanel } from "./components/TrashPanel";
 import { useUpdateStore } from "./stores/updateStore";
-import { useSettingsStore } from "./stores/settingsStore";
+import { applyThemeToDocument, themeCssVars, useSettingsStore } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
 import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
@@ -37,6 +37,16 @@ const ShortcutHelp = lazy(() => import("./components/ShortcutHelp").then((module
 const EmployeePanel = lazy(() => import("./components/EmployeePanel").then((module) => ({ default: module.EmployeePanel })));
 
 type View = ConsumerDestination | "employee";
+
+const VIEW_LABELS: Record<ConsumerDestination, string> = {
+  today: "Today",
+  search: "Search",
+  memories: "Memories",
+  activity: "Activity",
+  graph: "Graph",
+  attention: "Needs attention",
+  trust: "Privacy & Trust",
+};
 
 // The AI Employees feature is excluded from the public base build. Flip this
 // to true (and re-declare the employee-manager window in tauri.conf.json +
@@ -677,32 +687,27 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [saveNote, toggleView, setView]);
 
-  // Inject theme as CSS custom properties so every component can read them
-  const themeVars: React.CSSProperties & Record<string, string> = {
-    "--nv-bg": theme.bg,
-    "--nv-surface": theme.surface,
-    "--nv-border": theme.border,
-    "--nv-text": theme.text,
-    "--nv-text-muted": theme.textMuted,
-    "--nv-text-dim": theme.textDim,
-    "--nv-accent": theme.accent,
-    "--nv-accent-glow": theme.accentGlow,
-    "--nv-positive": theme.positive,
-    "--nv-negative": theme.negative,
-  } as React.CSSProperties & Record<string, string>;
+  const themeVars = useMemo(
+    () => themeCssVars(theme) as React.CSSProperties & Record<string, string>,
+    [theme],
+  );
 
   // Mirror the theme vars onto :root too, so UI portaled into document.body
   // (e.g. the Source Folders modal) inherits them. Without this, those portals
   // sit outside the themed wrapper <div> below and every var(--nv-*) resolves
   // to nothing → transparent, unstyled backgrounds.
   useEffect(() => {
-    const root = document.documentElement;
-    for (const [k, v] of Object.entries(themeVars)) root.style.setProperty(k, String(v));
-  }, [themeVars]);
+    applyThemeToDocument(theme);
+    // Tauri's native title bar must follow the same appearance as the web
+    // surface. The import fails harmlessly in browser/test builds.
+    void import("@tauri-apps/api/app")
+      .then(({ setTheme }) => setTheme(theme.mode))
+      .catch(() => undefined);
+  }, [theme]);
 
   return (
     <div
-      className={`flex flex-col h-screen overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
+      className={`nv-app-shell flex h-screen flex-col overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
       <IngestBanner />
@@ -784,27 +789,29 @@ export default function App() {
         </div>
       )}
 
+      <div className="nv-app-frame flex flex-1 overflow-hidden">
+        <ConsumerNavigation
+          active={view === "employee" ? "today" : view}
+          collapsed={sidebarCollapsed}
+          onNavigate={(destination) => { void setView(destination); }}
+          onOpenSettings={() => { void openSettings(); }}
+        />
+
+        <div className="nv-workspace min-w-0 flex flex-1 flex-col overflow-hidden">
       {/* Top bar */}
       <div
-        className="h-11 min-h-[44px] flex items-center justify-between px-5 backdrop-blur-[10px]"
-        style={{
-          background: theme.surface,
-          borderBottom: `1px solid ${theme.border}`,
-          boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
-        }}
+        className="nv-topbar flex h-[54px] shrink-0 items-center justify-between px-5"
       >
         <div className="flex items-center gap-3">
           <button
             onClick={() => setSidebarCollapsed((v) => !v)}
             title={sidebarCollapsed ? "Show navigation (⌘B)" : "Hide navigation (⌘B)"}
             aria-label="Toggle sidebar"
-            className="w-7 h-7 flex items-center justify-center rounded-md transition-colors"
+            className="nv-topbar-button w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
             style={{
               color: sidebarCollapsed ? theme.textDim : theme.textMuted,
               background: "transparent",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = theme.surface; e.currentTarget.style.color = theme.text; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = sidebarCollapsed ? theme.textDim : theme.textMuted; }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
               <rect x="3" y="4" width="18" height="16" rx="2" />
@@ -812,14 +819,15 @@ export default function App() {
               {!sidebarCollapsed && <line x1="6" y1="9" x2="6" y2="9.01" />}
             </svg>
           </button>
-          <div className="flex items-center gap-2" aria-label="NeuroVault">
-            <span className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: theme.accentGlow, color: theme.accent }} aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                <path d="M5 6.5c2.2-2.8 5-2.8 7 0v11c-2 2.8-4.8 2.8-7 0-1.8-2.2-1.8-4.3 0-5.8-1.5-1.5-1.5-3.5 0-5.2Z" />
-                <path d="m12 5 7 4.2v5.6L12 19" />
-              </svg>
+          <div className="flex min-w-0 items-center gap-3" aria-label={`Current view: ${view === "employee" ? "Today" : VIEW_LABELS[view]}`}>
+            <span className="text-[13px] font-medium" style={{ color: theme.text }}>
+              {view === "employee" ? "Today" : VIEW_LABELS[view]}
             </span>
-            <span className="text-[12px] font-semibold tracking-wide" style={{ color: theme.text }}>NeuroVault</span>
+            {view === "memories" && (
+              <span className="hidden text-[11px] sm:inline" style={{ color: theme.textDim }}>
+                Your private Markdown vault
+              </span>
+            )}
           </div>
         </div>
 
@@ -850,16 +858,10 @@ export default function App() {
             title="Window options"
             aria-haspopup="menu"
             aria-expanded={winMenu !== null}
-            className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+            className="nv-topbar-button w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
             style={{
               color: winMenu ? theme.textMuted : theme.textDim,
               background: winMenu ? theme.surface : "transparent",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = theme.surface; e.currentTarget.style.color = theme.textMuted; }}
-            onMouseLeave={(e) => {
-              if (winMenu) return;
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = theme.textDim;
             }}
           >
             {/* window + chevron: "minimise, with options" */}
@@ -879,13 +881,7 @@ export default function App() {
       </div>
 
       {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
-        <ConsumerNavigation
-          active={view === "employee" ? "today" : view}
-          collapsed={sidebarCollapsed}
-          onNavigate={(destination) => { void setView(destination); }}
-          onOpenSettings={() => { void openSettings(); }}
-        />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 flex overflow-hidden">
           <Suspense fallback={<ViewLoading />}>
           {view === "today" && (
@@ -949,14 +945,16 @@ export default function App() {
 
       {/* A compact live receipt shortcut; full Activity is a destination. */}
       <ActivityBar onExpand={() => { void setView("activity"); }} serverUp={serverUp} />
+        </div>
+      </div>
 
       {/* Settings window surface. Engineering controls live under Advanced. */}
       {settingsOpen && (
         <>
-          <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setSettingsOpen(false)} />
+          <div className="fixed inset-0 z-40" style={{ background: theme.overlay }} onClick={() => setSettingsOpen(false)} />
           <div
             className="fixed inset-x-[7vw] inset-y-[5vh] z-50 overflow-y-auto rounded-2xl"
-            style={{ background: theme.bg, border: `1px solid ${theme.border}`, boxShadow: "0 30px 90px rgba(0,0,0,0.5)" }}
+            style={{ background: theme.surfaceElevated, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}
             role="dialog"
             aria-modal="true"
             aria-label="Settings"
@@ -1008,14 +1006,14 @@ export default function App() {
       {dropActive && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center pointer-events-none"
-          style={{ background: "rgba(11,11,18,0.72)", backdropFilter: "blur(2px)" }}
+          style={{ background: theme.overlay, backdropFilter: "blur(2px)" }}
         >
           <div
             className="flex flex-col items-center gap-3 px-10 py-8 rounded-2xl"
             style={{
-              background: theme.surface,
+              background: theme.surfaceElevated,
               border: `2px dashed ${theme.accent}`,
-              boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+              boxShadow: theme.shadow,
             }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke={theme.accent} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-10 h-10">

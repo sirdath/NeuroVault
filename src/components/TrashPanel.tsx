@@ -71,7 +71,7 @@ export function TrashPanel({ open, onClose }: TrashPanelProps) {
   return (
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center p-6"
-      style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(5px)" }}
+      style={{ background: "var(--nv-overlay)", backdropFilter: "blur(5px)" }}
       onMouseDown={(event) => { if (event.target === event.currentTarget && !restoring) onClose(); }}
     >
       <section
@@ -79,7 +79,7 @@ export function TrashPanel({ open, onClose }: TrashPanelProps) {
         aria-modal="true"
         aria-labelledby="trash-title"
         className="flex max-h-[76vh] w-[620px] max-w-[94vw] flex-col overflow-hidden rounded-2xl"
-        style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)", boxShadow: "0 24px 70px rgba(0,0,0,0.45)" }}
+        style={{ background: "var(--nv-surface-elevated)", border: "1px solid var(--nv-border)", boxShadow: "var(--nv-shadow)" }}
       >
         <header className="flex items-start justify-between gap-4 px-5 py-4" style={{ borderBottom: "1px solid var(--nv-border)" }}>
           <div>

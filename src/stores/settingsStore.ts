@@ -1,146 +1,147 @@
 import { create } from "zustand";
 
+export type ThemeMode = "light" | "dark";
+
 export interface Theme {
-  id: string;
+  id: ThemeMode;
+  mode: ThemeMode;
   name: string;
   description: string;
   bg: string;
   surface: string;
+  surface2: string;
+  surfaceElevated: string;
   border: string;
+  borderStrong: string;
   text: string;
   textMuted: string;
   textDim: string;
   accent: string;
   accentGlow: string;
+  onAccent: string;
   positive: string;
+  warning: string;
   negative: string;
+  navBg: string;
+  navSurface: string;
+  navBorder: string;
+  navText: string;
+  navMuted: string;
+  navDim: string;
+  navActive: string;
+  shadow: string;
+  overlay: string;
 }
 
+/**
+ * NeuroVault deliberately has one visual identity and two appearances.
+ * The old palette gallery made every part of the app feel unrelated; these
+ * two modes keep the same quiet blue undertone while adapting contrast.
+ */
 export const THEMES: Theme[] = [
   {
-    id: "neurovault",
-    name: "NeuroVault",
-    description: "The brand: icon blue on deep indigo-black",
-    bg: "#05070e",
-    surface: "rgba(120,160,255,0.045)",
-    border: "rgba(120,160,255,0.10)",
-    text: "rgba(235,240,255,0.92)",
-    textMuted: "rgba(200,214,245,0.64)",
-    textDim: "rgba(200,214,245,0.72)",
-    accent: "#568cfa",
-    accentGlow: "rgba(86,140,250,0.16)",
-    positive: "#4ade80",
-    negative: "#ff6b6b",
+    id: "light",
+    mode: "light",
+    name: "Light",
+    description: "Warm paper, slate navigation, quiet blue details",
+    bg: "#f8f7f5",
+    surface: "#f3f6fa",
+    surface2: "#ecf1f7",
+    surfaceElevated: "#ffffff",
+    border: "#dde3ea",
+    borderStrong: "#c9d3df",
+    text: "#20242d",
+    textMuted: "#4f5a69",
+    textDim: "#5f6875",
+    accent: "#4058c9",
+    accentGlow: "rgba(64, 88, 201, 0.10)",
+    onAccent: "#ffffff",
+    positive: "#237a57",
+    warning: "#8a5c00",
+    negative: "#c24151",
+    navBg: "linear-gradient(160deg, #3a4654 0%, #2b3947 58%, #25384a 100%)",
+    navSurface: "rgba(255, 255, 255, 0.075)",
+    navBorder: "rgba(255, 255, 255, 0.11)",
+    navText: "#f4f7fa",
+    navMuted: "#ccd4de",
+    navDim: "#9aa7b7",
+    navActive: "rgba(255, 255, 255, 0.14)",
+    shadow: "0 18px 55px rgba(36, 52, 73, 0.13)",
+    overlay: "rgba(20, 29, 42, 0.44)",
   },
   {
-    id: "midnight",
-    name: "Midnight",
-    description: "Deep dark with violet accents",
-    bg: "#08080f",
-    surface: "rgba(255,255,255,0.03)",
-    border: "rgba(255,255,255,0.06)",
-    text: "rgba(255,255,255,0.9)",
-    textMuted: "rgba(255,255,255,0.62)",
-    textDim: "rgba(255,255,255,0.68)",
-    accent: "#b592ff",
-    accentGlow: "rgba(181,146,255,0.15)",
-    positive: "#4ade80",
-    negative: "#ff6b6b",
-  },
-  {
-    id: "claude",
-    name: "Claude",
-    description: "Warm cream tones inspired by Anthropic",
-    bg: "#1a1714",
-    surface: "rgba(255,245,230,0.04)",
-    border: "rgba(255,245,230,0.08)",
-    text: "rgba(255,245,230,0.9)",
-    textMuted: "rgba(255,245,230,0.62)",
-    textDim: "rgba(255,245,230,0.68)",
-    accent: "#d4a574",
-    accentGlow: "rgba(212,165,116,0.15)",
-    positive: "#7dcea0",
-    negative: "#e57373",
-  },
-  {
-    id: "chatgpt",
-    name: "OpenAI",
-    description: "Clean dark with teal-green accents",
-    bg: "#0d0d0d",
-    surface: "rgba(255,255,255,0.04)",
-    border: "rgba(255,255,255,0.07)",
-    text: "rgba(255,255,255,0.88)",
-    textMuted: "rgba(255,255,255,0.62)",
-    textDim: "rgba(255,255,255,0.68)",
-    accent: "#10a37f",
-    accentGlow: "rgba(16,163,127,0.15)",
-    positive: "#10a37f",
-    negative: "#ef4444",
-  },
-  {
-    id: "github",
-    name: "GitHub Dark",
-    description: "Neutral dark with blue accents",
-    bg: "#0d1117",
-    surface: "rgba(200,220,255,0.03)",
-    border: "rgba(200,220,255,0.08)",
-    text: "rgba(230,237,243,0.9)",
-    textMuted: "rgba(200,220,255,0.62)",
-    textDim: "rgba(200,220,255,0.68)",
-    accent: "#58a6ff",
-    accentGlow: "rgba(88,166,255,0.15)",
-    positive: "#3fb950",
-    negative: "#f85149",
-  },
-  {
-    id: "rosepine",
-    name: "Rosé Pine",
-    description: "Soft muted palette with rose and gold",
-    bg: "#191724",
-    surface: "rgba(224,206,235,0.04)",
-    border: "rgba(224,206,235,0.08)",
-    text: "rgba(224,222,244,0.9)",
-    textMuted: "rgba(170,165,200,0.78)",
-    textDim: "rgba(190,184,220,0.82)",
-    accent: "#c4a7e7",
-    accentGlow: "rgba(196,167,231,0.15)",
-    positive: "#9ccfd8",
-    negative: "#eb6f92",
-  },
-  {
-    id: "nord",
-    name: "Nord",
-    description: "Arctic blue-grey Scandinavian palette",
-    bg: "#1a1e26",
-    surface: "rgba(180,200,230,0.04)",
-    border: "rgba(180,200,230,0.08)",
-    text: "rgba(216,222,233,0.9)",
-    textMuted: "rgba(216,222,233,0.62)",
-    textDim: "rgba(216,222,233,0.68)",
-    accent: "#88c0d0",
-    accentGlow: "rgba(136,192,208,0.15)",
-    positive: "#a3be8c",
-    negative: "#bf616a",
-  },
-  {
-    id: "obsidian",
-    name: "Obsidian",
-    description: "Warm dark grey — matches Obsidian's default dark theme",
-    bg: "#1e1e1e",
-    surface: "rgba(255,255,255,0.04)",
-    border: "rgba(255,255,255,0.12)",
-    text: "rgba(220,221,222,0.95)",
-    textMuted: "rgba(153,153,153,0.9)",
-    textDim: "rgba(190,190,190,0.9)",
-    accent: "#7f6df2",
-    accentGlow: "rgba(127,109,242,0.15)",
-    positive: "#4ade80",
-    negative: "#ff6b6b",
+    id: "dark",
+    mode: "dark",
+    name: "Dark",
+    description: "Deep ink, softened contrast, luminous blue details",
+    bg: "#101720",
+    surface: "#17212c",
+    surface2: "#1b2734",
+    surfaceElevated: "#1e2a37",
+    border: "#2a3948",
+    borderStrong: "#3b4b5d",
+    text: "#edf2f7",
+    textMuted: "#aab6c5",
+    textDim: "#78879b",
+    accent: "#7b91ff",
+    accentGlow: "rgba(123, 145, 255, 0.16)",
+    onAccent: "#0c1420",
+    positive: "#55d6a0",
+    warning: "#f3c969",
+    negative: "#ff7b86",
+    navBg: "linear-gradient(160deg, #182432 0%, #0f1924 100%)",
+    navSurface: "rgba(255, 255, 255, 0.065)",
+    navBorder: "rgba(255, 255, 255, 0.09)",
+    navText: "#f4f7fa",
+    navMuted: "#c7d1dd",
+    navDim: "#8f9dad",
+    navActive: "rgba(123, 145, 255, 0.17)",
+    shadow: "0 20px 64px rgba(0, 0, 0, 0.34)",
+    overlay: "rgba(2, 7, 14, 0.68)",
   },
 ];
 
+export function themeCssVars(theme: Theme): Record<string, string> {
+  return {
+    "--nv-bg": theme.bg,
+    "--nv-surface": theme.surface,
+    "--nv-surface-2": theme.surface2,
+    "--nv-surface-elevated": theme.surfaceElevated,
+    "--nv-border": theme.border,
+    "--nv-border-strong": theme.borderStrong,
+    "--nv-text": theme.text,
+    "--nv-text-muted": theme.textMuted,
+    "--nv-text-dim": theme.textDim,
+    "--nv-accent": theme.accent,
+    "--nv-accent-glow": theme.accentGlow,
+    "--nv-on-accent": theme.onAccent,
+    "--nv-positive": theme.positive,
+    "--nv-warning": theme.warning,
+    "--nv-negative": theme.negative,
+    "--nv-nav-bg": theme.navBg,
+    "--nv-nav-surface": theme.navSurface,
+    "--nv-nav-border": theme.navBorder,
+    "--nv-nav-text": theme.navText,
+    "--nv-nav-muted": theme.navMuted,
+    "--nv-nav-dim": theme.navDim,
+    "--nv-nav-active": theme.navActive,
+    "--nv-shadow": theme.shadow,
+    "--nv-overlay": theme.overlay,
+  };
+}
+
+export function applyThemeToDocument(theme: Theme): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.dataset.theme = theme.mode;
+  root.style.colorScheme = theme.mode;
+  for (const [key, value] of Object.entries(themeCssVars(theme))) {
+    root.style.setProperty(key, value);
+  }
+}
+
 interface AppSettings {
-  themeId: string;
+  themeId: ThemeMode;
   fontSize: "small" | "medium" | "large";
   showPreviewSnippets: boolean;
   showTimestamps: boolean;
@@ -150,7 +151,7 @@ interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
-  themeId: "neurovault",
+  themeId: "light",
   fontSize: "medium",
   showPreviewSnippets: true,
   showTimestamps: true,
@@ -160,19 +161,23 @@ const DEFAULTS: AppSettings = {
   checkForUpdatesAutomatically: false,
 };
 
+function normalizeThemeId(value: unknown): ThemeMode {
+  return value === "dark" ? "dark" : "light";
+}
+
 function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem("nv.settings");
     if (raw) {
-      const saved = { ...DEFAULTS, ...JSON.parse(raw) } as AppSettings;
-      // One-time brand migration (2026-07-12): the app identity moved
-      // to the icon's blue. Flip everyone to the NeuroVault theme ONCE;
-      // any theme picked afterwards is respected forever.
-      if (!localStorage.getItem("nv.theme-migrated-blue")) {
-        localStorage.setItem("nv.theme-migrated-blue", "1");
-        saved.themeId = "neurovault";
-      }
-      return saved;
+      const parsed = JSON.parse(raw) as Partial<AppSettings> & { themeId?: unknown };
+      return {
+        ...DEFAULTS,
+        ...parsed,
+        // Every legacy theme was dark-only. Start the new visual system in
+        // the reference-inspired light mode; subsequent Light/Dark choices
+        // are persisted exactly.
+        themeId: normalizeThemeId(parsed.themeId),
+      };
     }
   } catch { /* corrupt */ }
   return DEFAULTS;
@@ -185,20 +190,23 @@ interface SettingsStore extends AppSettings {
 }
 
 function withTheme(settings: AppSettings) {
+  const themeId = normalizeThemeId(settings.themeId);
   return {
     ...settings,
-    theme: THEMES.find((theme) => theme.id === settings.themeId) ?? THEMES[0]!,
+    themeId,
+    theme: THEMES.find((theme) => theme.id === themeId) ?? THEMES[0]!,
   };
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => {
   const initial = loadSettings();
+  const themed = withTheme(initial);
+  applyThemeToDocument(themed.theme);
   return {
-    ...withTheme(initial),
+    ...themed,
     update: (partial) =>
       set((state) => {
-        const next = { ...state, ...partial };
-        const theme = THEMES.find((t) => t.id === next.themeId) ?? THEMES[0]!;
+        const next = withTheme({ ...state, ...partial });
         localStorage.setItem("nv.settings", JSON.stringify({
           themeId: next.themeId,
           fontSize: next.fontSize,
@@ -208,8 +216,13 @@ export const useSettingsStore = create<SettingsStore>((set) => {
           reduceMotion: next.reduceMotion,
           checkForUpdatesAutomatically: next.checkForUpdatesAutomatically,
         }));
-        return { ...next, theme };
+        applyThemeToDocument(next.theme);
+        return next;
       }),
-    syncFromStorage: () => set(withTheme(loadSettings())),
+    syncFromStorage: () => set(() => {
+      const next = withTheme(loadSettings());
+      applyThemeToDocument(next.theme);
+      return next;
+    }),
   };
 });

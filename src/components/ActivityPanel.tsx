@@ -252,7 +252,7 @@ export function ActivityPanel({ open, onClose, presentation = "modal" }: Activit
   if (presentation === "page") return panel;
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-40" style={{ background: "var(--nv-overlay)" }} onClick={onClose} />
       {panel}
     </>
   );

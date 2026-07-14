@@ -199,7 +199,7 @@ export function Onboarding({ onOpenSettings }: OnboardingProps) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100]"
-            style={{ background: "rgba(0,0,0,0.68)", backdropFilter: "blur(8px)" }}
+            style={{ background: "var(--nv-overlay)", backdropFilter: "blur(8px)" }}
             onClick={closeForNow}
           />
           <motion.div
@@ -408,7 +408,7 @@ function Promise({ label, detail }: { label: string; detail: string }) {
 function CheckRow({ ok, label }: { ok: boolean; label: string }) {
   return (
     <div className="flex items-center gap-2 py-1.5 text-[12px]" style={{ color: ok ? "var(--nv-text)" : "var(--nv-text-dim)" }}>
-      <span className="w-4 h-4 rounded-full flex items-center justify-center text-[10px]" style={{ background: ok ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.05)", color: ok ? "var(--nv-positive)" : "var(--nv-text-dim)" }}>{ok ? "✓" : "·"}</span>
+      <span className="w-4 h-4 rounded-full flex items-center justify-center text-[10px]" style={{ background: ok ? "color-mix(in srgb, var(--nv-positive) 14%, transparent)" : "var(--nv-surface-2)", color: ok ? "var(--nv-positive)" : "var(--nv-text-dim)" }}>{ok ? "✓" : "·"}</span>
       {label}
     </div>
   );

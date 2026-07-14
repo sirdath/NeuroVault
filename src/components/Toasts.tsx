@@ -1,11 +1,11 @@
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
 
-const COLORS = {
-  info: "border-[#00c9b1] bg-[#00c9b1]/10 text-[#00c9b1]",
-  success: "border-[#4ade80] bg-[#4ade80]/10 text-[#4ade80]",
-  warning: "border-[#568cfa] bg-[#568cfa]/10 text-[#568cfa]",
-  error: "border-[#ff6b6b] bg-[#ff6b6b]/10 text-[#ff6b6b]",
+const TONES = {
+  info: "var(--nv-accent)",
+  success: "var(--nv-positive)",
+  warning: "var(--nv-warning)",
+  error: "var(--nv-negative)",
 };
 
 const ICONS = {
@@ -25,7 +25,13 @@ export function Toasts() {
       {toasts.map((t) => (
           <div
             key={t.id}
-            className={`border rounded-md px-3 py-2 backdrop-blur-md shadow-lg font-[Geist,sans-serif] text-xs flex items-start gap-2 ${COLORS[t.type]}${reduceMotionSetting ? "" : " nv-toast-enter"}`}
+            className={`rounded-xl px-3 py-2.5 backdrop-blur-md font-[Geist,sans-serif] text-xs flex items-start gap-2${reduceMotionSetting ? "" : " nv-toast-enter"}`}
+            style={{
+              color: TONES[t.type],
+              background: `color-mix(in srgb, ${TONES[t.type]} 9%, var(--nv-surface-elevated))`,
+              border: `1px solid color-mix(in srgb, ${TONES[t.type]} 52%, var(--nv-border))`,
+              boxShadow: "var(--nv-shadow)",
+            }}
             role={t.type === "error" ? "alert" : "status"}
             aria-live={t.type === "error" ? "assertive" : "polite"}
             aria-atomic="true"

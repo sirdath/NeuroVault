@@ -27,9 +27,10 @@ import {
 } from "../lib/brainScopedUiState";
 import { ContextMenu } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { neurovaultTheme } from "./editor/theme";
+import { neurovaultDarkTheme, neurovaultLightTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
+import { useSettingsStore } from "../stores/settingsStore";
 
 export function Editor() {
   const brainId = useBrainStore((state) => state.activeBrainId);
@@ -42,6 +43,7 @@ export function Editor() {
 }
 
 function BrainEditor({ scope }: { scope: string }) {
+  const themeMode = useSettingsStore((state) => state.theme.mode);
   const activeFilename = useNoteStore((s) => s.activeFilename);
   const activeContent = useNoteStore((s) => s.activeContent);
   const isDirty = useNoteStore((s) => s.isDirty);
@@ -159,12 +161,12 @@ function BrainEditor({ scope }: { scope: string }) {
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
       EditorView.editable.of(!transitionLocked),
-      neurovaultTheme,
+      themeMode === "dark" ? neurovaultDarkTheme : neurovaultLightTheme,
       livePreviewTheme,
       livePreviewPlugin,
       buildCompletions(() => notesRef.current.map((n) => n.title)),
     ],
-    [transitionLocked]
+    [themeMode, transitionLocked]
   );
 
   // Auto-save with 1-second debounce
@@ -244,7 +246,7 @@ function BrainEditor({ scope }: { scope: string }) {
               onClick={() => void onNewNote()}
               disabled={creating}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold font-[Geist,sans-serif] transition-all disabled:opacity-60"
-              style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
+              style={{ background: "var(--nv-accent)", color: "var(--nv-on-accent)" }}
             >
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
@@ -262,7 +264,7 @@ function BrainEditor({ scope }: { scope: string }) {
   }
 
   return (
-    <div className="flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
+    <div className="nv-editor-shell flex-1 flex overflow-hidden" style={{ backgroundColor: "var(--nv-bg)" }}>
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Tab bar — drag to reorder, middle-click to close, x always
             visible. Shown whenever any note is open so a single-tab
@@ -271,7 +273,7 @@ function BrainEditor({ scope }: { scope: string }) {
             without opening a second). */}
         {openTabs.length > 0 && (
           <div
-            className="flex items-center overflow-x-auto flex-shrink-0"
+            className="nv-editor-tabs flex items-center overflow-x-auto flex-shrink-0"
             style={{ background: "var(--nv-surface)", borderBottom: "1px solid var(--nv-border)" }}
           >
             <DndContext
@@ -306,11 +308,11 @@ function BrainEditor({ scope }: { scope: string }) {
         {recoveryDraft && (
           <div
             className="flex shrink-0 items-center gap-3 px-5 py-3"
-            style={{ background: "rgba(251,191,36,0.08)", borderBottom: "1px solid rgba(251,191,36,0.25)" }}
+            style={{ background: "color-mix(in srgb, var(--nv-warning) 8%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--nv-warning) 25%, transparent)" }}
             role="alert"
           >
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-semibold" style={{ color: "#fbbf24" }}>Unsaved work was recovered from the last session</p>
+              <p className="text-[12px] font-semibold" style={{ color: "var(--nv-warning)" }}>Unsaved work was recovered from the last session</p>
               <p className="mt-0.5 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
                 A newer draft from {new Date(recoveryDraft.updatedAt).toLocaleString()} differs from the Markdown file. Nothing has been overwritten.
               </p>
@@ -318,7 +320,7 @@ function BrainEditor({ scope }: { scope: string }) {
             <button type="button" onClick={discardRecoveryDraft} className="rounded-lg px-3 py-1.5 text-[11px]" style={{ color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>
               Keep disk version
             </button>
-            <button type="button" onClick={recoverDraft} className="rounded-lg px-3 py-1.5 text-[11px] font-semibold" style={{ color: "var(--nv-bg)", background: "#fbbf24" }}>
+            <button type="button" onClick={recoverDraft} className="rounded-lg px-3 py-1.5 text-[11px] font-semibold" style={{ color: "var(--nv-on-accent)", background: "var(--nv-warning)" }}>
               Restore draft
             </button>
           </div>
@@ -326,9 +328,9 @@ function BrainEditor({ scope }: { scope: string }) {
 
         {/* Header */}
         <div
-          className="flex items-center justify-between px-6 py-2.5"
+          className="nv-editor-header flex items-center justify-between px-6 py-2.5"
           style={{
-            background: "var(--nv-surface)",
+            background: "color-mix(in srgb, var(--nv-surface-elevated) 84%, transparent)",
             borderBottom: "1px solid var(--nv-border)",
             boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.02)",
           }}
@@ -352,7 +354,7 @@ function BrainEditor({ scope }: { scope: string }) {
 
         {/* One always-live editor - Obsidian-style. No preview/edit toggle;
             syntax marks hide on every line except the one you are editing. */}
-        <div className="flex-1 overflow-auto">
+        <div className="nv-editor-canvas flex-1 overflow-auto">
           <CodeMirror
             value={activeContent}
             onChange={onChange}

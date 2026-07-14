@@ -90,7 +90,7 @@ export function TrustCenter({
               onClick={() => void toggleAutomatic()}
               disabled={busy || signals.automaticRecall === "unavailable" || signals.automaticRecall === "checking"}
               className="mt-4 rounded-lg px-3 py-1.5 text-[11px] font-semibold disabled:opacity-45"
-              style={{ color: automaticOn ? "#fbbf24" : "var(--nv-bg)", background: automaticOn ? "rgba(251,191,36,0.1)" : "var(--nv-accent)", border: automaticOn ? "1px solid rgba(251,191,36,0.28)" : "1px solid transparent" }}
+              style={{ color: automaticOn ? "var(--nv-warning)" : "var(--nv-on-accent)", background: automaticOn ? "color-mix(in srgb, var(--nv-warning) 10%, transparent)" : "var(--nv-accent)", border: automaticOn ? "1px solid color-mix(in srgb, var(--nv-warning) 28%, transparent)" : "1px solid transparent" }}
             >
               {busy ? "Updating…" : automaticOn ? "Pause automatic context" : "Turn on automatic context"}
             </button>
@@ -108,7 +108,7 @@ export function TrustCenter({
             <Fact label="Markdown" value={vaultPath || activeBrain?.vault_path || "Select a vault to see its location"} breakAll />
             <Fact label="Index & journal" value="Local NeuroVault application data" />
             <Fact label="At rest" value="Plaintext unless your Mac volume is encrypted" />
-            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "#fbbf24" }}>Turn on FileVault in macOS Settings to protect local data at rest.</p>
+            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--nv-warning)" }}>Turn on FileVault in macOS Settings to protect local data at rest.</p>
           </TrustCard>
           <TrustCard title="Shared" eyebrow="Outbound">
             <Fact label="Recent AI hosts" value={receiptsError ? "Could not load recent receipts" : hosts.length ? hosts.join(", ") : "No provider shown in recent receipts"} />

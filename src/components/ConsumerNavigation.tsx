@@ -3,6 +3,8 @@ import { API_HOST } from "../lib/config";
 import { proposalNeedsAttention } from "../lib/inspectorCopy";
 import { useBrainStore } from "../stores/brainStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
+import { useSettingsStore } from "../stores/settingsStore";
+import vaultMark from "../assets/vault-mark.png";
 
 export type ConsumerDestination =
   | "today"
@@ -72,6 +74,8 @@ export function ConsumerNavigation({
   const activeBrainId = useBrainStore((state) => state.activeBrainId);
   const switchBrain = useBrainStore((state) => state.switchBrain);
   const health = useConsumerHealthStore((state) => state.health);
+  const themeMode = useSettingsStore((state) => state.theme.mode);
+  const updateSettings = useSettingsStore((state) => state.update);
   const [attentionCount, setAttentionCount] = useState(0);
 
   useEffect(() => {
@@ -107,15 +111,29 @@ export function ConsumerNavigation({
 
   return (
     <aside
-      className="flex h-full shrink-0 flex-col"
+      className="nv-main-navigation flex h-full shrink-0 flex-col"
       style={{
-        width: collapsed ? 64 : 214,
-        background: "var(--nv-surface)",
-        borderRight: "1px solid var(--nv-border)",
+        width: collapsed ? 72 : 232,
       }}
       aria-label="Main navigation"
     >
-      <nav className="flex-1 px-2.5 py-3" aria-label="NeuroVault">
+      <div className={`nv-sidebar-brand flex shrink-0 items-center ${collapsed ? "justify-center px-2" : "gap-3 px-5"}`}>
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px]"
+          style={{ background: "var(--nv-nav-surface)", border: "1px solid var(--nv-nav-border)", boxShadow: "0 8px 22px rgba(4, 12, 24, 0.18)" }}
+          aria-hidden="true"
+        >
+          <img src={vaultMark} alt="" className="h-9 w-9 object-contain" style={{ mixBlendMode: "lighten", filter: "drop-shadow(0 3px 8px rgba(79, 131, 255, 0.28))" }} />
+        </span>
+        {!collapsed && (
+          <span className="min-w-0">
+            <span className="block truncate font-[Georgia,serif] text-[17px] font-semibold tracking-[-0.015em]" style={{ color: "var(--nv-nav-text)" }}>NeuroVault</span>
+            <span className="mt-0.5 block truncate text-[9px] font-medium uppercase tracking-[0.16em]" style={{ color: "var(--nv-nav-dim)" }}>Private memory</span>
+          </span>
+        )}
+      </div>
+
+      <nav className="flex-1 px-3 py-4" aria-label="NeuroVault">
         <div className="space-y-1">
           {NAV_ITEMS.map((item) => (
             <DestinationButton
@@ -129,7 +147,7 @@ export function ConsumerNavigation({
           ))}
         </div>
 
-        <div className="my-3" style={{ borderTop: "1px solid var(--nv-border)" }} />
+        <div className="my-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }} />
 
         <DestinationButton
           active={active === "attention"}
@@ -148,19 +166,19 @@ export function ConsumerNavigation({
         />
       </nav>
 
-      <div className="px-2.5 pb-3">
+      <div className="px-3 pb-3">
         {!collapsed && (
           <div className="mb-2 px-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-text-dim)" }}>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-nav-dim)" }}>
               Active vault
             </p>
             <select
               aria-label="Active vault"
               className="mt-1.5 w-full rounded-lg px-2.5 py-2 text-[12px] outline-none"
               style={{
-                color: "var(--nv-text)",
-                background: "var(--nv-bg)",
-                border: "1px solid var(--nv-border)",
+                color: "var(--nv-nav-text)",
+                background: "var(--nv-nav-surface)",
+                border: "1px solid var(--nv-nav-border)",
               }}
               value={activeBrainId ?? ""}
               onChange={(event) => {
@@ -172,33 +190,47 @@ export function ConsumerNavigation({
               {brains.map((brain) => <option key={brain.id} value={brain.id}>{brain.name || brain.id}</option>)}
             </select>
             {activeBrain && (
-              <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-text-dim)" }} title={activeBrain.vault_path}>
+              <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-nav-dim)" }} title={activeBrain.vault_path}>
                 {activeBrain.vault_path || "Local NeuroVault storage"}
               </p>
             )}
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] transition-colors hover:bg-white/5"
-          style={{ color: "var(--nv-text-muted)" }}
-          aria-label="Open settings"
-          title={collapsed ? "Settings" : undefined}
-        >
-          <svg {...iconProps}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" /></svg>
-          {!collapsed && <span className="flex-1">Settings</span>}
-          {!collapsed && (
-            <span
-              className="h-2 w-2 rounded-full"
-              style={{
-                background: health.tone === "positive" ? "var(--nv-positive)" : health.tone === "negative" ? "var(--nv-negative)" : "#fbbf24",
-              }}
-              aria-label={health.headline}
-            />
-          )}
-        </button>
+        <div className={`flex items-center ${collapsed ? "flex-col gap-1" : "gap-1"}`} style={{ borderTop: "1px solid var(--nv-nav-border)", paddingTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => updateSettings({ themeId: themeMode === "light" ? "dark" : "light" })}
+            className="nv-nav-item flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors"
+            style={{ color: "var(--nv-nav-muted)" }}
+            aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} mode`}
+            title={`Switch to ${themeMode === "light" ? "dark" : "light"} mode`}
+          >
+            {themeMode === "light" ? (
+              <svg {...iconProps}><path d="M20.5 14.2A8 8 0 0 1 9.8 3.5 8.2 8.2 0 1 0 20.5 14.2Z" /></svg>
+            ) : (
+              <svg {...iconProps}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="nv-nav-item flex min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] transition-colors"
+            style={{ color: "var(--nv-nav-muted)", width: collapsed ? 36 : "100%" }}
+            aria-label="Open settings"
+            title={collapsed ? "Settings" : undefined}
+          >
+            <svg {...iconProps}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" /></svg>
+            {!collapsed && <span className="flex-1">Settings</span>}
+            {!collapsed && (
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ background: health.tone === "positive" ? "var(--nv-positive)" : health.tone === "negative" ? "var(--nv-negative)" : "var(--nv-warning)" }}
+                aria-label={health.headline}
+              />
+            )}
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -225,17 +257,16 @@ function DestinationButton({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       title={collapsed ? label : undefined}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium transition-colors"
+      className="nv-nav-item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium transition-colors"
       style={{
-        color: active ? "var(--nv-text)" : "var(--nv-text-muted)",
-        background: active ? "var(--nv-accent-glow)" : "transparent",
-        boxShadow: active ? "inset 0 0 0 1px color-mix(in srgb, var(--nv-accent) 24%, transparent)" : undefined,
+        color: active ? "var(--nv-nav-text)" : "var(--nv-nav-muted)",
+        background: active ? "var(--nv-nav-active)" : "transparent",
       }}
     >
-      <span style={{ color: active ? "var(--nv-accent)" : "inherit" }}>{icon}</span>
+      <span style={{ color: active ? "#aebcff" : "inherit" }}>{icon}</span>
       {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
       {!collapsed && badge !== undefined && (
-        <span className="min-w-5 rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold" style={{ color: "var(--nv-bg)", background: "var(--nv-accent)" }}>
+        <span className="min-w-5 rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold" style={{ color: "var(--nv-on-accent)", background: "var(--nv-accent)" }}>
           {badge > 99 ? "99+" : badge}
         </span>
       )}

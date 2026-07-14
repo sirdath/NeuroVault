@@ -78,10 +78,10 @@ const pct = (v: number | null | undefined) =>
 
 function Chip({ text, tone }: { text: string; tone: "ok" | "dim" | "warn" | "accent" }) {
   const colors: Record<string, { bg: string; fg: string }> = {
-    ok: { bg: "rgba(74,222,128,0.12)", fg: "#4ade80" },
-    dim: { bg: "rgba(255,255,255,0.06)", fg: "var(--nv-text-dim)" },
-    warn: { bg: "rgba(248,113,113,0.12)", fg: "#f87171" },
-    accent: { bg: "rgba(86,140,250,0.12)", fg: "var(--nv-accent, #568cfa)" },
+    ok: { bg: "color-mix(in srgb, var(--nv-positive) 12%, transparent)", fg: "var(--nv-positive)" },
+    dim: { bg: "var(--nv-surface-2)", fg: "var(--nv-text-dim)" },
+    warn: { bg: "color-mix(in srgb, var(--nv-negative) 12%, transparent)", fg: "var(--nv-negative)" },
+    accent: { bg: "var(--nv-accent-glow)", fg: "var(--nv-accent)" },
   };
   const c = colors[tone] ?? colors.dim!;
   return (
@@ -99,7 +99,7 @@ function Bar({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
       <span className="w-20 shrink-0 text-right">{label}</span>
-      <div className="h-1.5 w-24 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
+      <div className="h-1.5 w-24 rounded-full overflow-hidden" style={{ background: "var(--nv-surface-2)" }}>
         <div
           className="h-full rounded-full"
           style={{ width: `${Math.round(value * 100)}%`, background: "var(--nv-accent, #568cfa)", opacity: 0.85 }}
@@ -255,7 +255,7 @@ function RecordCard({ r }: { r: LogRecord }) {
           {r.context_block_head && (
             <pre
               className="text-[10px] leading-relaxed p-2 rounded-lg overflow-x-auto whitespace-pre-wrap"
-              style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--nv-border)", color: "var(--nv-text-dim)" }}
+              style={{ background: "var(--nv-surface-2)", border: "1px solid var(--nv-border)", color: "var(--nv-text-dim)" }}
             >
               {r.context_block_head}
             </pre>
@@ -460,7 +460,7 @@ export default function MemoryInspector({
           {TRACE_EXPLAINER}
         </p>
         {error && (
-          <div className="text-xs" style={{ color: "#f87171" }}>
+          <div className="text-xs" style={{ color: "var(--nv-negative)" }}>
             {error}
           </div>
         )}

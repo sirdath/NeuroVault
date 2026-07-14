@@ -292,11 +292,11 @@ function BrainSidebar({
 
   return (
     <div
-      className="h-full flex flex-col backdrop-blur-[10px] relative"
+      className="nv-note-sidebar h-full flex flex-col backdrop-blur-[18px] relative"
       style={{
         width: sidebarWidth,
         minWidth: sidebarWidth,
-        background: "var(--nv-surface)",
+        background: "color-mix(in srgb, var(--nv-surface) 90%, var(--nv-bg))",
         borderRight: "1px solid var(--nv-border)",
       }}
     >
@@ -900,9 +900,9 @@ function NoteList({
                   paddingBlock: "var(--pad-y, 12px)",
                   minHeight: "var(--row-h, auto)",
                   ...(isActive ? {
-                    background: "var(--nv-surface)",
-                    border: `1px solid var(--nv-border)`,
-                    boxShadow: `inset 0 1px 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.15)`,
+                    background: "var(--nv-surface-elevated)",
+                    border: `1px solid color-mix(in srgb, var(--nv-accent) 22%, var(--nv-border))`,
+                    boxShadow: "0 5px 18px color-mix(in srgb, var(--nv-text) 7%, transparent)",
                   } : {
                     border: "1px solid transparent",
                   }),

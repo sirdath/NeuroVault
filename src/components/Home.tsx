@@ -112,7 +112,7 @@ function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string, fi
       onClick={() => onEnter(b.id)}
       className="relative text-left rounded-2xl overflow-hidden group transition-transform hover:-translate-y-0.5"
       style={{
-        background: T.surface,
+        background: "var(--nv-surface-elevated)",
         border: `1px solid ${b.is_active ? "var(--nv-accent, #568cfa)" : T.border}`,
         boxShadow: hover ? `0 8px 30px -12px ${T.glow}` : "none",
         minHeight: 176,
@@ -270,13 +270,13 @@ export default function Home({
   const cont = brief?.continue ?? null;
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto px-8 py-9" style={{ maxWidth: 1040 }}>
+    <main className="flex-1 overflow-y-auto" aria-labelledby="today-heading">
+      <div className="mx-auto px-10 py-11" style={{ maxWidth: 1080 }}>
         {/* 1. Is memory operating? One shared state machine, never a
             decorative always-green dot. */}
         <div className="mb-6 flex items-start gap-4">
           <div>
-            <h1 className="text-[26px] font-semibold tracking-tight" style={{ color: T.text }}>
+            <h1 id="today-heading" className="font-[Georgia,serif] text-[34px] font-semibold tracking-[-0.025em]" style={{ color: T.text }}>
               {greeting()}
             </h1>
             <p className="text-[13.5px] mt-1 flex items-center gap-2" style={{ color: T.dim }}>
@@ -319,7 +319,7 @@ export default function Home({
         </div>
 
         {error && (
-          <div className="text-[13px] mb-4" style={{ color: "#f87171" }}>
+          <div className="text-[13px] mb-4" style={{ color: "var(--nv-negative)" }}>
             {error}{" "}
             <button className="underline" onClick={load}>
               retry
@@ -335,7 +335,7 @@ export default function Home({
               <button
                 onClick={() => onOpenReview("attention")}
                 className="rounded-xl px-4 py-3 text-left"
-                style={{ background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.24)" }}
+                style={{ background: "color-mix(in srgb, var(--nv-negative) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--nv-negative) 24%, transparent)" }}
               >
                 <div className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--nv-negative)" }}>
                   Needs attention · {reviewSummary.attention}
@@ -509,6 +509,6 @@ export default function Home({
           ))}
         </div>
       </div>
-    </div>
+    </main>
   );
 }

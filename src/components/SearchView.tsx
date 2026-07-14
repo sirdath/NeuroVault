@@ -106,7 +106,7 @@ export function SearchView({
         <div className="flex items-end justify-between gap-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>Find the source</p>
-            <h1 id="search-heading" className="mt-1 text-2xl font-semibold" style={{ color: "var(--nv-text)" }}>Search memory</h1>
+            <h1 id="search-heading" className="mt-1 font-[Georgia,serif] text-[32px] font-semibold tracking-[-0.025em]" style={{ color: "var(--nv-text)" }}>Search memory</h1>
             <p className="mt-1 text-[13px]" style={{ color: "var(--nv-text-dim)" }}>
               Searching <strong style={{ color: "var(--nv-text-muted)" }}>{activeBrainName || "the active vault"}</strong>. Exact matches are never hidden by meaning scores.
             </p>
@@ -129,7 +129,7 @@ export function SearchView({
             aria-activedescendant={items[selected]?.id}
             placeholder="Search decisions, notes, people, tasks, or exact words…"
             className="w-full rounded-2xl py-4 pl-12 pr-12 text-[15px] outline-none"
-            style={{ color: "var(--nv-text)", background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 14px 45px rgba(0,0,0,0.14)" }}
+            style={{ color: "var(--nv-text)", background: "var(--nv-surface-elevated)", border: "1px solid var(--nv-border)", boxShadow: "var(--nv-shadow)" }}
           />
           {query && (
             <button type="button" onClick={() => setQuery("")} className="absolute right-3 top-1/2 h-7 w-7 -translate-y-1/2 rounded-lg" style={{ color: "var(--nv-text-dim)" }} aria-label="Clear search">×</button>
@@ -153,7 +153,7 @@ export function SearchView({
         </div>
 
         {error && (
-          <div className="mt-5 rounded-xl px-4 py-3 text-[12px]" style={{ color: "#fbbf24", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)" }} role="status">
+          <div className="mt-5 rounded-xl px-4 py-3 text-[12px]" style={{ color: "var(--nv-warning)", background: "color-mix(in srgb, var(--nv-warning) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--nv-warning) 28%, transparent)" }} role="status">
             {error}
           </div>
         )}

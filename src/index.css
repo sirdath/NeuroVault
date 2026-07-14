@@ -1,40 +1,54 @@
 @import "tailwindcss";
 
-/* NeuroVault Design System — Vault Noir
- *
- * A calm, warm-dark palette tuned for long-form reading and AI memory.
- * Three background tiers (bg / surface / surface-elevated) give the eye a
- * real depth gradient. Text contrast against --color-bg (#0b0b12):
- *   primary  e8e6f0  14.6:1  AAA
- *   secondary a8a6c0  8.2:1  AAA
- *   tertiary  8a88a0  5.4:1  AA
- *   muted     6a6880  3.4:1  AA Large only — chrome labels, not body
- */
-@theme {
-  /* Background hierarchy — three tiers */
-  --color-bg: #0b0b12;              /* canvas / editor */
-  --color-surface: #12121c;         /* sidebars, topbar, statusbar */
-  --color-surface-elevated: #1a1a28;/* cards, hover, popovers */
-  --color-border: #1f1f2e;
-  --color-border-strong: #2a2a40;
+/* NeuroVault Design System — quiet intelligence.
+ * Runtime variables come from settingsStore so every surface, including
+ * portals and CodeMirror, switches as one coherent Light/Dark appearance. */
+:root {
+  --nv-bg: #f8f7f5;
+  --nv-surface: #f3f6fa;
+  --nv-surface-2: #ecf1f7;
+  --nv-surface-elevated: #ffffff;
+  --nv-border: #dde3ea;
+  --nv-border-strong: #c9d3df;
+  --nv-text: #20242d;
+  --nv-text-muted: #4f5a69;
+  --nv-text-dim: #5f6875;
+  --nv-accent: #4058c9;
+  --nv-accent-glow: rgba(64, 88, 201, 0.10);
+  --nv-on-accent: #ffffff;
+  --nv-positive: #237a57;
+  --nv-warning: #8a5c00;
+  --nv-negative: #c24151;
+  --nv-nav-bg: linear-gradient(160deg, #3a4654 0%, #2b3947 58%, #25384a 100%);
+  --nv-nav-surface: rgba(255, 255, 255, 0.075);
+  --nv-nav-border: rgba(255, 255, 255, 0.11);
+  --nv-nav-text: #f4f7fa;
+  --nv-nav-muted: #ccd4de;
+  --nv-nav-dim: #9aa7b7;
+  --nv-nav-active: rgba(255, 255, 255, 0.14);
+  --nv-shadow: 0 18px 55px rgba(36, 52, 73, 0.13);
+  --nv-overlay: rgba(20, 29, 42, 0.44);
+}
 
-  /* Compatibility alias — components that still reference --color-raised. */
-  --color-raised: #1a1a28;
-
-  /* Accents — your brand identity, kept */
-  --color-brand: #568cfa;            /* primary accent / fresh state */
-  --color-brand-dim: rgba(86, 140, 250, 0.12);
-  --color-teal: #00c9b1;             /* AI / connected state */
-  --color-purple: #8b7cf8;           /* entities, code */
-  --color-coral: #ff6b6b;             /* danger / contradictions */
-  --color-green: #4ade80;             /* success / online */
-
-  /* Text hierarchy — AA-compliant against --color-bg */
-  --color-txt: #e8e6f0;              /* primary body text */
-  --color-sub: #a8a6c0;              /* secondary labels */
-  --color-tertiary: #8a88a0;         /* chrome labels, captions */
-  --color-muted: #6a6880;             /* placeholders, decorations */
-  --color-faint: #35335a;             /* disabled / dormant */
+@theme inline {
+  /* Tailwind compatibility aliases — never a separate palette. */
+  --color-bg: var(--nv-bg);
+  --color-surface: var(--nv-surface);
+  --color-surface-elevated: var(--nv-surface-elevated);
+  --color-border: var(--nv-border);
+  --color-border-strong: var(--nv-border-strong);
+  --color-raised: var(--nv-surface-elevated);
+  --color-brand: var(--nv-accent);
+  --color-brand-dim: var(--nv-accent-glow);
+  --color-teal: #3c9fa0;
+  --color-purple: #7767df;
+  --color-coral: var(--nv-negative);
+  --color-green: var(--nv-positive);
+  --color-txt: var(--nv-text);
+  --color-sub: var(--nv-text-muted);
+  --color-tertiary: var(--nv-text-dim);
+  --color-muted: var(--nv-text-dim);
+  --color-faint: var(--nv-border-strong);
 
   /* 4px spacing grid */
   --space-1: 4px;
@@ -74,19 +88,25 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: var(--color-bg);
-  color: var(--color-txt);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background-color: var(--nv-bg);
+  color: var(--nv-text);
+  font-family: Geist, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   font-size: 13px;            /* UI default */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Editor: Lora serif at 16px with relaxed line-height — like reading a book */
+body {
+  overflow: hidden;
+}
+
+/* The reference is editorial rather than dashboard-like: a quiet serif
+   writing surface inside restrained system chrome. */
 .cm-editor {
-  font-family: "Lora", Georgia, serif;
-  font-size: 16px;
-  line-height: 1.7;
+  font-family: "New York", "Iowan Old Style", Charter, Georgia, serif;
+  font-size: 17px;
+  line-height: 1.72;
+  background: var(--nv-bg);
 }
 
 /* Cap editor content width to ~700px for readability — Obsidian's most loved feature */
@@ -95,9 +115,11 @@ html, body, #root {
   justify-content: center;
 }
 .cm-editor .cm-content {
-  max-width: 740px;
-  padding: 32px 32px 30vh 32px;
-  font-family: "Lora", Georgia, serif;
+  width: min(100%, 780px);
+  max-width: 780px;
+  min-height: 100%;
+  padding: 54px 52px 34vh;
+  font-family: "New York", "Iowan Old Style", Charter, Georgia, serif;
 }
 
 .cm-editor .cm-line .tok-monospace,
@@ -115,11 +137,11 @@ html, body, #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2a40;
+  background: color-mix(in srgb, var(--nv-text-dim) 40%, transparent);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a55;
+  background: color-mix(in srgb, var(--nv-text-muted) 56%, transparent);
 }
 
 /* Ordinary copy must keep working in a trust/evidence product. Only controls
@@ -156,7 +178,7 @@ select:focus-visible,
 button:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--color-brand);
+  outline: 2px solid var(--nv-accent);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -253,7 +275,7 @@ html[data-density="compact"] {
   transition: opacity 180ms ease;
   background: radial-gradient(
     160px circle at var(--mx, 50%) var(--my, 50%),
-    rgba(86, 140, 250, 0.10),
+    color-mix(in srgb, var(--nv-accent) 10%, transparent),
     transparent 55%
   );
   z-index: 0;
@@ -266,7 +288,7 @@ html[data-density="compact"] {
   opacity: 1;
   background: radial-gradient(
     200px circle at 30% 50%,
-    rgba(86, 140, 250, 0.14),
+    color-mix(in srgb, var(--nv-accent) 14%, transparent),
     transparent 60%
   );
 }
@@ -274,8 +296,8 @@ html[data-density="compact"] {
 /* Soft peach glow — for focus rings, pulsing indicators, accent badges.
    Use with `box-shadow: var(--nv-glow-peach)` or as a class. */
 :root {
-  --nv-glow-brand: 0 0 0 1px rgba(86, 140, 250, 0.35),
-                   0 0 18px -2px rgba(86, 140, 250, 0.35);
+  --nv-glow-brand: 0 0 0 1px color-mix(in srgb, var(--nv-accent) 35%, transparent),
+                   0 0 18px -2px color-mix(in srgb, var(--nv-accent) 35%, transparent);
   --nv-glow-teal:  0 0 0 1px rgba(0, 201, 177, 0.35),
                    0 0 18px -2px rgba(0, 201, 177, 0.35);
   --nv-glow-purple: 0 0 0 1px rgba(139, 124, 248, 0.35),
@@ -298,7 +320,7 @@ html[data-density="compact"] {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.025;
+  opacity: 0.018;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   background-size: 160px 160px;
@@ -312,7 +334,7 @@ html[data-density="compact"] {
   font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--color-tertiary);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--nv-surface-2);
   border: 1px solid var(--color-border);
   padding: 1px 5px;
   border-radius: 4px;
@@ -322,9 +344,9 @@ html[data-density="compact"] {
   min-height: 16px;
 }
 .nv-kbd-active {
-  color: var(--color-brand);
-  border-color: rgba(86, 140, 250, 0.35);
-  background: rgba(86, 140, 250, 0.08);
+  color: var(--nv-accent);
+  border-color: color-mix(in srgb, var(--nv-accent) 35%, transparent);
+  background: var(--nv-accent-glow);
 }
 
 /* Fuzzy-match highlight — wrap matching chars in <mark class="nv-hl">. */
@@ -336,3 +358,114 @@ html[data-density="compact"] {
 
 /* Tabular numbers for counts / timestamps / token displays */
 .nv-tabular { font-variant-numeric: tabular-nums; }
+
+/* ── Reference-inspired application shell ─────────────────────────────── */
+.nv-app-shell {
+  background:
+    radial-gradient(circle at 72% -10%, color-mix(in srgb, var(--nv-accent) 7%, transparent), transparent 35%),
+    var(--nv-bg);
+}
+
+.nv-app-frame {
+  min-height: 0;
+  background: var(--nv-bg);
+}
+
+.nv-workspace {
+  position: relative;
+  background: var(--nv-bg);
+}
+
+.nv-topbar {
+  min-height: 54px;
+  background: color-mix(in srgb, var(--nv-surface-elevated) 88%, transparent);
+  border-bottom: 1px solid var(--nv-border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--nv-text) 2%, transparent);
+  backdrop-filter: blur(24px) saturate(1.1);
+  -webkit-backdrop-filter: blur(24px) saturate(1.1);
+}
+
+.nv-topbar-button:hover {
+  background: var(--nv-surface-2) !important;
+  color: var(--nv-text) !important;
+}
+
+.nv-main-navigation {
+  position: relative;
+  isolation: isolate;
+  color: var(--nv-nav-text);
+  background: var(--nv-nav-bg);
+  border-right: 1px solid var(--nv-nav-border);
+  box-shadow: 10px 0 34px rgba(12, 23, 36, 0.10);
+}
+
+.nv-main-navigation::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(145, 177, 218, 0.14), transparent 38%),
+    linear-gradient(180deg, transparent 55%, rgba(10, 22, 36, 0.16));
+}
+
+.nv-sidebar-brand {
+  min-height: 78px;
+  border-bottom: 1px solid var(--nv-nav-border);
+}
+
+.nv-nav-item:hover {
+  color: var(--nv-nav-text) !important;
+  background: var(--nv-nav-surface) !important;
+}
+
+.nv-nav-item[aria-current="page"] {
+  color: var(--nv-nav-text) !important;
+  background: var(--nv-nav-active) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 18px rgba(8, 18, 30, 0.10) !important;
+}
+
+.nv-note-sidebar {
+  background: color-mix(in srgb, var(--nv-surface) 90%, var(--nv-bg));
+  border-right: 1px solid var(--nv-border);
+}
+
+.nv-note-sidebar input,
+.nv-note-sidebar select {
+  background: var(--nv-surface-elevated) !important;
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--nv-text) 4%, transparent);
+}
+
+.nv-editor-shell,
+.nv-editor-canvas {
+  background: var(--nv-bg);
+}
+
+.nv-editor-header {
+  min-height: 48px;
+  background: color-mix(in srgb, var(--nv-surface-elevated) 82%, transparent);
+  border-bottom: 1px solid var(--nv-border);
+}
+
+.nv-editor-tabs {
+  background: var(--nv-surface) !important;
+  border-bottom: 1px solid var(--nv-border);
+}
+
+.nv-card {
+  background: var(--nv-surface-elevated);
+  border: 1px solid var(--nv-border);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--nv-text) 4%, transparent);
+}
+
+.nv-floating-surface {
+  background: var(--nv-surface-elevated);
+  border: 1px solid var(--nv-border);
+  box-shadow: var(--nv-shadow);
+}
+
+@media (max-width: 1050px) {
+  .nv-topbar { min-height: 48px; }
+  .cm-editor .cm-content { padding-inline: 34px; }
+}
