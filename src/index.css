@@ -4,30 +4,32 @@
  * Runtime variables come from settingsStore so every surface, including
  * portals and CodeMirror, switches as one coherent Light/Dark appearance. */
 :root {
-  --nv-bg: #f8f7f5;
-  --nv-surface: #f3f6fa;
-  --nv-surface-2: #ecf1f7;
+  --nv-bg: #f7f6f2;
+  --nv-surface: #f0f2f5;
+  --nv-surface-2: #e7eaf0;
   --nv-surface-elevated: #ffffff;
-  --nv-border: #dde3ea;
-  --nv-border-strong: #c9d3df;
-  --nv-text: #20242d;
-  --nv-text-muted: #4f5a69;
-  --nv-text-dim: #5f6875;
-  --nv-accent: #4058c9;
-  --nv-accent-glow: rgba(64, 88, 201, 0.10);
+  --nv-border: #d9dee6;
+  --nv-border-strong: #bfc7d3;
+  --nv-text: #171c25;
+  --nv-text-muted: #475365;
+  --nv-text-dim: #5e697b;
+  --nv-accent: #3457d5;
+  --nv-accent-glow: rgba(52, 87, 213, 0.10);
+  --nv-capture: #a84f2a;
+  --nv-capture-glow: rgba(168, 79, 42, 0.09);
   --nv-on-accent: #ffffff;
-  --nv-positive: #237a57;
-  --nv-warning: #8a5c00;
-  --nv-negative: #c24151;
-  --nv-nav-bg: linear-gradient(160deg, #3a4654 0%, #2b3947 58%, #25384a 100%);
-  --nv-nav-surface: rgba(255, 255, 255, 0.075);
-  --nv-nav-border: rgba(255, 255, 255, 0.11);
-  --nv-nav-text: #f4f7fa;
-  --nv-nav-muted: #ccd4de;
-  --nv-nav-dim: #9aa7b7;
-  --nv-nav-active: rgba(255, 255, 255, 0.14);
-  --nv-shadow: 0 18px 55px rgba(36, 52, 73, 0.13);
-  --nv-overlay: rgba(20, 29, 42, 0.44);
+  --nv-positive: #17745f;
+  --nv-warning: #8b5a00;
+  --nv-negative: #b83b4b;
+  --nv-nav-bg: linear-gradient(165deg, #121720 0%, #0d121a 100%);
+  --nv-nav-surface: rgba(255, 255, 255, 0.055);
+  --nv-nav-border: rgba(255, 255, 255, 0.085);
+  --nv-nav-text: #f5f7fb;
+  --nv-nav-muted: #c1c7d2;
+  --nv-nav-dim: #8d96a5;
+  --nv-nav-active: linear-gradient(90deg, rgba(52, 87, 213, 0.18), rgba(168, 79, 42, 0.07));
+  --nv-shadow: 0 12px 32px rgba(21, 29, 41, 0.10);
+  --nv-overlay: rgba(13, 18, 26, 0.46);
 }
 
 @theme inline {
@@ -40,6 +42,7 @@
   --color-raised: var(--nv-surface-elevated);
   --color-brand: var(--nv-accent);
   --color-brand-dim: var(--nv-accent-glow);
+  --color-capture: var(--nv-capture);
   --color-teal: #3c9fa0;
   --color-purple: #7767df;
   --color-coral: var(--nv-negative);
@@ -118,7 +121,7 @@ body {
   width: min(100%, 780px);
   max-width: 780px;
   min-height: 100%;
-  padding: 54px 52px 34vh;
+  padding: 36px 46px 18vh;
   font-family: "New York", "Iowan Old Style", Charter, Georgia, serif;
 }
 
@@ -252,7 +255,7 @@ html[data-density="compact"] {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Polish utilities — "Luminous Vault Noir"
+   Polish utilities — "Cortex Ink"
    A small kit of classes that elevate chrome without touching tokens.
    Usage: add `nv-spotlight` to any interactive row, `nv-glow` to any
    accent element, etc.
@@ -293,7 +296,7 @@ html[data-density="compact"] {
   );
 }
 
-/* Soft peach glow — for focus rings, pulsing indicators, accent badges.
+/* Semantic glows — for focus rings, pulsing indicators, and badges.
    Use with `box-shadow: var(--nv-glow-peach)` or as a class. */
 :root {
   --nv-glow-brand: 0 0 0 1px color-mix(in srgb, var(--nv-accent) 35%, transparent),
@@ -362,7 +365,7 @@ html[data-density="compact"] {
 /* ── Reference-inspired application shell ─────────────────────────────── */
 .nv-app-shell {
   background:
-    radial-gradient(circle at 72% -10%, color-mix(in srgb, var(--nv-accent) 7%, transparent), transparent 35%),
+    radial-gradient(circle at 72% -10%, color-mix(in srgb, var(--nv-accent) 5%, transparent), transparent 34%),
     var(--nv-bg);
 }
 
@@ -377,12 +380,10 @@ html[data-density="compact"] {
 }
 
 .nv-topbar {
-  min-height: 54px;
-  background: color-mix(in srgb, var(--nv-surface-elevated) 88%, transparent);
+  min-height: 46px;
+  background: var(--nv-surface-elevated);
   border-bottom: 1px solid var(--nv-border);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--nv-text) 2%, transparent);
-  backdrop-filter: blur(24px) saturate(1.1);
-  -webkit-backdrop-filter: blur(24px) saturate(1.1);
 }
 
 .nv-topbar-button:hover {
@@ -406,13 +407,18 @@ html[data-density="compact"] {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(circle at 20% 0%, rgba(145, 177, 218, 0.14), transparent 38%),
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--nv-accent) 13%, transparent), transparent 35%),
+    radial-gradient(circle at 86% 88%, color-mix(in srgb, var(--nv-capture) 7%, transparent), transparent 26%),
     linear-gradient(180deg, transparent 55%, rgba(10, 22, 36, 0.16));
 }
 
 .nv-sidebar-brand {
-  min-height: 78px;
+  min-height: 64px;
   border-bottom: 1px solid var(--nv-nav-border);
+}
+
+.nv-nav-item {
+  position: relative;
 }
 
 .nv-nav-item:hover {
@@ -423,7 +429,31 @@ html[data-density="compact"] {
 .nv-nav-item[aria-current="page"] {
   color: var(--nv-nav-text) !important;
   background: var(--nv-nav-active) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 18px rgba(8, 18, 30, 0.10) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 7px 16px rgba(8, 18, 30, 0.10) !important;
+}
+
+/* A tiny synapse, not a fake data graph: recall flows cobalt-to-copper. */
+.nv-nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--nv-accent), var(--nv-capture));
+  box-shadow: 0 0 9px var(--nv-accent-glow);
+}
+
+.nv-nav-item[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: calc(50% - 2px);
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--nv-capture);
 }
 
 /* The navigation rail is dark in both appearances, so its focus indicator
@@ -436,6 +466,8 @@ html[data-density="compact"] {
 .nv-note-sidebar {
   background: color-mix(in srgb, var(--nv-surface) 90%, var(--nv-bg));
   border-right: 1px solid var(--nv-border);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .nv-note-sidebar input,
@@ -450,7 +482,7 @@ html[data-density="compact"] {
 }
 
 .nv-editor-header {
-  min-height: 48px;
+  min-height: 44px;
   background: color-mix(in srgb, var(--nv-surface-elevated) 82%, transparent);
   border-bottom: 1px solid var(--nv-border);
 }
@@ -472,7 +504,27 @@ html[data-density="compact"] {
   box-shadow: var(--nv-shadow);
 }
 
+.nv-search-field {
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.nv-search-field:focus {
+  border-color: transparent !important;
+  box-shadow:
+    0 0 0 1px var(--nv-bg),
+    0 0 0 2px transparent,
+    0 -1px 0 var(--nv-capture),
+    0 1px 0 var(--nv-accent),
+    0 10px 28px color-mix(in srgb, var(--nv-accent) 10%, transparent) !important;
+}
+
+.nv-capture-action {
+  color: var(--nv-capture) !important;
+  background: var(--nv-capture-glow) !important;
+  border-color: color-mix(in srgb, var(--nv-capture) 42%, var(--nv-border)) !important;
+}
+
 @media (max-width: 1050px) {
-  .nv-topbar { min-height: 48px; }
-  .cm-editor .cm-content { padding-inline: 34px; }
+  .nv-topbar { min-height: 44px; }
+  .cm-editor .cm-content { padding: 30px 34px 14vh; }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNoteStore } from "../stores/noteStore";
 import { useBrainStore } from "../stores/brainStore";
@@ -15,6 +15,7 @@ import { BrainSelector } from "./BrainSelector";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { useGraphSettingsStore, folderColor } from "../stores/graphSettingsStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import type { NoteMeta } from "../lib/tauri";
 
 /** Top-level folder of a note (first path segment before "/"), or ""
@@ -30,7 +31,28 @@ function noteFolder(filename: string): string {
 // The virtualizer uses this as a bootstrap and then refines per-row once
 // each row is measured via measureElement.
 const ESTIMATED_ROW_HEIGHT = 68;
+const ESTIMATED_ROW_HEIGHT_WITHOUT_PREVIEW = 48;
 const VIRTUAL_OVERSCAN = 6;
+const PREVIEW_READ_CONCURRENCY = 4;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 420;
+const DEFAULT_SIDEBAR_WIDTH = 248;
+
+interface PreviewTarget {
+  scope: string;
+  filename: string;
+}
+
+function previewTargetKey(scope: string, filename: string): string {
+  return `${scope}\u0000${filename}`;
+}
+
+/** Convert a viewport pointer coordinate into a width local to the note
+ * browser. The global navigation rail sits to its left, so using clientX
+ * directly makes the browser jump wider by the rail width. */
+export function sidebarWidthFromPointer(clientX: number, sidebarLeft: number): number {
+  return Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, clientX - sidebarLeft));
+}
 
 
 interface SidebarProps {
@@ -81,36 +103,113 @@ function BrainSidebar({
   // an input instead of the title. Enter commits; Esc cancels.
   const [renamingFilename, setRenamingFilename] = useState<string | null>(null);
 
+  const showPreviewSnippets = useSettingsStore((s) => s.showPreviewSnippets);
   const [previewCache, setPreviewCache] = useState<ScopedPreviewCache>({});
   const previews = previewsForScope(previewCache, scope);
+  const previewCacheRef = useRef(previewCache);
+  const previewQueueRef = useRef<PreviewTarget[]>([]);
+  const previewPendingKeysRef = useRef(new Set<string>());
+  const previewActiveReadsRef = useRef(0);
+  const previewMountedRef = useRef(true);
+  const previewEnabledRef = useRef(showPreviewSnippets);
+  const previewScopeRef = useRef(scope);
   const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Load previews when notes change (NOT in render)
+  useEffect(() => { previewCacheRef.current = previewCache; }, [previewCache]);
+
+  const pumpPreviewQueue = useCallback(function drainPreviewQueue() {
+    if (!previewMountedRef.current || !previewEnabledRef.current) return;
+
+    while (
+      previewActiveReadsRef.current < PREVIEW_READ_CONCURRENCY &&
+      previewQueueRef.current.length > 0
+    ) {
+      const target = previewQueueRef.current.shift();
+      if (!target) break;
+      const key = previewTargetKey(target.scope, target.filename);
+      previewActiveReadsRef.current += 1;
+
+      void readNote(target.filename)
+        .then((content) => extractPreview(content), () => "")
+        .then((preview) => {
+          if (
+            !previewMountedRef.current ||
+            !previewEnabledRef.current ||
+            previewScopeRef.current !== target.scope
+          ) return;
+
+          setPreviewCache((cache) => {
+            const scoped = previewsForScope(cache, target.scope);
+            if (Object.prototype.hasOwnProperty.call(scoped, target.filename)) return cache;
+            const next = mergeScopedPreviews(cache, target.scope, {
+              [target.filename]: preview,
+            });
+            // Keep scheduling decisions current before React's next render.
+            previewCacheRef.current = next;
+            return next;
+          });
+        })
+        .finally(() => {
+          previewActiveReadsRef.current -= 1;
+          previewPendingKeysRef.current.delete(key);
+          drainPreviewQueue();
+        });
+    }
+  }, []);
+
+  // The preference is a hard off switch: clear work that has not started and
+  // never enqueue a preview read while snippets are disabled. Tauri invokes
+  // already in flight cannot be cancelled, but their results are ignored.
   useEffect(() => {
-    let cancelled = false;
-    const loadPreviews = async () => {
-      const newPreviews: Record<string, string> = {};
-      for (const note of notes) {
-        if (previews[note.filename]) continue;
-        try {
-          const content = await readNote(note.filename);
-          if (cancelled) return;
-          newPreviews[note.filename] = extractPreview(content);
-        } catch {
-          if (cancelled) return;
-          newPreviews[note.filename] = "";
-        }
+    previewEnabledRef.current = showPreviewSnippets;
+    if (!showPreviewSnippets) {
+      const queued = previewQueueRef.current.splice(0);
+      for (const target of queued) {
+        previewPendingKeysRef.current.delete(previewTargetKey(target.scope, target.filename));
       }
-      if (!cancelled && Object.keys(newPreviews).length > 0) {
-        setPreviewCache((cache) => mergeScopedPreviews(cache, scope, newPreviews));
-      }
+      return;
+    }
+    pumpPreviewQueue();
+  }, [pumpPreviewQueue, showPreviewSnippets]);
+
+  useEffect(() => {
+    previewMountedRef.current = true;
+    return () => {
+      previewMountedRef.current = false;
+      previewQueueRef.current = [];
+      previewPendingKeysRef.current.clear();
     };
-    if (notes.length > 0) void loadPreviews();
-    return () => { cancelled = true; };
-  }, [notes, scope]); // previews are intentionally a per-run snapshot
+  }, []);
+
+  const requestVisiblePreviews = useCallback((filenames: string[]) => {
+    if (!showPreviewSnippets) return;
+
+    const wanted = new Set(filenames.map((filename) => previewTargetKey(scope, filename)));
+    // Drop queued work that has scrolled outside the virtualized overscan.
+    // Reads already in flight finish quietly; the Tauri command itself has no
+    // cancellation primitive.
+    previewQueueRef.current = previewQueueRef.current.filter((target) => {
+      const key = previewTargetKey(target.scope, target.filename);
+      if (wanted.has(key)) return true;
+      previewPendingKeysRef.current.delete(key);
+      return false;
+    });
+
+    const cached = previewsForScope(previewCacheRef.current, scope);
+    for (const filename of filenames) {
+      const key = previewTargetKey(scope, filename);
+      if (
+        Object.prototype.hasOwnProperty.call(cached, filename) ||
+        previewPendingKeysRef.current.has(key)
+      ) continue;
+      previewPendingKeysRef.current.add(key);
+      previewQueueRef.current.push({ scope, filename });
+    }
+    pumpPreviewQueue();
+  }, [pumpPreviewQueue, scope, showPreviewSnippets]);
 
 
   // Keyboard: Ctrl+N
@@ -266,11 +365,14 @@ function BrainSidebar({
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(scopedStorageKey("nv.sidebar.width", scope)));
-      if (Number.isFinite(saved) && saved >= 200 && saved <= 500) return saved;
+      // 280px was the old fixed default, not an explicit density choice.
+      if (saved === 280) return DEFAULT_SIDEBAR_WIDTH;
+      if (Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH && saved <= MAX_SIDEBAR_WIDTH) return saved;
     } catch { /* corrupt / private mode */ }
-    return 280;
+    return DEFAULT_SIDEBAR_WIDTH;
   });
   const resizing = useRef(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -281,7 +383,8 @@ function BrainSidebar({
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!resizing.current) return;
-      const w = Math.max(200, Math.min(500, e.clientX));
+      const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
+      const w = sidebarWidthFromPointer(e.clientX, sidebarLeft);
       setSidebarWidth(w);
     };
     const onMouseUp = () => { resizing.current = false; document.body.style.cursor = ""; };
@@ -292,6 +395,7 @@ function BrainSidebar({
 
   return (
     <div
+      ref={sidebarRef}
       className="nv-note-sidebar h-full flex flex-col backdrop-blur-[18px] relative"
       style={{
         width: sidebarWidth,
@@ -353,8 +457,8 @@ function BrainSidebar({
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="w-7 h-7 flex items-center justify-center rounded-md transition-all text-base leading-none flex-shrink-0"
-            style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
+            className="nv-capture-action w-7 h-7 flex items-center justify-center rounded-md transition-all text-base leading-none flex-shrink-0"
+            style={{ border: "1px solid var(--nv-border)" }}
             title="New note (Ctrl+N)"
           >
             +
@@ -412,6 +516,8 @@ function BrainSidebar({
         <NoteList
           rows={buildFolderRows(filtered, expanded)}
           previews={previews}
+          showPreviewSnippets={showPreviewSnippets}
+          onVisibleNotesChange={requestVisiblePreviews}
           activeFilename={activeFilename}
           onSelect={(fn) => { void selectNote(fn); }}
           onDelete={handleDelete}
@@ -696,6 +802,8 @@ function buildFolderRows(
 interface NoteListProps {
   rows: Row[];
   previews: Record<string, string>;
+  showPreviewSnippets: boolean;
+  onVisibleNotesChange: (filenames: string[]) => void;
   activeFilename: string | null;
   onSelect: (filename: string) => void;
   onDelete: (filename: string, title: string) => void;
@@ -720,6 +828,8 @@ interface NoteListProps {
 function NoteList({
   rows,
   previews,
+  showPreviewSnippets,
+  onVisibleNotesChange,
   activeFilename,
   onSelect,
   onDelete,
@@ -747,7 +857,11 @@ function NoteList({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => (rows[i]?.kind === "folder" ? 32 : ESTIMATED_ROW_HEIGHT),
+    estimateSize: (i) => rows[i]?.kind === "folder"
+      ? 32
+      : showPreviewSnippets
+        ? ESTIMATED_ROW_HEIGHT
+        : ESTIMATED_ROW_HEIGHT_WITHOUT_PREVIEW,
     overscan: VIRTUAL_OVERSCAN,
     getItemKey: (i) => {
       const r = rows[i];
@@ -757,6 +871,18 @@ function NoteList({
   });
 
   const virtualItems = virtualizer.getVirtualItems();
+  const visibleNoteFilenames = useMemo(() => {
+    const filenames: string[] = [];
+    for (const item of virtualItems) {
+      const row = rows[item.index];
+      if (row?.kind === "note") filenames.push(row.note.filename);
+    }
+    return filenames;
+  }, [rows, virtualItems]);
+
+  useEffect(() => {
+    onVisibleNotesChange(visibleNoteFilenames);
+  }, [onVisibleNotesChange, visibleNoteFilenames]);
 
   return (
     <div
@@ -882,13 +1008,6 @@ function NoteList({
             >
               <div
                 className={`group relative cursor-pointer rounded-lg transition-all duration-200 nv-spotlight${isActive ? " nv-spotlight-active" : ""}`}
-                onMouseMove={(e) => {
-                  // Track mouse position for the spotlight radial glow
-                  const el = e.currentTarget;
-                  const r = el.getBoundingClientRect();
-                  el.style.setProperty("--mx", `${e.clientX - r.left}px`);
-                  el.style.setProperty("--my", `${e.clientY - r.top}px`);
-                }}
                 style={{
                   marginLeft: 12 + row.indent * 16,
                   marginRight: 12,
@@ -935,7 +1054,7 @@ function NoteList({
                       </span>
                     </div>
 
-                    {preview && (
+                    {showPreviewSnippets && preview && (
                       <p className="text-[11.5px] mt-1.5 line-clamp-2 font-[Geist,sans-serif] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
                         {preview}
                       </p>

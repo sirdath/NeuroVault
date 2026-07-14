@@ -71,17 +71,31 @@ test("public install guidance never tells users to bypass OS verification", asyn
   assert.doesNotMatch(publicCopy, /click\s+[“\"']?more info[^\n]*run anyway/i);
 });
 
-test("packaged Settings is a dedicated, reopenable native window", async () => {
+test("packaged Settings stays inside the main app and native Cmd+, routes to it", async () => {
   const config = JSON.parse(await read("src-tauri/tauri.conf.json"));
   const settings = config.app?.windows?.find((window) => window.label === "settings");
-  assert.equal(settings, undefined, "Settings should be lazy, not another webview at every launch");
+  assert.equal(settings, undefined, "Settings must not create a second webview");
 
   const app = await read("src-tauri/src/app.rs");
-  assert.match(app, /fn open_settings_window/);
-  assert.match(app, /WebviewWindowBuilder::new/);
-  assert.match(app, /index\.html\?view=settings/);
-  assert.match(app, /window\.label\(\) == "settings"/);
+  const frontend = await read("src/App.tsx");
+  const entrypoint = await read("src/main.tsx");
+  assert.match(app, /fn open_settings_in_main/);
+  assert.match(app, /emit\("open-settings-requested", \(\)\)/);
   assert.match(app, /accelerator\("CmdOrCtrl\+,"\)/);
+  assert.doesNotMatch(app, /index\.html\?view=settings/);
+  assert.doesNotMatch(app, /window\.label\(\) == "settings"/);
+  assert.doesNotMatch(entrypoint, /view=settings/);
+  assert.match(frontend, /listen<null>\("open-settings-requested"/);
+  assert.match(frontend, /setView\("settings"\)/);
+});
+
+test("note-browser collapse and window minimize remain direct, independent actions", async () => {
+  const frontend = await read("src/App.tsx");
+  assert.match(frontend, /if \(viewRef\.current !== "memories"\) return;/);
+  assert.match(frontend, /collapsed=\{navigationCollapsed\}/);
+  assert.match(frontend, /!sidebarCollapsed && \(\s*<Sidebar/s);
+  assert.match(frontend, /winInvoke\("minimize_main"\)[\s\S]*?aria-label="Minimize window"/);
+  assert.match(frontend, /aria-label="More window options"/);
 });
 
 test("automatic context has an always-reachable native app-menu control", async () => {

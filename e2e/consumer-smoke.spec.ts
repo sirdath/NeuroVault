@@ -40,6 +40,11 @@ test("the consumer shell boots, navigates, and has no serious structural accessi
   await expect(page.getByRole("button", { name: "Privacy & Trust", exact: true })).toBeVisible();
   await expect(page.getByText("Something crashed while rendering")).toHaveCount(0);
 
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open settings" })).toHaveAttribute("aria-current", "page");
+
   const audit = await new AxeBuilder({ page }).analyze();
   const blocking = audit.violations.filter(
     (violation) => violation.impact === "critical" || violation.impact === "serious",

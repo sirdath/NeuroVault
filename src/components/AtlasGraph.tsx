@@ -14,10 +14,8 @@ import type { CameraState, EdgeDisplayData, NodeDisplayData } from "sigma/types"
 import { createNodeBorderProgram } from "@sigma/node-border";
 import { createEdgeCurveProgram } from "@sigma/edge-curve";
 import { toBlob } from "@sigma/export-image";
-import type { GraphEdge } from "../lib/api";
 import {
   atlasLayoutEdges,
-  buildAtlasVisualModel,
   type AtlasEdgeTier,
   type AtlasVisualModel,
 } from "../lib/atlasVisualModel";
@@ -126,7 +124,8 @@ export interface AtlasGraphHandle {
 interface AtlasGraphProps {
   brainId: string;
   nodes: readonly SimNode[];
-  edges: readonly GraphEdge[];
+  /** Built once by NeuralGraph and shared by snapshots + Graph Engine. */
+  model: AtlasVisualModel;
   palette: GraphPalette;
   folderColors: Record<string, string>;
   nodeSizeScale: number;
@@ -667,7 +666,7 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   {
     brainId,
     nodes,
-    edges,
+    model,
     palette,
     folderColors,
     nodeSizeScale,
@@ -708,10 +707,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     }
   });
 
-  const model = useMemo(
-    () => buildAtlasVisualModel({ nodes: [...nodes], edges: [...edges] }),
-    [nodes, edges],
-  );
   const sourceNodesById = useMemo(
     () => new Map(nodes.map((node) => [node.id, node])),
     [nodes],

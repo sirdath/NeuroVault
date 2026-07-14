@@ -1,9 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "../stores/settingsStore";
 import { SettingsView } from "./SettingsView";
-import { SettingsWindow } from "./SettingsWindow";
 
 function savedSettings(themeId: "light" | "dark") {
   return JSON.stringify({
@@ -17,7 +16,7 @@ function savedSettings(themeId: "light" | "dark") {
   });
 }
 
-describe("Settings theme controls", () => {
+describe("in-app Settings", () => {
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem("nv.settings", savedSettings("light"));
@@ -26,6 +25,20 @@ describe("Settings theme controls", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps every settings section in the embedded destination", async () => {
+    const user = userEvent.setup();
+    render(<SettingsView />);
+
+    const sections = screen.getByRole("navigation", { name: "Settings sections" });
+    for (const label of ["General", "Connections", "Memory", "Vaults", "Privacy & Trust", "Advanced"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("button", { name: "Connections" }));
+    expect(screen.getByRole("heading", { name: "Connections", level: 2 })).toBeInTheDocument();
+    expect(sections).toContainElement(screen.getByRole("button", { name: "Connections" }));
+  });
 
   it("exposes the selected Light/Dark appearance as a pressed toggle", async () => {
     const user = userEvent.setup();
@@ -39,28 +52,5 @@ describe("Settings theme controls", () => {
     await user.click(dark);
     expect(light).toHaveAttribute("aria-pressed", "false");
     expect(dark).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("syncs a theme change from another window and removes the listener on unmount", async () => {
-    const { unmount } = render(<SettingsWindow />);
-
-    localStorage.setItem("nv.settings", savedSettings("dark"));
-    window.dispatchEvent(new StorageEvent("storage", {
-      key: "nv.settings",
-      newValue: savedSettings("dark"),
-      storageArea: localStorage,
-    }));
-
-    await waitFor(() => expect(useSettingsStore.getState().themeId).toBe("dark"));
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-
-    unmount();
-    localStorage.setItem("nv.settings", savedSettings("light"));
-    window.dispatchEvent(new StorageEvent("storage", {
-      key: "nv.settings",
-      newValue: savedSettings("light"),
-      storageArea: localStorage,
-    }));
-    expect(useSettingsStore.getState().themeId).toBe("dark");
   });
 });

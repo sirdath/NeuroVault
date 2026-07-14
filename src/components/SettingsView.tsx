@@ -9,7 +9,6 @@ import { BrainSelector } from "./BrainSelector";
 import { toast } from "../stores/toastStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
-import vaultMark from "../assets/vault-mark.png";
 
 
 const FONT_SIZES = [
@@ -133,13 +132,10 @@ export function SettingsView() {
   };
 
   return (
-    <div className="flex min-h-full" style={{ background: "var(--nv-bg)" }}>
-      <aside className="nv-main-navigation sticky top-0 h-full min-h-[80vh] w-[210px] shrink-0 px-4 py-10" aria-label="Settings sections">
-        <div className="mb-6 flex items-center gap-2.5 px-2">
-          <img src={vaultMark} alt="" className="h-8 w-8 object-contain" style={{ mixBlendMode: "lighten" }} />
-          <h1 className="font-[Georgia,serif] text-[19px] font-semibold" style={{ color: "var(--nv-nav-text)" }}>Settings</h1>
-        </div>
-        <nav className="space-y-1">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" style={{ background: "var(--nv-bg)" }}>
+      <header className="shrink-0 px-7 pt-6" style={{ borderBottom: "1px solid var(--nv-border)", background: "color-mix(in srgb, var(--nv-surface-elevated) 84%, transparent)" }}>
+        <h1 className="font-[Georgia,serif] text-[28px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>Settings</h1>
+        <nav className="mt-4 flex gap-1 overflow-x-auto pb-3" aria-label="Settings sections">
           {([
             ["general", "General"],
             ["connections", "Connections"],
@@ -153,17 +149,21 @@ export function SettingsView() {
               type="button"
               onClick={() => setSettingsTab(id)}
               aria-current={settingsTab === id ? "page" : undefined}
-              className="nv-nav-item w-full rounded-lg px-3 py-2 text-left text-[12px] font-medium"
-              style={{ color: settingsTab === id ? "var(--nv-nav-text)" : "var(--nv-nav-muted)", background: settingsTab === id ? "var(--nv-nav-active)" : "transparent" }}
+              className="shrink-0 rounded-lg px-3 py-1.5 text-left text-[12px] font-medium transition-colors"
+              style={{
+                color: settingsTab === id ? "var(--nv-text)" : "var(--nv-text-muted)",
+                background: settingsTab === id ? "var(--nv-accent-glow)" : "transparent",
+                border: `1px solid ${settingsTab === id ? "var(--nv-accent)" : "transparent"}`,
+              }}
             >
               {label}
             </button>
           ))}
         </nav>
-      </aside>
+      </header>
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-[760px] px-10 py-12">
-        <h2 className="mb-8 font-[Georgia,serif] text-[28px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
+      <div className="mx-auto max-w-[880px] px-7 py-7">
+        <h2 className="mb-6 font-[Georgia,serif] text-[24px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
           {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "memory" ? "Memory" : settingsTab === "vaults" ? "Vaults" : settingsTab === "privacy" ? "Privacy & Trust" : "Advanced"}
         </h2>
 
@@ -381,7 +381,7 @@ export function SettingsView() {
         </>}
       </div>
       </div>
-    </div>
+    </main>
   );
 }
 

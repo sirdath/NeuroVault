@@ -963,31 +963,19 @@ fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Open the dedicated Settings window. Keeping Settings out of the editor
-/// shell matches macOS convention and prevents a long technical panel from
-/// obscuring an unsaved note.
-#[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    if let Some(window) = app.get_webview_window("settings") {
+/// Bring the existing app window forward and ask its router to show Settings.
+/// A single webview means one theme, one health store, and one unsaved-note
+/// barrier instead of a second copy of application state.
+fn open_settings_in_main(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+    if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
-        window.show().map_err(|e| format!("show settings: {e}"))?;
+        window.show().map_err(|e| format!("show main: {e}"))?;
         let _ = window.set_focus();
-        return Ok(());
+        window
+            .emit("open-settings-requested", ())
+            .map_err(|e| format!("open settings: {e}"))?;
     }
-    let window = tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        tauri::WebviewUrl::App("index.html?view=settings".into()),
-    )
-    .title("NeuroVault Settings")
-    .inner_size(900.0, 720.0)
-    .min_inner_size(720.0, 560.0)
-    .resizable(true)
-    .center()
-    .build()
-    .map_err(|e| format!("create settings: {e}"))?;
-    let _ = window.set_focus();
     Ok(())
 }
 
@@ -1704,7 +1692,7 @@ pub fn run() {
         })
         .on_menu_event(|app, event| {
             if event.id() == "open-settings" {
-                let _ = open_settings_window(app.clone());
+                let _ = open_settings_in_main(app.clone());
                 return;
             }
             if event.id() != "automatic-context" {
@@ -1871,10 +1859,7 @@ pub fn run() {
         // runs the ExitRequested cleanup below (checkpoint + close DBs).
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "settings" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                } else if window.label() == "main" {
+                if window.label() == "main" {
                     api.prevent_close();
                     // Closing hides rather than exits, so the flush may finish
                     // while hidden. On failure the frontend reopens the window
@@ -1894,7 +1879,7 @@ pub fn run() {
             get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
             start_server, stop_server, server_status, import_folder_as_vault,
             hide_to_background, quit_after_save, brain_storage_stats,
-            open_main_window, open_settings_window, show_minitab, hide_minitab, set_minitab_collapsed,
+            open_main_window, show_minitab, hide_minitab, set_minitab_collapsed,
             minimize_main, shrink_to_widget,
             mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
             nv_auto_recall_status, nv_auto_recall_set,

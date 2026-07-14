@@ -102,7 +102,7 @@ export function SearchView({
 
   return (
     <main className="flex-1 overflow-y-auto" aria-labelledby="search-heading">
-      <div className="mx-auto w-full max-w-4xl px-8 py-9">
+      <div className="mx-auto w-full max-w-[1040px] px-8 py-7">
         <div className="flex items-end justify-between gap-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>Find the source</p>
@@ -113,7 +113,7 @@ export function SearchView({
           </div>
         </div>
 
-        <div className="relative mt-7">
+        <div className="relative mt-6">
           <svg className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ color: "var(--nv-text-dim)" }}><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
           <input
             ref={inputRef}
@@ -128,7 +128,7 @@ export function SearchView({
             aria-controls="search-results"
             aria-activedescendant={items[selected]?.id}
             placeholder="Search decisions, notes, people, tasks, or exact words…"
-            className="w-full rounded-2xl py-4 pl-12 pr-12 text-[15px] outline-none"
+            className="nv-search-field w-full rounded-xl py-3.5 pl-12 pr-12 text-[15px] outline-none"
             style={{ color: "var(--nv-text)", background: "var(--nv-surface-elevated)", border: "1px solid var(--nv-border)", boxShadow: "var(--nv-shadow)" }}
           />
           {query && (

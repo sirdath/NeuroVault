@@ -25,7 +25,15 @@ import { extractPreview } from "../lib/utils";
 import type { AtlasGraphHandle } from "./AtlasGraph";
 import { buildAtlasVisualModel } from "../lib/atlasVisualModel";
 import { graphSnapshot2D, graphSnapshot3D } from "../lib/graphSnapshots";
-import { canvasToPngBlob, copyPngToClipboard, downloadBlob, graphImageFilename } from "../lib/graphExport";
+import {
+  INTERACTIVE_WEBGL_RENDERER_CONFIG,
+  canvasToPngBlob,
+  copyPngToClipboard,
+  downloadBlob,
+  graphImageFilename,
+  renderThreeGraphToPng,
+  type ThreeGraphCaptureTarget,
+} from "../lib/graphExport";
 import { toast } from "../stores/toastStore";
 
 type Composer = { addPass: (pass: unknown) => void; passes: unknown[] };
@@ -35,14 +43,6 @@ type ForceGraph3DComposerAccess = { postProcessingComposer(): Composer };
 // and bloom wiring inert while the Graph Engine remains independently rich.
 const ENABLE_EVERYDAY_LIVE_LAYOUT = false;
 const ENABLE_EVERYDAY_BLOOM = false;
-const GRAPH_3D_RENDERER_CONFIG = {
-  antialias: true,
-  alpha: false,
-  // WebGL clears its drawing buffer by default. Preserving it makes the
-  // current fixed 3D snapshot exportable without running a second renderer.
-  preserveDrawingBuffer: true,
-};
-
 // react-force-graph ships heavy ThreeJS deps in its 3D variant. Lazy-load so
 // the 2D/Atlas modes don't pull in the whole 3D bundle until
 // the user actually toggles into 3D view. Cuts initial bundle size ~600 KB.
@@ -755,14 +755,19 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   }, [mode, centeringStrength, chargeStrength, linkDistanceCfg, layoutShape]);
 
   // Every visible mode exports an actual PNG. Atlas renders a temporary Sigma
-  // image; 2D and 3D capture their fixed canvases (3D preserves its WebGL
-  // drawing buffer via GRAPH_3D_RENDERER_CONFIG below).
+  // image; 2D captures its fixed canvas. The 3D path renders one explicit
+  // frame before encoding, so its interactive renderer never has to retain
+  // every drawing buffer just in case the user later exports.
   const captureGraphPng = useCallback(async (): Promise<Blob | null> => {
     const container = containerRef.current;
     if (!container) return null;
     if (mode === "engine") {
       const blob = await atlasRef.current?.exportPng();
       return blob ?? null;
+    }
+    if (mode === "3d") {
+      if (!fg3dRef.current) return null;
+      return renderThreeGraphToPng(fg3dRef.current as ThreeGraphCaptureTarget);
     }
     const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
     if (!canvas) return null;
@@ -2467,7 +2472,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             ref={atlasRef}
             brainId={activeBrainId ?? "default"}
             nodes={nodes}
-            edges={edges}
+            model={snapshotModel}
             palette={palette}
             folderColors={folderColors}
             nodeSizeScale={nodeSizeScale}
@@ -2524,7 +2529,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             width={size.w}
             height={size.h}
             backgroundColor={graphTheme.bg}
-            rendererConfig={GRAPH_3D_RENDERER_CONFIG}
+            rendererConfig={INTERACTIVE_WEBGL_RENDERER_CONFIG}
             nodeLabel={labelMode === "off" ? "" : (n: unknown) => (n as SimNode).title}
             nodeRelSize={2.5}
             nodeVal={nodeVal}

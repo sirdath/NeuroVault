@@ -23,7 +23,7 @@ import { toast } from "./stores/toastStore";
 import { useConsumerHealthStore } from "./stores/consumerHealthStore";
 import { healthToneColor } from "./lib/consumerHealth";
 import { meetingsDropClaim } from "./lib/meetingsDropClaim";
-import { useDensityStore } from "./stores/densityStore";
+import { canLeaveView } from "./lib/navigationGuard";
 
 const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
 const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
@@ -38,6 +38,11 @@ const EmployeePanel = lazy(() => import("./components/EmployeePanel").then((modu
 
 type View = ConsumerDestination | "employee";
 
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" &&
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
+}
+
 const VIEW_LABELS: Record<ConsumerDestination, string> = {
   today: "Today",
   search: "Search",
@@ -46,6 +51,7 @@ const VIEW_LABELS: Record<ConsumerDestination, string> = {
   graph: "Graph",
   attention: "Needs attention",
   trust: "Privacy & Trust",
+  settings: "Settings",
 };
 
 // The AI Employees feature is excluded from the public base build. Flip this
@@ -99,8 +105,6 @@ export default function App() {
   const loadBrains = useBrainStore((s) => s.loadBrains);
   const theme = useSettingsStore((s) => s.theme);
   const reduceMotion = useSettingsStore((s) => s.reduceMotion);
-  const syncSettingsFromStorage = useSettingsStore((s) => s.syncFromStorage);
-  const syncDensityFromStorage = useDensityStore((s) => s.syncFromStorage);
   const checkForUpdatesAutomatically = useSettingsStore((s) => s.checkForUpdatesAutomatically);
   // Today is the front door on every launch. The durable editor buffer is
   // flushed before navigating away from Memories, so destinations can never
@@ -112,12 +116,10 @@ export default function App() {
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
   const setGraphMode = useGraphSettingsStore((s) => s.setGraphMode);
   const setView = useCallback(async (next: View): Promise<boolean> => {
-    if (viewRef.current === "memories" && next !== "memories") {
-      const saved = await flushPendingSave();
-      if (!saved) {
-        toast.error("Your note is still open because it could not be saved. Retry or copy the text before leaving.");
-        return false;
-      }
+    const canLeave = await canLeaveView(viewRef.current, next, flushPendingSave);
+    if (!canLeave) {
+      toast.error("Your note is still open because it could not be saved. Retry or copy the text before leaving.");
+      return false;
     }
     viewRef.current = next;
     setViewState(next);
@@ -128,11 +130,9 @@ export default function App() {
   // True while files are being dragged over the window — drives the
   // drop-to-inbox overlay.
   const [dropActive, setDropActive] = useState(false);
-  // Sidebar collapse — when true, the left sidebar hides entirely and
-  // the editor / graph / compile view fills the full width. Toggled
-  // via the leftmost button in the top bar or Ctrl+B (VS Code's
-  // shortcut). Persisted to localStorage so the choice survives
-  // reloads.
+  // Note-browser collapse — this deliberately remains separate from the
+  // global navigation rail. Cmd+B restores the original behavior: in
+  // Memories it hides the note list and gives that space to the editor.
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("nv.sidebar.collapsed") === "1"; }
     catch { return false; }
@@ -141,12 +141,22 @@ export default function App() {
     try { localStorage.setItem("nv.sidebar.collapsed", sidebarCollapsed ? "1" : "0"); }
     catch { /* ignore */ }
   }, [sidebarCollapsed]);
-  // Ctrl+B (Cmd+B on macOS) toggles the sidebar — same chord VS Code
-  // uses, so the muscle memory carries.
+  const [navigationCollapsed, setNavigationCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("nv.navigation.collapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("nv.navigation.collapsed", navigationCollapsed ? "1" : "0"); }
+    catch { /* ignore */ }
+  }, [navigationCollapsed]);
+
+  // Ctrl+B (Cmd+B on macOS) toggles the Memories note browser. Other
+  // destinations have no note browser, so the shortcut is left alone there.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
       if (e.key !== "b" && e.key !== "B") return;
+      if (viewRef.current !== "memories") return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
@@ -178,6 +188,7 @@ export default function App() {
   // here. Closing the main window asks for a best-effort hidden flush; explicit
   // Quit is a strict handshake and only exits after this barrier succeeds.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     const unlistenPromise = listen<string>("neurovault-save-requested", (event) => {
       void (async () => {
         const saved = await flushPendingSave();
@@ -218,6 +229,7 @@ export default function App() {
   // yet (first boot, cold cache) we emit a toast and bail — user can
   // retry after the graph populates.
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     const un = listen<string[]>("neurovault-deep-link", (event) => {
       const urls = event.payload ?? [];
       for (const raw of urls) {
@@ -284,8 +296,7 @@ export default function App() {
     // `getCurrentWebview()` reads injected Tauri metadata synchronously; in a
     // browser preview that access throws before a promise `.catch()` can run.
     // Keep previews, tests, and recovery pages bootable without native APIs.
-    const tauriAvailable = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
-    if (!tauriAvailable) return;
+    if (!isTauriRuntime()) return;
     let webview: ReturnType<typeof getCurrentWebview>;
     try {
       webview = getCurrentWebview();
@@ -378,6 +389,7 @@ export default function App() {
 
   // Global shortcut bridge (Rust → frontend)
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     const unlistenPromise = listen<null>("quick-capture-shortcut", () => {
       setQuickCaptureOpen(true);
     });
@@ -386,54 +398,45 @@ export default function App() {
     };
   }, []);
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [attentionInitial, setAttentionInitial] = useState<"needs" | "observations">("needs");
 
-  // Settings lives in its own native window in the packaged app. Storage
-  // events keep appearance/density changes in sync with the main webview.
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === "nv.settings") syncSettingsFromStorage();
-      if (event.key === "nv.density") syncDensityFromStorage();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, [syncDensityFromStorage, syncSettingsFromStorage]);
+  // Settings is a normal in-app destination. Routing through setView keeps
+  // the same durable-save barrier used by every other destination.
+  const openSettings = useCallback(() => setView("settings"), [setView]);
 
-  const openSettings = useCallback(async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("open_settings_window");
-    } catch {
-      // Browser/Vite preview has no native window; keep a complete fallback.
-      setSettingsOpen(true);
-    }
-  }, []);
+  // Native Cmd+, asks the existing main webview to navigate here rather than
+  // creating a second webview with a second copy of application state.
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const unlistenPromise = listen<null>("open-settings-requested", () => {
+      void openSettings();
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [openSettings]);
 
   // Escape closes any of the top-level overlays. Modals that own an
   // input (QuickCapture, CommandPalette, edit forms) handle Escape
   // internally; this only covers the dismiss-only slide-overs.
   useEffect(() => {
-    if (!settingsOpen && !trashOpen && !shortcutHelpOpen) return;
+    if (!trashOpen && !shortcutHelpOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (shortcutHelpOpen) setShortcutHelpOpen(false);
       else if (trashOpen) setTrashOpen(false);
-      else if (settingsOpen) setSettingsOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, trashOpen, shortcutHelpOpen]);
+  }, [trashOpen, shortcutHelpOpen]);
 
   const toggleView = useCallback(() => {
     void setView(viewRef.current === "memories" ? "graph" : "memories");
   }, [setView]);
 
-  // Window-mode control (top-bar). One affordance, three ways to get the
-  // app out of the way: minimise to the Dock/taskbar, hide in the
-  // background, or shrink to the floating minitab widget. Each invokes a
-  // custom Rust command; the try/catch is the web/non-Tauri fallback.
+  // Window controls: minimize is the primary one-click action. Hide and the
+  // optional floating widget stay available behind the adjacent chevron.
   const [winMenu, setWinMenu] = useState<{ x: number; y: number } | null>(null);
   const winTriggerRef = useRef<HTMLButtonElement>(null);
   const winInvoke = useCallback(async (cmd: string) => {
@@ -462,15 +465,6 @@ export default function App() {
   const winMenuItems: ContextMenuEntry[] = useMemo(
     () => [
       {
-        label: "Minimize",
-        onSelect: () => winInvoke("minimize_main"),
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
-            <path d="M5 19h14" />
-          </svg>
-        ),
-      },
-      {
         label: "Hide in background",
         hint: restoreHint,
         onSelect: () => winInvoke("hide_to_background"),
@@ -483,7 +477,6 @@ export default function App() {
           </svg>
         ),
       },
-      { divider: true },
       {
         label: "Shrink to widget",
         onSelect: () => winInvoke("shrink_to_widget"),
@@ -792,33 +785,37 @@ export default function App() {
       <div className="nv-app-frame flex flex-1 overflow-hidden">
         <ConsumerNavigation
           active={view === "employee" ? "today" : view}
-          collapsed={sidebarCollapsed}
+          collapsed={navigationCollapsed}
           onNavigate={(destination) => { void setView(destination); }}
           onOpenSettings={() => { void openSettings(); }}
+          onToggleCollapsed={() => setNavigationCollapsed((collapsed) => !collapsed)}
         />
 
         <div className="nv-workspace min-w-0 flex flex-1 flex-col overflow-hidden">
       {/* Top bar */}
       <div
-        className="nv-topbar flex h-[54px] shrink-0 items-center justify-between px-5"
+        className="nv-topbar flex h-[46px] shrink-0 items-center justify-between px-4"
       >
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            title={sidebarCollapsed ? "Show navigation (⌘B)" : "Hide navigation (⌘B)"}
-            aria-label="Toggle sidebar"
-            className="nv-topbar-button w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-            style={{
-              color: sidebarCollapsed ? theme.textDim : theme.textMuted,
-              background: "transparent",
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <line x1="9" y1="4" x2="9" y2="20" />
-              {!sidebarCollapsed && <line x1="6" y1="9" x2="6" y2="9.01" />}
-            </svg>
-          </button>
+          {view === "memories" && (
+            <button
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              title={sidebarCollapsed ? "Show note browser (⌘B)" : "Hide note browser (⌘B)"}
+              aria-label={sidebarCollapsed ? "Show note browser" : "Hide note browser"}
+              aria-pressed={sidebarCollapsed}
+              className="nv-topbar-button flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+              style={{
+                color: sidebarCollapsed ? theme.textDim : theme.textMuted,
+                background: "transparent",
+              }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <line x1="9" y1="4" x2="9" y2="20" />
+                {!sidebarCollapsed && <line x1="6" y1="9" x2="6" y2="9.01" />}
+              </svg>
+            </button>
+          )}
           <div className="flex min-w-0 items-center gap-3" aria-label={`Current view: ${view === "employee" ? "Today" : VIEW_LABELS[view]}`}>
             <span className="text-[13px] font-medium" style={{ color: theme.text }}>
               {view === "employee" ? "Today" : VIEW_LABELS[view]}
@@ -850,26 +847,38 @@ export default function App() {
               {health.headline}
             </span>
           </div>
-          {/* Window mode — minimise / hide / shrink-to-widget. Replaces the
-              old single hide button; opens a small menu (ContextMenu). */}
-          <button
-            ref={winTriggerRef}
-            onClick={() => (winMenu ? setWinMenu(null) : openWinMenu())}
-            title="Window options"
-            aria-haspopup="menu"
-            aria-expanded={winMenu !== null}
-            className="nv-topbar-button w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-            style={{
-              color: winMenu ? theme.textMuted : theme.textDim,
-              background: winMenu ? theme.surface : "transparent",
-            }}
-          >
-            {/* window + chevron: "minimise, with options" */}
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 9h14" />
-              <path d="M8.5 14l3.5 3.5 3.5-3.5" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-0.5" aria-label="Window controls">
+            <button
+              type="button"
+              onClick={() => { void winInvoke("minimize_main"); }}
+              title="Minimize window"
+              aria-label="Minimize window"
+              className="nv-topbar-button flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+              style={{ color: theme.textDim, background: "transparent" }}
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              ref={winTriggerRef}
+              onClick={() => (winMenu ? setWinMenu(null) : openWinMenu())}
+              title="More window options"
+              aria-label="More window options"
+              aria-haspopup="menu"
+              aria-expanded={winMenu !== null}
+              className="nv-topbar-button flex h-8 w-6 items-center justify-center rounded-lg transition-colors"
+              style={{
+                color: winMenu ? theme.textMuted : theme.textDim,
+                background: winMenu ? theme.surface : "transparent",
+              }}
+            >
+              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                <path d="m7 9 5 5 5-5" />
+              </svg>
+            </button>
+          </div>
           <ContextMenu
             open={winMenu !== null}
             x={winMenu?.x ?? 0}
@@ -914,12 +923,14 @@ export default function App() {
           )}
           {view === "memories" && (
             <>
-              <Sidebar
-                triggerNewNote={triggerNewNote}
-                onNoteSelect={() => { /* already in Memories */ }}
-                onSettingsOpen={() => { void openSettings(); }}
-                onTrashOpen={() => setTrashOpen(true)}
-              />
+              {!sidebarCollapsed && (
+                <Sidebar
+                  triggerNewNote={triggerNewNote}
+                  onNoteSelect={() => { /* already in Memories */ }}
+                  onSettingsOpen={() => { void openSettings(); }}
+                  onTrashOpen={() => setTrashOpen(true)}
+                />
+              )}
               <Editor />
             </>
           )}
@@ -938,6 +949,7 @@ export default function App() {
               onOpenSettings={() => { void openSettings(); }}
             />
           )}
+          {view === "settings" && <SettingsView />}
           {EMPLOYEES_ENABLED && view === "employee" && <EmployeePanel />}
           </Suspense>
         </div>
@@ -947,31 +959,6 @@ export default function App() {
       <ActivityBar onExpand={() => { void setView("activity"); }} serverUp={serverUp} />
         </div>
       </div>
-
-      {/* Settings window surface. Engineering controls live under Advanced. */}
-      {settingsOpen && (
-        <>
-          <div className="fixed inset-0 z-40" style={{ background: theme.overlay }} onClick={() => setSettingsOpen(false)} />
-          <div
-            className="fixed inset-x-[7vw] inset-y-[5vh] z-50 overflow-y-auto rounded-2xl"
-            style={{ background: theme.surfaceElevated, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Settings"
-          >
-            <button
-              onClick={() => setSettingsOpen(false)}
-              className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-lg z-10 text-lg"
-              style={{ color: theme.textMuted }}
-              aria-label="Close settings"
-              title="Close (Esc)"
-            >
-              ×
-            </button>
-            <Suspense fallback={<ViewLoading compact />}><SettingsView /></Suspense>
-          </div>
-        </>
-      )}
 
       {/* Overlays — only visible when triggered */}
       <CommandPalette

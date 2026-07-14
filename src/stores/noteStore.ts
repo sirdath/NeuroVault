@@ -2,14 +2,16 @@ import { create } from "zustand";
 import * as tauri from "../lib/tauri";
 import type { NoteMeta } from "../lib/tauri";
 import { API_HOST } from "../lib/config";
-import { NoteDurabilityQueue, type NoteSaveSnapshot } from "../lib/noteDurability";
 import {
-  clearNoteDraft,
-  clearNoteDraftIfContentMatches,
-  readNoteDraft,
-  writeNoteDraft,
-  type NoteRecoveryDraft,
-} from "../lib/noteDrafts";
+  NoteDurabilityQueue,
+  type NoteSaveResult,
+  type NoteSaveSnapshot,
+} from "../lib/noteDurability";
+import { readNoteDraft, type NoteRecoveryDraft } from "../lib/noteDrafts";
+import {
+  installNoteDraftLifecycleFlush,
+  NoteDraftPersistence,
+} from "../lib/noteDraftPersistence";
 import { LatestRequestGate } from "../lib/latestRequest";
 import { toast } from "./toastStore";
 
@@ -66,6 +68,8 @@ export const useNoteStore = create<NoteStore>((set, get) => {
   // list/recall request must not repopulate state after a brain switch.
   const notesLoadGate = new LatestRequestGate();
   const searchGate = new LatestRequestGate();
+  const draftPersistence = new NoteDraftPersistence(localStorage);
+  installNoteDraftLifecycleFlush(draftPersistence);
 
   const loadNotes = async (showLoading = true): Promise<void> => {
     const generation = notesLoadGate.begin();
@@ -100,6 +104,11 @@ export const useNoteStore = create<NoteStore>((set, get) => {
     onSaving: () => set({ saveStatus: "saving", saveError: null }),
     onPersisted: (snapshot) => {
       const current = get();
+      draftPersistence.markPersisted(
+        snapshot.brainId ?? current.brainId,
+        snapshot.filename,
+        snapshot.content,
+      );
       if (
         current.activeFilename === snapshot.filename &&
         current.editRevision === snapshot.revision
@@ -110,12 +119,6 @@ export const useNoteStore = create<NoteStore>((set, get) => {
           saveError: null,
           lastSavedAt: Date.now(),
         });
-        clearNoteDraftIfContentMatches(
-          localStorage,
-          snapshot.brainId ?? current.brainId,
-          snapshot.filename,
-          snapshot.content,
-        );
       }
       // Otherwise a newer revision is already dirty. The queue loops and
       // persists it before the current barrier is allowed to resolve.
@@ -125,6 +128,21 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       toast.error(`Couldn't save note: ${error}`);
     },
   });
+
+  type DurabilityFlush = () => Promise<NoteSaveResult>;
+  const flushDurability = (): Promise<NoteSaveResult> => {
+    // A save/transition barrier first makes the recovery copy durable. If the
+    // Markdown write fails or the WebView disappears mid-await, the latest
+    // editor content remains recoverable.
+    draftPersistence.flushAll();
+    return durability.flush();
+  };
+  const runDurabilityExclusive = <T>(
+    task: (flush: DurabilityFlush) => Promise<T>,
+  ): Promise<T> => durability.runExclusive((flush) => task(() => {
+    draftPersistence.flushAll();
+    return flush();
+  }));
 
   return {
     brainId: null,
@@ -164,7 +182,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       if (get().transitionLocked) return false;
       if (get().activeFilename === filename) return true;
 
-      return durability.runExclusive(async (flush) => {
+      return runDurabilityExclusive(async (flush) => {
         if (get().transitionLocked) return false;
 
         const beforeRead = await flush();
@@ -185,7 +203,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         if (!afterRead.ok) return false;
         const brainId = get().brainId;
         const draft = readNoteDraft(localStorage, brainId, filename);
-        if (draft?.content === content) clearNoteDraft(localStorage, brainId, filename);
+        if (draft?.content === content) draftPersistence.discard(brainId, filename);
         set({
           activeFilename: filename,
           activeContent: content,
@@ -212,7 +230,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         saveStatus: "dirty",
         saveError: null,
       });
-      writeNoteDraft(localStorage, state.brainId, state.activeFilename, content);
+      draftPersistence.schedule(state.brainId, state.activeFilename, content);
     },
 
     recoverDraft: () => {
@@ -227,17 +245,17 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         saveError: null,
         recoveryDraft: null,
       });
-      writeNoteDraft(localStorage, state.brainId, state.activeFilename, draft.content);
+      draftPersistence.schedule(state.brainId, state.activeFilename, draft.content);
     },
 
     discardRecoveryDraft: () => {
       const state = get();
       if (!state.recoveryDraft) return;
-      clearNoteDraft(localStorage, state.recoveryDraft.brainId, state.recoveryDraft.filename);
+      draftPersistence.discard(state.recoveryDraft.brainId, state.recoveryDraft.filename);
       set({ recoveryDraft: null });
     },
 
-    saveNote: async () => durability.runExclusive(async (flush) => {
+    saveNote: async () => runDurabilityExclusive(async (flush) => {
       const result = await flush();
       if (result.ok && result.writes > 0) await loadNotes(false);
       return result.ok;
@@ -251,12 +269,15 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       const originalBrainId = state.brainId;
       const base = originalFilename.split("/").pop()?.replace(/\.md$/i, "") || "Recovered note";
       const stamp = new Date().toISOString().replace("T", " ").slice(0, 16).replace(":", "-");
+      // This path performs its own copy write instead of using the normal
+      // durability queue, so establish the same recovery barrier explicitly.
+      draftPersistence.flushAll();
       set({ transitionLocked: true });
       try {
         const filename = await tauri.createNote(`${base} — recovered ${stamp}`, originalBrainId);
         if (!filename) throw new Error("The copy was created without a filename.");
         await tauri.saveNote(filename, originalContent, originalBrainId);
-        clearNoteDraft(localStorage, originalBrainId, originalFilename);
+        draftPersistence.discard(originalBrainId, originalFilename);
         set((current) => ({
           activeFilename: filename,
           activeContent: originalContent,
@@ -288,7 +309,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       set({ transitionLocked: true });
       try {
         const diskContent = await tauri.readNote(filename);
-        clearNoteDraft(localStorage, brainId, filename);
+        draftPersistence.discard(brainId, filename);
         set((current) => ({
           activeContent: diskContent,
           isDirty: false,
@@ -312,9 +333,9 @@ export const useNoteStore = create<NoteStore>((set, get) => {
     // Lifecycle barriers intentionally skip the metadata refresh. The markdown
     // file is durable once flush resolves; delaying a window quit for a second
     // list operation creates risk without adding durability.
-    flushPendingSave: async () => (await durability.flush()).ok,
+    flushPendingSave: async () => (await flushDurability()).ok,
 
-    closeActiveNote: async () => durability.runExclusive(async (flush) => {
+    closeActiveNote: async () => runDurabilityExclusive(async (flush) => {
       if (get().transitionLocked) return false;
       const result = await flush();
       if (!result.ok) return false;
@@ -334,7 +355,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       // Lock first: no keystroke or note selection may enter after the barrier
       // and before the backend changes its process-global active brain.
       set({ transitionLocked: true });
-      const result = await durability.flush();
+      const result = await flushDurability();
       if (!result.ok) {
         set({ transitionLocked: false });
         return false;
@@ -368,7 +389,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       if (get().transitionLocked) return;
       set({ transitionLocked: true });
       try {
-        await durability.runExclusive(async (flush) => {
+        await runDurabilityExclusive(async (flush) => {
           const saved = await flush();
           if (!saved.ok) return;
           const filename = await tauri.createNote(title, get().brainId);
@@ -398,7 +419,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       if (get().transitionLocked) return;
       set({ transitionLocked: true });
       try {
-        await durability.runExclusive(async (flush) => {
+        await runDurabilityExclusive(async (flush) => {
           const saved = await flush();
           if (!saved.ok) return;
           await tauri.deleteNote(filename, get().brainId);
@@ -423,7 +444,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
 
     renameNote: async (filename: string, newFilename: string, newTitle?: string) => {
       if (get().transitionLocked) return false;
-      return durability.runExclusive(async (flush) => {
+      return runDurabilityExclusive(async (flush) => {
         const saved = await flush();
         if (!saved.ok) return false;
 

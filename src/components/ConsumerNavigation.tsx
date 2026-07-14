@@ -13,10 +13,11 @@ export type ConsumerDestination =
   | "activity"
   | "graph"
   | "attention"
-  | "trust";
+  | "trust"
+  | "settings";
 
 type NavItem = {
-  id: ConsumerDestination;
+  id: Exclude<ConsumerDestination, "settings">;
   label: string;
   icon: React.ReactNode;
 };
@@ -63,11 +64,13 @@ export function ConsumerNavigation({
   active,
   onNavigate,
   onOpenSettings,
+  onToggleCollapsed,
   collapsed = false,
 }: {
   active: ConsumerDestination;
   onNavigate: (destination: ConsumerDestination) => void;
   onOpenSettings: () => void;
+  onToggleCollapsed: () => void;
   collapsed?: boolean;
 }) {
   const brains = useBrainStore((state) => state.brains);
@@ -113,28 +116,39 @@ export function ConsumerNavigation({
     <aside
       className="nv-main-navigation flex h-full shrink-0 flex-col"
       style={{
-        width: collapsed ? 72 : 232,
+        width: collapsed ? 64 : 208,
       }}
       aria-label="Main navigation"
     >
-      <div className={`nv-sidebar-brand flex shrink-0 items-center ${collapsed ? "justify-center px-2" : "gap-3 px-5"}`}>
+      <div className={`nv-sidebar-brand relative flex shrink-0 items-center ${collapsed ? "flex-col justify-center gap-0.5 px-2" : "gap-2.5 px-3.5"}`}>
         <span
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px]"
-          style={{ background: "var(--nv-nav-surface)", border: "1px solid var(--nv-nav-border)", boxShadow: "0 8px 22px rgba(4, 12, 24, 0.18)" }}
+          className="flex h-9 w-9 shrink-0 items-center justify-center"
           aria-hidden="true"
         >
-          <img src={vaultMark} alt="" className="h-9 w-9 object-contain" style={{ mixBlendMode: "lighten", filter: "drop-shadow(0 3px 8px rgba(79, 131, 255, 0.28))" }} />
+          <img src={vaultMark} alt="" className="h-[30px] w-[30px] object-contain" style={{ mixBlendMode: "lighten", filter: "drop-shadow(0 2px 6px rgba(52, 87, 213, 0.24))" }} />
         </span>
         {!collapsed && (
           <span className="min-w-0">
-            <span className="block truncate font-[Georgia,serif] text-[17px] font-semibold tracking-[-0.015em]" style={{ color: "var(--nv-nav-text)" }}>NeuroVault</span>
+            <span className="block truncate font-[Georgia,serif] text-[16px] font-semibold tracking-[-0.015em]" style={{ color: "var(--nv-nav-text)" }}>NeuroVault</span>
             <span className="mt-0.5 block truncate text-[9px] font-medium uppercase tracking-[0.16em]" style={{ color: "var(--nv-nav-dim)" }}>Private memory</span>
           </span>
         )}
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className={`nv-nav-item flex shrink-0 items-center justify-center rounded-lg transition-colors ${collapsed ? "h-6 w-6" : "ml-auto h-7 w-7"}`}
+          style={{ color: "var(--nv-nav-muted)" }}
+          aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+          title={collapsed ? "Expand navigation" : "Collapse navigation"}
+        >
+          <svg {...iconProps} className="h-3.5 w-3.5">
+            <path d={collapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"} />
+          </svg>
+        </button>
       </div>
 
-      <nav className="flex-1 px-3 py-4" aria-label="NeuroVault">
-        <div className="space-y-1">
+      <nav className="flex-1 px-2.5 py-3" aria-label="NeuroVault">
+        <div className="space-y-0.5">
           {NAV_ITEMS.map((item) => (
             <DestinationButton
               key={item.id}
@@ -215,8 +229,13 @@ export function ConsumerNavigation({
           <button
             type="button"
             onClick={onOpenSettings}
+            aria-current={active === "settings" ? "page" : undefined}
             className="nv-nav-item flex min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] transition-colors"
-            style={{ color: "var(--nv-nav-muted)", width: collapsed ? 36 : "100%" }}
+            style={{
+              color: active === "settings" ? "var(--nv-nav-text)" : "var(--nv-nav-muted)",
+              background: active === "settings" ? "var(--nv-nav-active)" : "transparent",
+              width: collapsed ? 36 : "100%",
+            }}
             aria-label="Open settings"
             title={collapsed ? "Settings" : undefined}
           >
@@ -257,13 +276,13 @@ function DestinationButton({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       title={collapsed ? label : undefined}
-      className="nv-nav-item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium transition-colors"
+      className="nv-nav-item flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[12px] font-medium transition-colors"
       style={{
         color: active ? "var(--nv-nav-text)" : "var(--nv-nav-muted)",
         background: active ? "var(--nv-nav-active)" : "transparent",
       }}
     >
-      <span style={{ color: active ? "#aebcff" : "inherit" }}>{icon}</span>
+      <span style={{ color: active ? "var(--nv-accent)" : "inherit" }}>{icon}</span>
       {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
       {!collapsed && badge !== undefined && (
         <span className="min-w-5 rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold" style={{ color: "var(--nv-on-accent)", background: "var(--nv-accent)" }}>

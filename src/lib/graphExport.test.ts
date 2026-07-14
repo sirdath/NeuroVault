@@ -1,4 +1,10 @@
-import { canvasToPngBlob, graphImageFilename } from "./graphExport";
+import {
+  INTERACTIVE_WEBGL_RENDERER_CONFIG,
+  canvasToPngBlob,
+  graphImageFilename,
+  renderThreeGraphToPng,
+  type ThreeGraphCaptureTarget,
+} from "./graphExport";
 
 let failures = 0;
 function equal(label: string, actual: unknown, expected: unknown): void {
@@ -32,6 +38,30 @@ const emptyCanvas = {
 let rejected = false;
 try { await canvasToPngBlob(emptyCanvas); } catch { rejected = true; }
 equal("empty canvas rejects instead of downloading a blank file", rejected, true);
+
+equal(
+  "interactive WebGL does not preserve every frame",
+  INTERACTIVE_WEBGL_RENDERER_CONFIG.preserveDrawingBuffer,
+  false,
+);
+
+const renderOrder: string[] = [];
+const exportCanvas = {
+  toBlob(callback: (blob: Blob | null) => void, type?: string) {
+    renderOrder.push(`encode:${type ?? ""}`);
+    callback(png);
+  },
+} as HTMLCanvasElement;
+const captureTarget = {
+  renderer: () => ({
+    domElement: exportCanvas,
+    render: () => { renderOrder.push("render"); },
+  }),
+  scene: () => ({ isScene: true }),
+  camera: () => ({ isCamera: true }),
+} as unknown as ThreeGraphCaptureTarget;
+equal("3D export returns the encoded blob", await renderThreeGraphToPng(captureTarget), png);
+equal("3D export renders immediately before encoding", renderOrder.join(","), "render,encode:image/png");
 
 if (failures > 0) throw new Error(`${failures} graph export test(s) failed`);
 console.log("graph export tests passed");

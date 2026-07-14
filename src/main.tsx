@@ -11,7 +11,6 @@ import "./index.css";
 const params = new URLSearchParams(window.location.search);
 const isMinitab = params.get("view") === "minitab";
 if (isMinitab) document.documentElement.classList.add("minitab-window");
-const isSettingsWindow = params.get("view") === "settings";
 
 // The Employee Manager is a second window too (`?window=employees`):
 // the employee interface with no notes chrome. Today it hosts the
@@ -29,19 +28,11 @@ const EmployeeWindow = React.lazy(() =>
   }))
 );
 
-const SettingsWindow = React.lazy(() =>
-  import("./components/SettingsWindow").then((module) => ({
-    default: module.SettingsWindow,
-  }))
-);
-
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       {isMinitab ? (
         <React.Suspense fallback={null}><Minitab /></React.Suspense>
-      ) : isSettingsWindow ? (
-        <React.Suspense fallback={null}><SettingsWindow /></React.Suspense>
       ) : isEmployeeWindow ? (
         <div
           style={{

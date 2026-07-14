@@ -9,8 +9,9 @@
  *
  * Data: GET /api/home_brief (one read-only call assembling the
  * briefing across vaults) + GET /api/brains for the grid + lazy
- * per-card open-task counts on hover. Cards use simple branded surfaces;
- * data-like graph decoration is reserved for views built from real notes.
+ * per-card open-task counts on hover. Each compact card gets a deterministic
+ * vault signature whose node count scales with its real note count; it is a
+ * quiet identity mark, while actual relationships stay in Graph.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -101,6 +102,48 @@ function useOpenTasks(brainId: string | null) {
 
 // ---- brain card -----------------------------------------------------------
 
+function VaultSignature({ id, count }: { id: string; count: number }) {
+  const seed = Array.from(id).reduce((value, char) => ((value * 31) + char.charCodeAt(0)) >>> 0, 17);
+  const nodeCount = Math.max(3, Math.min(8, 3 + Math.ceil(Math.log10(count + 1) * 1.8)));
+  const points = Array.from({ length: nodeCount }, (_, index) => ({
+    x: 7 + ((seed + index * 29 + index * index * 7) % 48),
+    y: 6 + (((seed >>> 3) + index * 17 + index * index * 3) % 24),
+  }));
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 62 36" className="h-9 w-[62px] overflow-visible">
+      <defs>
+        <linearGradient id={`vault-signature-${seed}`} x1="0" x2="1">
+          <stop offset="0" stopColor="var(--nv-capture)" />
+          <stop offset="1" stopColor="var(--nv-accent)" />
+        </linearGradient>
+      </defs>
+      {points.slice(1).map((point, index) => (
+        <line
+          key={`edge-${index}`}
+          x1={points[index]!.x}
+          y1={points[index]!.y}
+          x2={point.x}
+          y2={point.y}
+          stroke={`url(#vault-signature-${seed})`}
+          strokeOpacity="0.34"
+          strokeWidth="0.8"
+        />
+      ))}
+      {points.map((point, index) => (
+        <circle
+          key={`node-${index}`}
+          cx={point.x}
+          cy={point.y}
+          r={index === 0 ? 2.2 : 1.45}
+          fill={index % 3 === 0 ? "var(--nv-capture)" : "var(--nv-accent)"}
+          fillOpacity={index === 0 ? 0.9 : 0.66}
+        />
+      ))}
+    </svg>
+  );
+}
+
 function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string, filename?: string) => void; entering: boolean }) {
   const [hover, setHover] = useState(false);
   const openTasks = useOpenTasks(hover ? b.id : null);
@@ -110,20 +153,23 @@ function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string, fi
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={() => onEnter(b.id)}
-      className="relative text-left rounded-2xl overflow-hidden group transition-transform hover:-translate-y-0.5"
+      className="relative text-left rounded-xl overflow-hidden group transition-transform hover:-translate-y-0.5"
       style={{
         background: "var(--nv-surface-elevated)",
         border: `1px solid ${b.is_active ? "var(--nv-accent, #568cfa)" : T.border}`,
         boxShadow: hover ? `0 8px 30px -12px ${T.glow}` : "none",
-        minHeight: 176,
+        minHeight: 124,
       }}
     >
-      <div className="absolute inset-x-0 top-0 h-20" style={{ background: "radial-gradient(circle at 20% 0%, var(--nv-accent-glow), transparent 68%)" }} />
-      <div className="relative p-4 pt-16 flex flex-col h-full">
-        <div className="flex items-baseline gap-2">
-          <span className="text-[15px] font-semibold truncate" style={{ color: T.text }}>
+      <div className="absolute inset-0" style={{ background: "radial-gradient(circle at 90% 0%, var(--nv-accent-glow), transparent 52%)" }} />
+      <div className="relative flex h-full flex-col p-4">
+        <div className="flex items-start gap-3">
+          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold" style={{ color: T.text }}>
             {b.name || b.id}
           </span>
+          <VaultSignature id={b.id} count={notes} />
+        </div>
+        <div className="-mt-1 flex items-center gap-2">
           {b.is_active && (
             <span
               className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
@@ -133,11 +179,11 @@ function Card({ b, onEnter, entering }: { b: BrainCard; onEnter: (id: string, fi
             </span>
           )}
         </div>
-        <div className="text-[12px] mt-0.5" style={{ color: T.dim }}>
+        <div className="mt-1 text-[12px]" style={{ color: T.dim }}>
           {notes.toLocaleString()} {notes === 1 ? "memory" : "memories"} · {mb(b.stats?.total_bytes)} ·{" "}
           {agoSecs(b.stats?.last_modified_secs)}
         </div>
-        <div className="mt-3 min-h-[20px] text-[11px]" style={{ color: T.dim }}>
+        <div className="mt-auto pt-2 min-h-[18px] text-[11px]" style={{ color: T.dim }}>
           {entering ? (
             <span style={{ color: T.accent }}>Opening…</span>
           ) : hover ? (
@@ -271,12 +317,12 @@ export default function Home({
 
   return (
     <main className="flex-1 overflow-y-auto" aria-labelledby="today-heading">
-      <div className="mx-auto px-10 py-11" style={{ maxWidth: 1080 }}>
+      <div className="mx-auto px-8 py-7" style={{ maxWidth: 1180 }}>
         {/* 1. Is memory operating? One shared state machine, never a
             decorative always-green dot. */}
-        <div className="mb-6 flex items-start gap-4">
+        <div className="mb-5 flex items-start gap-4">
           <div>
-            <h1 id="today-heading" className="font-[Georgia,serif] text-[34px] font-semibold tracking-[-0.025em]" style={{ color: T.text }}>
+            <h1 id="today-heading" className="font-[Georgia,serif] text-[30px] font-semibold tracking-[-0.025em]" style={{ color: T.text }}>
               {greeting()}
             </h1>
             <p className="text-[13.5px] mt-1 flex items-center gap-2" style={{ color: T.dim }}>
@@ -365,7 +411,7 @@ export default function Home({
         {/* 3. What should I continue? */}
         {cont && (cont.current_task || cont.next_step) && (
           <div
-            className="rounded-2xl p-6 mb-5"
+            className="rounded-xl p-4 mb-5"
             style={{ background: T.surface, border: `1px solid ${T.accent}`, boxShadow: `0 0 0 1px ${T.glow}` }}
           >
             <div className="text-[11px] font-semibold tracking-wider uppercase mb-2" style={{ color: T.accent }}>
@@ -385,7 +431,7 @@ export default function Home({
                 Next: {cont.next_step}
               </div>
             )}
-            <div className="mt-4">
+            <div className="mt-3">
               <button
                 onClick={() => enter(cont.brain, cont.last_files?.find((filename) => filename.endsWith(".md")))}
                 className="text-[13px] px-5 py-2 rounded-lg font-semibold hover:opacity-90"
@@ -503,7 +549,7 @@ export default function Home({
           </button>
         )}
 
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(228px, 1fr))" }}>
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(228px, 1fr))" }}>
           {sorted.map((b) => (
             <Card key={b.id} b={b} onEnter={enter} entering={entering === b.id} />
           ))}

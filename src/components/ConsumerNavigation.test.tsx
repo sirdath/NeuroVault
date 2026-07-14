@@ -44,6 +44,7 @@ describe("ConsumerNavigation", () => {
         active="today"
         onNavigate={vi.fn()}
         onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
       />,
     );
 
@@ -70,6 +71,7 @@ describe("ConsumerNavigation", () => {
         active="today"
         onNavigate={onNavigate}
         onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
       />,
     );
 
@@ -87,6 +89,7 @@ describe("ConsumerNavigation", () => {
         active="today"
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
+        onToggleCollapsed={vi.fn()}
       />,
     );
 
@@ -101,6 +104,7 @@ describe("ConsumerNavigation", () => {
         active="graph"
         onNavigate={vi.fn()}
         onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
         collapsed
       />,
     );
@@ -109,5 +113,40 @@ describe("ConsumerNavigation", () => {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();
+  });
+
+  it("marks the footer Settings destination active without adding it to the primary menu", () => {
+    render(
+      <ConsumerNavigation
+        active="settings"
+        onNavigate={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Open settings" })).toHaveAttribute("aria-current", "page");
+    const navigation = screen.getByRole("navigation", { name: "NeuroVault" });
+    expect(within(navigation).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(
+      NAVIGATION_LABELS,
+    );
+  });
+
+  it("keeps global-rail collapse separate from destination routing", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const onToggleCollapsed = vi.fn();
+    render(
+      <ConsumerNavigation
+        active="today"
+        onNavigate={onNavigate}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Collapse navigation" }));
+    expect(onToggleCollapsed).toHaveBeenCalledOnce();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { THEMES, useSettingsStore } from "./settingsStore";
+import { THEMES, themeCssVars, useSettingsStore } from "./settingsStore";
 
 const persistedSettings = (themeId: string) => ({
   themeId,
@@ -22,6 +22,18 @@ describe("settingsStore themes", () => {
       { id: "light", mode: "light", name: "Light" },
       { id: "dark", mode: "dark", name: "Dark" },
     ]);
+  });
+
+  it("keeps recall and capture as distinct semantic colors in both modes", () => {
+    for (const theme of THEMES) {
+      expect(theme.accent).not.toBe(theme.capture);
+      expect(theme.accentGlow).not.toBe(theme.captureGlow);
+      expect(themeCssVars(theme)).toMatchObject({
+        "--nv-accent": theme.accent,
+        "--nv-capture": theme.capture,
+        "--nv-capture-glow": theme.captureGlow,
+      });
+    }
   });
 
   it.each(["light", "dark"] as const)("persists and reapplies %s mode", (themeId) => {
