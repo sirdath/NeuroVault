@@ -426,6 +426,13 @@ html[data-density="compact"] {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 18px rgba(8, 18, 30, 0.10) !important;
 }
 
+/* The navigation rail is dark in both appearances, so its focus indicator
+   must use the rail foreground rather than the canvas accent. */
+.nv-main-navigation :is(button, a, select, [tabindex]):focus-visible {
+  outline-color: var(--nv-nav-text);
+  box-shadow: 0 0 0 4px rgba(123, 145, 255, 0.34);
+}
+
 .nv-note-sidebar {
   background: color-mix(in srgb, var(--nv-surface) 90%, var(--nv-bg));
   border-right: 1px solid var(--nv-border);

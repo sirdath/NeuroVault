@@ -69,7 +69,8 @@ const SPLASH_CSS = `
   position:fixed; inset:0; z-index:99999;
   display:flex; align-items:center; justify-content:center;
   background:
-    radial-gradient(ellipse at 50% 45%, #101a2e 0%, #0a0d18 55%, #06070c 100%);
+    radial-gradient(ellipse at 50% 45%, var(--nv-accent-glow) 0%, transparent 52%),
+    var(--nv-bg);
   animation: nv-splash-bgin .35s ease-out both;
 }
 .nv-splash--out{ animation: nv-splash-leave .45s cubic-bezier(.55,0,.3,1) forwards; }
@@ -83,8 +84,8 @@ const SPLASH_CSS = `
 .nv-splash-haze{ opacity:0; animation: nv-fadein .6s .1s ease-out forwards; }
 
 .nv-splash-ring{
-  fill:none; stroke:#2F7BF6; stroke-linecap:round;
-  filter: drop-shadow(0 0 6px rgba(47,123,246,.55));
+  fill:none; stroke:var(--nv-accent); stroke-linecap:round;
+  filter: drop-shadow(0 0 6px var(--nv-accent-glow));
   transform-origin:120px 120px; transform-box:fill-box;
 }
 .nv-splash-ring--outer{
@@ -94,18 +95,19 @@ const SPLASH_CSS = `
              nv-spin 9s .9s linear infinite;
 }
 .nv-splash-ring--inner{
-  stroke-width:1.2; stroke:#7FB0FF; stroke-dasharray:540; stroke-dashoffset:540;
+  stroke-width:1.2; stroke:color-mix(in srgb, var(--nv-accent) 68%, var(--nv-text)); stroke-dasharray:540; stroke-dashoffset:540;
   opacity:.6;
   animation: nv-draw .8s .22s cubic-bezier(.2,.7,.2,1) forwards,
              nv-spin-rev 7s .8s linear infinite;
 }
 .nv-splash-orbit{ transform-origin:120px 120px; transform-box:fill-box;
   opacity:0; animation: nv-fadein .5s .55s ease-out forwards, nv-spin 6s .55s linear infinite; }
-.nv-splash-node{ fill:#9cc2ff; filter: drop-shadow(0 0 4px rgba(120,170,255,.9)); }
+.nv-splash-node{ fill:color-mix(in srgb, var(--nv-accent) 72%, var(--nv-text)); filter: drop-shadow(0 0 4px var(--nv-accent-glow)); }
 
 .nv-splash-logo{
   position:relative; width:108px; height:108px; object-fit:contain;
-  filter: drop-shadow(0 6px 22px rgba(47,123,246,.45));
+  border-radius:24px;
+  box-shadow:0 16px 42px color-mix(in srgb, var(--nv-accent) 22%, transparent);
   opacity:0; transform:scale(.82);
   animation: nv-pop .55s .05s cubic-bezier(.2,.9,.25,1.3) forwards;
 }

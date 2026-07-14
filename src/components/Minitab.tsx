@@ -15,16 +15,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { API_HOST } from "../lib/config";
+import { useSettingsStore } from "../stores/settingsStore";
 import logo from "../assets/vault-mark.png";
 
 type State = "on" | "off" | "busy";
-
-const ACCENT = "#2D7FF9";
 
 export function Minitab() {
   const [state, setState] = useState<State>("off");
   const [collapsed, setCollapsed] = useState(false);
   const busyRef = useRef(false);
+  const theme = useSettingsStore((settings) => settings.theme);
+  const syncThemeFromStorage = useSettingsStore((settings) => settings.syncFromStorage);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "nv.settings") syncThemeFromStorage();
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [syncThemeFromStorage]);
 
   const probe = useCallback(async () => {
     if (busyRef.current) return;
@@ -82,8 +91,9 @@ export function Minitab() {
 
   const on = state === "on";
   const busy = state === "busy";
-  const dot = busy ? "#f4b942" : on ? "#34d399" : "#6b7280";
+  const dot = busy ? theme.warning : on ? theme.positive : theme.textDim;
   const label = busy ? "Switching…" : on ? "Memory on" : "Paused";
+  const translucentCard = `color-mix(in srgb, ${theme.surfaceElevated} 92%, transparent)`;
 
   // ── Collapsed: a tiny logo "puck". Click to expand. The status dot rides
   //    the corner so you still see at a glance whether memory is on. ──
@@ -110,12 +120,12 @@ export function Minitab() {
             width: 48,
             height: 48,
             padding: 0,
-            border: "1px solid rgba(255,255,255,0.10)",
+            border: `1px solid ${theme.border}`,
             borderRadius: 14,
-            background: "rgba(17, 19, 24, 0.86)",
+            background: translucentCard,
             backdropFilter: "blur(18px)",
             WebkitBackdropFilter: "blur(18px)",
-            boxShadow: "0 6px 22px rgba(0,0,0,0.45)",
+            boxShadow: theme.shadow,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -139,7 +149,7 @@ export function Minitab() {
               height: 11,
               borderRadius: "50%",
               background: dot,
-              border: "2px solid rgba(17,19,24,0.95)",
+              border: `2px solid ${theme.surfaceElevated}`,
               boxShadow: on ? `0 0 6px ${dot}` : "none",
               transition: "background 0.2s",
             }}
@@ -173,12 +183,12 @@ export function Minitab() {
           gap: 8,
           padding: "10px 12px",
           borderRadius: 16,
-          background: "rgba(17, 19, 24, 0.86)",
+          background: translucentCard,
           backdropFilter: "blur(18px)",
           WebkitBackdropFilter: "blur(18px)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          boxShadow: "0 8px 30px rgba(0,0,0,0.45)",
-          color: "#e8eaed",
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.shadow,
+          color: theme.text,
         }}
       >
         {/* header / drag strip */}
@@ -208,7 +218,7 @@ export function Minitab() {
                   flexShrink: 0,
                 }}
               />
-              <span style={{ fontSize: 11, color: "#9aa0aa" }}>{label}</span>
+              <span style={{ fontSize: 11, color: theme.textMuted }}>{label}</span>
             </span>
           </div>
 
@@ -248,8 +258,8 @@ export function Minitab() {
               cursor: busy ? "default" : "pointer",
               fontSize: 12,
               fontWeight: 600,
-              color: on ? "#e8eaed" : "#fff",
-              background: on ? "rgba(255,255,255,0.08)" : ACCENT,
+              color: on ? theme.text : theme.onAccent,
+              background: on ? theme.surface2 : theme.accent,
               transition: "background 0.15s, opacity 0.15s",
               opacity: busy ? 0.6 : 1,
             }}
@@ -263,12 +273,12 @@ export function Minitab() {
               flex: 1,
               height: 30,
               borderRadius: 9,
-              border: "1px solid rgba(255,255,255,0.12)",
+              border: `1px solid ${theme.border}`,
               background: "transparent",
               cursor: "pointer",
               fontSize: 12,
               fontWeight: 600,
-              color: "#cdd2da",
+              color: theme.textMuted,
             }}
           >
             Open app
@@ -307,8 +317,8 @@ function IconButton({
         borderRadius: 7,
         border: "none",
         cursor: "pointer",
-        background: hover ? "rgba(255,255,255,0.10)" : "transparent",
-        color: hover ? "#e8eaed" : "#9aa0aa",
+        background: hover ? "var(--nv-surface-2)" : "transparent",
+        color: hover ? "var(--nv-text)" : "var(--nv-text-muted)",
         transition: "background 0.12s, color 0.12s",
       }}
     >

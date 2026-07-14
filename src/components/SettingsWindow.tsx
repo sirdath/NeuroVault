@@ -11,6 +11,7 @@ import { Toasts } from "./Toasts";
 export function SettingsWindow() {
   const theme = useSettingsStore((state) => state.theme);
   const reduceMotion = useSettingsStore((state) => state.reduceMotion);
+  const syncFromStorage = useSettingsStore((state) => state.syncFromStorage);
 
   const themeVars = useMemo(
     () => themeCssVars(theme) as CSSProperties & Record<string, string>,
@@ -23,6 +24,17 @@ export function SettingsWindow() {
       .then(({ setTheme }) => setTheme(theme.mode))
       .catch(() => undefined);
   }, [theme]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "nv.settings" || event.key === null) {
+        syncFromStorage();
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [syncFromStorage]);
 
   return (
     <main

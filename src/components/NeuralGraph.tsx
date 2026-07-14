@@ -6,6 +6,7 @@ import type { SimNode } from "../stores/graphStore";
 import type { GraphEdge } from "../lib/api";
 import { useNoteStore } from "../stores/noteStore";
 import { useBrainStore } from "../stores/brainStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import {
   PALETTE_NEUTRAL,
   PALETTES,
@@ -405,6 +406,7 @@ interface NeuralGraphProps {
 
 export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const graphTheme = useSettingsStore((state) => state.theme);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [mode, setMode] = useState<GraphViewMode>(() => {
     try {
@@ -1714,7 +1716,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = withAlpha("#d8d7e5", inFocus ? 0.86 : 0.35);
+        ctx.fillStyle = withAlpha(graphTheme.text, inFocus ? 0.86 : 0.35);
         ctx.fillText(label, node.x, node.y + radius + 4 / Math.max(1, globalScale));
         ctx.restore();
       }
@@ -1790,7 +1792,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = withAlpha("#c7c5dc", Math.max(0.45, focusAlpha));
+        ctx.fillStyle = withAlpha(graphTheme.text, Math.max(0.45, focusAlpha));
         const title = node.title.length > 28 ? `${node.title.slice(0, 26)}…` : node.title;
         ctx.fillText(title, node.x, node.y + r + 5 / globalScale);
       }
@@ -1814,22 +1816,22 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.fill();
     }
 
-    // HEALTH RING — drawn after fill, before the dark rim. This is the
+    // HEALTH RING — drawn after fill, before the canvas-coloured rim. This is the
     // node's health/strength signal, decoupled from the fill (which now
     // carries category). Ring COLOUR encodes state; ring WIDTH + OPACITY
     // scale with node.strength so a strong, well-connected memory gets a
     // bold halo and a weak one barely a hairline. Colours match the
-    // status pills used elsewhere: dormant=dim grey, fresh=brand blue,
-    // active/connected=teal, default=muted lilac.
+    // status semantics used elsewhere: dormant=dim, fresh=brand blue,
+    // active/connected=positive, default=muted.
     if (focusAlpha > 0.4) {
       const strength = Math.max(0, Math.min(1, node.strength ?? 0.5));
       const ringColor = isDormant
-        ? "#6a6880"
+        ? graphTheme.textDim
         : isFresh
-        ? "#568cfa"
+        ? graphTheme.accent
         : node.state === "active" || node.state === "connected"
-        ? "#00c9b1"
-        : "#8a88a0";
+        ? graphTheme.positive
+        : graphTheme.textMuted;
       // Width 0.6 → 2.2 px (zoom-independent) and opacity 0.25 → 0.85.
       const ringWidth = (0.6 + strength * 1.6) / globalScale;
       const ringAlpha = (0.25 + strength * 0.6) * focusAlpha;
@@ -1840,7 +1842,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       ctx.strokeStyle = withAlpha(ringColor, ringAlpha);
       // Fresh nodes additionally get a soft glow to "pop" as just-added.
       if (isFresh) {
-        ctx.shadowColor = "rgba(86, 140, 250, 0.55)";
+        ctx.shadowColor = withAlpha(graphTheme.accent, 0.55);
         ctx.shadowBlur = 4;
       }
       ctx.stroke();
@@ -1853,7 +1855,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     if (focusAlpha > 0.2) {
       drawNodeShape(ctx, node.x, node.y, r, nodeShape);
       ctx.lineWidth = 0.5 / globalScale;
-      ctx.strokeStyle = withAlpha("#0b0b12", 0.75 * focusAlpha);
+      ctx.strokeStyle = withAlpha(graphTheme.bg, 0.75 * focusAlpha);
       ctx.stroke();
     }
 
@@ -1891,13 +1893,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       } else {
         ctx.rect(boxX, boxY, boxW, boxH);
       }
-      ctx.fillStyle = withAlpha("#0b0b12", 0.62 * labelAlpha);
+      ctx.fillStyle = withAlpha(graphTheme.surfaceElevated, 0.72 * labelAlpha);
       ctx.fill();
       ctx.restore();
-      ctx.fillStyle = withAlpha("#c7c5dc", labelAlpha);
+      ctx.fillStyle = withAlpha(graphTheme.text, labelAlpha);
       ctx.fillText(truncated, node.x, labelY);
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode, graphTheme]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
@@ -1979,7 +1981,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           const size = (11 + weight * 4) / globalScale;
           ctx.save();
           ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
-          ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+          ctx.shadowColor = withAlpha(
+            graphTheme.mode === "light" ? graphTheme.surfaceElevated : graphTheme.bg,
+            graphTheme.mode === "light" ? 0.92 : 0.72,
+          );
           ctx.shadowBlur = 5 / globalScale;
           ctx.fillStyle = withAlpha(color, 0.72);
           ctx.fillText(label, cx, cy);
@@ -2009,7 +2014,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           const size = (11 + weight * 4) / globalScale;
           ctx.save();
           ctx.font = `600 ${size}px "Geist", system-ui, sans-serif`;
-          ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+          ctx.shadowColor = withAlpha(
+            graphTheme.mode === "light" ? graphTheme.surfaceElevated : graphTheme.bg,
+            graphTheme.mode === "light" ? 0.92 : 0.72,
+          );
           ctx.shadowBlur = 5 / globalScale;
           ctx.fillStyle = withAlpha(color, 0.85);
           ctx.fillText(label, cx, cy);
@@ -2032,7 +2040,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           const r1 = baseR + 4 + elapsed * 60;
           const a1 = Math.max(0, 0.8 * (1 - elapsed));
           ctx.save();
-          ctx.strokeStyle = withAlpha("#00c9b1", a1);
+          ctx.strokeStyle = withAlpha(graphTheme.positive, a1);
           ctx.lineWidth = 2 / globalScale;
           ctx.beginPath();
           ctx.arc(target.x, target.y, r1 / globalScale + baseR, 0, Math.PI * 2);
@@ -2042,7 +2050,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           if (p2 > 0) {
             const r2 = baseR + 4 + p2 * 50;
             const a2 = Math.max(0, 0.6 * (1 - p2 / 0.7));
-            ctx.strokeStyle = withAlpha("#568cfa", a2);
+            ctx.strokeStyle = withAlpha(graphTheme.accent, a2);
             ctx.lineWidth = 1.5 / globalScale;
             ctx.beginPath();
             ctx.arc(target.x, target.y, r2 / globalScale + baseR, 0, Math.PI * 2);
@@ -2052,7 +2060,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         }
       }
     }
-  }, [nodes, focusedNodeId, focusPulse, palette, folderColors, showClusterLabels]);
+  }, [nodes, focusedNodeId, focusPulse, palette, folderColors, showClusterLabels, graphTheme]);
 
   /** Community background tints — gated on Analytics mode + the
    *  "group by community" toggle. Drawn in `onRenderFramePre` so
@@ -2515,7 +2523,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             graphData={snapshot3DData}
             width={size.w}
             height={size.h}
-            backgroundColor="#0b0b12"
+            backgroundColor={graphTheme.bg}
             rendererConfig={GRAPH_3D_RENDERER_CONFIG}
             nodeLabel={labelMode === "off" ? "" : (n: unknown) => (n as SimNode).title}
             nodeRelSize={2.5}

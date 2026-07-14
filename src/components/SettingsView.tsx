@@ -174,6 +174,8 @@ export function SettingsView() {
             {THEMES.map((t) => (
               <button
                 key={t.id}
+                type="button"
+                aria-pressed={themeId === t.id}
                 onClick={() => update({ themeId: t.id })}
                 className="relative min-h-[132px] text-left rounded-2xl p-4 transition-all border"
                 style={{

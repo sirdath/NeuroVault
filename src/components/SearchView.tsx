@@ -171,7 +171,15 @@ export function SearchView({
               className="flex w-full items-start gap-4 px-5 py-4 text-left"
               style={{ background: selected === index ? "var(--nv-surface)" : "transparent", borderBottom: index < items.length - 1 ? "1px solid var(--nv-border)" : undefined }}
             >
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold" style={{ color: item.kind === "note" ? "var(--nv-accent)" : "#b794f4", background: item.kind === "note" ? "var(--nv-accent-glow)" : "rgba(183,148,244,0.12)" }}>
+              <span
+                className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold"
+                style={{
+                  color: item.kind === "note" ? "var(--nv-accent)" : "var(--nv-positive)",
+                  background: item.kind === "note"
+                    ? "var(--nv-accent-glow)"
+                    : "color-mix(in srgb, var(--nv-positive) 14%, var(--nv-surface-elevated))",
+                }}
+              >
                 {item.kind === "note" ? "N" : "M"}
               </span>
               <span className="min-w-0 flex-1">
