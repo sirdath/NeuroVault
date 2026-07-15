@@ -40,7 +40,7 @@ const SHORTCUTS: Array<{
     items: [
       { keys: "/", description: "Open slash command menu" },
       { keys: "[[", description: "Open wikilink autocomplete" },
-      { keys: "⌘Click", description: "Follow a wikilink" },
+      { keys: "⌘B", description: "Show or hide the note browser" },
     ],
   },
   {

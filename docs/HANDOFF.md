@@ -12,7 +12,7 @@ forgets you after every conversation; NeuroVault doesn't."
 - **Storage**: markdown vault is canonical (`~/.neurovault/brains/<id>/vault/*.md`); SQLite + **sqlite-vec** (`vec0`, `embedding float[384]`) is a **rebuildable** index. Engine table for a memory = `engrams`.
 - **Embeddings**: BGE-small-en-v1.5 (384-d) via **fastembed-rs** (ONNX), **on-device, zero-LLM ingest**. Cross-encoder reranker is a separate model (`BGERerankerBase`).
 - **Retrieval**: hybrid (vector KNN + BM25 + entity-graph) → **RRF** → optional rerank → recency/boosts → final score.
-- **MCP**: native Rust `neurovault-server --mcp-only` (rmcp), 54 tools, tiers `minimal/lite/standard/full`. Thin stdio→loopback-HTTP bridge; loads no model/DB.
+- **MCP**: native Rust `neurovault-server --mcp-only` (rmcp), 55 tools, tiers `minimal` (3), `lite` (8, default), `standard` (21), and `full` (55). Thin stdio→loopback-HTTP bridge; loads no model/DB.
 - Flagship extras: **graphify** (codebase → on-device knowledge graph: `who_calls`, `blast_radius`, …).
 
 ## 2. Conventions / preferences (IMPORTANT)

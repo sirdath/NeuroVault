@@ -82,7 +82,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 
 **Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
-> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (20) or `full` (54, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
+> **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (21) or `full` (55, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
 
 **Manually**, point your MCP client at the bundled native MCP server — `neurovault-server --mcp-only`, a Rust stdio↔HTTP bridge built on the official [rmcp](https://github.com/modelcontextprotocol/rust-sdk) SDK (no Python):
 
@@ -234,7 +234,7 @@ The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no
 
 ## MCP tools
 
-Exposed to any MCP-speaking agent via the native Rust MCP server — **54 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (20) · `full` (54, includes the graphify code tools). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
+Exposed to any MCP-speaking agent via the native Rust MCP server — **55 tools**, gated by a **tier** system so agents only pay for the slice they use: `minimal` (3) · `lite` (8, the default) · `standard` (21) · `full` (55, includes the graphify code tools). Set it with `NEUROVAULT_MCP_TIER`, `~/.neurovault/mcp_tier.txt`, or Settings → MCP. Every tool takes an optional `brain` parameter to target a specific brain. Highlights:
 
 | Tool | What it does |
 |------|-------------|
@@ -257,7 +257,7 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **54 tools*
 
 ## Architecture
 
-**[Full technical reference map](docs/reference.html)** — the whole system on one page: topology, the hybrid retrieval core, ingest, storage, the 54-tool MCP surface, and why every path is on-device (no external model calls, no paid path).
+**[Full technical reference map](docs/reference.html)** — the whole system on one page: topology, the hybrid retrieval core, ingest, storage, the 55-tool MCP surface, and why every path is on-device (no external model calls, no paid path).
 
 [![NeuroVault technical reference](docs/reference.png)](docs/reference.html)
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useBrainStore } from "../stores/brainStore";
 import MemoryReview, { LearningReport } from "./MemoryReview";
 
 export type AttentionTab = "pending" | "history";
@@ -11,6 +12,9 @@ const TABS: Array<{ id: AttentionTab; label: string; help: string }> = [
 export function AttentionCenter({ initialTab = "pending" }: { initialTab?: AttentionTab }) {
   const [tab, setTab] = useState<AttentionTab>(initialTab);
   const [showQuality, setShowQuality] = useState(false);
+  const activeVaultName = useBrainStore((state) =>
+    state.brains.find((brain) => brain.id === state.activeBrainId)?.name ?? state.activeBrainName,
+  );
 
   const selectTab = (next: AttentionTab) => {
     setTab(next);
@@ -20,12 +24,14 @@ export function AttentionCenter({ initialTab = "pending" }: { initialTab?: Atten
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden" aria-labelledby="attention-heading">
       <header className="shrink-0 px-7 pb-4 pt-7" style={{ borderBottom: "1px solid var(--nv-border)" }}>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>Your judgment</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>
+          Your judgment · {activeVaultName || "Active vault"}
+        </p>
         <div className="mt-1 flex items-end justify-between gap-6">
           <div>
             <h1 id="attention-heading" className="text-2xl font-semibold tracking-[-0.025em]" style={{ color: "var(--nv-text)" }}>Review</h1>
             <p className="mt-1 max-w-2xl text-[12px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
-              NeuroVault asks only when it needs permission or wants to check that an observation is accurate.
+              Configured Markdown and code sources are indexed automatically. This page only supervises memory changes and observations NeuroVault infers from your activity; your answers never gate source ingestion.
             </p>
           </div>
         </div>

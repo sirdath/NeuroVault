@@ -65,16 +65,17 @@ export function Sidebar(props: SidebarProps = {}) {
   const brainId = useBrainStore((state) => state.activeBrainId);
   const vaultPath = useNoteStore((state) => state.vaultPath);
   const scope = brainUiScope(brainId, vaultPath);
-  return <BrainSidebar key={scope} scope={scope} {...props} />;
+  return <BrainSidebar key={scope} scope={scope} brainId={brainId} {...props} />;
 }
 
 function BrainSidebar({
   scope,
+  brainId,
   triggerNewNote = 0,
   triggerSearch = 0,
   onNoteSelect,
   onTrashOpen,
-}: SidebarProps & { scope: string }) {
+}: SidebarProps & { scope: string; brainId: string | null }) {
   const notes = useNoteStore((s) => s.notes);
   const notesStatus = useNoteStore((s) => s.notesStatus);
   const notesError = useNoteStore((s) => s.notesError);
@@ -129,7 +130,7 @@ function BrainSidebar({
       const key = previewTargetKey(target.scope, target.filename);
       previewActiveReadsRef.current += 1;
 
-      void readNote(target.filename)
+      void readNote(target.filename, brainId)
         .then((content) => extractPreview(content), () => "")
         .then((preview) => {
           if (
@@ -155,7 +156,7 @@ function BrainSidebar({
           drainPreviewQueue();
         });
     }
-  }, []);
+  }, [brainId]);
 
   // The preference is a hard off switch: clear work that has not started and
   // never enqueue a preview read while snippets are disabled. Tauri invokes
@@ -332,7 +333,7 @@ function BrainSidebar({
           onSelect: async () => {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
-              const vaultPath = await invoke<string>("get_vault_path");
+              const vaultPath = await invoke<string>("get_vault_path", { brainId });
               const sep = vaultPath.includes("\\") ? "\\" : "/";
               const full = `${vaultPath.replace(/[\\/]+$/, "")}${sep}${ctxMenu.note.filename}`;
               await invoke("reveal_in_file_manager", { path: full });

@@ -44,7 +44,7 @@ That's it. `recall`, `remember`, `related`, `session_start`, and the rest appear
 
 - **Local-first & yours.** Memory is markdown in `~/.neurovault/brains/<id>/vault/`; the SQLite + sqlite-vec index next to it is rebuildable. Nothing leaves your machine.
 - **On-device, zero-LLM ingest.** BGE-small ONNX embeddings + hybrid retrieval (vector + BM25 keyword + knowledge-graph → fused → reranked). No API keys, no per-write LLM cost.
-- **Tiers.** Defaults to `lite` (8 tools: recall, remember, related, session_start, status, list_brains, switch_brain, update). Set `NEUROVAULT_MCP_TIER=standard` or `full` for chunk/temporal recall, brain maintenance, multi-agent coordination (`handoff` / `agent_inbox`), the code knowledge-graph tools, and more — 54 tools in all.
+- **Tiers.** Defaults to `lite` (8 tools: recall, remember, related, session_start, status, list_brains, switch_brain, update). Set `NEUROVAULT_MCP_TIER=standard` or `full` for chunk/temporal recall, brain maintenance, multi-agent coordination (`handoff` / `agent_inbox`), the code knowledge-graph tools, and more — 55 tools in all (`standard` has 21).
 - **Per-folder brains.** Drop a `.neurovault` file in a project (or set `NEUROVAULT_BRAIN=<name>`) to scope it to its own brain.
 
 ## Good to know

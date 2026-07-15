@@ -31,7 +31,7 @@ describe("in-app Settings", () => {
     render(<SettingsView />);
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    for (const label of ["General", "Connections", "Vaults"]) {
+    for (const label of ["General", "Sources", "Connections", "Vaults"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: "Developer" })).not.toBeInTheDocument();
@@ -47,6 +47,10 @@ describe("in-app Settings", () => {
     expect(screen.getByText("VS Code / Continue")).toBeInTheDocument();
     expect(screen.getByText("Other MCP client")).toBeInTheDocument();
     expect(screen.queryByText(/Automatic Memory \(Claude Code\)/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open Sources" }));
+    expect(screen.getByRole("heading", { name: "Sources", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage source folders" })).toBeInTheDocument();
   });
 
   it("lands contextual settings links on the requested section", () => {

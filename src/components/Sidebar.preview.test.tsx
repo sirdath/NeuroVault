@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  readNote: vi.fn<(filename: string) => Promise<string>>(),
+  readNote: vi.fn<(filename: string, brainId?: string | null) => Promise<string>>(),
   virtualIndexes: [0, 1, 2] as number[],
 }));
 
@@ -74,6 +74,7 @@ describe("Sidebar preview loading", () => {
       "note-1.md",
       "note-2.md",
     ]);
+    expect(mocks.readNote.mock.calls.map(([, brainId]) => brainId)).toEqual(["alpha", "alpha", "alpha"]);
   });
 
   it("performs zero preview reads when snippets are disabled", async () => {

@@ -105,7 +105,7 @@ test("release navigation has one owner for vaults, settings, review, trust, and 
   assert.doesNotMatch(frontend, /<ActivityBar|from "\.\/components\/ActivityBar"/);
   assert.doesNotMatch(settings, /\["memory", "Memory"\]|\["privacy", "Privacy & Trust"\]/);
   assert.doesNotMatch(settings, /<MemoryInspector|<InspectorSection|<PrivacySettings/);
-  assert.match(settings, /<ConnectionsCenter \/>/);
+  assert.match(settings, /<ConnectionsCenter\b/);
   assert.doesNotMatch(settings, /<AutoRecallSection|<McpSection|<ClaudeCodeMcpSection|nv_auto_recall/);
   assert.match(trust, /setAutomaticRecall/);
   assert.match(trust, /<ActivityPanel[\s\S]*?presentation="embedded"/);
@@ -117,6 +117,9 @@ test("note-browser collapse and window minimize remain direct, independent actio
   assert.match(frontend, /if \(viewRef\.current !== "memories"\) return;/);
   assert.match(frontend, /collapsed=\{navigationCollapsed\}/);
   assert.match(frontend, /!sidebarCollapsed && \(\s*<Sidebar/s);
+  assert.match(frontend, /const \[sidebarCollapsed, setSidebarCollapsed\] = useState\(false\)/);
+  assert.doesNotMatch(frontend, /nv\.sidebar\.collapsed/);
+  assert.match(frontend, /initializeConsumerVault\(loadBrains, initVault\)/);
   assert.match(frontend, /winInvoke\("minimize_main"\)[\s\S]*?aria-label="Minimize window"/);
   assert.match(frontend, /aria-label="More window options"/);
 });

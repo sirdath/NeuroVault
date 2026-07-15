@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { API_HOST } from "../lib/config";
-import { proposalNeedsAttention } from "../lib/inspectorCopy";
 import { useBrainStore } from "../stores/brainStore";
 import vaultMark from "../assets/vault-mark-transparent.png";
 
@@ -51,12 +50,14 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
 export function ConsumerNavigation({
   active,
   onNavigate,
+  onVaultActivated,
   onOpenSettings,
   onToggleCollapsed,
   collapsed = false,
 }: {
   active: ConsumerDestination;
-  onNavigate: (destination: ConsumerDestination) => void;
+  onNavigate: (destination: ConsumerDestination) => Promise<boolean>;
+  onVaultActivated?: () => void;
   onOpenSettings: () => void;
   onToggleCollapsed: () => void;
   collapsed?: boolean;
@@ -85,9 +86,7 @@ export function ConsumerNavigation({
         }
         const body = (await response.json()) as { proposals?: Array<{ action?: string }> };
         if (!cancelled) {
-          setAttentionCount(
-            (body.proposals ?? []).filter((proposal) => proposalNeedsAttention(proposal.action ?? "")).length,
-          );
+          setAttentionCount((body.proposals ?? []).length);
         }
       } catch {
         // Never leave a previous vault's count visible after a failed refresh.
@@ -111,19 +110,27 @@ export function ConsumerNavigation({
     [brains, switchingBrainId],
   );
   const vaultSwitchBusy = switchingBrainId !== null || brainLoading;
-  const showReview = attentionCount > 0 || active === "attention";
-
   const handleActiveVaultChange = async (brainId: string) => {
     if (!brainId || brainId === activeBrainId || vaultSwitchBusy) return;
 
     // Vault-scoped pages can otherwise keep accepting input against the old
     // vault while the backend is activating the new one. Move to the stable
     // Memories surface first, then lock the selector until activation ends.
-    onNavigate("memories");
+    const leftScopedView = await onNavigate("memories");
+    if (!leftScopedView) return;
     setSwitchError(null);
     setSwitchingBrainId(brainId);
     try {
-      await switchBrain(brainId);
+      const switched = await switchBrain(brainId);
+      if (!switched) {
+        setSwitchError("Couldn't switch vault because the current note could not be saved.");
+        return;
+      }
+      // Brain activation reloads the note store asynchronously. Expand the
+      // browser and enforce Memories after it finishes so Graph (or another
+      // stale scoped view) cannot win the race and leave an empty workspace.
+      onVaultActivated?.();
+      await onNavigate("memories");
     } catch {
       setSwitchError("Couldn't switch vault. Your current vault is still active; try again.");
     } finally {
@@ -180,8 +187,7 @@ export function ConsumerNavigation({
             />
           ))}
         </div>
-        {showReview && (
-          <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }}>
+        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }}>
           <DestinationButton
             active={active === "attention"}
             collapsed={collapsed}
@@ -190,8 +196,7 @@ export function ConsumerNavigation({
             badge={attentionCount > 0 ? attentionCount : undefined}
             onClick={() => onNavigate("attention")}
           />
-          </div>
-        )}
+        </div>
       </nav>
 
       <div className="px-3 pb-3">

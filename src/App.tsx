@@ -25,6 +25,7 @@ import { healthToneColor } from "./lib/consumerHealth";
 import { meetingsDropClaim } from "./lib/meetingsDropClaim";
 import { canLeaveView } from "./lib/navigationGuard";
 import { persistRestorableConsumerView, readRestorableConsumerView } from "./lib/consumerViewState";
+import { initializeConsumerVault } from "./lib/consumerBootstrap";
 
 const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
 const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
@@ -114,7 +115,8 @@ export default function App() {
   const theme = useSettingsStore((s) => s.theme);
   const reduceMotion = useSettingsStore((s) => s.reduceMotion);
   const checkForUpdatesAutomatically = useSettingsStore((s) => s.checkForUpdatesAutomatically);
-  // First launch begins with Today. Later launches restore only a calm primary
+  // First launch begins with Memories, the product's core surface. Later
+  // launches restore only a calm primary
   // destination; transient screens such as Settings and Review never become
   // the next launch's front door. The durable editor buffer is still flushed
   // before every navigation away from Memories.
@@ -144,14 +146,10 @@ export default function App() {
   // Note-browser collapse — this deliberately remains separate from the
   // global navigation rail. Cmd+B restores the original behavior: in
   // Memories it hides the note list and gives that space to the editor.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem("nv.sidebar.collapsed") === "1"; }
-    catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("nv.sidebar.collapsed", sidebarCollapsed ? "1" : "0"); }
-    catch { /* ignore */ }
-  }, [sidebarCollapsed]);
+  // The note browser is session-only and always starts expanded. Persisting a
+  // collapsed value made a Memories-first cold launch look like an empty
+  // vault until the user switched vaults, which happened to expand it.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [navigationCollapsed, setNavigationCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("nv.navigation.collapsed") === "1"; }
     catch { return false; }
@@ -190,8 +188,7 @@ export default function App() {
   const serverDown = healthSignals.service === "offline";
 
   useEffect(() => {
-    void loadBrains();
-    void initVault();
+    void initializeConsumerVault(loadBrains, initVault);
   }, [initVault, loadBrains]);
 
   // Rust owns native window/quit lifecycle, but the active text buffer lives
@@ -465,7 +462,7 @@ export default function App() {
   const restoreHint = useMemo(
     () =>
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
-        ? "⌃⇧Space"
+        ? "⌘⇧Space"
         : "Ctrl+Shift+Space",
     []
   );
@@ -812,7 +809,8 @@ export default function App() {
         <ConsumerNavigation
           active={view === "employee" ? "today" : view === "activity" ? "trust" : view}
           collapsed={navigationCollapsed}
-          onNavigate={(destination) => { void setView(destination); }}
+          onNavigate={setView}
+          onVaultActivated={() => setSidebarCollapsed(false)}
           onOpenSettings={() => { void openSettings(); }}
           onToggleCollapsed={() => setNavigationCollapsed((collapsed) => !collapsed)}
         />
@@ -933,6 +931,8 @@ export default function App() {
           <Suspense fallback={<ViewLoading />}>
           {view === "today" && (
             <Home
+              onOpenGraph={() => { void setView("graph"); }}
+              onOpenReview={() => { setAttentionInitial("pending"); void setView("attention"); }}
               onEnter={(filename) => {
                 void setView("memories").then((moved) => {
                   if (moved && filename) void useNoteStore.getState().selectNote(filename);

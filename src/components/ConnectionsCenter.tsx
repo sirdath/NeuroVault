@@ -10,7 +10,7 @@ import {
 
 type ClientId = "claude-code" | "claude-desktop" | "cursor" | "vscode" | "other";
 
-export function ConnectionsCenter() {
+export function ConnectionsCenter({ onOpenSources }: { onOpenSources?: () => void } = {}) {
   const [sidecarPath, setSidecarPath] = useState("");
   const [desktopConfigPath, setDesktopConfigPath] = useState("");
   const [expanded, setExpanded] = useState<ClientId | null>(null);
@@ -105,13 +105,16 @@ export function ConnectionsCenter() {
               <div>
                 <h3 className="text-[15px] font-semibold" style={{ color: "var(--nv-text)" }}>Connect your AI tools</h3>
                 <p className="mt-1 max-w-2xl text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-                  Give an MCP-compatible client access to this vault&apos;s recall and memory tools. Choose the app you use; NeuroVault generates the right local configuration.
+                  Give an MCP-compatible client access to NeuroVault&apos;s local recall and memory tools. Choose the app you use; NeuroVault generates the right configuration.
                 </p>
               </div>
               <AgentActivity entry={lastAgentCall} />
             </div>
             <p className="mt-3 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
-              Automatic context is controlled once, in Privacy & Trust. Connections only manages which apps can reach NeuroVault.
+              Claude Code supports automatic context and outcome capture. Other MCP clients receive memory tools; their host decides when to call them. Automatic context is controlled once, in Privacy & Trust.
+            </p>
+            <p className="mt-1.5 text-[11px]" style={{ color: "var(--nv-text-dim)" }}>
+              Local MCP clients can reach your vaults unless you scope a project with a <code>.neurovault</code> file whose first line is the vault name.
             </p>
           </div>
         </div>
@@ -126,7 +129,7 @@ export function ConnectionsCenter() {
         <ClientCard
           title="Claude Code"
           description="Best-supported setup with a safe, automatic config merge."
-          badge="Recommended"
+          badge="Automatic + tools"
           expanded={expanded === "claude-code"}
           onToggle={() => toggle("claude-code")}
           action={
@@ -156,7 +159,7 @@ export function ConnectionsCenter() {
         <ClientCard
           title="Claude Desktop"
           description="Manual setup that keeps your existing MCP servers intact."
-          badge="Copy config"
+          badge="Tools"
           expanded={expanded === "claude-desktop"}
           onToggle={() => toggle("claude-desktop")}
         >
@@ -170,7 +173,7 @@ export function ConnectionsCenter() {
         <ClientCard
           title="Cursor"
           description="Use a global config for every project, or a project-local config."
-          badge="Copy config"
+          badge="Tools"
           expanded={expanded === "cursor"}
           onToggle={() => toggle("cursor")}
         >
@@ -184,7 +187,7 @@ export function ConnectionsCenter() {
         <ClientCard
           title="VS Code / Continue"
           description="Choose the format used by your editor's agent extension."
-          badge="Editor setup"
+          badge="Tools"
           expanded={expanded === "vscode"}
           onToggle={() => toggle("vscode")}
         >
@@ -199,7 +202,7 @@ export function ConnectionsCenter() {
         <ClientCard
           title="Other MCP client"
           description="A portable stdio configuration for custom clients and agent frameworks."
-          badge="Custom"
+          badge="Tools"
           expanded={expanded === "other"}
           onToggle={() => toggle("other")}
           last
@@ -209,8 +212,25 @@ export function ConnectionsCenter() {
             <SetupPath label="Command" value={sidecarPath || "Resolved in installed app"} />
             <SetupPath label="Arguments" value="--mcp-only" />
           </div>
+          <SetupPath label="Optional project scope" value=".neurovault → first line is the vault name" />
           {configs && <CopyBlock label="Generic MCP JSON" value={configs.standard} copied={copied === "generic-json"} onCopy={() => void copy("generic-json", configs.standard)} />}
         </ClientCard>
+      </section>
+
+      <section className="rounded-2xl p-5" aria-label="Knowledge sources" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="max-w-2xl">
+            <h3 className="text-[14px] font-semibold" style={{ color: "var(--nv-text)" }}>Connect knowledge sources</h3>
+            <p className="mt-1 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+              Sync Markdown or Obsidian folders, Notion Markdown exports, transcripts, and local code repositories into the active vault.
+            </p>
+          </div>
+          {onOpenSources && (
+            <button type="button" onClick={onOpenSources} className="rounded-lg px-3.5 py-2 text-[11px] font-semibold" style={{ color: "var(--nv-accent)", background: "var(--nv-accent-glow)", border: "1px solid color-mix(in srgb, var(--nv-accent) 30%, transparent)" }}>
+              Open Sources
+            </button>
+          )}
+        </div>
       </section>
     </div>
   );

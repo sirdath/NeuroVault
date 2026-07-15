@@ -8,6 +8,25 @@ interface QuickCaptureProps {
   onClose: () => void;
 }
 
+export function formatQuickCapture(text: string): { title: string; markdown: string } {
+  const lines = text.trim().split(/\r?\n/);
+  const titleIndex = lines.findIndex((line) => line.trim().length > 0);
+  const rawTitle = (titleIndex >= 0 ? (lines[titleIndex] ?? "") : "")
+    .replace(/^\s*#+\s*/, "")
+    .trim();
+  const title = rawTitle.slice(0, 80).trim() || "Quick capture";
+  const overflow = rawTitle.slice(80).trim();
+  const remainder = titleIndex >= 0
+    ? lines.filter((_, index) => index !== titleIndex)
+    : [];
+  if (overflow) remainder.unshift(overflow);
+  const body = remainder.join("\n").trim();
+  return {
+    title,
+    markdown: body ? `# ${title}\n\n${body}` : `# ${title}\n`,
+  };
+}
+
 /**
  * Frictionless inbox capture — the feature most likely to make people pick
  * NeuroVault over Bear. Press Ctrl/Cmd + Shift + Space anywhere in the app,
@@ -37,16 +56,13 @@ export function QuickCapture({ open, onClose }: QuickCaptureProps) {
   const save = useCallback(async () => {
     const body = text.trim();
     if (!body || saving) return;
-
-    // First non-empty line becomes the title. Strip markdown heading markers.
-    const firstLine = body.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
-    const title = firstLine.replace(/^#+\s*/, "").slice(0, 80).trim() || "Quick capture";
+    const { title, markdown } = formatQuickCapture(body);
 
     setSaving(true);
     try {
       // Create the note (title-only stub), then write the full body back.
       const filename = await tauri.createNote(title);
-      await tauri.saveNote(filename, `# ${title}\n\n${body}`);
+      await tauri.saveNote(filename, markdown);
       await loadNotes();
       toast.success(`Captured: ${title}`);
       onClose();

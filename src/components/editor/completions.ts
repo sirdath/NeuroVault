@@ -103,12 +103,13 @@ function wikilinkCompletions(
       }));
 
     if (options.length === 0) {
-      // Allow creating a new note
+      // Keep unresolved wikilinks useful without implying that accepting the
+      // completion creates a Markdown file. Note creation remains explicit.
       if (query) {
         options.push({
-          label: `Create "${query}"`,
+          label: `Link to "${query}"`,
           apply: `${query}]]`,
-          detail: "new note",
+          detail: "unresolved link",
           boost: -1,
         });
       } else {

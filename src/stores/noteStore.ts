@@ -73,9 +73,10 @@ export const useNoteStore = create<NoteStore>((set, get) => {
 
   const loadNotes = async (showLoading = true): Promise<void> => {
     const generation = notesLoadGate.begin();
+    const brainId = get().brainId;
     if (showLoading) set({ notesStatus: "loading", notesError: null });
     try {
-      const notes = await tauri.listNotes();
+      const notes = await tauri.listNotes(brainId);
       if (!notesLoadGate.isCurrent(generation)) return;
       set({ notes, notesStatus: "ready", notesError: null });
     } catch (error) {
@@ -165,7 +166,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
     initVault: async () => {
       set({ notesStatus: "loading", notesError: null });
       try {
-        const vaultPath = await tauri.getVaultPath();
+        const vaultPath = await tauri.getVaultPath(get().brainId);
         set({ vaultPath });
         await loadNotes(false);
       } catch (error) {
@@ -188,9 +189,10 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         const beforeRead = await flush();
         if (!beforeRead.ok) return false;
 
+        const brainId = get().brainId;
         let content: string;
         try {
-          content = await tauri.readNote(filename);
+          content = await tauri.readNote(filename, brainId);
         } catch (error) {
           toast.error(`Couldn't open note: ${messageFrom(error)}`);
           return false;
@@ -201,7 +203,6 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         // then switch synchronously before another input event can interleave.
         const afterRead = await flush();
         if (!afterRead.ok) return false;
-        const brainId = get().brainId;
         const draft = readNoteDraft(localStorage, brainId, filename);
         if (draft?.content === content) draftPersistence.discard(brainId, filename);
         set({
@@ -308,7 +309,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       const brainId = state.brainId;
       set({ transitionLocked: true });
       try {
-        const diskContent = await tauri.readNote(filename);
+        const diskContent = await tauri.readNote(filename, brainId);
         draftPersistence.discard(brainId, filename);
         set((current) => ({
           activeContent: diskContent,
@@ -394,7 +395,7 @@ export const useNoteStore = create<NoteStore>((set, get) => {
           if (!saved.ok) return;
           const filename = await tauri.createNote(title, get().brainId);
           await loadNotes(false);
-          const content = await tauri.readNote(filename);
+          const content = await tauri.readNote(filename, get().brainId);
           const afterRead = await flush();
           if (!afterRead.ok) return;
           set({

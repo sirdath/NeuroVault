@@ -235,14 +235,23 @@ pub async fn brains_activate(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut parsed: serde_json::Value = serde_json::from_str(&data)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let brain_name = parsed
+        .get("brains")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(&brain_id))
+        })
+        .and_then(|brain| brain.get("name").and_then(|value| value.as_str()))
+        .unwrap_or(&brain_id)
+        .to_string();
     let exists = parsed
         .get("brains")
         .and_then(|v| v.as_array())
-        .map(|arr| {
+        .is_some_and(|arr| {
             arr.iter()
                 .any(|b| b.get("id").and_then(|v| v.as_str()) == Some(&brain_id))
-        })
-        .unwrap_or(false);
+        });
     if !exists {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
@@ -254,9 +263,12 @@ pub async fn brains_activate(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     fs::write(registry_path(), serialised)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(
-        serde_json::json!({"status": "ok", "active": brain_id}),
-    ))
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "active": brain_id,
+        "brain_id": brain_id,
+        "name": brain_name,
+    })))
 }
 
 pub async fn brains_stats(
@@ -1864,10 +1876,15 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
 
         let brains = super::read_ops::list_brains_with_stats()?;
         let mut needs_review = 0usize;
+        let mut needs_review_by_brain = serde_json::Map::new();
         let mut sessions_today = 0usize;
+        let mut context_added_today = 0usize;
+        let mut context_quiet_today = 0usize;
+        let mut memories_surfaced_today = 0usize;
+        let mut notes_changed_today = 0usize;
         let mut best_continue: Option<serde_json::Value> = None;
         let mut best_updated = String::new();
-        let mut since: Vec<serde_json::Value> = Vec::new();
+        let mut since: Vec<(String, serde_json::Value)> = Vec::new();
 
         for b in &brains {
             let scope = super::adaptive::Scope {
@@ -1893,7 +1910,7 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
                 }
             }
             // Review backlog (unreviewed proposals) across brains.
-            needs_review += super::adaptive::proposals::load_all(&b.id)
+            let brain_needs_review = super::adaptive::proposals::load_all(&b.id)
                 .values()
                 .filter(|p| {
                     matches!(
@@ -1902,19 +1919,41 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
                     )
                 })
                 .count();
+            needs_review += brain_needs_review;
+            needs_review_by_brain.insert(b.id.clone(), serde_json::json!(brain_needs_review));
             // Recent journal → sessions today + a change digest.
             let events = super::journal::read_window(&b.id, day_ago, now, None);
             let mut seen_sessions = std::collections::HashSet::new();
             for e in &events {
-                if let (Some(sid), Ok(ts)) = (
-                    e.session_id.as_deref(),
-                    time::OffsetDateTime::parse(
-                        &e.ts,
-                        &time::format_description::well_known::Rfc3339,
-                    ),
-                ) {
+                let parsed_ts = time::OffsetDateTime::parse(
+                    &e.ts,
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .ok();
+                if let (Some(sid), Some(ts)) = (e.session_id.as_deref(), parsed_ts) {
                     if ts >= midnight {
                         seen_sessions.insert(sid.to_string());
+                    }
+                }
+                if parsed_ts.is_some_and(|ts| ts >= midnight) {
+                    match e.event_type.as_str() {
+                        "context_decision"
+                            if e.after
+                                .as_deref()
+                                .is_some_and(|value| value.starts_with("inject ")) =>
+                        {
+                            context_added_today += 1;
+                            memories_surfaced_today += e
+                                .after
+                                .as_deref()
+                                .and_then(|value| value.split(';').nth(1))
+                                .and_then(|value| value.split_whitespace().next())
+                                .and_then(|value| value.parse::<usize>().ok())
+                                .unwrap_or(0);
+                        }
+                        "context_decision" => context_quiet_today += 1,
+                        "note_created" | "note_updated" => notes_changed_today += 1,
+                        _ => {}
                     }
                 }
                 let text = match e.event_type.as_str() {
@@ -1924,26 +1963,41 @@ pub async fn home_brief(_s: State<ServerState>) -> Result<Json<serde_json::Value
                     "note_superseded" => Some(format!("A note was replaced in {}", b.name)),
                     "task_completed" => Some(format!("A task was completed in {}", b.name)),
                     "working_state_updated" => Some(format!("Working state moved in {}", b.name)),
+                    "note_created" => Some(format!("A memory was added to {}", b.name)),
+                    "note_updated" => Some(format!("A memory was updated in {}", b.name)),
                     _ => None,
                 };
                 if let Some(t) = text {
-                    since.push(serde_json::json!({ "brain": b.id, "text": t, "ts": e.ts }));
+                    since.push((
+                        format!("{}:{}:{}", b.id, e.event_type, e.object_id),
+                        serde_json::json!({ "brain": b.id, "text": t, "ts": e.ts }),
+                    ));
                 }
             }
             sessions_today += seen_sessions.len();
         }
         // newest changes first, capped
         since.sort_by(|a, b| {
-            b["ts"]
+            b.1["ts"]
                 .as_str()
                 .unwrap_or("")
-                .cmp(a["ts"].as_str().unwrap_or(""))
+                .cmp(a.1["ts"].as_str().unwrap_or(""))
         });
+        let mut seen_changes = std::collections::HashSet::new();
+        since.retain(|(key, _)| seen_changes.insert(key.clone()));
         since.truncate(5);
+        let since: Vec<_> = since.into_iter().map(|(_, value)| value).collect();
 
         Ok(serde_json::json!({
             "needs_review": needs_review,
+            "needs_review_by_brain": needs_review_by_brain,
             "sessions_today": sessions_today,
+            "activity": {
+                "context_added": context_added_today,
+                "context_quiet": context_quiet_today,
+                "memories_surfaced": memories_surfaced_today,
+                "notes_changed": notes_changed_today,
+            },
             "continue": best_continue,
             "since": since,
         }))

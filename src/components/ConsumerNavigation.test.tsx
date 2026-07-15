@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBrainStore } from "../stores/brainStore";
 import { ConsumerNavigation, type ConsumerDestination } from "./ConsumerNavigation";
@@ -8,6 +9,7 @@ const NAVIGATION_LABELS = [
   "Memories",
   "Graph",
   "Today",
+  "Review",
 ] as const;
 
 describe("ConsumerNavigation", () => {
@@ -39,7 +41,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="today"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
@@ -56,9 +58,10 @@ describe("ConsumerNavigation", () => {
     ["Memories", "memories"],
     ["Graph", "graph"],
     ["Today", "today"],
+    ["Review", "attention"],
   ] as const)("maps %s to the %s destination", async (label, destination) => {
     const user = userEvent.setup();
-    const onNavigate = vi.fn<(destination: ConsumerDestination) => void>();
+    const onNavigate = vi.fn<(destination: ConsumerDestination) => Promise<boolean>>().mockResolvedValue(true);
     render(
       <ConsumerNavigation
         active="today"
@@ -73,17 +76,17 @@ describe("ConsumerNavigation", () => {
     expect(onNavigate).toHaveBeenCalledWith(destination);
   });
 
-  it("hides Review when nothing actionable is waiting", () => {
+  it("keeps Review discoverable when nothing is waiting", () => {
     render(
       <ConsumerNavigation
         active="today"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
   });
 
   it("shows Review with a badge when an actionable proposal is waiting", async () => {
@@ -92,7 +95,7 @@ describe("ConsumerNavigation", () => {
       json: async () => ({ proposals: [{ action: "memory_strengthened" }] }),
     } as Response);
     const user = userEvent.setup();
-    const onNavigate = vi.fn();
+    const onNavigate = vi.fn().mockResolvedValue(true);
     render(
       <ConsumerNavigation
         active="today"
@@ -112,7 +115,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="attention"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
@@ -132,7 +135,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="today"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
@@ -151,7 +154,7 @@ describe("ConsumerNavigation", () => {
       });
     });
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review" })).not.toHaveTextContent("1"));
     expect(fetchMock).toHaveBeenLastCalledWith(
       expect.stringContaining("brain_id=second"),
       expect.any(Object),
@@ -160,7 +163,7 @@ describe("ConsumerNavigation", () => {
 
   it("keeps Settings separate from destination routing", async () => {
     const user = userEvent.setup();
-    const onNavigate = vi.fn();
+    const onNavigate = vi.fn().mockResolvedValue(true);
     const onOpenSettings = vi.fn();
     render(
       <ConsumerNavigation
@@ -180,7 +183,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="graph"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
         collapsed
@@ -197,7 +200,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="memories"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
@@ -210,7 +213,7 @@ describe("ConsumerNavigation", () => {
     render(
       <ConsumerNavigation
         active="settings"
-        onNavigate={vi.fn()}
+        onNavigate={vi.fn().mockResolvedValue(true)}
         onOpenSettings={vi.fn()}
         onToggleCollapsed={vi.fn()}
       />,
@@ -225,7 +228,7 @@ describe("ConsumerNavigation", () => {
 
   it("keeps global-rail collapse separate from destination routing", async () => {
     const user = userEvent.setup();
-    const onNavigate = vi.fn();
+    const onNavigate = vi.fn().mockResolvedValue(true);
     const onToggleCollapsed = vi.fn();
     render(
       <ConsumerNavigation
@@ -243,9 +246,9 @@ describe("ConsumerNavigation", () => {
 
   it("moves to Memories and locks the vault control while switching", async () => {
     const user = userEvent.setup();
-    const onNavigate = vi.fn();
+    const onNavigate = vi.fn().mockResolvedValue(true);
     let finishSwitch: (() => void) | undefined;
-    const switchBrain = vi.fn(() => new Promise<void>((resolve) => { finishSwitch = resolve; }));
+    const switchBrain = vi.fn(() => new Promise<boolean>((resolve) => { finishSwitch = () => resolve(true); }));
     useBrainStore.setState({
       brains: [
         { id: "primary", name: "Primary vault", description: "", created_at: "", is_active: true, vault_path: "/vaults/primary" },
@@ -272,11 +275,75 @@ describe("ConsumerNavigation", () => {
 
     finishSwitch?.();
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Active vault" })).toBeEnabled());
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("finishes a Graph vault switch on the rendered Memories destination", async () => {
+    const user = userEvent.setup();
+    const switchBrain = vi.fn().mockResolvedValue(true);
+    const onVaultActivated = vi.fn();
+    useBrainStore.setState({
+      brains: [
+        { id: "primary", name: "Primary vault", description: "", created_at: "", is_active: true },
+        { id: "second", name: "Second vault", description: "", created_at: "", is_active: false },
+      ],
+      activeBrainId: "primary",
+      activeBrainName: "Primary vault",
+      switchBrain,
+    });
+
+    function Harness() {
+      const [active, setActive] = useState<ConsumerDestination>("graph");
+      return (
+        <ConsumerNavigation
+          active={active}
+          onNavigate={async (destination) => {
+            setActive(destination);
+            return true;
+          }}
+          onVaultActivated={onVaultActivated}
+          onOpenSettings={vi.fn()}
+          onToggleCollapsed={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Active vault" }), "second");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Memories" })).toHaveAttribute("aria-current", "page"));
+    expect(switchBrain).toHaveBeenCalledWith("second");
+    expect(onVaultActivated).toHaveBeenCalledOnce();
+  });
+
+  it("does not activate another vault when the current note blocks navigation", async () => {
+    const user = userEvent.setup();
+    const switchBrain = vi.fn().mockResolvedValue(true);
+    useBrainStore.setState({
+      brains: [
+        { id: "primary", name: "Primary vault", description: "", created_at: "", is_active: true },
+        { id: "second", name: "Second vault", description: "", created_at: "", is_active: false },
+      ],
+      activeBrainId: "primary",
+      activeBrainName: "Primary vault",
+      switchBrain,
+    });
+    render(
+      <ConsumerNavigation
+        active="graph"
+        onNavigate={vi.fn().mockResolvedValue(false)}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Active vault" }), "second");
+    expect(switchBrain).not.toHaveBeenCalled();
   });
 
   it("reports a failed vault switch without leaving the scoped destination active", async () => {
     const user = userEvent.setup();
-    const onNavigate = vi.fn();
+    const onNavigate = vi.fn().mockResolvedValue(true);
     const switchBrain = vi.fn().mockRejectedValue(new Error("activation failed"));
     useBrainStore.setState({
       brains: [

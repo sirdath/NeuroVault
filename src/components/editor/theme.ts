@@ -18,14 +18,22 @@ const c = {
   dim: "var(--nv-text-dim)",
 };
 
-function editorTheme(dark: boolean): Extension {
+export type EditorFontSize = "small" | "medium" | "large";
+
+const EDITOR_FONT_SIZE: Record<EditorFontSize, string> = {
+  small: "15.5px",
+  medium: "17px",
+  large: "19px",
+};
+
+function editorTheme(dark: boolean, fontSize: EditorFontSize): Extension {
   return EditorView.theme(
     {
       "&": {
         backgroundColor: c.bg,
         color: c.text,
         fontFamily: "'New York', 'Iowan Old Style', Charter, Georgia, serif",
-        fontSize: "17px",
+        fontSize: EDITOR_FONT_SIZE[fontSize],
         lineHeight: "1.72",
       },
       ".cm-content": {
@@ -124,5 +132,6 @@ const highlightStyle = HighlightStyle.define([
 
 const syntaxTheme = syntaxHighlighting(highlightStyle);
 
-export const neurovaultLightTheme: Extension = [editorTheme(false), syntaxTheme];
-export const neurovaultDarkTheme: Extension = [editorTheme(true), syntaxTheme];
+export function neurovaultEditorTheme(dark: boolean, fontSize: EditorFontSize): Extension {
+  return [editorTheme(dark, fontSize), syntaxTheme];
+}

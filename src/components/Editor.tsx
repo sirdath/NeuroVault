@@ -27,7 +27,7 @@ import {
 } from "../lib/brainScopedUiState";
 import { ContextMenu } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { neurovaultDarkTheme, neurovaultLightTheme } from "./editor/theme";
+import { neurovaultEditorTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -44,6 +44,7 @@ export function Editor() {
 
 function BrainEditor({ scope }: { scope: string }) {
   const themeMode = useSettingsStore((state) => state.theme.mode);
+  const fontSize = useSettingsStore((state) => state.fontSize);
   const activeFilename = useNoteStore((s) => s.activeFilename);
   const activeContent = useNoteStore((s) => s.activeContent);
   const isDirty = useNoteStore((s) => s.isDirty);
@@ -161,12 +162,12 @@ function BrainEditor({ scope }: { scope: string }) {
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
       EditorView.editable.of(!transitionLocked),
-      themeMode === "dark" ? neurovaultDarkTheme : neurovaultLightTheme,
+      neurovaultEditorTheme(themeMode === "dark", fontSize),
       livePreviewTheme,
       livePreviewPlugin,
       buildCompletions(() => notesRef.current.map((n) => n.title)),
     ],
-    [themeMode, transitionLocked]
+    [fontSize, themeMode, transitionLocked]
   );
 
   // Auto-save with 1-second debounce

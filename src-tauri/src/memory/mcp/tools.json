@@ -2734,7 +2734,7 @@
  {
   "name": "graphify",
   "title": "Graphify a codebase",
-  "description": "Parse a local code repository into the brain's on-device knowledge graph (files, symbols, imports, call edges) with tree-sitter. Nothing leaves the machine — no network, no model. Languages: Rust, Python, TypeScript/TSX. After graphifying, query the graph with where_defined / who_calls / whats_in_file. Re-run any time to refresh.",
+  "description": "Parse a local code repository into the brain's on-device knowledge graph (files, symbols, imports, call edges) with tree-sitter. Nothing leaves the machine — no network, no model. Languages: Rust, Python, TypeScript/TSX, Go, Java, C#, and Ruby. After graphifying, query the graph with where_defined / who_calls / whats_in_file. Re-run any time to refresh.",
   "annotations": {
    "read_only": false,
    "idempotent": true,

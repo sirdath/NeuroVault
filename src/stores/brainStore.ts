@@ -39,6 +39,17 @@ interface SyncSourcesResult {
   skipped_duplicates: number;
 }
 
+export function normalizeBrainActivation(
+  response: { brain_id?: string; active?: string; name?: string },
+  requestedId: string,
+  requestedName: string,
+): { id: string; name: string } {
+  return {
+    id: response.brain_id || response.active || requestedId,
+    name: response.name || requestedName,
+  };
+}
+
 /** Read-only preview of what a sync would do (the /sources/preview dry run).
  * The list fields hold source-file absolute paths. */
 export interface SyncPlan {
@@ -66,7 +77,9 @@ interface BrainStore {
   ingest: IngestProgress | null;
 
   loadBrains: () => Promise<void>;
-  switchBrain: (brainId: string) => Promise<void>;
+  /** Activate a vault after draining the current editor buffer.
+   * Returns false when the durability barrier refuses the transition. */
+  switchBrain: (brainId: string) => Promise<boolean>;
   createBrain: (
     name: string,
     description: string,
@@ -141,13 +154,13 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   },
 
   switchBrain: async (brainId: string) => {
-    if (brainId === get().activeBrainId) return;
+    if (brainId === get().activeBrainId) return true;
 
     const noteStore = useNoteStore.getState();
     // The backend resolves note writes against a process-global active brain.
     // Drain and lock the old buffer before activation starts, otherwise an
     // in-flight autosave can land in the newly-active vault.
-    if (!(await noteStore.beginBrainSwitch())) return;
+    if (!(await noteStore.beginBrainSwitch())) return false;
 
     set({ loading: true, ingest: { phase: "starting", files_done: 0, files_total: 0, current_file: "" } });
 
@@ -179,9 +192,10 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
           method: "POST",
         });
         if (res.ok) {
-          const data = await res.json();
-          activatedBrainId = data.brain_id;
-          activatedBrainName = data.name;
+          const data = await res.json() as { brain_id?: string; active?: string; name?: string };
+          const activated = normalizeBrainActivation(data, brainId, activatedBrainName);
+          activatedBrainId = activated.id;
+          activatedBrainName = activated.name;
           usedServer = true;
         }
       } catch {
@@ -215,6 +229,7 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       // Reload brains list and notes for the new brain
       await get().loadBrains();
       await useNoteStore.getState().initVault();
+      return true;
     } finally {
       window.clearInterval(poller);
       set({ loading: false, ingest: null });

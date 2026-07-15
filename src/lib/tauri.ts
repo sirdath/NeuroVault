@@ -47,8 +47,9 @@ interface ApiNote {
   size?: number;
 }
 
-async function httpListNotes(): Promise<NoteMeta[]> {
-  const res = await fetch(`${HTTP_BASE}/api/notes`);
+async function httpListNotes(brainId?: string | null): Promise<NoteMeta[]> {
+  const query = brainId ? `?brain=${encodeURIComponent(brainId)}` : "";
+  const res = await fetch(`${HTTP_BASE}/api/notes${query}`);
   if (!res.ok) throw new Error(`list_notes HTTP ${res.status}`);
   const notes = (await res.json()) as ApiNote[];
   return notes.map((n) => ({
@@ -59,17 +60,18 @@ async function httpListNotes(): Promise<NoteMeta[]> {
   }));
 }
 
-async function httpReadNote(filename: string): Promise<string> {
+async function httpReadNote(filename: string, brainId?: string | null): Promise<string> {
   // The API's per-note endpoint is keyed on engram id, not filename, so
   // we list first and resolve filename -> id. List is cheap (one query)
   // and the browser-mode fallback is intentionally not hot-path.
-  const listRes = await fetch(`${HTTP_BASE}/api/notes`);
+  const query = brainId ? `?brain=${encodeURIComponent(brainId)}` : "";
+  const listRes = await fetch(`${HTTP_BASE}/api/notes${query}`);
   if (!listRes.ok) throw new Error(`list_notes HTTP ${listRes.status}`);
   const all = (await listRes.json()) as ApiNote[];
   const match = all.find((n) => n.filename === filename);
   if (!match) throw new Error(`note not found: ${filename}`);
 
-  const noteRes = await fetch(`${HTTP_BASE}/api/notes/${match.id}`);
+  const noteRes = await fetch(`${HTTP_BASE}/api/notes/${match.id}${query}`);
   if (!noteRes.ok) throw new Error(`read_note HTTP ${noteRes.status}`);
   const detail = (await noteRes.json()) as { content?: string };
   return detail.content ?? "";
@@ -112,16 +114,18 @@ async function httpJsonSend<T>(
 
 // --- Exports --------------------------------------------------------------
 
-export const getVaultPath = () =>
+export const getVaultPath = (brainId?: string | null) =>
   IS_TAURI
-    ? invoke<string>("get_vault_path")
+    ? invoke<string>("get_vault_path", { brainId: brainId ?? null })
     : Promise.resolve("~/.neurovault/brains/default/vault");
 
-export const listNotes = () =>
-  IS_TAURI ? invoke<NoteMeta[]>("list_notes") : httpListNotes();
+export const listNotes = (brainId?: string | null) =>
+  IS_TAURI ? invoke<NoteMeta[]>("list_notes", { brainId: brainId ?? null }) : httpListNotes(brainId);
 
-export const readNote = (filename: string) =>
-  IS_TAURI ? invoke<string>("read_note", { filename }) : httpReadNote(filename);
+export const readNote = (filename: string, brainId?: string | null) =>
+  IS_TAURI
+    ? invoke<string>("read_note", { filename, brainId: brainId ?? null })
+    : httpReadNote(filename, brainId);
 
 /** Phase-5 integration: these three helpers try the `nv_*` commands
  *  first (which run the full ingest pipeline — chunk, embed,

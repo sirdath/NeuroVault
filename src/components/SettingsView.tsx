@@ -9,6 +9,8 @@ import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import vaultMark from "../assets/vault-mark-transparent.png";
 import { ConnectionsCenter } from "./ConnectionsCenter";
+import { BrainSourcesPanel } from "./BrainSourcesPanel";
+import { useBrainStore } from "../stores/brainStore";
 
 
 const FONT_SIZES = [
@@ -30,7 +32,7 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 const SERVER_URL = API_HOST;
 const DEVELOPER_OPTIONS_KEY = "nv.developer-options";
 
-export type SettingsSection = "general" | "connections" | "vaults" | "advanced";
+export type SettingsSection = "general" | "sources" | "connections" | "vaults" | "advanced";
 
 export function SettingsView({ initialSection = "general" }: { initialSection?: SettingsSection }) {
   const [developerOptions, setDeveloperOptions] = useState(() => {
@@ -165,6 +167,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         <nav className="mt-4 flex gap-1 overflow-x-auto pb-3" aria-label="Settings sections">
           {([
             ["general", "General"],
+            ["sources", "Sources"],
             ["connections", "Connections"],
             ["vaults", "Vaults"],
             ...(developerOptions ? [["advanced", "Developer"]] as const : []),
@@ -189,7 +192,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[880px] px-7 py-7">
         <h2 className="mb-6 text-[24px] font-semibold tracking-[-0.03em]" style={{ color: "var(--nv-text)" }}>
-          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Developer"}
+          {settingsTab === "general" ? "General" : settingsTab === "sources" ? "Sources" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Developer"}
         </h2>
 
         {/* Theme */}
@@ -373,7 +376,8 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         </Section>
         </>}
 
-        {settingsTab === "connections" && <ConnectionsCenter />}
+        {settingsTab === "sources" && <SourcesSettings />}
+        {settingsTab === "connections" && <ConnectionsCenter onOpenSources={() => setSettingsTab("sources")} />}
         {settingsTab === "vaults" && <VaultSettings />}
         {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
 
@@ -436,6 +440,63 @@ function VaultSettings() {
         </div>
       </Section>
     </>
+  );
+}
+
+function SourcesSettings() {
+  const brains = useBrainStore((state) => state.brains);
+  const activeBrainId = useBrainStore((state) => state.activeBrainId);
+  const activeBrain = brains.find((brain) => brain.id === activeBrainId) ?? null;
+  const [foldersOpen, setFoldersOpen] = useState(false);
+
+  return (
+    <>
+      <Section title="Knowledge sources">
+        <div className="rounded-2xl p-5" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-2xl">
+              <p className="text-[14px] font-semibold" style={{ color: "var(--nv-text)" }}>
+                Add knowledge to {activeBrain?.name || "the active vault"}
+              </p>
+              <p className="mt-1 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+                Keep one or more Markdown folders synced without changing the originals, or index a code repository into the same local graph.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!activeBrain}
+              onClick={() => setFoldersOpen(true)}
+              className="rounded-lg px-3.5 py-2 text-[12px] font-semibold disabled:opacity-40"
+              style={{ background: "var(--nv-accent)", color: "var(--nv-on-accent)" }}
+            >
+              Manage source folders
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <SourceCapability title="Markdown & Obsidian" detail="Use a folder as a vault or mirror additional folders." />
+            <SourceCapability title="Code repositories" detail="Index symbols, files, calls, and relationships on-device." />
+            <SourceCapability title="Notion exports & transcripts" detail="Sync their exported Markdown folders through the same pipeline." />
+          </div>
+        </div>
+      </Section>
+      <Section title="File inbox">
+        <div className="rounded-xl p-4 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)", background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+          Drop files anywhere on the NeuroVault window to copy them into this vault&apos;s private Import inbox. Originals stay untouched. Non-Markdown files are staged for a capable connected AI to process; NeuroVault does not silently extract them.
+        </div>
+      </Section>
+      {foldersOpen && activeBrain && (
+        <BrainSourcesPanel brainId={activeBrain.id} brainName={activeBrain.name} onClose={() => setFoldersOpen(false)} />
+      )}
+    </>
+  );
+}
+
+function SourceCapability({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="rounded-xl px-3.5 py-3" style={{ background: "var(--nv-bg)", border: "1px solid var(--nv-border)" }}>
+      <p className="text-[12px] font-semibold" style={{ color: "var(--nv-text)" }}>{title}</p>
+      <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>{detail}</p>
+    </div>
   );
 }
 
@@ -527,7 +588,7 @@ function UpdatesSection() {
  *  NeuroVault tools that's 5-9 k tokens before the user types
  *  anything. Lite (~1.5 k) drops everything except the daily-use
  *  surface; Standard (~3.5 k) trims admin tools the user rarely
- *  invokes. Full is the default.
+ *  invokes. Lite is the default for new installations.
  *
  *  Persists `~/.neurovault/mcp_tier.txt`; the native MCP server
  *  (`neurovault-server --mcp-only`) reads it at startup, so changes
@@ -538,9 +599,9 @@ const TIER_INFO: { value: McpTier; label: string; tokens: string; description: s
   { value: "lite", label: "Lite", tokens: "~1.5k tok",
     description: "8 essentials only — recall, remember, related, session_start, status, list/switch_brain, update." },
   { value: "standard", label: "Standard", tokens: "~3.5k tok",
-    description: "17 tools — Lite + chunks, temporal_recall, dedupe, core_memory, delete, find_clutter." },
+    description: "21 tools — Lite plus deeper recall, core memory, maintenance, and project workflows." },
   { value: "full", label: "Full", tokens: "~6-8k tok",
-    description: "All 30 tools — adds link editing, contradictions, orphan links, bulk metadata, optimize_disk, compile, brain creation." },
+    description: "All 55 tools — adds graph editing, consolidation, inbox, code indexing, bulk maintenance, and API administration." },
 ];
 
 function MCPTierSection() {

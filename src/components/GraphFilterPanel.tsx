@@ -612,7 +612,7 @@ export function GraphFilterPanel({
               className="text-[10px] font-[Geist,sans-serif] leading-snug"
               style={{ color: "var(--nv-text-dim)" }}
             >
-              Atlas computes a stable layout off the UI thread and caches it per vault. Choose Atlas, Neural, Galaxy, or Time Rings from the canvas pattern menu.
+              The Graph Engine computes a stable layout off the UI thread and caches it per vault. Choose Time Rings, Constellation Islands, Neural Arbor, Connectome Halo, Memory Flow, or Knowledge Globe from the canvas pattern menu.
             </p>
           </div>
         ) : (

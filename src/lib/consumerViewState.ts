@@ -9,12 +9,12 @@ export function isRestorableConsumerView(value: unknown): value is RestorableCon
 export function readRestorableConsumerView(
   storage: Pick<Storage, "getItem"> | null | undefined,
 ): RestorableConsumerView {
-  if (!storage) return "today";
+  if (!storage) return "memories";
   try {
     const saved = storage.getItem("nv.view");
-    return isRestorableConsumerView(saved) ? saved : "today";
+    return isRestorableConsumerView(saved) ? saved : "memories";
   } catch {
-    return "today";
+    return "memories";
   }
 }
 

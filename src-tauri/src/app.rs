@@ -196,9 +196,18 @@ fn extract_title(content: &str, filename: &str) -> String {
         .replace('-', " ")
 }
 
+fn vault_dir_for(brain_id: Option<&str>) -> Result<PathBuf, String> {
+    match brain_id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => memory::resolve_vault_path(id).map_err(|error| error.to_string()),
+        None => Ok(vault_dir()),
+    }
+}
+
 #[tauri::command]
-fn get_vault_path() -> String {
-    vault_dir().to_string_lossy().to_string()
+fn get_vault_path(brain_id: Option<String>) -> Result<String, String> {
+    Ok(vault_dir_for(brain_id.as_deref())?
+        .to_string_lossy()
+        .to_string())
 }
 
 /// Brain summary for the offline-fallback path. Fields mirror the server's
@@ -315,8 +324,8 @@ fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn list_notes() -> Result<Vec<NoteMeta>, String> {
-    let vault = vault_dir();
+fn list_notes(brain_id: Option<String>) -> Result<Vec<NoteMeta>, String> {
+    let vault = vault_dir_for(brain_id.as_deref())?;
     let mut notes: Vec<NoteMeta> = Vec::new();
 
     // Recursively walk subdirectories so notes organized into folders
@@ -369,8 +378,9 @@ fn list_notes() -> Result<Vec<NoteMeta>, String> {
 }
 
 #[tauri::command]
-fn read_note(filename: String) -> Result<String, String> {
-    fs::read_to_string(vault_dir().join(&filename)).map_err(|e| format!("Failed to read note: {e}"))
+fn read_note(filename: String, brain_id: Option<String>) -> Result<String, String> {
+    fs::read_to_string(vault_dir_for(brain_id.as_deref())?.join(&filename))
+        .map_err(|e| format!("Failed to read note: {e}"))
 }
 
 #[tauri::command]
@@ -923,7 +933,8 @@ fn notify_hidden_once() {
 }
 
 /// Hide the main window without quitting the app. The sidecar keeps running
-/// and the user can restore via Ctrl+Shift+Space (the quick-capture shortcut
+/// and the user can restore via Cmd+Shift+Space on macOS or Ctrl+Shift+Space
+/// elsewhere (the quick-capture shortcut
 /// also unhides/focuses the window).
 #[tauri::command]
 fn hide_to_background(window: tauri::Window) -> Result<(), String> {
@@ -1566,9 +1577,15 @@ pub fn run() {
         Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
     };
 
-    // CmdOrCtrl+Shift+Space — opens the QuickCapture overlay even when the
-    // window isn't focused. Matches Bear/Drafts/Raycast muscle memory.
-    let quick_capture = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+    // Cmd+Shift+Space on macOS, Ctrl+Shift+Space elsewhere — opens Quick
+    // Capture even when the window isn't focused. Keep native registration
+    // aligned with the shortcut the UI advertises.
+    let primary_modifier = if cfg!(target_os = "macos") {
+        Modifiers::SUPER
+    } else {
+        Modifiers::CONTROL
+    };
+    let quick_capture = Shortcut::new(Some(primary_modifier | Modifiers::SHIFT), Code::Space);
 
     tauri::Builder::default()
         // Single-instance guard with deep-link forwarding: when a
@@ -1729,7 +1746,7 @@ pub fn run() {
         })
         .setup(move |app| {
             // Register the shortcut at startup. If another app already owns
-            // the combo we log and move on — the in-app Ctrl+Shift+Space
+            // the combo we log and move on — the in-app Cmd/Ctrl+Shift+Space
             // handler still works when the window is focused.
             match app.global_shortcut().register(quick_capture) {
                 Ok(_) => eprintln!("[neurovault] global shortcut registered: Ctrl/Cmd+Shift+Space"),

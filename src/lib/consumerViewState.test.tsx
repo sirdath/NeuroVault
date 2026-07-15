@@ -14,13 +14,13 @@ describe("consumer view persistence", () => {
   it.each(["search", "activity", "attention", "trust", "settings", "employee", "unknown", null])(
     "falls back from transient or invalid value %s",
     (view) => {
-      expect(readRestorableConsumerView({ getItem: () => view })).toBe("today");
+      expect(readRestorableConsumerView({ getItem: () => view })).toBe("memories");
     },
   );
 
   it("falls back when storage is unavailable", () => {
-    expect(readRestorableConsumerView(null)).toBe("today");
-    expect(readRestorableConsumerView({ getItem: () => { throw new Error("denied"); } })).toBe("today");
+    expect(readRestorableConsumerView(null)).toBe("memories");
+    expect(readRestorableConsumerView({ getItem: () => { throw new Error("denied"); } })).toBe("memories");
   });
 
   it("persists only primary views", () => {
