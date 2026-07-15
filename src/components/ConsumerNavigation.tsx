@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { API_HOST } from "../lib/config";
 import { proposalNeedsAttention } from "../lib/inspectorCopy";
 import { useBrainStore } from "../stores/brainStore";
-import { useSettingsStore } from "../stores/settingsStore";
 import vaultMark from "../assets/vault-mark-transparent.png";
 
 export type ConsumerDestination =
@@ -42,28 +41,10 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
     label: "Graph",
     icon: <svg {...iconProps}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="12" cy="18" r="2" /><path d="m7.7 7.1 3.2 9M16.2 8.1l-3.1 8M8 6.3l8-.1" /></svg>,
   },
-];
-
-const SECONDARY_NAV_ITEMS: NavItem[] = [
   {
     id: "today",
     label: "Today",
     icon: <svg {...iconProps}><path d="M4 5.5h16v14H4z" /><path d="M8 3v5M16 3v5M4 10h16" /></svg>,
-  },
-  {
-    id: "search",
-    label: "Search",
-    icon: <svg {...iconProps}><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>,
-  },
-  {
-    id: "activity",
-    label: "Activity",
-    icon: <svg {...iconProps}><path d="M4 12h3l2-6 4 12 2-6h5" /></svg>,
-  },
-  {
-    id: "trust",
-    label: "Privacy & Trust",
-    icon: <svg {...iconProps}><path d="M12 3 20 6v5c0 5-3.2 8.2-8 10-4.8-1.8-8-5-8-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></svg>,
   },
 ];
 
@@ -84,8 +65,6 @@ export function ConsumerNavigation({
   const activeBrainId = useBrainStore((state) => state.activeBrainId);
   const brainLoading = useBrainStore((state) => state.loading);
   const switchBrain = useBrainStore((state) => state.switchBrain);
-  const themeMode = useSettingsStore((state) => state.theme.mode);
-  const updateSettings = useSettingsStore((state) => state.update);
   const [attentionCount, setAttentionCount] = useState(0);
   const [switchingBrainId, setSwitchingBrainId] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -132,6 +111,7 @@ export function ConsumerNavigation({
     [brains, switchingBrainId],
   );
   const vaultSwitchBusy = switchingBrainId !== null || brainLoading;
+  const showReview = attentionCount > 0 || active === "attention";
 
   const handleActiveVaultChange = async (brainId: string) => {
     if (!brainId || brainId === activeBrainId || vaultSwitchBusy) return;
@@ -159,23 +139,19 @@ export function ConsumerNavigation({
       }}
       aria-label="Main navigation"
     >
-      <div className={`nv-sidebar-brand relative flex shrink-0 items-center ${collapsed ? "flex-col justify-center gap-0.5 px-2" : "gap-2.5 px-3.5"}`}>
+      <div className={`nv-sidebar-brand relative flex shrink-0 items-center ${collapsed ? "flex-col justify-center gap-0.5 px-2" : "gap-2.5 px-3"}`}>
         <span
-          className="flex h-9 w-9 shrink-0 items-center justify-center"
+          className="flex shrink-0 items-center justify-center"
           aria-hidden="true"
         >
           <img
             src={vaultMark}
             alt=""
-            className="block h-[32px] w-[32px] object-contain"
-            style={{ filter: "drop-shadow(0 2px 7px rgba(52, 87, 213, 0.3))" }}
+            className="nv-sidebar-mark block h-[30px] w-[30px] object-contain"
           />
         </span>
         {!collapsed && (
-          <span className="min-w-0">
-            <span className="block truncate font-[Georgia,serif] text-[16px] font-semibold tracking-[-0.015em]" style={{ color: "var(--nv-nav-text)" }}>NeuroVault</span>
-            <span className="mt-0.5 block truncate text-[9px] font-medium uppercase tracking-[0.16em]" style={{ color: "var(--nv-nav-dim)" }}>Private memory</span>
-          </span>
+          <span className="nv-sidebar-wordmark min-w-0 truncate" style={{ color: "var(--nv-nav-text)" }}>NeuroVault</span>
         )}
         <button
           type="button"
@@ -191,8 +167,7 @@ export function ConsumerNavigation({
         </button>
       </div>
 
-      <nav className="flex-1 px-2.5 py-3" aria-label="NeuroVault">
-        {!collapsed && <NavigationSectionLabel>Core</NavigationSectionLabel>}
+      <nav className="flex-1 px-2.5 py-3.5" aria-label="NeuroVault">
         <div className="space-y-0.5">
           {PRIMARY_NAV_ITEMS.map((item) => (
             <DestinationButton
@@ -205,34 +180,22 @@ export function ConsumerNavigation({
             />
           ))}
         </div>
-
-        <div className="my-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }} />
-
-        {!collapsed && <NavigationSectionLabel>More</NavigationSectionLabel>}
-        <div className="space-y-0.5">
-          {SECONDARY_NAV_ITEMS.map((item) => (
-            <DestinationButton
-              key={item.id}
-              active={active === item.id}
-              collapsed={collapsed}
-              icon={item.icon}
-              label={item.label}
-              onClick={() => onNavigate(item.id)}
-            />
-          ))}
+        {showReview && (
+          <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }}>
           <DestinationButton
             active={active === "attention"}
             collapsed={collapsed}
             icon={<svg {...iconProps}><path d="M12 3.5 21 20H3z" /><path d="M12 9v4M12 16.5h.01" /></svg>}
-            label="Needs attention"
+            label="Review"
             badge={attentionCount > 0 ? attentionCount : undefined}
             onClick={() => onNavigate("attention")}
           />
-        </div>
+          </div>
+        )}
       </nav>
 
       <div className="px-3 pb-3">
-        {!collapsed && (
+        {!collapsed && brains.length > 1 && (
           <div className="mb-2 px-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-nav-dim)" }}>
               Active vault
@@ -275,21 +238,7 @@ export function ConsumerNavigation({
           </div>
         )}
 
-        <div className={`flex items-center ${collapsed ? "flex-col gap-1" : "gap-1"}`} style={{ borderTop: "1px solid var(--nv-nav-border)", paddingTop: 10 }}>
-          <button
-            type="button"
-            onClick={() => updateSettings({ themeId: themeMode === "light" ? "dark" : "light" })}
-            className="nv-nav-item flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors"
-            style={{ color: "var(--nv-nav-muted)" }}
-            aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} mode`}
-            title={`Switch to ${themeMode === "light" ? "dark" : "light"} mode`}
-          >
-            {themeMode === "light" ? (
-              <svg {...iconProps}><path d="M20.5 14.2A8 8 0 0 1 9.8 3.5 8.2 8.2 0 1 0 20.5 14.2Z" /></svg>
-            ) : (
-              <svg {...iconProps}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
-            )}
-          </button>
+        <div className="flex items-center" style={{ borderTop: "1px solid var(--nv-nav-border)", paddingTop: 10 }}>
           <button
             type="button"
             onClick={onOpenSettings}
@@ -309,17 +258,6 @@ export function ConsumerNavigation({
         </div>
       </div>
     </aside>
-  );
-}
-
-function NavigationSectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p
-      className="mb-1.5 px-2.5 text-[9px] font-semibold uppercase tracking-[0.16em]"
-      style={{ color: "var(--nv-nav-dim)" }}
-    >
-      {children}
-    </p>
   );
 }
 

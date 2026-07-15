@@ -24,10 +24,10 @@ import { useConsumerHealthStore } from "./stores/consumerHealthStore";
 import { healthToneColor } from "./lib/consumerHealth";
 import { meetingsDropClaim } from "./lib/meetingsDropClaim";
 import { canLeaveView } from "./lib/navigationGuard";
+import { persistRestorableConsumerView, readRestorableConsumerView } from "./lib/consumerViewState";
 
 const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
 const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
-const ActivityPanel = lazy(() => import("./components/ActivityPanel").then((module) => ({ default: module.ActivityPanel })));
 const SearchView = lazy(() => import("./components/SearchView").then((module) => ({ default: module.SearchView })));
 const AttentionCenter = lazy(() => import("./components/AttentionCenter").then((module) => ({ default: module.AttentionCenter })));
 const TrustCenter = lazy(() => import("./components/TrustCenter").then((module) => ({ default: module.TrustCenter })));
@@ -47,9 +47,9 @@ const VIEW_LABELS: Record<ConsumerDestination, string> = {
   today: "Today",
   search: "Search",
   memories: "Memories",
-  activity: "Activity",
+  activity: "Context history",
   graph: "Graph",
-  attention: "Needs attention",
+  attention: "Review",
   trust: "Privacy & Trust",
   settings: "Settings",
 };
@@ -114,11 +114,14 @@ export default function App() {
   const theme = useSettingsStore((s) => s.theme);
   const reduceMotion = useSettingsStore((s) => s.reduceMotion);
   const checkForUpdatesAutomatically = useSettingsStore((s) => s.checkForUpdatesAutomatically);
-  // Today is the front door on every launch. The durable editor buffer is
-  // flushed before navigating away from Memories, so destinations can never
-  // become a data-loss shortcut.
-  const [view, setViewState] = useState<View>("today");
-  const viewRef = useRef<View>("today");
+  // First launch begins with Today. Later launches restore only a calm primary
+  // destination; transient screens such as Settings and Review never become
+  // the next launch's front door. The durable editor buffer is still flushed
+  // before every navigation away from Memories.
+  const [view, setViewState] = useState<View>(() =>
+    readRestorableConsumerView(typeof window === "undefined" ? null : window.localStorage),
+  );
+  const viewRef = useRef<View>(view);
   // Graph performance mode. "off" keeps the nav button but renders a
   // re-enable placeholder instead of mounting NeuralGraph (zero graph cost).
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
@@ -131,7 +134,7 @@ export default function App() {
     }
     viewRef.current = next;
     setViewState(next);
-    try { localStorage.setItem("nv.view", next); } catch { /* ignore */ }
+    persistRestorableConsumerView(typeof window === "undefined" ? null : window.localStorage, next);
     return true;
   }, [flushPendingSave]);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -185,7 +188,6 @@ export default function App() {
   const refreshHealth = useConsumerHealthStore((state) => state.refresh);
   const serverUp = healthSignals.service === "online";
   const serverDown = healthSignals.service === "offline";
-  const noteCount = healthSignals.memories ?? 0;
 
   useEffect(() => {
     void loadBrains();
@@ -407,7 +409,7 @@ export default function App() {
   }, []);
 
   const [trashOpen, setTrashOpen] = useState(false);
-  const [attentionInitial, setAttentionInitial] = useState<"needs" | "observations">("needs");
+  const [attentionInitial, setAttentionInitial] = useState<"pending" | "history">("pending");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
 
   // Settings is a normal in-app destination. Routing through setView keeps
@@ -567,15 +569,15 @@ export default function App() {
       },
       {
         id: "view-activity",
-        title: "Open Activity receipts",
+        title: "Open Context history",
         category: "View",
         action: () => { void setView("activity"); },
       },
       {
         id: "view-attention",
-        title: "Open Needs attention",
+        title: "Open Review",
         category: "View",
-        action: () => { setAttentionInitial("needs"); void setView("attention"); },
+        action: () => { setAttentionInitial("pending"); void setView("attention"); },
       },
       {
         id: "view-trust",
@@ -591,7 +593,7 @@ export default function App() {
       },
       {
         id: "mcp-setup",
-        title: "Connect Claude Desktop",
+        title: "Manage AI connections",
         category: "Action",
         action: () => { void openSettings("connections"); },
       },
@@ -808,7 +810,7 @@ export default function App() {
 
       <div className="nv-app-frame flex flex-1 overflow-hidden">
         <ConsumerNavigation
-          active={view === "employee" ? "today" : view}
+          active={view === "employee" ? "today" : view === "activity" ? "trust" : view}
           collapsed={navigationCollapsed}
           onNavigate={(destination) => { void setView(destination); }}
           onOpenSettings={() => { void openSettings(); }}
@@ -847,16 +849,31 @@ export default function App() {
               </span>
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="nv-global-search-trigger"
+            aria-label="Search notes and AI memories"
+            title="Search notes and AI memories (⌘K)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="m16 16 4 4" />
+            </svg>
+            <span className="nv-global-search-label">Search</span>
+            <kbd>⌘K</kbd>
+          </button>
         </div>
 
         <div className="flex items-center gap-4">
           <UpdateButton theme={theme} />
-          {noteCount > 0 && (
-            <span className="text-[11px]" style={{ color: theme.textDim }}>
-              {noteCount.toLocaleString()} {noteCount === 1 ? "memory" : "memories"}
-            </span>
-          )}
-          <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="nv-health-trigger flex items-center gap-1.5 rounded-lg px-2 py-1.5"
+            onClick={() => { void setView("trust"); }}
+            aria-label={`${health.headline}. Open Privacy & Trust`}
+            title="Open Privacy & Trust"
+          >
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{
@@ -867,7 +884,7 @@ export default function App() {
             <span className="text-[11px]" style={{ color: theme.textDim }}>
               {health.headline}
             </span>
-          </div>
+          </button>
           <div className="flex items-center gap-0.5" aria-label="Window controls">
             <button
               type="button"
@@ -921,11 +938,6 @@ export default function App() {
                   if (moved && filename) void useNoteStore.getState().selectNote(filename);
                 });
               }}
-              onOpenReview={(kind) => {
-                setAttentionInitial(kind === "attention" ? "needs" : "observations");
-                void setView("attention");
-              }}
-              onOpenActivity={() => { void setView("activity"); }}
             />
           )}
           {view === "search" && (
@@ -954,7 +966,6 @@ export default function App() {
               <Editor />
             </>
           )}
-          {view === "activity" && <ActivityPanel open onClose={() => { void setView("today"); }} presentation="page" />}
           {view === "graph" &&
             (graphMode === "off" ? (
               <GraphOffPlaceholder onEnable={() => setGraphMode("full")} />
@@ -962,9 +973,11 @@ export default function App() {
               <NeuralGraph onOpenNote={() => { void setView("memories"); }} />
             ))}
           {view === "attention" && <AttentionCenter key={attentionInitial} initialTab={attentionInitial} />}
-          {view === "trust" && (
+          {(view === "trust" || view === "activity") && (
             <TrustCenter
-              onOpenActivity={() => { void setView("activity"); }}
+              key={view === "activity" ? "history" : "overview"}
+              initialTab={view === "activity" ? "history" : "overview"}
+              onOpenReview={() => { setAttentionInitial("history"); void setView("attention"); }}
               onOpenTrash={() => setTrashOpen(true)}
               onOpenSettings={(section) => { void openSettings(section); }}
             />

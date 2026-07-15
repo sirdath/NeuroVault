@@ -106,7 +106,7 @@ export function SearchView({
         <div className="flex items-end justify-between gap-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>Find the source</p>
-            <h1 id="search-heading" className="mt-1 font-[Georgia,serif] text-[32px] font-semibold tracking-[-0.025em]" style={{ color: "var(--nv-text)" }}>Search memory</h1>
+            <h1 id="search-heading" className="mt-1 text-[30px] font-semibold tracking-[-0.035em]" style={{ color: "var(--nv-text)" }}>Search memory</h1>
             <p className="mt-1 text-[13px]" style={{ color: "var(--nv-text-dim)" }}>
               Searching <strong style={{ color: "var(--nv-text-muted)" }}>{activeBrainName || "the active vault"}</strong>. Exact matches are never hidden by meaning scores.
             </p>

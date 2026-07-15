@@ -4,6 +4,9 @@
  * Runtime variables come from settingsStore so every surface, including
  * portals and CodeMirror, switches as one coherent Light/Dark appearance. */
 :root {
+  --nv-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --nv-font-reading: "New York", "Iowan Old Style", Charter, Georgia, serif;
+  --nv-font-mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
   --nv-bg: #f7f6f2;
   --nv-surface: #f0f2f5;
   --nv-surface-2: #e7eaf0;
@@ -93,10 +96,18 @@ html, body, #root {
   padding: 0;
   background-color: var(--nv-bg);
   color: var(--nv-text);
-  font-family: Geist, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--nv-font-ui);
   font-size: 13px;            /* UI default */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Older components used a Tailwind arbitrary `Geist` family without
+   shipping that font, which made the interface vary by machine. Route the
+   legacy class through the same deterministic native stack while those
+   components are progressively tokenized. */
+.font-\[Geist\,sans-serif\] {
+  font-family: var(--nv-font-ui) !important;
 }
 
 body {
@@ -106,7 +117,7 @@ body {
 /* The reference is editorial rather than dashboard-like: a quiet serif
    writing surface inside restrained system chrome. */
 .cm-editor {
-  font-family: "New York", "Iowan Old Style", Charter, Georgia, serif;
+  font-family: var(--nv-font-reading);
   font-size: 17px;
   line-height: 1.72;
   background: var(--nv-bg);
@@ -122,12 +133,12 @@ body {
   max-width: 780px;
   min-height: 100%;
   padding: 36px 46px 18vh;
-  font-family: "New York", "Iowan Old Style", Charter, Georgia, serif;
+  font-family: var(--nv-font-reading);
 }
 
 .cm-editor .cm-line .tok-monospace,
 .cm-editor .cm-line code {
-  font-family: "JetBrains Mono", monospace;
+  font-family: var(--nv-font-mono);
   font-size: 0.875em;
 }
 
@@ -391,6 +402,58 @@ html[data-density="compact"] {
   color: var(--nv-text) !important;
 }
 
+.nv-global-search-trigger {
+  width: clamp(180px, 24vw, 264px);
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  border-radius: 9px;
+  color: var(--nv-text-dim);
+  background: color-mix(in srgb, var(--nv-surface) 68%, var(--nv-surface-elevated));
+  border: 1px solid var(--nv-border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 30%, transparent);
+  text-align: left;
+}
+
+.nv-global-search-trigger:hover {
+  color: var(--nv-text);
+  background: var(--nv-surface);
+  border-color: var(--nv-border-strong);
+}
+
+.nv-global-search-trigger svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.nv-global-search-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.nv-global-search-trigger kbd {
+  min-width: 28px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  color: var(--nv-text-dim);
+  background: var(--nv-surface-elevated);
+  border: 1px solid var(--nv-border);
+  font-family: var(--nv-font-ui);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.nv-health-trigger:hover {
+  background: var(--nv-surface-2);
+}
+
 .nv-main-navigation {
   position: relative;
   isolation: isolate;
@@ -413,8 +476,19 @@ html[data-density="compact"] {
 }
 
 .nv-sidebar-brand {
-  min-height: 64px;
-  border-bottom: 1px solid var(--nv-nav-border);
+  min-height: 56px;
+}
+
+.nv-sidebar-mark {
+  filter: none;
+}
+
+.nv-sidebar-wordmark {
+  font-family: var(--nv-font-ui);
+  font-size: 15.5px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1;
 }
 
 .nv-nav-item {
@@ -461,6 +535,19 @@ html[data-density="compact"] {
 .nv-main-navigation :is(button, a, select, [tabindex]):focus-visible {
   outline-color: var(--nv-nav-text);
   box-shadow: 0 0 0 4px rgba(123, 145, 255, 0.34);
+}
+
+@media (max-width: 760px) {
+  .nv-global-search-trigger {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .nv-global-search-label,
+  .nv-global-search-trigger kbd {
+    display: none;
+  }
 }
 
 .nv-note-sidebar {

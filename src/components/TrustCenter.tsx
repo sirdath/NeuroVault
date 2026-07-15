@@ -4,13 +4,18 @@ import { healthToneColor } from "../lib/consumerHealth";
 import { useBrainStore } from "../stores/brainStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { useNoteStore } from "../stores/noteStore";
+import { ActivityPanel } from "./ActivityPanel";
+
+export type TrustTab = "overview" | "history";
 
 export function TrustCenter({
-  onOpenActivity,
+  initialTab = "overview",
+  onOpenReview,
   onOpenTrash,
   onOpenSettings,
 }: {
-  onOpenActivity: () => void;
+  initialTab?: TrustTab;
+  onOpenReview: () => void;
   onOpenTrash: () => void;
   onOpenSettings: (section: "connections" | "vaults") => void;
 }) {
@@ -25,6 +30,7 @@ export function TrustCenter({
   const [receiptsError, setReceiptsError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TrustTab>(initialTab);
 
   const loadReceipts = useCallback(async () => {
     setReceiptsError(false);
@@ -64,6 +70,14 @@ export function TrustCenter({
         <p className="mt-2 max-w-3xl text-[13px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
           Your vault and index stay on this Mac. NeuroVault shares selected context only with AI providers you connect. Every automatic context decision leaves a local receipt.
         </p>
+
+        <div className="mt-6 flex items-center gap-1 border-b" style={{ borderColor: "var(--nv-border)" }} aria-label="Privacy and trust views">
+          <TrustTabButton active={tab === "overview"} onClick={() => setTab("overview")}>Overview</TrustTabButton>
+          <TrustTabButton active={tab === "history"} onClick={() => setTab("history")}>Context history</TrustTabButton>
+        </div>
+
+        {tab === "overview" ? (
+          <>
 
         <section className="mt-7 grid gap-4 md:grid-cols-2" aria-label="Memory status and controls">
           <TrustCard title="Memory status" eyebrow="Is it working?">
@@ -117,7 +131,7 @@ export function TrustCenter({
             <Fact label="Updates" value="GitHub is contacted only by the update checker" />
             <Fact label="Fonts & interface" value="Never sent; NeuroVault uses local system fonts and does not fetch fonts from a CDN" />
             <div className="mt-3 flex items-center gap-3">
-              <button type="button" onClick={onOpenActivity} className="text-[11px] font-medium" style={{ color: "var(--nv-accent)" }}>View context receipts →</button>
+              <button type="button" onClick={() => setTab("history")} className="text-[11px] font-medium" style={{ color: "var(--nv-accent)" }}>View context history →</button>
               {receiptsError && <button type="button" onClick={() => void loadReceipts()} className="text-[11px] underline" style={{ color: "var(--nv-text-muted)" }}>Try again</button>}
             </div>
           </TrustCard>
@@ -129,13 +143,43 @@ export function TrustCenter({
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-text-dim)" }}>Ownership & recovery</p>
               <p className="mt-1 text-[13px]" style={{ color: "var(--nv-text)" }}>Notes remain ordinary Markdown. Deleted notes can be restored from NeuroVault Trash.</p>
             </div>
-            <button type="button" onClick={onOpenTrash} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Open Trash</button>
-            <button type="button" onClick={() => onOpenSettings("vaults")} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-accent)", border: "1px solid var(--nv-border)" }}>Manage vaults & backups</button>
-            <button type="button" onClick={() => onOpenSettings("connections")} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Connections</button>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]">
+              <button type="button" onClick={onOpenReview} className="font-medium" style={{ color: "var(--nv-accent)" }}>Review history</button>
+              <button type="button" onClick={onOpenTrash} style={{ color: "var(--nv-text-muted)" }}>Restore deleted notes</button>
+              <button type="button" onClick={() => onOpenSettings("vaults")} style={{ color: "var(--nv-text-muted)" }}>Vaults & backups</button>
+              <button type="button" onClick={() => onOpenSettings("connections")} style={{ color: "var(--nv-text-muted)" }}>Connections</button>
+            </div>
           </div>
         </section>
+          </>
+        ) : (
+          <section className="mt-7" aria-labelledby="context-history-heading">
+            <div className="mb-4">
+              <h2 id="context-history-heading" className="text-[16px] font-semibold" style={{ color: "var(--nv-text)" }}>Context history</h2>
+              <p className="mt-1 text-[12px]" style={{ color: "var(--nv-text-muted)" }}>
+                A local receipt for what NeuroVault gave your AI — and when it deliberately stayed quiet.
+              </p>
+            </div>
+            <ActivityPanel open onClose={() => setTab("overview")} presentation="embedded" />
+          </section>
+        )}
       </div>
     </main>
+  );
+}
+
+function TrustTabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="relative px-3 py-2.5 text-[12px] font-medium"
+      style={{ color: active ? "var(--nv-text)" : "var(--nv-text-dim)" }}
+      aria-current={active ? "page" : undefined}
+    >
+      {children}
+      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full" style={{ background: "var(--nv-accent)" }} />}
+    </button>
   );
 }
 

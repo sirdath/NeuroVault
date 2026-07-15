@@ -479,7 +479,7 @@ function FocusedProposal({
 export default function MemoryReview({
   tab,
 }: {
-  tab: "needs" | "observations" | "approved" | "rejected";
+  tab: "pending" | "history";
 }) {
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const activeBrainIdRef = useRef(activeBrainId);
@@ -504,7 +504,7 @@ export default function MemoryReview({
       return;
     }
     try {
-      const status = tab === "needs" || tab === "observations" ? "unreviewed" : tab === "approved" ? "" : "rejected";
+      const status = tab === "pending" ? "unreviewed" : "";
       const params = new URLSearchParams({ limit: "200" });
       if (status) params.set("decision", status);
       params.set("brain_id", requestedBrainId);
@@ -521,10 +521,17 @@ export default function MemoryReview({
       if (list.some((proposal) => proposal.brain_id !== data.brain)) {
         throw new Error("Proposal response mixed records from different vaults");
       }
-      if (tab === "needs") list = list.filter((p) => proposalNeedsAttention(p.action));
-      if (tab === "observations") list = list.filter((p) => !proposalNeedsAttention(p.action));
-      if (tab === "approved") list = list.filter((p) => p.review_status === "approved" || p.review_status === "edited");
-      list.sort((a, b) => a.proposed_at.localeCompare(b.proposed_at));
+      if (tab === "pending") {
+        // Real memory changes come first, followed by optional accuracy checks.
+        // Within each group, preserve the oldest-first inbox discipline.
+        list.sort((a, b) => {
+          const priority = Number(proposalNeedsAttention(b.action)) - Number(proposalNeedsAttention(a.action));
+          return priority || a.proposed_at.localeCompare(b.proposed_at);
+        });
+      } else {
+        list = list.filter((proposal) => proposal.review_status !== "unreviewed");
+        list.sort((a, b) => (b.decided_at ?? b.proposed_at).localeCompare(a.decided_at ?? a.proposed_at));
+      }
       if (generation === loadGeneration.current && requestedBrainId === activeBrainIdRef.current) {
         setLoadedBrainId(data.brain);
         setProposals(list);
@@ -557,7 +564,7 @@ export default function MemoryReview({
 
   const queue = useMemo(() => {
     if (!proposals) return [];
-    if (tab !== "needs" && tab !== "observations") return proposals;
+    if (tab !== "pending") return proposals;
     // Skipped items move to the back but stay reviewable.
     const active = proposals.filter((p) => !skipped.has(p.proposal_id));
     const parked = proposals.filter((p) => skipped.has(p.proposal_id));
@@ -594,9 +601,9 @@ export default function MemoryReview({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "ArrowRight") setIndex((i) => Math.min(i + 1, Math.max(queue.length - 1, 0)));
       else if (e.key === "ArrowLeft") setIndex((i) => Math.max(i - 1, 0));
-      else if ((tab === "needs" || tab === "observations") && (e.key === "a" || e.key === "A")) keyActions.current.approve?.();
-      else if ((tab === "needs" || tab === "observations") && (e.key === "e" || e.key === "E")) keyActions.current.edit?.();
-      else if ((tab === "needs" || tab === "observations") && (e.key === "r" || e.key === "R")) keyActions.current.reject?.();
+      else if (tab === "pending" && (e.key === "a" || e.key === "A")) keyActions.current.approve?.();
+      else if (tab === "pending" && (e.key === "e" || e.key === "E")) keyActions.current.edit?.();
+      else if (tab === "pending" && (e.key === "r" || e.key === "R")) keyActions.current.reject?.();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -661,18 +668,14 @@ export default function MemoryReview({
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-3 max-w-sm">
           <div className="text-[16px] font-medium" style={{ color: T.text }}>
-            {tab === "needs" ? "Nothing needs attention" : tab === "observations" ? "No learning checks" : "Nothing here yet"}
+            {tab === "pending" ? "Nothing to review" : "No review history yet"}
           </div>
           <div className="text-[13px] leading-relaxed" style={{ color: T.dim }}>
-            {tab === "needs"
-              ? "No proposed memory changes are waiting for you."
-              : tab === "observations"
-                ? "NeuroVault has no optional accuracy checks right now."
-              : tab === "approved"
-                ? "Memories you approve will appear here."
-                : "Suggestions you reject will appear here."}
+            {tab === "pending"
+              ? "No memory changes or optional accuracy checks are waiting for you."
+              : "Your approved, corrected, and rejected decisions will appear here."}
           </div>
-          {(tab === "needs" || tab === "observations") && (
+          {tab === "pending" && (
             <button
               onClick={checkForNew}
               className="text-[13px] px-4 py-2 rounded-lg"
@@ -695,13 +698,13 @@ export default function MemoryReview({
       <div className="mx-auto" style={{ maxWidth: 660 }}>
         <div className="flex items-center mb-4">
           <div className="text-[13px]" style={{ color: T.dim }}>
-            {similar > 1 && (tab === "needs" || tab === "observations")
+            {similar > 1 && tab === "pending"
               ? `${similar} similar observations — reviewing them one at a time`
-              : tab === "needs"
-                ? "NeuroVault wants to change memory. Nothing happens until you decide."
-                : tab === "observations"
-                  ? "Optional accuracy check — this does not change memory."
-                : ""}
+              : tab === "pending"
+                ? current && proposalNeedsAttention(current.action)
+                  ? "NeuroVault wants to change memory. Nothing happens until you decide."
+                  : "Optional accuracy check — this does not change memory."
+                : "Review history is read-only."}
           </div>
           <div className="ml-auto text-[13px] tabular-nums" style={{ color: T.dim }}>
             {Math.min(index + 1, queue.length)} of {queue.length}
@@ -729,7 +732,7 @@ export default function MemoryReview({
           >
             ← Previous
           </button>
-          {(tab === "needs" || tab === "observations") && current && (
+          {tab === "pending" && current && (
             <button
               onClick={() => {
                 setSkipped((s) => new Set(s).add(current.proposal_id));
@@ -756,7 +759,7 @@ export default function MemoryReview({
             {note}
           </div>
         )}
-        {(tab === "needs" || tab === "observations") && (
+        {tab === "pending" && (
           <div className="text-center mt-6 text-[11px]" style={{ color: T.dim, opacity: 0.7 }}>
             A approve · E edit · R reject · ←/→ navigate
           </div>

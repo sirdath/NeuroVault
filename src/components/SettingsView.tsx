@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
-import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 import { useUpdateStore } from "../stores/updateStore";
 import { BrainSelector } from "./BrainSelector";
@@ -9,6 +8,7 @@ import { toast } from "../stores/toastStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import vaultMark from "../assets/vault-mark-transparent.png";
+import { ConnectionsCenter } from "./ConnectionsCenter";
 
 
 const FONT_SIZES = [
@@ -28,11 +28,21 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 ];
 
 const SERVER_URL = API_HOST;
+const DEVELOPER_OPTIONS_KEY = "nv.developer-options";
 
 export type SettingsSection = "general" | "connections" | "vaults" | "advanced";
 
 export function SettingsView({ initialSection = "general" }: { initialSection?: SettingsSection }) {
-  const [settingsTab, setSettingsTab] = useState<SettingsSection>(initialSection);
+  const [developerOptions, setDeveloperOptions] = useState(() => {
+    try {
+      return window.localStorage.getItem(DEVELOPER_OPTIONS_KEY) === "on";
+    } catch {
+      return false;
+    }
+  });
+  const [settingsTab, setSettingsTab] = useState<SettingsSection>(
+    initialSection === "advanced" && !developerOptions ? "general" : initialSection,
+  );
   const { themeId, fontSize, checkForUpdatesAutomatically, update } = useSettingsStore();
   const density = useDensityStore((s) => s.density);
   const setDensity = useDensityStore((s) => s.setDensity);
@@ -43,7 +53,20 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
   const [stopping, setStopping] = useState(false);
 
-  useEffect(() => setSettingsTab(initialSection), [initialSection]);
+  useEffect(() => {
+    setSettingsTab(initialSection === "advanced" && !developerOptions ? "general" : initialSection);
+  }, [developerOptions, initialSection]);
+
+  const toggleDeveloperOptions = () => {
+    const next = !developerOptions;
+    setDeveloperOptions(next);
+    try {
+      window.localStorage.setItem(DEVELOPER_OPTIONS_KEY, next ? "on" : "off");
+    } catch {
+      // Settings still work for this session when storage is unavailable.
+    }
+    if (!next && settingsTab === "advanced") setSettingsTab("general");
+  };
 
   useEffect(() => {
     if (!online) { setServerInfo(null); return; }
@@ -96,7 +119,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         setTimeout(poll, 2000);
       } else {
         setStarting(false);
-        toast.error("The local memory service did not start within 60 seconds. Restart NeuroVault or open Advanced diagnostics.");
+        toast.error("The local memory service did not start within 60 seconds. Restart NeuroVault or open Developer settings.");
       }
     };
     setTimeout(poll, 1000);
@@ -138,14 +161,14 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" style={{ background: "var(--nv-bg)" }}>
       <header className="shrink-0 px-7 pt-6" style={{ borderBottom: "1px solid var(--nv-border)", background: "color-mix(in srgb, var(--nv-surface-elevated) 84%, transparent)" }}>
-        <h1 className="font-[Georgia,serif] text-[28px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>Settings</h1>
+        <h1 className="text-[28px] font-semibold tracking-[-0.035em]" style={{ color: "var(--nv-text)" }}>Settings</h1>
         <nav className="mt-4 flex gap-1 overflow-x-auto pb-3" aria-label="Settings sections">
           {([
             ["general", "General"],
             ["connections", "Connections"],
             ["vaults", "Vaults"],
-            ["advanced", "Advanced"],
-          ] as const).map(([id, label]) => (
+            ...(developerOptions ? [["advanced", "Developer"]] as const : []),
+          ] as readonly (readonly [SettingsSection, string])[]).map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -165,8 +188,8 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
       </header>
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[880px] px-7 py-7">
-        <h2 className="mb-6 font-[Georgia,serif] text-[24px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
-          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Advanced"}
+        <h2 className="mb-6 text-[24px] font-semibold tracking-[-0.03em]" style={{ color: "var(--nv-text)" }}>
+          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Developer"}
         </h2>
 
         {/* Theme */}
@@ -268,6 +291,30 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
             </button>
           </SettingRow>
 
+          <SettingRow
+            label="Developer options"
+            description="Show local server, API, model, and protocol diagnostics. Most people never need these controls."
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-label="Show developer options"
+              aria-checked={developerOptions}
+              onClick={toggleDeveloperOptions}
+              className="relative h-6 w-11 rounded-full transition-colors"
+              style={{ background: developerOptions ? "var(--nv-accent)" : "var(--nv-border)" }}
+            >
+              <span
+                className="absolute top-1 h-4 w-4 rounded-full transition-transform"
+                style={{
+                  left: 4,
+                  background: developerOptions ? "var(--nv-bg)" : "var(--nv-text-muted)",
+                  transform: developerOptions ? "translateX(20px)" : "translateX(0)",
+                }}
+              />
+            </button>
+          </SettingRow>
+
         </Section>
         </>}
 
@@ -326,7 +373,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         </Section>
         </>}
 
-        {settingsTab === "connections" && <><AutoRecallSection /><McpSection /><ClaudeCodeMcpSection /></>}
+        {settingsTab === "connections" && <ConnectionsCenter />}
         {settingsTab === "vaults" && <VaultSettings />}
         {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
 
@@ -354,7 +401,6 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
               alt=""
               aria-hidden="true"
               className="h-10 w-10 flex-shrink-0 object-contain"
-              style={{ filter: "drop-shadow(0 3px 10px rgba(52, 87, 213, 0.26))" }}
             />
             <div>
               <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
@@ -393,84 +439,6 @@ function VaultSettings() {
   );
 }
 
-/**
- * Live indicator of whether an MCP client (Claude Desktop, Cursor, …)
- * is actually talking to the server right now. Reads the audit log —
- * any entry whose tool does not start with "http:" is an MCP call,
- * because HTTP routes are prefixed by the audit middleware and MCP
- * tool calls land bare ("remember", "recall", etc).
- *
- * Three visual states tell a clear story in a demo:
- *   • green pulse + "Connected · last call Ns ago"   (<= 60s)
- *   • amber dot   + "Idle · last call Nm ago"        (between 60s and 30min)
- *   • gray dot    + "Not connected yet"              (no MCP call ever seen)
- */
-function McpConnectionBadge() {
-  const [lastMcp, setLastMcp] = useState<AuditEntry | null>(null);
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const entries = await activityApi.recent(50);
-        const mcp = entries.find((e) => !e.tool.startsWith("http:"));
-        if (!cancelled) setLastMcp(mcp ?? null);
-      } catch { /* server down — handled by the parent banner */ }
-    };
-    load();
-    const poll = setInterval(load, 3000);
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => { cancelled = true; clearInterval(poll); clearInterval(tick); };
-  }, []);
-
-  const ageMs = lastMcp ? now - Date.parse(lastMcp.ts) : Number.POSITIVE_INFINITY;
-  const state: "live" | "idle" | "never" = !lastMcp
-    ? "never"
-    : ageMs <= 60_000 ? "live" : "idle";
-
-  const color = state === "live"
-    ? "var(--nv-positive)"
-    : state === "idle" ? "var(--nv-accent)" : "var(--nv-text-dim)";
-  const pulse = state === "live";
-
-  let label: string;
-  if (state === "never") {
-    label = "Not connected yet — finish the setup below and restart Claude Desktop";
-  } else if (state === "live") {
-    const s = Math.max(0, Math.round(ageMs / 1000));
-    label = `Connected · last call ${s}s ago (${lastMcp!.tool})`;
-  } else {
-    const m = Math.round(ageMs / 60_000);
-    label = `Idle · last call ${m} min ago (${lastMcp!.tool})`;
-  }
-
-  return (
-    <div
-      className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
-      style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}
-    >
-      <span
-        className={`w-2 h-2 rounded-full ${pulse ? "animate-pulse" : ""}`}
-        style={{
-          backgroundColor: color,
-          boxShadow: pulse ? `0 0 6px ${color}` : undefined,
-        }}
-      />
-      <span className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
-        {label}
-      </span>
-    </div>
-  );
-}
-
-/**
- * MCP setup card — shows the user how to wire NeuroVault into Claude
- * Desktop / Cursor as an MCP server. Auto-detects the sidecar path and
- * the OS-specific Claude config location. The JSON block is kept
- * minimal (just `command`) since more keys are optional and would
- * distract from the copy-paste target.
- */
 /** Live app version (from tauri.conf via getVersion). Falls back to a
  *  dash in browser/dev mode where the Tauri API isn't present. */
 function AppVersion() {
@@ -552,296 +520,6 @@ function UpdatesSection() {
     </Section>
   );
 }
-
-function McpSection() {
-  const [sidecarPath, setSidecarPath] = useState<string>("");
-  const [configPath, setConfigPath] = useState<string>("");
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const [s, c] = await Promise.all([
-          invoke<string>("mcp_sidecar_path"),
-          invoke<string>("mcp_config_path"),
-        ]);
-        setSidecarPath(s || "");
-        setConfigPath(c || "");
-      } catch {
-        // Web fallback — nothing to detect
-      }
-    })();
-  }, []);
-
-  const configJson = sidecarPath
-    ? JSON.stringify(
-        { mcpServers: { neurovault: { command: sidecarPath, args: ["--mcp-only"] } } },
-        null, 2,
-      )
-    : "";
-
-  const handleCopy = async () => {
-    if (!configJson) return;
-    try {
-      await navigator.clipboard.writeText(configJson);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const handleReveal = async () => {
-    if (!configPath) return;
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("reveal_in_file_manager", { path: configPath });
-    } catch {
-      /* ignore — some platforms don't support reveal */
-    }
-  };
-
-  return (
-    <Section title="Connect Claude Desktop (MCP)">
-      <McpConnectionBadge />
-      {!sidecarPath ? (
-        <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-          Sidecar binary not found next to the app. Rebuild and reinstall NeuroVault, then reopen this dialog.
-        </p>
-      ) : (
-        <>
-          <div>
-            <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
-              Paste the snippet below into your Claude Desktop config so Claude can call <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault.
-            </p>
-            <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-              Restart Claude Desktop after saving. If the key <span className="font-mono">mcpServers</span> already exists, merge the <span className="font-mono">neurovault</span> entry into it instead of replacing the whole block.
-            </p>
-          </div>
-
-          <div className="relative">
-            <pre
-              className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
-              style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
-            >{configJson}</pre>
-            <button
-              onClick={handleCopy}
-              className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
-              style={{
-                background: copied ? "var(--nv-positive)" : "var(--nv-surface)",
-                color: copied ? "var(--nv-bg)" : "var(--nv-text-muted)",
-                border: "1px solid var(--nv-border)",
-              }}
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-
-          <SettingRow
-            label="Config file"
-            description={
-              configPath
-                ? `Claude Desktop reads this on startup — create it if missing`
-                : "Open Claude Desktop once so it creates the config file"
-            }
-          >
-            <button
-              onClick={handleReveal}
-              disabled={!configPath}
-              className="text-[11px] font-medium font-[Geist,sans-serif] px-3 py-1.5 rounded-lg transition-all disabled:opacity-30"
-              style={{ border: "1px solid var(--nv-border)", color: "var(--nv-text-muted)" }}
-            >
-              Show in folder
-            </button>
-          </SettingRow>
-          {configPath && (
-            <p
-              className="text-[11px] font-mono truncate -mt-2"
-              style={{ color: "var(--nv-text-dim)", direction: "rtl", textAlign: "left" }}
-              title={configPath}
-            >
-              {configPath}
-            </p>
-          )}
-        </>
-      )}
-    </Section>
-  );
-}
-
-/**
- * MCP setup for Claude Code — the terminal CLI, not Claude Desktop.
- * Claude Code stores user-scope MCP servers in ~/.claude.json (not
- * ~/.claude/settings.json) and the canonical registration path is
- * ``claude mcp add --scope user <name> <cmd> -- <args...>``. The UI
- * shows both the one-line CLI command (to copy into a terminal) and
- * the raw JSON snippet (for users who prefer to edit the file).
- *
- * The server is invoked in --mcp-only mode (no HTTP) so it doesn't
- * race the Tauri sidecar for port 8765 and so the stdio handshake
- * lands fast without waiting for embedder warmup.
- */
-function ClaudeCodeMcpSection() {
-  const [sidecarPath, setSidecarPath] = useState<string>("");
-  const [copiedCli, setCopiedCli] = useState(false);
-  const [copiedJson, setCopiedJson] = useState(false);
-  const [registering, setRegistering] = useState(false);
-  const [registerMsg, setRegisterMsg] = useState<string>("");
-  const [registerOk, setRegisterOk] = useState(false);
-
-  // One-click: merge the neurovault server into ~/.claude.json (NOT
-  // ~/.claude/.mcp.json — Claude Code reads user-scope servers from the
-  // home-root file). The Rust command merges + writes atomically, so the
-  // user's existing auth tokens and other config are preserved.
-  const doRegister = async () => {
-    setRegistering(true);
-    setRegisterMsg("");
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const res = await invoke<{ path: string; created: boolean; updated: boolean }>(
-        "register_claude_code_mcp",
-      );
-      setRegisterOk(true);
-      setRegisterMsg(
-        `${res.updated ? "Updated" : "Added"} neurovault in ~/.claude.json${
-          res.created ? " (created the file)" : ""
-        }. Restart your Claude Code session to load it.`,
-      );
-    } catch (e) {
-      setRegisterOk(false);
-      setRegisterMsg(`Couldn't register automatically: ${String(e)}`);
-    } finally {
-      setRegistering(false);
-    }
-  };
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const s = await invoke<string>("mcp_sidecar_path");
-        setSidecarPath(s || "");
-      } catch {
-        /* web fallback */
-      }
-    })();
-  }, []);
-
-  const cliCommand = sidecarPath
-    ? `claude mcp add --scope user neurovault "${sidecarPath}" -- --mcp-only`
-    : "";
-
-  const jsonSnippet = sidecarPath
-    ? JSON.stringify(
-        {
-          mcpServers: {
-            neurovault: {
-              type: "stdio",
-              command: sidecarPath,
-              args: ["--mcp-only"],
-            },
-          },
-        },
-        null,
-        2,
-      )
-    : "";
-
-  const copy = async (text: string, setFlag: (v: boolean) => void) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setFlag(true);
-      setTimeout(() => setFlag(false), 2000);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  return (
-    <Section title="Connect Claude Code (MCP)">
-      {!sidecarPath ? (
-        <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-          Sidecar binary not found next to the app. Rebuild and reinstall NeuroVault.
-        </p>
-      ) : (
-        <>
-          <div>
-            <p className="text-[13px] font-[Geist,sans-serif] mb-1" style={{ color: "var(--nv-text-muted)" }}>
-              Connect Claude Code (the terminal CLI) so it can <span className="font-mono">remember</span> and <span className="font-mono">recall</span> against this vault in every project. One click registers it in <span className="font-mono">~/.claude.json</span> — your existing login and config are preserved.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={doRegister}
-              disabled={registering}
-              className="text-[12px] font-medium font-[Geist,sans-serif] px-3.5 py-1.5 rounded-lg transition-all disabled:opacity-50"
-              style={{ background: "var(--nv-accent)", color: "var(--nv-bg)", border: "1px solid var(--nv-accent)" }}
-            >
-              {registering ? "Registering…" : "Register automatically"}
-            </button>
-            {registerMsg && (
-              <span
-                className="text-[11px] font-[Geist,sans-serif]"
-                style={{ color: registerOk ? "var(--nv-positive)" : "var(--nv-negative)" }}
-              >
-                {registerMsg}
-              </span>
-            )}
-          </div>
-
-          <details className="group">
-            <summary className="text-[11px] font-[Geist,sans-serif] cursor-pointer select-none" style={{ color: "var(--nv-text-dim)" }}>
-              Prefer the terminal? Show the <span className="font-mono">claude mcp add</span> command →
-            </summary>
-            <div className="relative mt-2">
-              <pre
-                className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
-                style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
-              >{cliCommand}</pre>
-              <button
-                onClick={() => copy(cliCommand, setCopiedCli)}
-                className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
-                style={{
-                  background: copiedCli ? "var(--nv-positive)" : "var(--nv-surface)",
-                  color: copiedCli ? "var(--nv-bg)" : "var(--nv-text-muted)",
-                  border: "1px solid var(--nv-border)",
-                }}
-              >
-                {copiedCli ? "Copied" : "Copy command"}
-              </button>
-            </div>
-          </details>
-
-          <details className="group">
-            <summary className="text-[11px] font-[Geist,sans-serif] cursor-pointer select-none" style={{ color: "var(--nv-text-dim)" }}>
-              Prefer to edit <span className="font-mono">~/.claude.json</span> by hand? Show the raw JSON snippet →
-            </summary>
-            <div className="relative mt-2">
-              <pre
-                className="text-[11.5px] font-mono p-3 rounded-lg overflow-x-auto leading-relaxed"
-                style={{ background: "var(--nv-bg)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
-              >{jsonSnippet}</pre>
-              <button
-                onClick={() => copy(jsonSnippet, setCopiedJson)}
-                className="absolute top-2 right-2 text-[10px] uppercase tracking-wider font-[Geist,sans-serif] px-2 py-1 rounded-md transition-colors"
-                style={{
-                  background: copiedJson ? "var(--nv-positive)" : "var(--nv-surface)",
-                  color: copiedJson ? "var(--nv-bg)" : "var(--nv-text-muted)",
-                  border: "1px solid var(--nv-border)",
-                }}
-              >
-                {copiedJson ? "Copied" : "Copy JSON"}
-              </button>
-            </div>
-          </details>
-        </>
-      )}
-    </Section>
-  );
-}
-
 
 /**
  *  MCP tier picker. Every MCP tool's name + description + JSON schema
@@ -968,99 +646,6 @@ function MCPTierSection() {
  *  small recall cost. Backend reads it as the default for the recall
  *  path's `rerank` param.
  */
-/**
- * Automatic memory for Claude Code. Installs UserPromptSubmit +
- * SessionStart hooks (via the bundled sidecar's `hook` subcommand) so
- * relevant memories are injected into every prompt automatically — the
- * agent no longer has to decide to call recall. The hooks fail open:
- * when NeuroVault isn't running they print nothing and Claude Code is
- * unaffected.
- */
-function AutoRecallSection() {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const installed = await invoke<boolean>("nv_auto_recall_status");
-        if (!cancelled) setEnabled(installed);
-      } catch {
-        if (!cancelled) setEnabled(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const onToggle = useCallback(async () => {
-    if (enabled === null || saving) return;
-    const next = !enabled;
-    setSaving(true);
-    setError(null);
-    setMsg(null);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("nv_auto_recall_set", { enabled: next });
-      setEnabled(next);
-      setMsg(
-        next
-          ? "Installed. Takes effect in new Claude Code sessions."
-          : "Removed from Claude Code settings.",
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [enabled, saving]);
-
-  const on = enabled === true;
-  return (
-    <Section title="Automatic Memory (Claude Code)">
-      <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-        Injects relevant memories into every Claude Code prompt automatically — no recall tool call needed. A session brief loads at startup, and each prompt is matched against this vault in the background. If NeuroVault isn&apos;t running, the hooks stay silent and Claude Code is unaffected.
-      </p>
-      <button
-        onClick={onToggle}
-        disabled={saving || enabled === null}
-        className="w-full text-left rounded-lg p-3 transition-colors disabled:opacity-50 flex items-center justify-between gap-3"
-        style={{
-          background: on ? "var(--nv-surface-2, var(--nv-surface))" : "var(--nv-bg)",
-          border: on ? "1px solid var(--nv-accent)" : "1px solid var(--nv-border)",
-        }}
-        aria-pressed={on}
-      >
-        <div>
-          <span className="text-[13px] font-semibold font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
-            Automatic recall {enabled === null ? "…" : on ? "On" : "Off"}
-          </span>
-          <p className="text-[11.5px] leading-snug font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-muted)" }}>
-            {on
-              ? "Memories surface on their own in every Claude Code session."
-              : "Claude Code only remembers when it explicitly calls the recall tool."}
-          </p>
-        </div>
-        <span className="text-[10px] uppercase tracking-wider font-[Geist,sans-serif] font-medium px-2 py-1 rounded shrink-0" style={{
-          background: on ? "var(--nv-accent)" : "var(--nv-surface)",
-          color: on ? "var(--nv-bg)" : "var(--nv-text-dim)",
-        }}>
-          {enabled === null ? "…" : on ? "On" : "Off"}
-        </span>
-      </button>
-      {msg && (
-        <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-positive)" }}>{msg}</p>
-      )}
-      {error && (
-        <p className="text-[11px] font-[Geist,sans-serif]" style={{ color: "var(--nv-negative)" }}>{error}</p>
-      )}
-    </Section>
-  );
-}
-
 function RerankSection() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);

@@ -8,10 +8,6 @@ const NAVIGATION_LABELS = [
   "Memories",
   "Graph",
   "Today",
-  "Search",
-  "Activity",
-  "Privacy & Trust",
-  "Needs attention",
 ] as const;
 
 describe("ConsumerNavigation", () => {
@@ -60,9 +56,6 @@ describe("ConsumerNavigation", () => {
     ["Memories", "memories"],
     ["Graph", "graph"],
     ["Today", "today"],
-    ["Search", "search"],
-    ["Activity", "activity"],
-    ["Privacy & Trust", "trust"],
   ] as const)("maps %s to the %s destination", async (label, destination) => {
     const user = userEvent.setup();
     const onNavigate = vi.fn<(destination: ConsumerDestination) => void>();
@@ -80,9 +73,26 @@ describe("ConsumerNavigation", () => {
     expect(onNavigate).toHaveBeenCalledWith(destination);
   });
 
-  it("keeps Needs attention visible even when the queue is empty", async () => {
-    const onNavigate = vi.fn();
+  it("hides Review when nothing actionable is waiting", () => {
+    render(
+      <ConsumerNavigation
+        active="today"
+        onNavigate={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+  });
+
+  it("shows Review with a badge when an actionable proposal is waiting", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ proposals: [{ action: "memory_strengthened" }] }),
+    } as Response);
     const user = userEvent.setup();
+    const onNavigate = vi.fn();
     render(
       <ConsumerNavigation
         active="today"
@@ -92,12 +102,26 @@ describe("ConsumerNavigation", () => {
       />,
     );
 
-    const review = screen.getByRole("button", { name: "Needs attention" });
+    const review = await screen.findByRole("button", { name: /Review/ });
+    expect(review).toHaveTextContent("1");
     await user.click(review);
     expect(onNavigate).toHaveBeenCalledWith("attention");
   });
 
-  it("clears a prior vault's badge when the next scoped count cannot load", async () => {
+  it("keeps Review visible while its destination is active", () => {
+    render(
+      <ConsumerNavigation
+        active="attention"
+        onNavigate={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("clears a prior vault's Review item when the next scoped count cannot load", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock
       .mockResolvedValueOnce({
@@ -115,7 +139,7 @@ describe("ConsumerNavigation", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Needs attention/ })).toHaveTextContent("1");
+      expect(screen.getByRole("button", { name: /Review/ })).toHaveTextContent("1");
     });
     act(() => {
       useBrainStore.setState({
@@ -127,7 +151,7 @@ describe("ConsumerNavigation", () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Needs attention" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenLastCalledWith(
       expect.stringContaining("brain_id=second"),
       expect.any(Object),
@@ -167,6 +191,19 @@ describe("ConsumerNavigation", () => {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();
+  });
+
+  it("does not duplicate vault controls when only one vault exists", () => {
+    render(
+      <ConsumerNavigation
+        active="memories"
+        onNavigate={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Active vault" })).not.toBeInTheDocument();
   });
 
   it("marks the footer Settings destination active without adding it to the primary menu", () => {

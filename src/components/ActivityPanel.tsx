@@ -11,7 +11,7 @@ import { toast } from "../stores/toastStore";
 interface ActivityPanelProps {
   open: boolean;
   onClose: () => void;
-  presentation?: "modal" | "page";
+  presentation?: "modal" | "page" | "embedded";
 }
 
 type View = "receipts" | "technical";
@@ -96,51 +96,60 @@ export function ActivityPanel({ open, onClose, presentation = "modal" }: Activit
 
   if (!open) return null;
 
+  const embedded = presentation === "embedded";
+
   const panel = (
       <div
         className={presentation === "modal"
           ? "fixed bottom-0 left-0 right-0 h-[74vh] z-50 flex flex-col rounded-t-2xl overflow-hidden"
-          : "flex min-w-0 flex-1 flex-col overflow-hidden"}
+          : embedded
+            ? "flex min-w-0 flex-col overflow-hidden rounded-2xl"
+            : "flex min-w-0 flex-1 flex-col overflow-hidden"}
         style={{
           background: "var(--nv-bg)",
           borderTop: presentation === "modal" ? "1px solid var(--nv-border)" : undefined,
+          border: embedded ? "1px solid var(--nv-border)" : undefined,
           boxShadow: presentation === "modal" ? "0 -24px 80px rgba(0,0,0,0.35)" : undefined,
+          height: embedded ? "min(620px, calc(100vh - 220px))" : undefined,
+          minHeight: embedded ? 420 : undefined,
         }}
-        role={presentation === "modal" ? "dialog" : "main"}
-        aria-label="Memory activity"
+        role={presentation === "modal" ? "dialog" : embedded ? "region" : "main"}
+        aria-label={embedded ? "Context receipt list" : "Memory activity"}
       >
-        <div
-          className="flex items-center gap-4 px-6 py-4 flex-shrink-0"
-          style={{ borderBottom: "1px solid var(--nv-border)" }}
-        >
-          <div>
-            <h2 className="text-[15px] font-semibold" style={{ color: "var(--nv-text)" }}>
-              Activity
-            </h2>
-            <p className="text-[11px] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
-              A local receipt for what NeuroVault gave your AI — and what it deliberately withheld.
-            </p>
+        {!embedded && (
+          <div
+            className="flex items-center gap-4 px-6 py-4 flex-shrink-0"
+            style={{ borderBottom: "1px solid var(--nv-border)" }}
+          >
+            <div>
+              <h2 className="text-[15px] font-semibold" style={{ color: "var(--nv-text)" }}>
+                Activity
+              </h2>
+              <p className="text-[11px] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
+                A local receipt for what NeuroVault gave your AI — and what it deliberately withheld.
+              </p>
+            </div>
+            <div className="flex items-center gap-1 ml-3">
+              <ViewButton active={view === "receipts"} onClick={() => setView("receipts")}>
+                Memory receipts
+              </ViewButton>
+              <ViewButton active={view === "technical"} onClick={() => setView("technical")}>
+                Technical log
+              </ViewButton>
+            </div>
+            {presentation === "modal" && (
+              <button
+                onClick={onClose}
+                className="ml-auto w-8 h-8 flex items-center justify-center rounded-lg text-lg"
+                style={{ color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
+                aria-label="Close activity panel"
+                title="Close (Esc)"
+              >
+                ×
+              </button>
+            )}
           </div>
-          <div className="flex items-center gap-1 ml-3">
-            <ViewButton active={view === "receipts"} onClick={() => setView("receipts")}>
-              Memory receipts
-            </ViewButton>
-            <ViewButton active={view === "technical"} onClick={() => setView("technical")}>
-              Technical log
-            </ViewButton>
-          </div>
-          {presentation === "modal" && (
-            <button
-              onClick={onClose}
-              className="ml-auto w-8 h-8 flex items-center justify-center rounded-lg text-lg"
-              style={{ color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}
-              aria-label="Close activity panel"
-              title="Close (Esc)"
-            >
-              ×
-            </button>
-          )}
-        </div>
+        )}
 
         {error && (
           <div className="px-6 py-3 text-[12px]" style={{ color: "var(--nv-negative)" }}>
@@ -148,16 +157,16 @@ export function ActivityPanel({ open, onClose, presentation = "modal" }: Activit
           </div>
         )}
 
-        {view === "receipts" ? (
+        {embedded || view === "receipts" ? (
           <>
             <div
-              className="flex items-center gap-6 px-6 py-3 flex-shrink-0"
+              className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3 flex-shrink-0"
               style={{ borderBottom: "1px solid var(--nv-border)" }}
             >
               <Stat value={receiptStats.decisions} label="decisions" />
               <Stat value={receiptStats.injections} label="times context was added" />
               <Stat value={receiptStats.memories} label="memories shared" />
-              <div className="ml-auto flex gap-1">
+              <div className="ml-auto flex flex-wrap justify-end gap-1">
                 {(["all", "inject", "silent"] as const).map((filter) => (
                   <button
                     key={filter}
@@ -249,7 +258,7 @@ export function ActivityPanel({ open, onClose, presentation = "modal" }: Activit
       </div>
   );
 
-  if (presentation === "page") return panel;
+  if (presentation === "page" || presentation === "embedded") return panel;
   return (
     <>
       <div className="fixed inset-0 z-40" style={{ background: "var(--nv-overlay)" }} onClick={onClose} />

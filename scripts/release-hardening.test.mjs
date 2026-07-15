@@ -89,13 +89,14 @@ test("packaged Settings stays inside the main app and native Cmd+, routes to it"
   assert.match(frontend, /setView\("settings"\)/);
 });
 
-test("release navigation has one owner for vaults, settings, review, trust, and activity", async () => {
+test("release navigation has one owner for vaults, settings, review, trust, and context history", async () => {
   const navigation = await read("src/components/ConsumerNavigation.tsx");
   const sidebar = await read("src/components/Sidebar.tsx");
   const settings = await read("src/components/SettingsView.tsx");
+  const trust = await read("src/components/TrustCenter.tsx");
   const frontend = await read("src/App.tsx");
 
-  assert.match(navigation, /const PRIMARY_NAV_ITEMS[\s\S]*?id: "memories"[\s\S]*?id: "graph"/);
+  assert.match(navigation, /const PRIMARY_NAV_ITEMS[\s\S]*?id: "memories"[\s\S]*?id: "graph"[\s\S]*?id: "today"/);
   assert.match(navigation, /vault-mark-transparent\.png/);
   const transparentMark = await stat(new URL("../src/assets/vault-mark-transparent.png", import.meta.url));
   assert.ok(transparentMark.isFile() && transparentMark.size > 0, "transparent app mark must ship in clean builds");
@@ -104,7 +105,11 @@ test("release navigation has one owner for vaults, settings, review, trust, and 
   assert.doesNotMatch(frontend, /<ActivityBar|from "\.\/components\/ActivityBar"/);
   assert.doesNotMatch(settings, /\["memory", "Memory"\]|\["privacy", "Privacy & Trust"\]/);
   assert.doesNotMatch(settings, /<MemoryInspector|<InspectorSection|<PrivacySettings/);
-  assert.match(settings, /<AutoRecallSection \/><McpSection \/><ClaudeCodeMcpSection \/>/);
+  assert.match(settings, /<ConnectionsCenter \/>/);
+  assert.doesNotMatch(settings, /<AutoRecallSection|<McpSection|<ClaudeCodeMcpSection|nv_auto_recall/);
+  assert.match(trust, /setAutomaticRecall/);
+  assert.match(trust, /<ActivityPanel[\s\S]*?presentation="embedded"/);
+  assert.match(frontend, /view === "trust" \|\| view === "activity"/);
 });
 
 test("note-browser collapse and window minimize remain direct, independent actions", async () => {

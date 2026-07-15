@@ -49,7 +49,7 @@ describe("MemoryReview vault scoping", () => {
 
   it("sends a decision with the vault that produced the card", async () => {
     const user = userEvent.setup();
-    render(<MemoryReview tab="needs" />);
+    render(<MemoryReview tab="pending" />);
 
     await user.click(await screen.findByRole("button", { name: "Apply change" }));
     await waitFor(() => {
@@ -64,7 +64,7 @@ describe("MemoryReview vault scoping", () => {
   });
 
   it("removes the old card immediately when the active vault changes", async () => {
-    render(<MemoryReview tab="needs" />);
+    render(<MemoryReview tab="pending" />);
     expect(await screen.findByRole("button", { name: "Apply change" })).toBeInTheDocument();
 
     act(() => {

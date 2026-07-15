@@ -451,7 +451,7 @@ export default function MemoryInspector({
       </div>
 
       {tab === "needs" || tab === "observations" || tab === "approved" || tab === "rejected" ? (
-        <MemoryReview key={tab} tab={tab} />
+        <MemoryReview key={tab} tab={tab === "needs" || tab === "observations" ? "pending" : "history"} />
       ) : tab === "learning" ? (
         <LearningReport />
       ) : (
