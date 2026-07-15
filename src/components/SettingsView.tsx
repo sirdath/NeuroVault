@@ -4,11 +4,11 @@ import { useDensityStore, type Density } from "../stores/densityStore";
 import { activityApi, type AuditEntry } from "../lib/api";
 import { API_HOST, API_DISPLAY } from "../lib/config";
 import { useUpdateStore } from "../stores/updateStore";
-import MemoryInspector from "./MemoryInspector";
 import { BrainSelector } from "./BrainSelector";
 import { toast } from "../stores/toastStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
+import vaultMark from "../assets/vault-mark-transparent.png";
 
 
 const FONT_SIZES = [
@@ -29,8 +29,10 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 
 const SERVER_URL = API_HOST;
 
-export function SettingsView() {
-  const [settingsTab, setSettingsTab] = useState<"general" | "connections" | "memory" | "vaults" | "privacy" | "advanced">("general");
+export type SettingsSection = "general" | "connections" | "vaults" | "advanced";
+
+export function SettingsView({ initialSection = "general" }: { initialSection?: SettingsSection }) {
+  const [settingsTab, setSettingsTab] = useState<SettingsSection>(initialSection);
   const { themeId, fontSize, checkForUpdatesAutomatically, update } = useSettingsStore();
   const density = useDensityStore((s) => s.density);
   const setDensity = useDensityStore((s) => s.setDensity);
@@ -40,6 +42,8 @@ export function SettingsView() {
   const online = healthSignals.service === "online";
   const [serverInfo, setServerInfo] = useState<{ notes: number; connections: number; brain: string } | null>(null);
   const [stopping, setStopping] = useState(false);
+
+  useEffect(() => setSettingsTab(initialSection), [initialSection]);
 
   useEffect(() => {
     if (!online) { setServerInfo(null); return; }
@@ -139,9 +143,7 @@ export function SettingsView() {
           {([
             ["general", "General"],
             ["connections", "Connections"],
-            ["memory", "Memory"],
             ["vaults", "Vaults"],
-            ["privacy", "Privacy & Trust"],
             ["advanced", "Advanced"],
           ] as const).map(([id, label]) => (
             <button
@@ -164,7 +166,7 @@ export function SettingsView() {
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[880px] px-7 py-7">
         <h2 className="mb-6 font-[Georgia,serif] text-[24px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
-          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "memory" ? "Memory" : settingsTab === "vaults" ? "Vaults" : settingsTab === "privacy" ? "Privacy & Trust" : "Advanced"}
+          {settingsTab === "general" ? "General" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Advanced"}
         </h2>
 
         {/* Theme */}
@@ -325,9 +327,7 @@ export function SettingsView() {
         </>}
 
         {settingsTab === "connections" && <><AutoRecallSection /><McpSection /><ClaudeCodeMcpSection /></>}
-        {settingsTab === "memory" && <><AutoRecallSection /><InspectorSection /></>}
         {settingsTab === "vaults" && <VaultSettings />}
-        {settingsTab === "privacy" && <PrivacySettings />}
         {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
 
         {/* Shortcuts */}
@@ -349,27 +349,13 @@ export function SettingsView() {
 
         <Section title="About">
           <div className="flex items-center gap-3">
-            <svg
-              viewBox="0 0 24 24"
-              className="w-10 h-10 flex-shrink-0"
-              style={{ color: "var(--nv-accent)" }}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.4}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-label="NeuroVault"
-            >
-              <circle cx="12" cy="12" r="9.5" />
-              <line x1="12"   y1="8.4"  x2="12"   y2="11.6" />
-              <line x1="7.5"  y1="15.6" x2="10.7" y2="13.8" />
-              <line x1="16.5" y1="15.6" x2="13.3" y2="13.8" />
-              <circle cx="12"   cy="6.9"  r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="6.4"  cy="16"   r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="17.6" cy="16"   r="1.5" fill="currentColor" stroke="none" />
-              <circle cx="12"   cy="12.8" r="1.4" />
-              <line   x1="12"   y1="14.2" x2="12" y2="15.7" />
-            </svg>
+            <img
+              src={vaultMark}
+              alt=""
+              aria-hidden="true"
+              className="h-10 w-10 flex-shrink-0 object-contain"
+              style={{ filter: "drop-shadow(0 3px 10px rgba(52, 87, 213, 0.26))" }}
+            />
             <div>
               <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
@@ -388,64 +374,22 @@ export function SettingsView() {
 function VaultSettings() {
   return (
     <>
-      <Section title="Active vault">
+      <Section title="Manage vaults">
         <p className="mb-4 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-          Vaults are hard project boundaries. NeuroVault saves, searches, and shares context only from the active vault unless you explicitly switch.
+          Use the Active vault control in the main navigation to switch context. Manage, create, rename, export, or remove vaults here.
         </p>
         <div className="rounded-xl p-4" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-          <BrainSelector />
+          <BrainSelector triggerLabel="Open vault manager" placement="down" mode="manage" />
         </div>
       </Section>
       <Section title="Ownership & backup">
         <div className="space-y-3 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
           <p>Your notes are ordinary Markdown. Internal vaults, their index, and supporting memory data live under <span className="font-mono">~/.neurovault/</span>.</p>
-          <p>Use the vault menu above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
+          <p>Use the vault manager above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
           <p>Deleting a note moves its Markdown to NeuroVault Trash. Restore it from Memories or Privacy & Trust; restoring rebuilds its search index.</p>
         </div>
       </Section>
     </>
-  );
-}
-
-function PrivacySettings() {
-  return (
-    <>
-      <Section title="The exact privacy contract">
-        <div className="rounded-xl p-4" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-          <p className="text-[13px] font-medium leading-relaxed" style={{ color: "var(--nv-text)" }}>
-            Your vault and index stay on this Mac. NeuroVault shares selected context only with AI providers you connect.
-          </p>
-          <p className="mt-2 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
-            Local storage is plaintext unless the volume is encrypted. Enable FileVault in macOS Settings if other people could access this Mac or its drive.
-          </p>
-        </div>
-      </Section>
-      <Section title="Possible outbound connections">
-        <div className="space-y-2">
-          <PrivacyFlow name="Connected AI provider" condition="Only while you use that connection" detail="Receives the small set of memories chosen for context, plus the prompt handled by the AI client itself." />
-          <PrivacyFlow name="GitHub Releases" condition="Only when you check, or opt in to launch checks" detail="Receives an ordinary update request; it does not receive vault contents or a stable install identifier." />
-          <PrivacyFlow name="Optional model provider" condition="Only when you deliberately enable a provider-backed compile feature" detail="May receive the content shown in that feature's confirmation." />
-          <PrivacyFlow name="Fonts and interface" condition="Never" detail="The interface uses local system fonts; opening NeuroVault does not fetch fonts from a CDN." />
-        </div>
-      </Section>
-      <Section title="Controls">
-        <p className="text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-          Pause automatic context under Connections. Review every delivery in Activity. Revoke external API keys under Advanced. Trash, export, and correction remain available without an account.
-        </p>
-      </Section>
-    </>
-  );
-}
-
-function PrivacyFlow({ name, condition, detail }: { name: string; condition: string; detail: string }) {
-  return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-      <div className="flex items-baseline gap-3">
-        <p className="text-[12px] font-medium" style={{ color: "var(--nv-text)" }}>{name}</p>
-        <p className="ml-auto text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--nv-accent)" }}>{condition}</p>
-      </div>
-      <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>{detail}</p>
-    </div>
   );
 }
 
@@ -546,27 +490,6 @@ function AppVersion() {
  *  Update pill, so a check here lights up the pill (and vice-versa).
  *  "Update" downloads + installs via the native updater when configured,
  *  else opens the GitHub release page (current unsigned-installer state). */
-function InspectorSection() {
-  const [open, setOpen] = useState(false);
-  return (
-    <Section title="Memory Inspector">
-      <SettingRow
-        label="See what your memory is doing"
-        description="Two views: Recall activity shows what NeuroVault quietly added to your Claude conversations (and when it chose to stay out of the way). Suggestions shows things it thinks it learned from your sessions - each one waits for your yes or no."
-      >
-        <button
-          onClick={() => setOpen(true)}
-          className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", color: "var(--nv-accent, #568cfa)" }}
-        >
-          Open Inspector
-        </button>
-      </SettingRow>
-      {open && <MemoryInspector onClose={() => setOpen(false)} />}
-    </Section>
-  );
-}
-
 function UpdatesSection() {
   const info = useUpdateStore((s) => s.info);
   const checking = useUpdateStore((s) => s.checking);

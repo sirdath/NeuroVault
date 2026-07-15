@@ -1395,8 +1395,10 @@ pub async fn consolidation_false_negative(
 
 #[derive(Deserialize)]
 pub struct ProposalDecisionBody {
-    #[serde(default, alias = "brain")]
-    brain_id: Option<String>,
+    /// Required mutation scope. Review decisions must never fall back to the
+    /// process-global active brain: that can change after the card was loaded.
+    #[serde(alias = "brain")]
+    brain_id: String,
     #[serde(default)]
     reviewer: Option<String>,
     #[serde(default)]
@@ -1404,6 +1406,17 @@ pub struct ProposalDecisionBody {
     /// Field edits (name -> approved value); both values are retained.
     #[serde(default)]
     edits: std::collections::HashMap<String, String>,
+}
+
+fn proposal_decision_brain_id(body: &ProposalDecisionBody) -> Result<String, ApiError> {
+    let brain_id = body.brain_id.trim();
+    if brain_id.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "brain_id is required for proposal decisions".into(),
+        ));
+    }
+    resolve_brain_id(Some(brain_id)).map_err(ApiError::from)
 }
 
 /// POST /api/proposals/:id/approve — review decision as a journal
@@ -1415,8 +1428,8 @@ pub async fn proposal_approve(
     _s: State<ServerState>,
     Json(body): Json<ProposalDecisionBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = proposal_decision_brain_id(&body)?;
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
-        let id = resolve_brain_id(body.brain_id.as_deref())?;
         let reviewer = body.reviewer.as_deref().unwrap_or("user");
         let (mut rec, changed) = super::adaptive::proposals::decide(
             &id,
@@ -1515,8 +1528,8 @@ pub async fn proposal_reject(
     _s: State<ServerState>,
     Json(body): Json<ProposalDecisionBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = proposal_decision_brain_id(&body)?;
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
-        let id = resolve_brain_id(body.brain_id.as_deref())?;
         let reviewer = body.reviewer.as_deref().unwrap_or("user");
         let (rec, changed) = super::adaptive::proposals::decide(
             &id,
@@ -1532,6 +1545,37 @@ pub async fn proposal_reject(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod proposal_decision_scope_tests {
+    use super::*;
+
+    #[test]
+    fn proposal_decisions_require_an_explicit_non_empty_brain() {
+        let missing = serde_json::from_value::<ProposalDecisionBody>(serde_json::json!({
+            "reviewer": "user"
+        }));
+        assert!(
+            missing.is_err(),
+            "missing brain_id must not fall back to active"
+        );
+
+        let empty = serde_json::from_value::<ProposalDecisionBody>(serde_json::json!({
+            "brain_id": "   ",
+            "reviewer": "user"
+        }))
+        .unwrap();
+        let err = proposal_decision_brain_id(&empty).unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        let legacy_alias = serde_json::from_value::<ProposalDecisionBody>(serde_json::json!({
+            "brain": "vault-a",
+            "reviewer": "user"
+        }))
+        .unwrap();
+        assert_eq!(legacy_alias.brain_id, "vault-a");
+    }
 }
 
 /// GET /api/proposals?brain=&status= — the Inspector's review queue.

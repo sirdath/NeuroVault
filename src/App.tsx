@@ -11,9 +11,9 @@ import { QuickCapture } from "./components/QuickCapture";
 import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
 import Home from "./components/Home";
-import { ActivityBar } from "./components/ActivityBar";
 import { UpdateButton } from "./components/UpdateButton";
 import { ConsumerNavigation, type ConsumerDestination } from "./components/ConsumerNavigation";
+import type { SettingsSection } from "./components/SettingsView";
 import { TrashPanel } from "./components/TrashPanel";
 import { useUpdateStore } from "./stores/updateStore";
 import { applyThemeToDocument, themeCssVars, useSettingsStore } from "./stores/settingsStore";
@@ -53,6 +53,14 @@ const VIEW_LABELS: Record<ConsumerDestination, string> = {
   trust: "Privacy & Trust",
   settings: "Settings",
 };
+
+/** Stable number-row shortcuts. Keep this independent from the visual rail
+ * order so reorganising navigation never silently changes muscle memory. */
+export const NUMBER_KEY_DESTINATIONS = {
+  "1": "today",
+  "2": "memories",
+  "3": "graph",
+} as const satisfies Record<string, ConsumerDestination>;
 
 // The AI Employees feature is excluded from the public base build. Flip this
 // to true (and re-declare the employee-manager window in tauri.conf.json +
@@ -400,10 +408,14 @@ export default function App() {
 
   const [trashOpen, setTrashOpen] = useState(false);
   const [attentionInitial, setAttentionInitial] = useState<"needs" | "observations">("needs");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
 
   // Settings is a normal in-app destination. Routing through setView keeps
   // the same durable-save barrier used by every other destination.
-  const openSettings = useCallback(() => setView("settings"), [setView]);
+  const openSettings = useCallback((section: SettingsSection = "general") => {
+    setSettingsSection(section);
+    return setView("settings");
+  }, [setView]);
 
   // Native Cmd+, asks the existing main webview to navigate here rather than
   // creating a second webview with a second copy of application state.
@@ -581,7 +593,7 @@ export default function App() {
         id: "mcp-setup",
         title: "Connect Claude Desktop",
         category: "Action",
-        action: () => { void openSettings(); },
+        action: () => { void openSettings("connections"); },
       },
       {
         id: "window-minimize",
@@ -617,7 +629,19 @@ export default function App() {
           id: `switch-brain-${b.id}`,
           title: `Switch to ${b.name}`,
           category: "Vault",
-          action: () => { void switchBrain(b.id).then(() => setView("memories")); },
+          action: () => {
+            void (async () => {
+              // Leave any vault-scoped review/search surface before changing
+              // the backend's active context. This mirrors the visible rail
+              // switcher and prevents an old card staying actionable.
+              if (!(await setView("memories"))) return;
+              try {
+                await switchBrain(b.id);
+              } catch (error) {
+                toast.error(`Couldn't switch to ${b.name}: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            })();
+          },
         })),
     ],
     [saveNote, toggleView, brains, activeBrainId, switchBrain, winInvoke, setView, openSettings]
@@ -649,14 +673,14 @@ export default function App() {
         e.preventDefault();
         toggleView();
       }
-      // Ctrl+1/2 — jump straight to Editor / Graph. The number-row key
-      // doesn't vary by keyboard layout on Windows/Mac so checking e.key
+      // Ctrl/Cmd+1/2/3 keep their established destination mapping even when
+      // the visual navigation order changes. The number row doesn't vary by
+      // keyboard layout on Windows/Mac so checking e.key
       // is fine; don't trigger when a modifier chord collides with a
       // browser shortcut (e.g. Ctrl+Shift+1).
       if (ctrl && !e.shiftKey && !e.altKey) {
-        if (e.key === "1") { e.preventDefault(); void setView("today"); return; }
-        if (e.key === "2") { e.preventDefault(); void setView("memories"); return; }
-        if (e.key === "3") { e.preventDefault(); void setView("graph"); return; }
+        const destination = NUMBER_KEY_DESTINATIONS[e.key as keyof typeof NUMBER_KEY_DESTINATIONS];
+        if (destination) { e.preventDefault(); void setView(destination); return; }
         if (EMPLOYEES_ENABLED && e.key === "4") { e.preventDefault(); void setView("employee"); return; }
       }
       if (ctrl && e.key === "/") {
@@ -816,16 +840,13 @@ export default function App() {
               </svg>
             </button>
           )}
-          <div className="flex min-w-0 items-center gap-3" aria-label={`Current view: ${view === "employee" ? "Today" : VIEW_LABELS[view]}`}>
-            <span className="text-[13px] font-medium" style={{ color: theme.text }}>
-              {view === "employee" ? "Today" : VIEW_LABELS[view]}
-            </span>
-            {view === "memories" && (
-              <span className="hidden text-[11px] sm:inline" style={{ color: theme.textDim }}>
-                Your private Markdown vault
+          {navigationCollapsed && (
+            <div className="flex min-w-0 items-center" aria-label={`Current view: ${view === "employee" ? "Today" : VIEW_LABELS[view]}`}>
+              <span className="text-[12px] font-medium" style={{ color: theme.text }}>
+                {view === "employee" ? "Today" : VIEW_LABELS[view]}
               </span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-4">
@@ -927,7 +948,6 @@ export default function App() {
                 <Sidebar
                   triggerNewNote={triggerNewNote}
                   onNoteSelect={() => { /* already in Memories */ }}
-                  onSettingsOpen={() => { void openSettings(); }}
                   onTrashOpen={() => setTrashOpen(true)}
                 />
               )}
@@ -946,17 +966,15 @@ export default function App() {
             <TrustCenter
               onOpenActivity={() => { void setView("activity"); }}
               onOpenTrash={() => setTrashOpen(true)}
-              onOpenSettings={() => { void openSettings(); }}
+              onOpenSettings={(section) => { void openSettings(section); }}
             />
           )}
-          {view === "settings" && <SettingsView />}
+          {view === "settings" && <SettingsView initialSection={settingsSection} />}
           {EMPLOYEES_ENABLED && view === "employee" && <EmployeePanel />}
           </Suspense>
         </div>
       </div>
 
-      {/* A compact live receipt shortcut; full Activity is a destination. */}
-      <ActivityBar onExpand={() => { void setView("activity"); }} serverUp={serverUp} />
         </div>
       </div>
 
@@ -983,7 +1001,7 @@ export default function App() {
           <ShortcutHelp open onClose={() => setShortcutHelpOpen(false)} />
         </Suspense>
       )}
-      <Suspense fallback={null}><Onboarding onOpenSettings={() => { void openSettings(); }} /></Suspense>
+      <Suspense fallback={null}><Onboarding onOpenSettings={(section) => { void openSettings(section); }} /></Suspense>
       <TrashPanel open={trashOpen} onClose={() => setTrashOpen(false)} />
       <Toasts />
 

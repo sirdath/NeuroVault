@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import logo from "../assets/vault-mark.png";
+import logo from "../assets/vault-mark-transparent.png";
 
 /**
  * Fast, futuristic app-open animation: the NeuroVault mark fades in, two
@@ -106,8 +106,7 @@ const SPLASH_CSS = `
 
 .nv-splash-logo{
   position:relative; width:108px; height:108px; object-fit:contain;
-  border-radius:24px;
-  box-shadow:0 16px 42px color-mix(in srgb, var(--nv-accent) 22%, transparent);
+  filter:drop-shadow(0 14px 24px color-mix(in srgb, var(--nv-accent) 28%, transparent));
   opacity:0; transform:scale(.82);
   animation: nv-pop .55s .05s cubic-bezier(.2,.9,.25,1.3) forwards;
 }

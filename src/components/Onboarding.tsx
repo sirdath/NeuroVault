@@ -10,7 +10,7 @@ import { API_HOST } from "../lib/config";
 const STORAGE_KEY = "nv.onboarding.done";
 
 interface OnboardingProps {
-  onOpenSettings: () => void;
+  onOpenSettings: (section: "connections") => void;
 }
 
 /**
@@ -352,11 +352,11 @@ export function Onboarding({ onOpenSettings }: OnboardingProps) {
 
                   <div className="flex items-center gap-3 mt-7">
                     <button
-                      onClick={() => { finish(); onOpenSettings(); }}
+                      onClick={() => { finish(); onOpenSettings("connections"); }}
                       className="text-[11px]"
                       style={{ color: "var(--nv-text-dim)" }}
                     >
-                      Advanced settings
+                      Connection settings
                     </button>
                     {!recallOn && (
                       <button onClick={finish} disabled={!hasBrain} className="ml-auto text-[12px] px-3 py-2" style={{ color: "var(--nv-text-dim)" }}>

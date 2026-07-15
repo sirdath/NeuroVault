@@ -24,7 +24,15 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function BrainSelector() {
+export function BrainSelector({
+  triggerLabel,
+  placement = "up",
+  mode = "switch",
+}: {
+  triggerLabel?: string;
+  placement?: "up" | "down";
+  mode?: "switch" | "manage";
+} = {}) {
   const { brains, activeBrainName, loading, switchBrain, createBrain, updateBrain, deleteBrain, loadBrains } =
     useBrainStore();
   const [open, setOpen] = useState(false);
@@ -131,8 +139,10 @@ export function BrainSelector() {
       setNewName("");
       setNewDesc("");
       setCreating(false);
-      setOpen(false);
-      await switchBrain(result.brain_id);
+      if (mode === "switch") {
+        setOpen(false);
+        await switchBrain(result.brain_id);
+      }
     }
   };
 
@@ -155,8 +165,10 @@ export function BrainSelector() {
         return;
       }
 
-      setOpen(false);
-      await switchBrain(result.brain_id);
+      if (mode === "switch") {
+        setOpen(false);
+        await switchBrain(result.brain_id);
+      }
     } catch (e) {
       toast.error(`Couldn't open folder: ${String(e)}`);
     }
@@ -194,10 +206,11 @@ export function BrainSelector() {
         className="flex items-center gap-1.5 px-2 py-1.5 text-[12px] font-[Geist,sans-serif] rounded-md transition-all w-full text-left"
         style={{ color: "var(--nv-text-muted)" }}
         disabled={loading}
+        aria-label={triggerLabel ?? "Switch active vault"}
       >
         <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: "var(--nv-accent)" }} />
         <span className="truncate flex-1 font-medium">
-          {loading ? "Switching..." : activeBrainName}
+          {loading ? "Loading vaults…" : triggerLabel ?? activeBrainName}
         </span>
         <svg
           className={`w-3 h-3 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
@@ -208,10 +221,10 @@ export function BrainSelector() {
         </svg>
       </button>
 
-      {/* Dropdown — opens UPWARD since we're at the bottom */}
+      {/* The global rail and Settings use different vertical anchors. */}
       {open && (
         <div
-          className="absolute bottom-full left-0 mb-1 w-[260px] rounded-lg shadow-2xl z-50 overflow-hidden"
+          className={`absolute left-0 w-[260px] rounded-lg shadow-2xl z-50 overflow-hidden ${placement === "down" ? "top-full mt-1" : "bottom-full mb-1"}`}
           style={{
             background: "var(--nv-bg)",
             border: "1px solid var(--nv-border)",
@@ -383,64 +396,81 @@ export function BrainSelector() {
                   </div>
                 );
               }
+              const brainSummary = (
+                <>
+                  <span
+                    className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
+                    style={{ backgroundColor: brain.is_active ? "var(--nv-accent)" : "var(--nv-text-dim)" }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[12px] font-medium font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>
+                        {brain.name}
+                      </p>
+                      {brain.vault_path && (
+                        <span
+                          className="text-[9px] uppercase tracking-wider font-[Geist,sans-serif] px-1 py-px rounded-sm flex-shrink-0"
+                          style={{ color: "var(--nv-accent)", background: "var(--nv-accent-glow, rgba(181,146,255,0.1))", opacity: 0.9 }}
+                          title={`External folder: ${brain.vault_path}`}
+                        >
+                          folder
+                        </span>
+                      )}
+                    </div>
+                    {brain.vault_path ? (
+                      <p
+                        className="text-[10px] font-mono truncate"
+                        style={{ color: "var(--nv-text-dim)", direction: "rtl", textAlign: "left" }}
+                        title={brain.vault_path}
+                      >
+                        {brain.vault_path}
+                      </p>
+                    ) : (
+                      brain.description && (
+                        <p className="text-[10px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text-dim)" }}>
+                          {brain.description}
+                        </p>
+                      )
+                    )}
+                    {(() => {
+                      const s = stats[brain.id];
+                      if (!s) return null;
+                      return (
+                        <p className="text-[10px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
+                          {s.note_count} {s.note_count === 1 ? "note" : "notes"} · {formatBytes(s.total_bytes)}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                </>
+              );
               return (
                 <div
                   key={brain.id}
                   className="group relative flex items-start gap-2.5 px-3 py-2 transition-colors"
                   style={{ background: brain.is_active ? "var(--nv-surface)" : undefined }}
                 >
-                  <button
-                    onClick={() => handleSwitch(brain.id)}
-                    className="flex items-start gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
-                  >
-                    <span
-                      className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
-                      style={{ backgroundColor: brain.is_active ? "var(--nv-accent)" : "var(--nv-text-dim)" }}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-[12px] font-medium font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text)" }}>
-                          {brain.name}
-                        </p>
-                        {brain.vault_path && (
-                          <span
-                            className="text-[9px] uppercase tracking-wider font-[Geist,sans-serif] px-1 py-px rounded-sm flex-shrink-0"
-                            style={{ color: "var(--nv-accent)", background: "var(--nv-accent-glow, rgba(181,146,255,0.1))", opacity: 0.9 }}
-                            title={`External folder: ${brain.vault_path}`}
-                          >
-                            folder
-                          </span>
-                        )}
-                      </div>
-                      {brain.vault_path ? (
-                        <p
-                          className="text-[10px] font-mono truncate"
-                          style={{ color: "var(--nv-text-dim)", direction: "rtl", textAlign: "left" }}
-                          title={brain.vault_path}
-                        >
-                          {brain.vault_path}
-                        </p>
-                      ) : (
-                        brain.description && (
-                          <p className="text-[10px] font-[Geist,sans-serif] truncate" style={{ color: "var(--nv-text-dim)" }}>
-                            {brain.description}
-                          </p>
-                        )
-                      )}
-                      {(() => {
-                        const s = stats[brain.id];
-                        if (!s) return null;
-                        return (
-                          <p className="text-[10px] font-[Geist,sans-serif] mt-0.5" style={{ color: "var(--nv-text-dim)" }}>
-                            {s.note_count} {s.note_count === 1 ? "note" : "notes"} · {formatBytes(s.total_bytes)}
-                          </p>
-                        );
-                      })()}
+                  {mode === "switch" ? (
+                    <button
+                      onClick={() => handleSwitch(brain.id)}
+                      className="flex items-start gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
+                    >
+                      {brainSummary}
+                    </button>
+                  ) : (
+                    <div
+                      role="group"
+                      aria-label={brain.is_active ? `${brain.name}, active vault` : brain.name}
+                      className="flex items-start gap-2.5 min-w-0 flex-1 text-left"
+                    >
+                      {brainSummary}
                     </div>
-                  </button>
+                  )}
                   <div className="flex items-center gap-0.5 flex-shrink-0">
                     {brain.is_active && (
-                      <span className="text-[10px] mt-0.5" style={{ color: "var(--nv-accent)" }}>✓</span>
+                      <span className="text-[10px] mt-0.5" style={{ color: "var(--nv-accent)" }}>
+                        {mode === "manage" ? "Active" : "✓"}
+                      </span>
                     )}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                       {/* Source folders — open the per-brain mirror panel.

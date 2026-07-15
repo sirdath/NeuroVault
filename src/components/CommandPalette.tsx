@@ -335,7 +335,7 @@ export function CommandPalette({ open, onClose, commands, currentView, onOpenNot
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Search commands, notes, memory…"
+              placeholder="Quick open or run a command…"
               className="flex-1 bg-transparent text-base font-[Geist,sans-serif] focus:outline-none"
               style={{ color: "var(--color-txt)" }}
             />

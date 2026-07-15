@@ -173,6 +173,12 @@ pub fn decide(
 ) -> Result<(StoredProposal, bool)> {
     let mut rec = get(brain_id, proposal_id)
         .ok_or_else(|| MemoryError::Other(format!("unknown proposal {proposal_id}")))?;
+    if rec.brain_id != brain_id {
+        return Err(MemoryError::Other(format!(
+            "proposal {proposal_id} belongs to brain {}, not {brain_id}",
+            rec.brain_id
+        )));
+    }
     let target = if approve {
         if edits.is_empty() {
             ReviewStatus::Approved
@@ -488,6 +494,37 @@ mod tests {
             assert!(m.median_review_seconds.is_some());
             let sup = m.by_action.get("supersession_suggestion").unwrap();
             assert_eq!(*sup, (2, 1));
+        });
+    }
+
+    #[test]
+    fn decision_scope_never_crosses_brains() {
+        with_temp_home(|| {
+            let mut a = fixture("shared-id");
+            a.brain_id = "vault-a".into();
+            let mut b = fixture("shared-id");
+            b.brain_id = "vault-b".into();
+            append("vault-a", &a).unwrap();
+            append("vault-b", &b).unwrap();
+
+            decide("vault-a", "shared-id", true, &HashMap::new(), "dath", None).unwrap();
+
+            assert_eq!(
+                get("vault-a", "shared-id").unwrap().review_status,
+                ReviewStatus::Approved
+            );
+            assert_eq!(
+                get("vault-b", "shared-id").unwrap().review_status,
+                ReviewStatus::Unreviewed,
+                "an identical proposal id in another vault must remain untouched"
+            );
+
+            let mut misplaced = fixture("misplaced");
+            misplaced.brain_id = "vault-a".into();
+            append("vault-b", &misplaced).unwrap();
+            let err =
+                decide("vault-b", "misplaced", false, &HashMap::new(), "dath", None).unwrap_err();
+            assert!(err.to_string().contains("belongs to brain vault-a"));
         });
     }
 }

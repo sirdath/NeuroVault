@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -24,8 +24,6 @@ vi.mock("../lib/tauri", () => ({
   readNote: mocks.readNote,
   saveNote: vi.fn(),
 }));
-
-vi.mock("./BrainSelector", () => ({ BrainSelector: () => null }));
 
 import { useBrainStore } from "../stores/brainStore";
 import { useNoteStore } from "../stores/noteStore";
@@ -84,5 +82,20 @@ describe("Sidebar preview loading", () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(mocks.readNote).not.toHaveBeenCalled();
+  });
+
+  it("keeps Trash beside New note without duplicate vault or Settings controls", () => {
+    prepare(false);
+    const onTrashOpen = vi.fn();
+    render(<Sidebar onTrashOpen={onTrashOpen} />);
+
+    const trash = screen.getByRole("button", { name: "Open Trash" });
+    const newNote = screen.getByTitle("New note (Ctrl+N)");
+    expect(trash.parentElement).toBe(newNote.parentElement);
+    expect(screen.queryByTitle("Settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+
+    fireEvent.click(trash);
+    expect(onTrashOpen).toHaveBeenCalledOnce();
   });
 });

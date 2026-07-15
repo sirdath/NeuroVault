@@ -1,17 +1,17 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBrainStore } from "../stores/brainStore";
 import { ConsumerNavigation, type ConsumerDestination } from "./ConsumerNavigation";
 
 const NAVIGATION_LABELS = [
+  "Memories",
+  "Graph",
   "Today",
   "Search",
-  "Memories",
   "Activity",
-  "Graph",
-  "Needs attention",
   "Privacy & Trust",
+  "Needs attention",
 ] as const;
 
 describe("ConsumerNavigation", () => {
@@ -33,6 +33,7 @@ describe("ConsumerNavigation", () => {
       ],
       activeBrainId: "primary",
       activeBrainName: "Primary vault",
+      switchBrain: vi.fn().mockResolvedValue(true),
     });
   });
 
@@ -56,12 +57,11 @@ describe("ConsumerNavigation", () => {
   });
 
   it.each([
+    ["Memories", "memories"],
+    ["Graph", "graph"],
     ["Today", "today"],
     ["Search", "search"],
-    ["Memories", "memories"],
     ["Activity", "activity"],
-    ["Graph", "graph"],
-    ["Needs attention", "attention"],
     ["Privacy & Trust", "trust"],
   ] as const)("maps %s to the %s destination", async (label, destination) => {
     const user = userEvent.setup();
@@ -78,6 +78,60 @@ describe("ConsumerNavigation", () => {
     await user.click(screen.getByRole("button", { name: label }));
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledWith(destination);
+  });
+
+  it("keeps Needs attention visible even when the queue is empty", async () => {
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConsumerNavigation
+        active="today"
+        onNavigate={onNavigate}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    const review = screen.getByRole("button", { name: "Needs attention" });
+    await user.click(review);
+    expect(onNavigate).toHaveBeenCalledWith("attention");
+  });
+
+  it("clears a prior vault's badge when the next scoped count cannot load", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ proposals: [{ action: "memory_strengthened" }] }),
+      } as Response)
+      .mockRejectedValueOnce(new Error("offline"));
+    render(
+      <ConsumerNavigation
+        active="today"
+        onNavigate={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Needs attention/ })).toHaveTextContent("1");
+    });
+    act(() => {
+      useBrainStore.setState({
+        brains: [
+          { id: "second", name: "Second vault", description: "", created_at: "", is_active: true },
+        ],
+        activeBrainId: "second",
+        activeBrainName: "Second vault",
+      });
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Needs attention" })).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("brain_id=second"),
+      expect.any(Object),
+    );
   });
 
   it("keeps Settings separate from destination routing", async () => {
@@ -148,5 +202,67 @@ describe("ConsumerNavigation", () => {
     await user.click(screen.getByRole("button", { name: "Collapse navigation" }));
     expect(onToggleCollapsed).toHaveBeenCalledOnce();
     expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("moves to Memories and locks the vault control while switching", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    let finishSwitch: (() => void) | undefined;
+    const switchBrain = vi.fn(() => new Promise<void>((resolve) => { finishSwitch = resolve; }));
+    useBrainStore.setState({
+      brains: [
+        { id: "primary", name: "Primary vault", description: "", created_at: "", is_active: true, vault_path: "/vaults/primary" },
+        { id: "second", name: "Second vault", description: "", created_at: "", is_active: false, vault_path: "/vaults/second" },
+      ],
+      activeBrainId: "primary",
+      activeBrainName: "Primary vault",
+      switchBrain,
+    });
+    render(
+      <ConsumerNavigation
+        active="graph"
+        onNavigate={onNavigate}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Active vault" }), "second");
+    expect(switchBrain).toHaveBeenCalledWith("second");
+    expect(onNavigate).toHaveBeenCalledWith("memories");
+    expect(screen.getByRole("combobox", { name: "Active vault" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Switching to Second vault");
+
+    finishSwitch?.();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Active vault" })).toBeEnabled());
+  });
+
+  it("reports a failed vault switch without leaving the scoped destination active", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const switchBrain = vi.fn().mockRejectedValue(new Error("activation failed"));
+    useBrainStore.setState({
+      brains: [
+        { id: "primary", name: "Primary vault", description: "", created_at: "", is_active: true, vault_path: "/vaults/primary" },
+        { id: "second", name: "Second vault", description: "", created_at: "", is_active: false, vault_path: "/vaults/second" },
+      ],
+      activeBrainId: "primary",
+      activeBrainName: "Primary vault",
+      switchBrain,
+    });
+    render(
+      <ConsumerNavigation
+        active="graph"
+        onNavigate={onNavigate}
+        onOpenSettings={vi.fn()}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Active vault" }), "second");
+
+    expect(onNavigate).toHaveBeenCalledWith("memories");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't switch vault");
+    expect(screen.getByRole("combobox", { name: "Active vault" })).toBeEnabled();
   });
 });

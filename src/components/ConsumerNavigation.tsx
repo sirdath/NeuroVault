@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { API_HOST } from "../lib/config";
 import { proposalNeedsAttention } from "../lib/inspectorCopy";
 import { useBrainStore } from "../stores/brainStore";
-import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import vaultMark from "../assets/vault-mark.png";
+import vaultMark from "../assets/vault-mark-transparent.png";
 
 export type ConsumerDestination =
   | "today"
@@ -32,7 +31,20 @@ const iconProps = {
   className: "h-4 w-4",
 };
 
-const NAV_ITEMS: NavItem[] = [
+const PRIMARY_NAV_ITEMS: NavItem[] = [
+  {
+    id: "memories",
+    label: "Memories",
+    icon: <svg {...iconProps}><path d="M6 3.5h9l3 3v14H6z" /><path d="M14.5 3.5v4h3.5M9 12h6M9 16h5" /></svg>,
+  },
+  {
+    id: "graph",
+    label: "Graph",
+    icon: <svg {...iconProps}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="12" cy="18" r="2" /><path d="m7.7 7.1 3.2 9M16.2 8.1l-3.1 8M8 6.3l8-.1" /></svg>,
+  },
+];
+
+const SECONDARY_NAV_ITEMS: NavItem[] = [
   {
     id: "today",
     label: "Today",
@@ -44,19 +56,14 @@ const NAV_ITEMS: NavItem[] = [
     icon: <svg {...iconProps}><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>,
   },
   {
-    id: "memories",
-    label: "Memories",
-    icon: <svg {...iconProps}><path d="M6 3.5h9l3 3v14H6z" /><path d="M14.5 3.5v4h3.5M9 12h6M9 16h5" /></svg>,
-  },
-  {
     id: "activity",
     label: "Activity",
     icon: <svg {...iconProps}><path d="M4 12h3l2-6 4 12 2-6h5" /></svg>,
   },
   {
-    id: "graph",
-    label: "Graph",
-    icon: <svg {...iconProps}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="12" cy="18" r="2" /><path d="m7.7 7.1 3.2 9M16.2 8.1l-3.1 8M8 6.3l8-.1" /></svg>,
+    id: "trust",
+    label: "Privacy & Trust",
+    icon: <svg {...iconProps}><path d="M12 3 20 6v5c0 5-3.2 8.2-8 10-4.8-1.8-8-5-8-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></svg>,
   },
 ];
 
@@ -75,20 +82,28 @@ export function ConsumerNavigation({
 }) {
   const brains = useBrainStore((state) => state.brains);
   const activeBrainId = useBrainStore((state) => state.activeBrainId);
+  const brainLoading = useBrainStore((state) => state.loading);
   const switchBrain = useBrainStore((state) => state.switchBrain);
-  const health = useConsumerHealthStore((state) => state.health);
   const themeMode = useSettingsStore((state) => state.theme.mode);
   const updateSettings = useSettingsStore((state) => state.update);
   const [attentionCount, setAttentionCount] = useState(0);
+  const [switchingBrainId, setSwitchingBrainId] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setAttentionCount(0);
+    if (!activeBrainId) return;
+
     const load = async () => {
       try {
-        const response = await fetch(`${API_HOST}/api/proposals?decision=unreviewed&limit=200`, {
+        const response = await fetch(`${API_HOST}/api/proposals?brain_id=${encodeURIComponent(activeBrainId)}&decision=unreviewed&limit=200`, {
           signal: AbortSignal.timeout(4000),
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!cancelled) setAttentionCount(0);
+          return;
+        }
         const body = (await response.json()) as { proposals?: Array<{ action?: string }> };
         if (!cancelled) {
           setAttentionCount(
@@ -96,7 +111,8 @@ export function ConsumerNavigation({
           );
         }
       } catch {
-        // Attention count is supplementary. Health communicates service failure.
+        // Never leave a previous vault's count visible after a failed refresh.
+        if (!cancelled) setAttentionCount(0);
       }
     };
     void load();
@@ -105,12 +121,35 @@ export function ConsumerNavigation({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [activeBrainId]);
 
   const activeBrain = useMemo(
     () => brains.find((brain) => brain.id === activeBrainId) ?? null,
     [brains, activeBrainId],
   );
+  const switchingBrain = useMemo(
+    () => brains.find((brain) => brain.id === switchingBrainId) ?? null,
+    [brains, switchingBrainId],
+  );
+  const vaultSwitchBusy = switchingBrainId !== null || brainLoading;
+
+  const handleActiveVaultChange = async (brainId: string) => {
+    if (!brainId || brainId === activeBrainId || vaultSwitchBusy) return;
+
+    // Vault-scoped pages can otherwise keep accepting input against the old
+    // vault while the backend is activating the new one. Move to the stable
+    // Memories surface first, then lock the selector until activation ends.
+    onNavigate("memories");
+    setSwitchError(null);
+    setSwitchingBrainId(brainId);
+    try {
+      await switchBrain(brainId);
+    } catch {
+      setSwitchError("Couldn't switch vault. Your current vault is still active; try again.");
+    } finally {
+      setSwitchingBrainId(null);
+    }
+  };
 
   return (
     <aside
@@ -125,7 +164,12 @@ export function ConsumerNavigation({
           className="flex h-9 w-9 shrink-0 items-center justify-center"
           aria-hidden="true"
         >
-          <img src={vaultMark} alt="" className="h-[30px] w-[30px] object-contain" style={{ mixBlendMode: "lighten", filter: "drop-shadow(0 2px 6px rgba(52, 87, 213, 0.24))" }} />
+          <img
+            src={vaultMark}
+            alt=""
+            className="block h-[32px] w-[32px] object-contain"
+            style={{ filter: "drop-shadow(0 2px 7px rgba(52, 87, 213, 0.3))" }}
+          />
         </span>
         {!collapsed && (
           <span className="min-w-0">
@@ -148,8 +192,9 @@ export function ConsumerNavigation({
       </div>
 
       <nav className="flex-1 px-2.5 py-3" aria-label="NeuroVault">
+        {!collapsed && <NavigationSectionLabel>Core</NavigationSectionLabel>}
         <div className="space-y-0.5">
-          {NAV_ITEMS.map((item) => (
+          {PRIMARY_NAV_ITEMS.map((item) => (
             <DestinationButton
               key={item.id}
               active={active === item.id}
@@ -163,21 +208,27 @@ export function ConsumerNavigation({
 
         <div className="my-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }} />
 
-        <DestinationButton
-          active={active === "attention"}
-          collapsed={collapsed}
-          icon={<svg {...iconProps}><path d="M12 3.5 21 20H3z" /><path d="M12 9v4M12 16.5h.01" /></svg>}
-          label="Needs attention"
-          badge={attentionCount > 0 ? attentionCount : undefined}
-          onClick={() => onNavigate("attention")}
-        />
-        <DestinationButton
-          active={active === "trust"}
-          collapsed={collapsed}
-          icon={<svg {...iconProps}><path d="M12 3 20 6v5c0 5-3.2 8.2-8 10-4.8-1.8-8-5-8-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></svg>}
-          label="Privacy & Trust"
-          onClick={() => onNavigate("trust")}
-        />
+        {!collapsed && <NavigationSectionLabel>More</NavigationSectionLabel>}
+        <div className="space-y-0.5">
+          {SECONDARY_NAV_ITEMS.map((item) => (
+            <DestinationButton
+              key={item.id}
+              active={active === item.id}
+              collapsed={collapsed}
+              icon={item.icon}
+              label={item.label}
+              onClick={() => onNavigate(item.id)}
+            />
+          ))}
+          <DestinationButton
+            active={active === "attention"}
+            collapsed={collapsed}
+            icon={<svg {...iconProps}><path d="M12 3.5 21 20H3z" /><path d="M12 9v4M12 16.5h.01" /></svg>}
+            label="Needs attention"
+            badge={attentionCount > 0 ? attentionCount : undefined}
+            onClick={() => onNavigate("attention")}
+          />
+        </div>
       </nav>
 
       <div className="px-3 pb-3">
@@ -188,6 +239,7 @@ export function ConsumerNavigation({
             </p>
             <select
               aria-label="Active vault"
+              aria-busy={vaultSwitchBusy}
               className="mt-1.5 w-full rounded-lg px-2.5 py-2 text-[12px] outline-none"
               style={{
                 color: "var(--nv-nav-text)",
@@ -195,15 +247,27 @@ export function ConsumerNavigation({
                 border: "1px solid var(--nv-nav-border)",
               }}
               value={activeBrainId ?? ""}
+              disabled={vaultSwitchBusy}
               onChange={(event) => {
-                if (!event.target.value || event.target.value === activeBrainId) return;
-                void switchBrain(event.target.value).then(() => onNavigate("memories"));
+                void handleActiveVaultChange(event.target.value);
               }}
             >
               {brains.length === 0 && <option value="">No vault configured</option>}
               {brains.map((brain) => <option key={brain.id} value={brain.id}>{brain.name || brain.id}</option>)}
             </select>
-            {activeBrain && (
+            {switchingBrainId !== null ? (
+              <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-accent)" }} role="status" aria-live="polite">
+                Switching to {switchingBrain?.name || "vault"}…
+              </p>
+            ) : brainLoading ? (
+              <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-accent)" }} role="status" aria-live="polite">
+                Updating vaults…
+              </p>
+            ) : switchError ? (
+              <p className="mt-1.5 text-[10px] leading-snug" style={{ color: "var(--nv-negative)" }} role="alert">
+                {switchError}
+              </p>
+            ) : activeBrain && (
               <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-nav-dim)" }} title={activeBrain.vault_path}>
                 {activeBrain.vault_path || "Local NeuroVault storage"}
               </p>
@@ -241,17 +305,21 @@ export function ConsumerNavigation({
           >
             <svg {...iconProps}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" /></svg>
             {!collapsed && <span className="flex-1">Settings</span>}
-            {!collapsed && (
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ background: health.tone === "positive" ? "var(--nv-positive)" : health.tone === "negative" ? "var(--nv-negative)" : "var(--nv-warning)" }}
-                aria-label={health.headline}
-              />
-            )}
           </button>
         </div>
       </div>
     </aside>
+  );
+}
+
+function NavigationSectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="mb-1.5 px-2.5 text-[9px] font-semibold uppercase tracking-[0.16em]"
+      style={{ color: "var(--nv-nav-dim)" }}
+    >
+      {children}
+    </p>
   );
 }
 

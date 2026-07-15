@@ -26,18 +26,26 @@ describe("in-app Settings", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps every settings section in the embedded destination", async () => {
+  it("keeps one canonical home for settings without duplicate review or trust sections", async () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    for (const label of ["General", "Connections", "Memory", "Vaults", "Privacy & Trust", "Advanced"]) {
+    for (const label of ["General", "Connections", "Vaults", "Advanced"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Memory" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Privacy & Trust" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Connections" }));
     expect(screen.getByRole("heading", { name: "Connections", level: 2 })).toBeInTheDocument();
     expect(sections).toContainElement(screen.getByRole("button", { name: "Connections" }));
+  });
+
+  it("lands contextual settings links on the requested section", () => {
+    render(<SettingsView initialSection="connections" />);
+    expect(screen.getByRole("heading", { name: "Connections", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "page");
   });
 
   it("exposes the selected Light/Dark appearance as a pressed toggle", async () => {

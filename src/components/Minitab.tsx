@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { API_HOST } from "../lib/config";
 import { useSettingsStore } from "../stores/settingsStore";
-import logo from "../assets/vault-mark.png";
+import logo from "../assets/vault-mark-transparent.png";
 
 type State = "on" | "off" | "busy";
 
@@ -138,7 +138,7 @@ export function Minitab() {
             width={32}
             height={32}
             draggable={false}
-            style={{ borderRadius: 9, display: "block" }}
+            style={{ display: "block", filter: `drop-shadow(0 3px 8px ${theme.accent}55)` }}
           />
           <span
             style={{
@@ -202,7 +202,7 @@ export function Minitab() {
             width={40}
             height={40}
             draggable={false}
-            style={{ borderRadius: 11, flexShrink: 0 }}
+            style={{ flexShrink: 0, filter: `drop-shadow(0 3px 10px ${theme.accent}44)` }}
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
             <span style={{ fontSize: 15, fontWeight: 650, letterSpacing: 0.2 }}>NeuroVault</span>

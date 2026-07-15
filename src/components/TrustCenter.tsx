@@ -12,7 +12,7 @@ export function TrustCenter({
 }: {
   onOpenActivity: () => void;
   onOpenTrash: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section: "connections" | "vaults") => void;
 }) {
   const health = useConsumerHealthStore((state) => state.health);
   const signals = useConsumerHealthStore((state) => state.signals);
@@ -113,7 +113,9 @@ export function TrustCenter({
           <TrustCard title="Shared" eyebrow="Outbound">
             <Fact label="Recent AI hosts" value={receiptsError ? "Could not load recent receipts" : hosts.length ? hosts.join(", ") : "No provider shown in recent receipts"} />
             <Fact label="Recent context deliveries" value={receiptsError ? "Unavailable until the local service reconnects" : `${shared.length} in the latest ${receipts.length} decisions`} />
+            <Fact label="Optional model features" value="Only when you deliberately enable a provider-backed compile feature; its confirmation shows the content that may be sent" />
             <Fact label="Updates" value="GitHub is contacted only by the update checker" />
+            <Fact label="Fonts & interface" value="Never sent; NeuroVault uses local system fonts and does not fetch fonts from a CDN" />
             <div className="mt-3 flex items-center gap-3">
               <button type="button" onClick={onOpenActivity} className="text-[11px] font-medium" style={{ color: "var(--nv-accent)" }}>View context receipts →</button>
               {receiptsError && <button type="button" onClick={() => void loadReceipts()} className="text-[11px] underline" style={{ color: "var(--nv-text-muted)" }}>Try again</button>}
@@ -128,7 +130,8 @@ export function TrustCenter({
               <p className="mt-1 text-[13px]" style={{ color: "var(--nv-text)" }}>Notes remain ordinary Markdown. Deleted notes can be restored from NeuroVault Trash.</p>
             </div>
             <button type="button" onClick={onOpenTrash} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Open Trash</button>
-            <button type="button" onClick={onOpenSettings} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-accent)", border: "1px solid var(--nv-border)" }}>Backup, export & connections</button>
+            <button type="button" onClick={() => onOpenSettings("vaults")} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-accent)", border: "1px solid var(--nv-border)" }}>Manage vaults & backups</button>
+            <button type="button" onClick={() => onOpenSettings("connections")} className="rounded-lg px-3 py-2 text-[12px]" style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}>Connections</button>
           </div>
         </section>
       </div>

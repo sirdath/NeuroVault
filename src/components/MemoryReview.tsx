@@ -22,6 +22,7 @@ import {
   relativeTime,
   REJECT_REASONS,
 } from "../lib/inspectorCopy";
+import { useBrainStore } from "../stores/brainStore";
 
 // ---------------------------------------------------------------------------
 // Types (mirror the API; unchanged)
@@ -36,6 +37,7 @@ export type ProposedField = {
 
 export type Proposal = {
   proposal_id: string;
+  brain_id: string;
   action: string;
   memory_type: string;
   object_id: string;
@@ -76,18 +78,22 @@ const T = {
   border: "var(--nv-border)",
 };
 
-function useEvidence(proposal: Proposal | null) {
+function useEvidence(proposal: Proposal | null, brainId: string | null) {
   const [events, setEvents] = useState<JournalEvent[] | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setEvents(null);
     setFailed(false);
-    if (!proposal) return;
+    if (!proposal || !brainId) return;
     let alive = true;
     (async () => {
       try {
+        const params = new URLSearchParams({
+          ids: proposal.evidence.join(","),
+          brain_id: brainId,
+        });
         const r = await fetch(
-          `${API_HOST}/api/journal_events?ids=${encodeURIComponent(proposal.evidence.join(","))}`,
+          `${API_HOST}/api/journal_events?${params}`,
           { signal: AbortSignal.timeout(5000) }
         );
         const data = (await r.json()) as { events: JournalEvent[] };
@@ -99,7 +105,7 @@ function useEvidence(proposal: Proposal | null) {
     return () => {
       alive = false;
     };
-  }, [proposal?.proposal_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [proposal?.proposal_id, brainId]); // eslint-disable-line react-hooks/exhaustive-deps
   return { events, failed };
 }
 
@@ -126,6 +132,7 @@ function Disclosure({ label, children }: { label: string; children: React.ReactN
 
 function FocusedProposal({
   p,
+  brainId,
   project,
   events,
   evidenceFailed,
@@ -133,10 +140,11 @@ function FocusedProposal({
   registerKeyActions,
 }: {
   p: Proposal;
+  brainId: string;
   project: string | null;
   events: JournalEvent[] | null;
   evidenceFailed: boolean;
-  onDecided: () => void;
+  onDecided: (brainId: string) => void;
   registerKeyActions: (a: { approve?: () => void; edit?: () => void; reject?: () => void }) => void;
 }) {
   const copy = actionCopy(p.action);
@@ -161,7 +169,10 @@ function FocusedProposal({
       setBusy(true);
       setError(null);
       try {
-        const body: Record<string, unknown> = { reviewer: "user" };
+        // The decision must stay attached to the vault that produced this
+        // card. The globally active vault can change while the request is in
+        // flight, so never let the backend infer this mutation's scope.
+        const body: Record<string, unknown> = { brain_id: brainId, reviewer: "user" };
         if (approve && Object.keys(edits).length > 0) body.edits = edits;
         if (!approve) {
           const reason = [rejectReason, rejectDetail.trim()].filter(Boolean).join(" — ");
@@ -177,14 +188,14 @@ function FocusedProposal({
           }
         );
         if (!r.ok) throw new Error(await r.text());
-        onDecided();
+        onDecided(brainId);
       } catch (e) {
         setError(e instanceof Error ? e.message : "The request failed — try again.");
       } finally {
         setBusy(false);
       }
     },
-    [p.proposal_id, edits, rejectReason, rejectDetail, busy, onDecided]
+    [p.proposal_id, brainId, edits, rejectReason, rejectDetail, busy, onDecided]
   );
 
   // Keyboard actions delegate here (guarded upstream against inputs).
@@ -470,39 +481,79 @@ export default function MemoryReview({
 }: {
   tab: "needs" | "observations" | "approved" | "rejected";
 }) {
+  const activeBrainId = useBrainStore((s) => s.activeBrainId);
+  const activeBrainIdRef = useRef(activeBrainId);
+  activeBrainIdRef.current = activeBrainId;
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [loadedBrainId, setLoadedBrainId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [note, setNote] = useState<string | null>(null);
   const keyActions = useRef<{ approve?: () => void; edit?: () => void; reject?: () => void }>({});
+  const loadGeneration = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedBrainId: string | null) => {
+    const generation = ++loadGeneration.current;
+    if (!requestedBrainId) {
+      if (generation === loadGeneration.current && activeBrainIdRef.current === null) {
+        setLoadedBrainId(null);
+        setProposals([]);
+        setError(null);
+      }
+      return;
+    }
     try {
       const status = tab === "needs" || tab === "observations" ? "unreviewed" : tab === "approved" ? "" : "rejected";
       const params = new URLSearchParams({ limit: "200" });
       if (status) params.set("decision", status);
+      params.set("brain_id", requestedBrainId);
       const r = await fetch(`${API_HOST}/api/proposals?${params}`, {
         signal: AbortSignal.timeout(5000),
       });
-      const data = (await r.json()) as { proposals: Proposal[] };
+      if (!r.ok) throw new Error(await r.text());
+      const data = (await r.json()) as { brain?: string; proposals: Proposal[] };
+      if (!data.brain) throw new Error("Proposal response did not identify its vault");
+      if (data.brain !== requestedBrainId) {
+        throw new Error("Proposal response came from a different vault");
+      }
       let list = data.proposals ?? [];
+      if (list.some((proposal) => proposal.brain_id !== data.brain)) {
+        throw new Error("Proposal response mixed records from different vaults");
+      }
       if (tab === "needs") list = list.filter((p) => proposalNeedsAttention(p.action));
       if (tab === "observations") list = list.filter((p) => !proposalNeedsAttention(p.action));
       if (tab === "approved") list = list.filter((p) => p.review_status === "approved" || p.review_status === "edited");
       list.sort((a, b) => a.proposed_at.localeCompare(b.proposed_at));
-      setProposals(list);
-      setError(null);
+      if (generation === loadGeneration.current && requestedBrainId === activeBrainIdRef.current) {
+        setLoadedBrainId(data.brain);
+        setProposals(list);
+        setError(null);
+      }
     } catch {
-      setError("Can't reach NeuroVault — is the app running?");
+      if (generation === loadGeneration.current && requestedBrainId === activeBrainIdRef.current) {
+        setLoadedBrainId(null);
+        setError("Can't load this vault's review queue — is NeuroVault running?");
+      }
     }
   }, [tab]);
 
   useEffect(() => {
+    // A review card is scoped data. Remove it immediately on vault changes,
+    // invalidate any slower request for the prior vault, and load a fresh
+    // queue before exposing another decision button.
+    loadGeneration.current += 1;
     setProposals(null);
+    setLoadedBrainId(null);
     setIndex(0);
-    load();
-  }, [load]);
+    setSkipped(new Set());
+    setNote(null);
+    keyActions.current = {};
+    void load(activeBrainId);
+    return () => {
+      loadGeneration.current += 1;
+    };
+  }, [activeBrainId, load]);
 
   const queue = useMemo(() => {
     if (!proposals) return [];
@@ -514,7 +565,7 @@ export default function MemoryReview({
   }, [proposals, skipped, tab]);
 
   const current = queue.length > 0 ? queue[Math.min(index, queue.length - 1)] : null;
-  const { events, failed } = useEvidence(current ?? null);
+  const { events, failed } = useEvidence(current ?? null, loadedBrainId);
   const project = useMemo(() => (events ? projectFromEvents(events) : null), [events]);
 
   // Similar-observation grouping: same action as the focused card.
@@ -523,10 +574,11 @@ export default function MemoryReview({
     [queue, current]
   );
 
-  const onDecided = useCallback(() => {
+  const onDecided = useCallback((decisionBrainId: string) => {
+    if (decisionBrainId !== activeBrainIdRef.current) return;
     setNote("Recorded.");
     setTimeout(() => setNote(null), 1500);
-    load();
+    void load(decisionBrainId);
   }, [load]);
 
   // Keyboard: A approve, E edit, R reject, arrows navigate. Never when
@@ -563,7 +615,7 @@ export default function MemoryReview({
       const r = await fetch(`${API_HOST}/api/consolidate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "proposal" }),
+        body: JSON.stringify({ brain_id: activeBrainId, mode: "proposal" }),
         signal: AbortSignal.timeout(60000),
       });
       const data = (await r.json()) as { proposals: unknown[] };
@@ -572,11 +624,11 @@ export default function MemoryReview({
           ? `Found ${data.proposals.length} new thing(s) worth reviewing.`
           : "Nothing new worth remembering right now."
       );
-      load();
+      void load(activeBrainId);
     } catch {
       setNote("Couldn't check — is the app running?");
     }
-  }, [load]);
+  }, [activeBrainId, load]);
 
   // ---- states ----
   if (error)
@@ -587,7 +639,7 @@ export default function MemoryReview({
             {error}
           </div>
           <button
-            onClick={load}
+            onClick={() => void load(activeBrainId)}
             className="text-[13px] px-4 py-2 rounded-lg"
             style={{ color: T.text, border: `1px solid ${T.border}` }}
           >
@@ -656,9 +708,10 @@ export default function MemoryReview({
           </div>
         </div>
 
-        {current && (
+        {current && loadedBrainId && (
           <FocusedProposal
             p={current}
+            brainId={loadedBrainId}
             project={project}
             events={events}
             evidenceFailed={failed}

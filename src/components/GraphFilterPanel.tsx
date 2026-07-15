@@ -367,7 +367,7 @@ export function GraphFilterPanel({
             type="text"
             value={s.searchQuery}
             onChange={(e) => s.setSearchQuery(e.target.value)}
-            placeholder="Search nodes..."
+            placeholder="Find node…"
             className="w-full text-[12px] px-2.5 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif]"
             style={{
               background: "var(--nv-surface)",

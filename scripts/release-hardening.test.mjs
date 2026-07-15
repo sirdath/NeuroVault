@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -87,6 +87,24 @@ test("packaged Settings stays inside the main app and native Cmd+, routes to it"
   assert.doesNotMatch(entrypoint, /view=settings/);
   assert.match(frontend, /listen<null>\("open-settings-requested"/);
   assert.match(frontend, /setView\("settings"\)/);
+});
+
+test("release navigation has one owner for vaults, settings, review, trust, and activity", async () => {
+  const navigation = await read("src/components/ConsumerNavigation.tsx");
+  const sidebar = await read("src/components/Sidebar.tsx");
+  const settings = await read("src/components/SettingsView.tsx");
+  const frontend = await read("src/App.tsx");
+
+  assert.match(navigation, /const PRIMARY_NAV_ITEMS[\s\S]*?id: "memories"[\s\S]*?id: "graph"/);
+  assert.match(navigation, /vault-mark-transparent\.png/);
+  const transparentMark = await stat(new URL("../src/assets/vault-mark-transparent.png", import.meta.url));
+  assert.ok(transparentMark.isFile() && transparentMark.size > 0, "transparent app mark must ship in clean builds");
+  assert.doesNotMatch(navigation, /mixBlendMode/);
+  assert.doesNotMatch(sidebar, /BrainSelector|onSettingsOpen|title="Settings"/);
+  assert.doesNotMatch(frontend, /<ActivityBar|from "\.\/components\/ActivityBar"/);
+  assert.doesNotMatch(settings, /\["memory", "Memory"\]|\["privacy", "Privacy & Trust"\]/);
+  assert.doesNotMatch(settings, /<MemoryInspector|<InspectorSection|<PrivacySettings/);
+  assert.match(settings, /<AutoRecallSection \/><McpSection \/><ClaudeCodeMcpSection \/>/);
 });
 
 test("note-browser collapse and window minimize remain direct, independent actions", async () => {
