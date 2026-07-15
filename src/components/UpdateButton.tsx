@@ -31,7 +31,7 @@ export function UpdateButton({ theme }: { theme: Theme }) {
       <button
         onClick={() => restart()}
         className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-semibold rounded-lg transition-colors"
-        style={{ background: theme.accent, color: theme.bg }}
+        style={{ background: theme.accent, color: theme.onAccent }}
         title="Restart NeuroVault to finish updating"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
@@ -50,7 +50,7 @@ export function UpdateButton({ theme }: { theme: Theme }) {
         onClick={() => install()}
         disabled={installing}
         className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-[Geist,sans-serif] font-semibold rounded-lg transition-colors disabled:opacity-80"
-        style={{ background: theme.accent, color: theme.bg }}
+        style={{ background: theme.accent, color: theme.onAccent }}
         title={`Version ${info!.latest} is available`}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">

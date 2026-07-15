@@ -89,6 +89,24 @@ test("packaged Settings stays inside the main app and native Cmd+, routes to it"
   assert.match(frontend, /setView\("settings"\)/);
 });
 
+test("all eight palettes reach Settings, native chrome, portals, and the editor", async () => {
+  const store = await read("src/stores/settingsStore.ts");
+  const settings = await read("src/components/SettingsView.tsx");
+  const frontend = await read("src/App.tsx");
+  const editor = await read("src/components/editor/theme.ts");
+
+  for (const id of ["light", "dark", "glacier", "parchment", "sage", "abyss", "graphite", "synapse"]) {
+    assert.match(store, new RegExp(`id: ["']${id}["']`), `${id} must remain selectable`);
+  }
+  assert.match(store, /root\.dataset\.theme = theme\.mode/);
+  assert.match(store, /root\.dataset\.themeId = theme\.id/);
+  assert.match(frontend, /setTheme\(theme\.mode\)/);
+  assert.match(settings, /THEME_GROUPS/);
+  assert.match(settings, /aria-pressed=\{selected\}/);
+  assert.match(editor, /var\(--nv-capture\)/);
+  assert.doesNotMatch(editor, /#3c9fa0|#7767df/i);
+});
+
 test("release navigation has one owner for vaults, settings, review, trust, and context history", async () => {
   const navigation = await read("src/components/ConsumerNavigation.tsx");
   const sidebar = await read("src/components/Sidebar.tsx");

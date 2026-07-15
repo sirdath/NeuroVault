@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useSettingsStore } from "../stores/settingsStore";
+import { THEMES, useSettingsStore, type ThemeId } from "../stores/settingsStore";
 import { SettingsView } from "./SettingsView";
 
-function savedSettings(themeId: "light" | "dark") {
+function savedSettings(themeId: ThemeId) {
   return JSON.stringify({
     themeId,
     fontSize: "medium",
@@ -59,18 +59,31 @@ describe("in-app Settings", () => {
     expect(screen.getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("exposes the selected Light/Dark appearance as a pressed toggle", async () => {
+  it("shows all eight live theme previews and persists same-mode palette changes", async () => {
     const user = userEvent.setup();
     render(<SettingsView />);
 
-    const light = screen.getByRole("button", { name: /^Light/ });
-    const dark = screen.getByRole("button", { name: /^Dark/ });
-    expect(light).toHaveAttribute("aria-pressed", "true");
-    expect(dark).toHaveAttribute("aria-pressed", "false");
+    const cards = THEMES.map((theme) => screen.getByRole("button", { name: new RegExp(`^${theme.name}:`) }));
+    expect(cards).toHaveLength(8);
 
-    await user.click(dark);
+    const light = screen.getByRole("button", { name: /^Light:/ });
+    const abyss = screen.getByRole("button", { name: /^Abyss:/ });
+    const synapse = screen.getByRole("button", { name: /^Synapse:/ });
+    expect(light).toHaveAttribute("aria-pressed", "true");
+    expect(abyss).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(abyss);
     expect(light).toHaveAttribute("aria-pressed", "false");
-    expect(dark).toHaveAttribute("aria-pressed", "true");
+    expect(abyss).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement).toHaveAttribute("data-theme-id", "abyss");
+
+    await user.click(synapse);
+    expect(abyss).toHaveAttribute("aria-pressed", "false");
+    expect(synapse).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement).toHaveAttribute("data-theme-id", "synapse");
+    expect(JSON.parse(localStorage.getItem("nv.settings") ?? "null")).toMatchObject({ themeId: "synapse" });
   });
 
   it("keeps technical controls behind an explicit developer-options switch", async () => {

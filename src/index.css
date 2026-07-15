@@ -2,7 +2,7 @@
 
 /* NeuroVault Design System — quiet intelligence.
  * Runtime variables come from settingsStore so every surface, including
- * portals and CodeMirror, switches as one coherent Light/Dark appearance. */
+ * portals and CodeMirror, switches as one coherent palette. */
 :root {
   --nv-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
   --nv-font-reading: "New York", "Iowan Old Style", Charter, Georgia, serif;
@@ -46,8 +46,8 @@
   --color-brand: var(--nv-accent);
   --color-brand-dim: var(--nv-accent-glow);
   --color-capture: var(--nv-capture);
-  --color-teal: #3c9fa0;
-  --color-purple: #7767df;
+  --color-teal: var(--nv-positive);
+  --color-purple: var(--nv-accent);
   --color-coral: var(--nv-negative);
   --color-green: var(--nv-positive);
   --color-txt: var(--nv-text);
@@ -312,11 +312,11 @@ html[data-density="compact"] {
 :root {
   --nv-glow-brand: 0 0 0 1px color-mix(in srgb, var(--nv-accent) 35%, transparent),
                    0 0 18px -2px color-mix(in srgb, var(--nv-accent) 35%, transparent);
-  --nv-glow-teal:  0 0 0 1px rgba(0, 201, 177, 0.35),
-                   0 0 18px -2px rgba(0, 201, 177, 0.35);
-  --nv-glow-purple: 0 0 0 1px rgba(139, 124, 248, 0.35),
-                    0 0 18px -2px rgba(139, 124, 248, 0.35);
-  --nv-ring-brand: 0 0 0 2px rgba(86, 140, 250, 0.18);
+  --nv-glow-teal:  0 0 0 1px color-mix(in srgb, var(--nv-positive) 35%, transparent),
+                   0 0 18px -2px color-mix(in srgb, var(--nv-positive) 35%, transparent);
+  --nv-glow-purple: 0 0 0 1px color-mix(in srgb, var(--nv-accent) 35%, transparent),
+                    0 0 18px -2px color-mix(in srgb, var(--nv-accent) 35%, transparent);
+  --nv-ring-brand: 0 0 0 2px color-mix(in srgb, var(--nv-accent) 18%, transparent);
 }
 .nv-glow-brand { box-shadow: var(--nv-glow-brand); }
 .nv-glow-teal  { box-shadow: var(--nv-glow-teal); }

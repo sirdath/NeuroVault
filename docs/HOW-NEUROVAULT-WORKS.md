@@ -370,7 +370,7 @@ Three primary views, togglable via the tab bar or `Ctrl+1/2/3`:
 - **Quick capture** (`Ctrl+Shift+Space`, `QuickCapture.tsx`): global-shortcut overlay. Writes to inbox silently, no view switch.
 - **Hover preview** (`HoverPreview.tsx`): 260-px card with title, L0 summary, strength pill, "View note" button.
 - **Activity bar + panel** (`ActivityBar.tsx`, `ActivityPanel.tsx`): bottom status pill shows connected agents + call rate. Click to slide up full audit feed.
-- **Themes** (6 options, `settingsStore.ts`): Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord. CSS-variable driven.
+- **Themes** (8 options, `settingsStore.ts`): Light, Dark, Glacier, Parchment, Sage, Abyss, Graphite, and Synapse. Every palette is CSS-variable driven and resolves to a native light or dark window appearance.
 - **Density** (`densityStore.ts`): comfortable / cozy / compact sidebar rows.
 - **Toasts** (`Toasts.tsx`): bottom-right. Errors sticky; info/success auto-dismiss at 4 s.
 

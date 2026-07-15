@@ -9,8 +9,8 @@ const c = {
   raised: "var(--nv-surface-elevated)",
   border: "var(--nv-border)",
   accent: "var(--nv-accent)",
-  teal: "#3c9fa0",
-  purple: "#7767df",
+  capture: "var(--nv-capture)",
+  signal: "color-mix(in srgb, var(--nv-accent) 68%, var(--nv-capture))",
   negative: "var(--nv-negative)",
   positive: "var(--nv-positive)",
   text: "var(--nv-text)",
@@ -63,10 +63,10 @@ function editorTheme(dark: boolean, fontSize: EditorFontSize): Extension {
         backgroundColor: "color-mix(in srgb, var(--nv-accent) 3.5%, transparent)",
       },
       ".cm-selectionMatch": {
-        backgroundColor: "color-mix(in srgb, #7767df 14%, transparent)",
+        backgroundColor: "color-mix(in srgb, var(--nv-accent) 14%, transparent)",
       },
       "&.cm-focused .cm-matchingBracket, &.cm-focused .cm-nonmatchingBracket": {
-        backgroundColor: "color-mix(in srgb, #3c9fa0 20%, transparent)",
+        backgroundColor: "color-mix(in srgb, var(--nv-capture) 20%, transparent)",
         outline: "none",
       },
       ".cm-gutters": {
@@ -104,13 +104,13 @@ function editorTheme(dark: boolean, fontSize: EditorFontSize): Extension {
 }
 
 const highlightStyle = HighlightStyle.define([
-  { tag: t.keyword, color: c.purple },
+  { tag: t.keyword, color: c.signal },
   { tag: [t.name, t.deleted, t.character, t.macroName], color: c.text },
-  { tag: [t.function(t.variableName), t.labelName], color: c.teal },
+  { tag: [t.function(t.variableName), t.labelName], color: c.capture },
   { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: c.accent },
   { tag: [t.definition(t.name), t.separator], color: c.text },
-  { tag: [t.typeName, t.className, t.changed, t.annotation, t.modifier, t.self, t.namespace], color: c.purple },
-  { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp, t.special(t.string)], color: c.teal },
+  { tag: [t.typeName, t.className, t.changed, t.annotation, t.modifier, t.self, t.namespace], color: c.signal },
+  { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp, t.special(t.string)], color: c.capture },
   { tag: [t.meta, t.comment], color: c.muted, fontStyle: "italic" },
   { tag: t.strong, fontWeight: "700", color: c.text },
   { tag: t.emphasis, fontStyle: "italic", color: c.text },
@@ -126,7 +126,7 @@ const highlightStyle = HighlightStyle.define([
     tag: t.monospace,
     fontFamily: "'JetBrains Mono', ui-monospace, monospace",
     fontSize: "0.88em",
-    color: c.purple,
+    color: c.signal,
   },
 ]);
 

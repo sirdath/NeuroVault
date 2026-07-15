@@ -31,6 +31,10 @@ const DENSITIES: { label: string; value: Density; hint: string }[] = [
 
 const SERVER_URL = API_HOST;
 const DEVELOPER_OPTIONS_KEY = "nv.developer-options";
+const THEME_GROUPS = [
+  { label: "Light", mode: "light" as const },
+  { label: "Dark", mode: "dark" as const },
+];
 
 export type SettingsSection = "general" | "sources" | "connections" | "vaults" | "advanced";
 
@@ -197,32 +201,84 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
 
         {/* Theme */}
         {settingsTab === "general" && <>
-        <Section title="Theme">
-          <div className="grid grid-cols-2 gap-3">
-            {THEMES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={themeId === t.id}
-                onClick={() => update({ themeId: t.id })}
-                className="relative min-h-[132px] text-left rounded-2xl p-4 transition-all border"
-                style={{
-                  background: t.bg,
-                  borderColor: themeId === t.id ? t.accent : t.border,
-                  boxShadow: themeId === t.id ? `0 0 0 2px ${t.accentGlow}, ${t.shadow}` : undefined,
-                }}
-              >
-                <div className="mb-3 flex h-8 overflow-hidden rounded-lg" style={{ border: `1px solid ${t.border}` }}>
-                  <div className="w-[28%]" style={{ background: t.navBg }} />
-                  <div className="flex-1" style={{ background: t.bg }} />
-                  <div className="w-[22%]" style={{ background: t.surface }} />
+        <Section title="Appearance">
+          <p className="mb-5 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+            Choose a complete NeuroVault palette. Changes apply instantly across memories, graphs, the editor, and every window.
+          </p>
+          <div className="space-y-6">
+            {THEME_GROUPS.map((group) => (
+              <div key={group.mode}>
+                <div className="mb-2.5 flex items-center gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-text-dim)" }}>
+                    {group.label}
+                  </span>
+                  <span className="h-px flex-1" style={{ background: "var(--nv-border)" }} />
                 </div>
-                <p className="text-[13px] font-medium font-[Geist,sans-serif]" style={{ color: t.text }}>{t.name}</p>
-                <p className="text-[11px] font-[Geist,sans-serif] mt-0.5" style={{ color: t.textDim }}>{t.description}</p>
-                {themeId === t.id && (
-                  <div className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full" style={{ backgroundColor: t.accent }} />
-                )}
-              </button>
+                <div className="grid grid-cols-2 gap-3 min-[1120px]:grid-cols-4">
+                  {THEMES.filter((theme) => theme.mode === group.mode).map((t) => {
+                    const selected = themeId === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        aria-label={`${t.name}: ${t.description}`}
+                        aria-pressed={selected}
+                        onClick={() => update({ themeId: t.id })}
+                        className="relative min-h-[142px] rounded-2xl border p-3.5 text-left transition-all"
+                        style={{
+                          background: t.bg,
+                          borderColor: selected ? t.accent : t.border,
+                          boxShadow: selected ? `0 0 0 2px ${t.accentGlow}, ${t.shadow}` : t.shadow,
+                        }}
+                      >
+                        <div
+                          className="relative mb-3 flex h-11 overflow-hidden rounded-xl"
+                          style={{ border: `1px solid ${t.border}`, background: t.bg }}
+                          aria-hidden="true"
+                        >
+                          <div className="flex w-[25%] flex-col gap-1 px-1.5 py-2" style={{ background: t.navBg }}>
+                            <span className="h-1 w-3 rounded-full" style={{ background: t.navText, opacity: 0.8 }} />
+                            <span className="h-1 w-full rounded-full" style={{ background: t.accent, opacity: 0.8 }} />
+                            <span className="h-1 w-4/5 rounded-full" style={{ background: t.navDim, opacity: 0.55 }} />
+                          </div>
+                          <div className="relative flex-1 overflow-hidden" style={{ background: t.bg }}>
+                            <span className="absolute left-[14%] top-[50%] h-px w-[50%] -rotate-[13deg] origin-left" style={{ background: t.borderStrong }} />
+                            <span className="absolute left-[39%] top-[30%] h-px w-[33%] rotate-[24deg] origin-left" style={{ background: t.borderStrong }} />
+                            <span className="absolute left-[12%] top-[45%] h-2.5 w-2.5 rounded-full" style={{ background: t.accent, boxShadow: `0 0 8px ${t.accent}` }} />
+                            <span className="absolute left-[42%] top-[25%] h-2 w-2 rounded-full" style={{ background: t.capture }} />
+                            <span className="absolute left-[67%] top-[51%] h-2.5 w-2.5 rounded-full" style={{ background: t.positive }} />
+                            <span className="absolute bottom-1.5 left-[12%] h-1 w-[65%] rounded-full" style={{ background: t.textDim, opacity: 0.28 }} />
+                          </div>
+                          <div className="flex w-[20%] flex-col gap-1.5 px-1.5 py-2" style={{ background: t.surface }}>
+                            <span className="h-1 w-full rounded-full" style={{ background: t.textMuted, opacity: 0.42 }} />
+                            <span className="h-1 w-4/5 rounded-full" style={{ background: t.textDim, opacity: 0.28 }} />
+                          </div>
+                        </div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-[13px] font-semibold" style={{ color: t.text }}>{t.name}</p>
+                            <p className="mt-0.5 text-[10.5px] leading-snug" style={{ color: t.textDim }}>{t.description}</p>
+                          </div>
+                          <div className="mt-0.5 flex shrink-0 gap-1" aria-hidden="true">
+                            {[t.accent, t.capture, t.positive].map((color) => (
+                              <span key={color} className="h-2 w-2 rounded-full" style={{ background: color }} />
+                            ))}
+                          </div>
+                        </div>
+                        {selected && (
+                          <span
+                            className="absolute right-2.5 top-2.5 grid h-5 w-5 place-items-center rounded-full text-[11px] font-bold"
+                            style={{ background: t.accent, color: t.onAccent, boxShadow: `0 0 0 2px ${t.bg}` }}
+                            aria-hidden="true"
+                          >
+                            ✓
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             ))}
           </div>
         </Section>
