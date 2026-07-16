@@ -884,6 +884,10 @@ fn register_claude_code_mcp() -> Result<McpRegisterResult, String> {
 /// uses `open -R`. No-op on Linux (most distros' file managers vary).
 #[tauri::command]
 fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    // Only the Windows and macOS arms below spawn anything; the Linux arm is a
+    // deliberate no-op, so an unconditional import is dead there and trips
+    // `-D warnings` on the Linux CI runner.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     use std::process::Command;
     #[cfg(target_os = "windows")]
     {
