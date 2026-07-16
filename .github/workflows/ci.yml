@@ -108,6 +108,24 @@ jobs:
           TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
         run: cargo clippy --all-targets -- -D warnings
 
+      # Integration tests that open a real brain.db load the sqlite-vec
+      # extension. vec0.dll/.dylib are committed for Windows/macOS, but Linux
+      # ships none — release.yml and npm-release.yml already fetch vec0.so and
+      # CI never did, so adaptive_scenario died the moment the Tests step was
+      # first reached ("vec0.so not found in any candidate location"). Same
+      # pinned release as the other workflows; bump all three together.
+      - name: Download vec0.so (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="v0.1.9"; STRIPPED="${VERSION#v}"
+          ASSET="sqlite-vec-${STRIPPED}-loadable-linux-x86_64.tar.gz"
+          curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/vec.tgz \
+            "https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
+          mkdir -p src-tauri/resources
+          tar -xzf /tmp/vec.tgz -C src-tauri/resources/
+          ls -lh src-tauri/resources/vec0.so
+
       - name: Tests
         working-directory: src-tauri
         run: cargo test --no-default-features
