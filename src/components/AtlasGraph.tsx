@@ -22,6 +22,7 @@ import {
   ATLAS_BUILT_IN_PATTERNS,
   atlasBuiltInPattern,
   transformAtlasPositions,
+  type AtlasPatternId,
   type AtlasPositions,
 } from "../lib/atlasPatterns";
 // atlasLayoutTypes survives the ForceAtlas removal: deterministicAtlasSeed
@@ -113,7 +114,11 @@ export interface AtlasGraphHandle {
 interface AtlasGraphProps {
   brainId: string;
   nodes: readonly SimNode[];
-  /** Built once by NeuralGraph and shared by snapshots + Graph Engine. */
+  /** Which composition to draw. Controlled by the preset bar — AtlasGraph used
+   *  to own this in its own localStorage key, a second source of truth that
+   *  could disagree with NeuralGraph about what was on screen. */
+  patternId: AtlasPatternId;
+  /** Built once by NeuralGraph and shared by every preset. */
   model: AtlasVisualModel;
   palette: GraphPalette;
   folderColors: Record<string, string>;
@@ -126,7 +131,6 @@ interface AtlasGraphProps {
   onNodeHover: (node: SimNode | null) => void;
   onNodeClick: (node: SimNode) => void;
   onRuntimeError: (error: Error) => void;
-  onCloseEngine?: () => void;
 }
 
 interface ThemeColors {
@@ -140,58 +144,6 @@ interface ThemeColors {
   warning: string;
 }
 
-const SELECTED_PATTERN_KEY = "nv.atlas.pattern";
-
-interface StyleMeta {
-  eyebrow: string;
-  description: string;
-  glyph: string;
-}
-
-const STYLE_META: Readonly<Record<string, StyleMeta>> = {
-  timeline: {
-    eyebrow: "Chronology",
-    description: "Your memory unfolding through time",
-    glyph: "◌",
-  },
-  constellation: {
-    eyebrow: "Communities",
-    description: "Related ideas gathered as islands",
-    glyph: "✦",
-  },
-  dendrite: {
-    eyebrow: "Structure",
-    description: "Knowledge branching from its anchors",
-    glyph: "⌁",
-  },
-  halo: {
-    eyebrow: "Connections",
-    description: "A circular fingerprint of relationships",
-    glyph: "◎",
-  },
-  flow: {
-    eyebrow: "History",
-    description: "Communities flowing across time",
-    glyph: "≋",
-  },
-  globe: {
-    eyebrow: "World",
-    description: "A dimensional map of your knowledge",
-    glyph: "◉",
-  },
-};
-
-const LABEL_OPTIONS: readonly { id: GraphLabelMode; label: string }[] = [
-  { id: "off", label: "Off" },
-  { id: "key", label: "Key" },
-  { id: "all", label: "All" },
-];
-
-const CONNECTION_OPTIONS: readonly { id: GraphConnectionMode; label: string }[] = [
-  { id: "off", label: "Off" },
-  { id: "featured", label: "Featured" },
-  { id: "all", label: "All" },
-];
 
 const AtlasNodeProgram = createNodeBorderProgram<
   AtlasNodeAttributes,
@@ -535,29 +487,6 @@ function atmosphereBackground(patternId: string, colors: ThemeColors, alpha: num
   }
 }
 
-function stylePreviewBackground(patternId: string, colors: ThemeColors): string {
-  switch (patternId) {
-    case "timeline":
-      return `repeating-radial-gradient(circle at 64% 62%, transparent 0 7px, ${colorWithAlpha(colors.accent, 0.38)} 8px, transparent 9px 13px)`;
-    case "constellation":
-      return [
-        `radial-gradient(circle at 30% 34%, ${colorWithAlpha(colors.accent, 0.7)} 0 2px, transparent 3px)`,
-        `radial-gradient(circle at 62% 62%, ${colorWithAlpha(colors.positive, 0.65)} 0 3px, transparent 4px)`,
-        `radial-gradient(circle at 76% 28%, ${colorWithAlpha(colors.text, 0.45)} 0 1px, transparent 2px)`,
-      ].join(", ");
-    case "dendrite":
-      return `linear-gradient(145deg, transparent 43%, ${colorWithAlpha(colors.accent, 0.55)} 44% 45%, transparent 46%), linear-gradient(35deg, transparent 52%, ${colorWithAlpha(colors.positive, 0.45)} 53% 54%, transparent 55%)`;
-    case "halo":
-      return `radial-gradient(circle, transparent 0 19px, ${colorWithAlpha(colors.accent, 0.7)} 20px, transparent 21px), repeating-conic-gradient(from 4deg, ${colorWithAlpha(colors.positive, 0.4)} 0 1deg, transparent 1deg 16deg)`;
-    case "flow":
-      return `repeating-linear-gradient(0deg, transparent 0 7px, ${colorWithAlpha(colors.border, 0.25)} 8px, transparent 9px 14px), linear-gradient(110deg, transparent 22%, ${colorWithAlpha(colors.accent, 0.55)} 48%, transparent 72%)`;
-    case "globe":
-      return `radial-gradient(circle, ${colorWithAlpha(colors.accent, 0.26)} 0 23px, ${colorWithAlpha(colors.positive, 0.1)} 24px, transparent 26px)`;
-    default:
-      return `radial-gradient(circle, ${colorWithAlpha(colors.accent, 0.35)}, transparent 66%)`;
-  }
-}
-
 function nodeStyleScale(patternId: string, anchor: boolean): number {
   const ordinary = patternId === "halo"
     ? 0.88
@@ -599,6 +528,7 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   {
     brainId,
     nodes,
+    patternId,
     model,
     palette,
     folderColors,
@@ -611,7 +541,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     onNodeHover,
     onNodeClick,
     onRuntimeError,
-    onCloseEngine,
   },
   forwardedRef,
 ) {
@@ -621,20 +550,10 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   const runtimeErrorReportedRef = useRef(false);
   const [rendererReady, setRendererReady] = useState(false);
   const appTheme = useSettingsStore((state) => state.theme);
+  // Read-only here: the toolbar owns these controls for every preset now.
+  // AtlasGraph used to render its own duplicate pair inside the Engine panel.
   const labelMode = useGraphSettingsStore((state) => state.labelMode);
   const connectionMode = useGraphSettingsStore((state) => state.connectionMode);
-  const setLabelMode = useGraphSettingsStore((state) => state.setLabelMode);
-  const setConnectionMode = useGraphSettingsStore((state) => state.setConnectionMode);
-  const [patternId, setPatternId] = useState(() => {
-    try {
-      const saved = localStorage.getItem(SELECTED_PATTERN_KEY);
-      return saved === "atlas" || saved === "neural" || saved === "galaxy"
-        ? "timeline"
-        : (saved ?? "timeline");
-    } catch {
-      return "timeline";
-    }
-  });
 
   const sourceNodesById = useMemo(
     () => new Map(nodes.map((node) => [node.id, node])),
@@ -652,11 +571,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   const pattern = ATLAS_BUILT_IN_PATTERNS.find((item) => item.id === patternId)
     ?? atlasBuiltInPattern("timeline");
   const dendrite = useMemo(() => dendriteScene(model), [model]);
-  const styleMeta = STYLE_META[pattern.id] ?? {
-    eyebrow: "Custom",
-    description: "Your own visual composition",
-    glyph: "◇",
-  };
   const colors = useMemo<ThemeColors>(() => ({
     background: appTheme.bg,
     text: appTheme.text,
@@ -1089,11 +1003,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     if (pulseRafRef.current != null) cancelAnimationFrame(pulseRafRef.current);
   }, []);
 
-  const selectPattern = useCallback((nextId: string) => {
-    setPatternId(nextId);
-    try { localStorage.setItem(SELECTED_PATTERN_KEY, nextId); } catch { /* optional */ }
-  }, []);
-
   const atmosphereAlpha = 0.04 + pattern.appearance.atmosphere * 0.12;
   const shownRelationshipCount = connectionMode === "off"
     ? 0
@@ -1143,138 +1052,18 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
       )}
       <div ref={rendererContainerRef} className="absolute inset-0" />
 
+      {/* A 316px card sat here naming the composition and repeating the Names /
+          Connections controls the toolbar already owned — the duplication that
+          made "Lines" and "Connections" two words for one setting. The preset
+          bar's active pill names the view and carries the same description as
+          its tooltip, so the card was restating what the control already said.
+
+          The composition gallery lived here too — a second, competing view picker
+          that only existed once you had found the "Open Graph Engine" button.
+          It IS the preset bar now, in the toolbar, alongside 2D and 3D.
+          Dropping to bottom-4: it no longer has to clear the gallery. */}
       <div
-        className="absolute top-4 left-4 z-20 w-[316px] rounded-2xl p-3 font-[Geist,sans-serif]"
-        style={{
-          background: colorWithAlpha(colors.background, 0.86),
-          border: `1px solid ${colorWithAlpha(colors.border, 0.72)}`,
-          boxShadow: `0 18px 54px ${colorWithAlpha(colors.background, 0.52)}`,
-          backdropFilter: "blur(18px)",
-        }}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase tracking-[0.2em]" style={{ color: colors.dim }}>
-              Graph Engine · {styleMeta.eyebrow}
-            </div>
-            <div className="mt-0.5 truncate text-[14px] font-semibold" style={{ color: colors.text }}>
-              {pattern.name}
-            </div>
-            <p className="mt-0.5 text-[10px] leading-4" style={{ color: colors.dim }}>
-              {styleMeta.description}
-            </p>
-          </div>
-          {onCloseEngine && (
-            <button
-              type="button"
-              onClick={onCloseEngine}
-              className="shrink-0 rounded-lg px-2 py-1 text-[10px] transition-colors"
-              style={{ color: colors.text, border: `1px solid ${colors.border}` }}
-              aria-label="Back to graph snapshots"
-            >
-              ← Snapshots
-            </button>
-          )}
-        </div>
-
-        <div className="mt-3 grid gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[10px]" style={{ color: colors.dim }}>Names</span>
-            <div className="flex rounded-lg p-0.5" style={{ background: colorWithAlpha(colors.border, 0.3) }}>
-              {LABEL_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => setLabelMode(option.id)}
-                  className="rounded-md px-2 py-1 text-[9px] transition-colors"
-                  style={{
-                    background: labelMode === option.id ? colorWithAlpha(colors.accent, 0.25) : "transparent",
-                    color: labelMode === option.id ? colors.text : colors.dim,
-                  }}
-                  aria-pressed={labelMode === option.id}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[10px]" style={{ color: colors.dim }}>Connections</span>
-            <div className="flex rounded-lg p-0.5" style={{ background: colorWithAlpha(colors.border, 0.3) }}>
-              {CONNECTION_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => setConnectionMode(option.id)}
-                  className="rounded-md px-2 py-1 text-[9px] transition-colors"
-                  style={{
-                    background: connectionMode === option.id ? colorWithAlpha(colors.accent, 0.25) : "transparent",
-                    color: connectionMode === option.id ? colors.text : colors.dim,
-                  }}
-                  aria-pressed={connectionMode === option.id}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-
-      <div
-        className="absolute bottom-5 left-1/2 z-20 max-w-[calc(100%-32px)] -translate-x-1/2 overflow-x-auto rounded-2xl p-1.5 font-[Geist,sans-serif]"
-        style={{
-          background: colorWithAlpha(colors.background, 0.84),
-          border: `1px solid ${colorWithAlpha(colors.border, 0.68)}`,
-          boxShadow: `0 16px 42px ${colorWithAlpha(colors.background, 0.5)}`,
-          backdropFilter: "blur(18px)",
-        }}
-        aria-label="Graph composition gallery"
-      >
-        <div className="flex min-w-max gap-1">
-          {ATLAS_BUILT_IN_PATTERNS.map((item) => {
-            const active = pattern.id === item.id;
-            const meta = STYLE_META[item.id];
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => selectPattern(item.id)}
-                className="group w-[126px] rounded-xl p-1.5 text-left transition-colors"
-                style={{
-                  background: active ? colorWithAlpha(colors.accent, 0.13) : "transparent",
-                  border: `1px solid ${active ? colorWithAlpha(colors.accent, 0.62) : "transparent"}`,
-                }}
-                aria-pressed={active}
-                title={meta?.description ?? item.name}
-              >
-                <div
-                  className="relative h-8 overflow-hidden rounded-lg"
-                  style={{
-                    background: stylePreviewBackground(item.id, colors),
-                    border: `1px solid ${colorWithAlpha(colors.border, 0.48)}`,
-                  }}
-                >
-                  <span
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[17px]"
-                    style={{ color: active ? colors.accent : colors.dim }}
-                  >
-                    {meta?.glyph ?? "◇"}
-                  </span>
-                </div>
-                <div className="mt-1 truncate text-[10px] font-medium" style={{ color: active ? colors.text : colors.dim }}>
-                  {item.name}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div
-        className="absolute bottom-[108px] right-4 pointer-events-none text-[10px] font-[Geist,sans-serif] tabular-nums"
+        className="absolute bottom-4 right-4 pointer-events-none text-[10px] font-[Geist,sans-serif] tabular-nums"
         style={{ color: "var(--nv-text-dim)" }}
       >
         {model.nodes.length.toLocaleString()} memories · {shownRelationshipCount.toLocaleString()} shown

@@ -10,11 +10,14 @@ import {
   PALETTE_NEUTRAL,
   PALETTES,
   folderColor,
+  presetRenderer,
   useGraphSettingsStore,
   type GraphConnectionMode,
   type GraphLabelMode,
   type GraphNodeShape,
 } from "../stores/graphSettingsStore";
+import type { AtlasPatternId } from "../lib/atlasPatterns";
+import { GraphPresetBar } from "./GraphPresetBar";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
 import { GraphLegend } from "./GraphLegend";
@@ -231,15 +234,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphTheme = useSettingsStore((state) => state.theme);
   const [size, setSize] = useState({ w: 800, h: 600 });
-  const [mode, setMode] = useState<GraphViewMode>(() => {
-    try {
-      const v = localStorage.getItem("nv.graph.mode");
-      // Product split migration: old Atlas/Static/2D all become the calm 2D
-      // snapshot. Only an explicit old 3D choice remains 3D.
-      if (v === "3d") return "3d";
-      return "2d";
-    } catch { return "2d"; }
-  });
+  // The view is one persisted preset in graphSettingsStore; `mode` is only
+  // which renderer draws it. Nothing here owns view state any more.
+  const preset = useGraphSettingsStore((s) => s.preset);
+  const setPreset = useGraphSettingsStore((s) => s.setPreset);
+  const mode: GraphViewMode = presetRenderer(preset);
   // Ref to the 3D force-graph instance so we can attach an UnrealBloomPass
   // once the Three.js renderer/composer is available. The ref is passed
   // to ForceGraph3D as-is; we narrow at the use site.
@@ -247,7 +246,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const fg2dRef = useRef<unknown>(undefined);
   const cameraFrameTokenRef = useRef(0);
   const atlasRef = useRef<AtlasGraphHandle>(null);
-  const lastSnapshotModeRef = useRef<"2d" | "3d">(mode === "3d" ? "3d" : "2d");
   // Master performance switch. "lite" derives a low-power preset at read
   // time — the individual settings below are shadowed when lite is on, so
   // the user's real preferences are preserved and restored on switch back.
@@ -1073,32 +1071,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     }
   }, [cancelClose, setSelected, allNotes, selectNote, onOpenNote]);
 
-  // Persist the calm snapshot choice separately from the temporary Graph
-  // Engine workspace, so closing the engine always returns the user to the
-  // exact everyday view they came from.
-  const setModePersist = useCallback((next: GraphViewMode) => {
-    if (next !== "engine") lastSnapshotModeRef.current = next;
-    setMode(next);
-    if (next !== "engine") {
-      try { localStorage.setItem("nv.graph.mode", next); } catch { /* ignore */ }
-    }
-  }, []);
-
-  const openGraphEngine = useCallback(() => {
-    if (mode !== "engine") lastSnapshotModeRef.current = mode;
-    setModePersist("engine");
-  }, [mode, setModePersist]);
-
-  const closeGraphEngine = useCallback(() => {
-    setModePersist(lastSnapshotModeRef.current);
-  }, [setModePersist]);
-
   const [atlasFallbackNotice, setAtlasFallbackNotice] = useState<string | null>(null);
   const handleAtlasRuntimeError = useCallback((error: Error) => {
-    console.error("Graph Engine renderer unavailable; returning to the snapshot", error);
-    setAtlasFallbackNotice("Graph Engine could not start on this graphics device. Your 2D snapshot is still available.");
-    closeGraphEngine();
-  }, [closeGraphEngine]);
+    console.error("Composition renderer unavailable; returning to the 2D snapshot", error);
+    setAtlasFallbackNotice("That composition could not start on this graphics device. The 2D map is still available.");
+    // No "last snapshot" to restore: with one preset bar there is no separate
+    // workspace to leave, so a WebGL failure falls back to the preset that
+    // needs no WebGL at all.
+    setPreset("2d");
+  }, [setPreset]);
 
   // Hover-focus state. When set, `paintNode2D` dims every node that
   // isn't the hovered node or one of its 1-hop neighbours. Same story
@@ -1760,101 +1741,60 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       onMouseMove={handleContainerMouseMove}
       onMouseLeave={() => scheduleClose()}
     >
-      {/* The everyday surface is deliberately quiet. Secondary actions stay in
-          one native menu; the Graph Engine owns the richer visual controls. */}
-      {mode === "engine" ? (
-        <div className="absolute top-4 right-4 z-30 flex items-center gap-1 rounded-xl p-1"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-          <button onClick={handleZoomFit} className="rounded-lg px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--nv-text-muted)" }}>
-            Fit
-          </button>
-          <button onClick={handleSaveImage} className="rounded-lg px-2.5 py-1 text-[10px] font-medium" style={{ color: "var(--nv-text-muted)" }}>
-            Save image
-          </button>
-          <button onClick={handleCopyImage} className="rounded-lg px-2.5 py-1 text-[10px] font-medium" style={{ color: "var(--nv-text-muted)" }}>
-            Copy image
-          </button>
-          <button
-            onClick={() => setFilterPanelOpen((open) => !open)}
-            className="rounded-lg px-2.5 py-1 text-[10px] font-medium"
-            style={{ color: filterPanelOpen ? "var(--nv-accent)" : "var(--nv-text-muted)" }}
-            aria-pressed={filterPanelOpen}
-          >
-            Filters
-          </button>
-        </div>
-      ) : (
-        <div className="absolute top-4 right-4 z-30 flex items-center gap-1 rounded-xl p-1 font-[Geist,sans-serif]"
-          style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 12px 34px rgba(0,0,0,0.22)" }}>
-          <div className="flex gap-0.5 rounded-lg p-0.5" style={{ background: "var(--nv-bg)" }}>
-            {(["2d", "3d"] as const).map((view) => (
-              <button
-                key={view}
-                type="button"
-                onClick={() => setModePersist(view)}
-                className="rounded-md px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider"
-                style={{
-                  background: mode === view ? "var(--nv-accent)" : "transparent",
-                  color: mode === view ? "var(--nv-bg)" : "var(--nv-text-muted)",
-                }}
-                aria-pressed={mode === view}
-              >
-                {view}
-              </button>
-            ))}
+      {/* ONE toolbar. There used to be two — this branched on mode === "engine"
+          and swapped in a different set of controls, so Fit lived in both, image
+          export lived in both under different labels ("Save image" vs "Save PNG
+          image"), and Filters existed only inside the Engine. Every view is a
+          preset now, so every view gets the same controls. */}
+      <div className="absolute top-4 right-4 z-30 flex items-center gap-1 rounded-xl p-1 font-[Geist,sans-serif]"
+        style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 12px 34px rgba(0,0,0,0.22)" }}>
+        <GraphPresetBar preset={preset} onSelect={setPreset} />
+        <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
+          Names
+          <select value={labelMode} onChange={(event) => setLabelMode(event.target.value as GraphLabelMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }} aria-label="Note names">
+            <option value="off">Off</option>
+            <option value="key">Key</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
+          Lines
+          <select value={connectionMode} onChange={(event) => setConnectionMode(event.target.value as GraphConnectionMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }} aria-label="Connections">
+            <option value="off">Off</option>
+            <option value="featured">Some</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+        <button onClick={handleZoomFit} className="rounded-lg px-2 py-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--nv-text-muted)" }}>
+          Fit
+        </button>
+        <details className="relative">
+          <summary className="cursor-pointer list-none rounded-lg px-2 py-1 text-[12px] [&::-webkit-details-marker]:hidden" style={{ color: "var(--nv-text-muted)" }} aria-label="More graph actions">
+            •••
+          </summary>
+          <div className="absolute right-0 mt-2 grid min-w-[150px] gap-0.5 rounded-xl p-1.5"
+            style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 18px 42px rgba(0,0,0,0.35)" }}>
+            <button onClick={() => setFilterPanelOpen((open) => !open)} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: filterPanelOpen ? "var(--nv-accent)" : "var(--nv-text-muted)" }} aria-pressed={filterPanelOpen}>
+              Filters
+            </button>
+            <button onClick={handleRefresh} disabled={refreshing} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+              {refreshing ? "Updating…" : "Update snapshot"}
+            </button>
+            <button onClick={() => setDiagnosticOpen(true)} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+              Vault diagnostic
+            </button>
+            <button onClick={toggleAnalyticsMode} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: analyticsMode ? "var(--nv-accent)" : "var(--nv-text-muted)" }}>
+              {analyticsMode ? "Hide analytics" : "Show analytics"}
+            </button>
+            <button onClick={handleSaveImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+              Save PNG image
+            </button>
+            <button onClick={handleCopyImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
+              Copy image
+            </button>
           </div>
-          <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
-            Names
-            <select value={labelMode} onChange={(event) => setLabelMode(event.target.value as GraphLabelMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }}>
-              <option value="off">Off</option>
-              <option value="key">Key</option>
-              <option value="all">All</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: "var(--nv-text-dim)" }}>
-            Lines
-            <select value={connectionMode} onChange={(event) => setConnectionMode(event.target.value as GraphConnectionMode)} className="bg-transparent text-[10px] outline-none" style={{ color: "var(--nv-text-muted)" }}>
-              <option value="off">Off</option>
-              <option value="featured">Featured</option>
-              <option value="all">All</option>
-            </select>
-          </label>
-          <button onClick={handleZoomFit} className="rounded-lg px-2 py-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--nv-text-muted)" }}>
-            Fit
-          </button>
-          <button
-            type="button"
-            onClick={openGraphEngine}
-            className="rounded-lg px-3 py-1 text-[10px] font-semibold tracking-wide"
-            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
-          >
-            Open Graph Engine
-          </button>
-          <details className="relative">
-            <summary className="cursor-pointer list-none rounded-lg px-2 py-1 text-[12px] [&::-webkit-details-marker]:hidden" style={{ color: "var(--nv-text-muted)" }} aria-label="More graph actions">
-              •••
-            </summary>
-            <div className="absolute right-0 mt-2 grid min-w-[150px] gap-0.5 rounded-xl p-1.5"
-              style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)", boxShadow: "0 18px 42px rgba(0,0,0,0.35)" }}>
-              <button onClick={handleRefresh} disabled={refreshing} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
-                {refreshing ? "Updating…" : "Update snapshot"}
-              </button>
-              <button onClick={() => setDiagnosticOpen(true)} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
-                Vault diagnostic
-              </button>
-              <button onClick={toggleAnalyticsMode} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: analyticsMode ? "var(--nv-accent)" : "var(--nv-text-muted)" }}>
-                {analyticsMode ? "Hide analytics" : "Show analytics"}
-              </button>
-              <button onClick={handleSaveImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
-                Save PNG image
-              </button>
-              <button onClick={handleCopyImage} className="rounded-lg px-2 py-1.5 text-left text-[10px]" style={{ color: "var(--nv-text-muted)" }}>
-                Copy image
-              </button>
-            </div>
-          </details>
-        </div>
-      )}
+        </details>
+      </div>
 
       {/* Analytics tip bar — appears below the toolbar when analytics
           mode is on. Idle copy + per-hover swap + dismiss-for-session. */}
@@ -1873,11 +1813,17 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         brainId={activeBrainId ?? undefined}
       />
 
-      {/* Filters / Display / Layout / Time-lapse panel — slides in
-          from the right when the toolbar's Filters pill is on.
-          Reads + writes the graph settings store, which the render
-          paths above subscribe to. */}
-      {mode === "engine" && <GraphFilterPanel
+      {/* Filters / Display / Time-lapse panel — opens from the ••• menu.
+          Reads + writes the graph settings store, which the render paths
+          above subscribe to.
+
+          No longer gated on the Engine. It used to mount only when
+          mode === "engine", which was fine while Filters lived exclusively in
+          the Engine's own toolbar. Now that every preset shares one ••• menu,
+          that gate would have made the Filters button do nothing in 2D and 3D
+          — and every control inside it (orphans, semantic edges, node size,
+          search) applies to the snapshots just as much. */}
+      <GraphFilterPanel
         open={filterPanelOpen}
         onClose={() => setFilterPanelOpen(false)}
         nodeCount={nodes.length}
@@ -1887,7 +1833,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         onTimelapseStart={startTimelapse}
         onTimelapseStop={stopTimelapse}
         timelapseActive={tlActive}
-      />}
+      />
 
       {atlasFallbackNotice && (
         <div
@@ -1935,7 +1881,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}
             onRuntimeError={handleAtlasRuntimeError}
-            onCloseEngine={closeGraphEngine}
+            // Controlled: the preset IS the composition. AtlasGraph used to own
+            // this in its own localStorage key, which is why the two could
+            // disagree about what was on screen.
+            patternId={preset as AtlasPatternId}
           />
         ) : mode !== "3d" ? (
           <ForceGraph2D
