@@ -208,7 +208,7 @@ tree-sitter-java = "0.23"
 # Pinned: c-sharp 0.23.2+ ships grammar ABI 15, but the tree-sitter 0.24 core
 # accepts max ABI 14 (0.23.1 is the last ABI-14 build). Bump only alongside the
 # tree-sitter core. Other grammars (go/java/ruby 0.23) are already ABI ≤14.
-tree-sitter-c-sharp = "=0.23.1"
+tree-sitter-c-sharp = "=0.23.5"
 tree-sitter-ruby = "0.23"
 ignore = "0.4"
 
