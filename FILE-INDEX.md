@@ -1,7 +1,7 @@
 # NeuroVault — File Index
 
-> **Every tracked file in this repo, with a one-line purpose.** 406 files, grouped by area.
-> Generated 2026-07-15. Build artifacts are excluded (`node_modules/`, `src-tauri/target/`, `dist/`, `.fastembed_cache/`, `.git/`).
+> **Every tracked file in this repo, with a one-line purpose.** 400 files, grouped by area.
+> Generated 2026-07-15, updated 2026-07-16. Build artifacts are excluded (`node_modules/`, `src-tauri/target/`, `dist/`, `.fastembed_cache/`, `.git/`).
 
 **How to read this.** Find your area below, scan for the file. A ⚠ _[X]_ badge marks a
 [cleanup candidate](#cleanup-candidates) (X = tier). Large binary/generated bulk (icon sets,
@@ -320,7 +320,6 @@ Governance/onboarding docs live at the repo root; everything else is under `docs
 | File | Purpose |
 |------|---------|
 | `docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md` | Forensic writeup of LongMemEval hit@5 misses by question type. |
-| `docs/benchmarks/chunks/chunk_*.json (6 files)` | Per-chunk longmemeval intermediate outputs; ignored-but-tracked, gitignore rule now no-op. ⚠ _[A]_ |
 | `docs/benchmarks/longmemeval-*.json (5 files)` | Published merged LongMemEval scorecard result JSONs (100q/12q/470q/rerank/fusion). |
 | `docs/benchmarks/merge_chunked_ab.py` | Aggregates chunked compare-ablate run log into full-470 A/B scorecard. |
 | `docs/benchmarks/merge_reports.py` | Merges per-chunk nv-bench longmemeval JSON reports into one scorecard. |
@@ -411,7 +410,6 @@ Continuous integration, build/release automation, brand source assets, the archi
 | `scripts/gates.sh` | Full verification gate; treats empty diagnostic output as failure |
 | `scripts/make-app-icon.py` | Generate inverted split-colour opaque-square app icon (Tahoe-safe) |
 | `scripts/make-dmg-background.py` | Render macOS .dmg installer background (neural graph, drag-to-install) |
-| `scripts/preview-shoot.mjs` | Dev screenshot harness for preview.html; line 2 hardcodes one ephemeral /private/tmp session path. ⚠ _[A]_ |
 | `scripts/release-hardening.test.mjs` | node:test asserting CSP/updater/release security invariants in tauri.conf |
 | `scripts/stage-sidecar.mjs` | Build + stage neurovault-server as Tauri externalBin sidecar (breaks build.rs circularity) |
 | `scripts/verify-macos-release.sh` | Verify macOS app codesign/notarization of built .app and .dmg |
@@ -434,13 +432,19 @@ Continuous integration, build/release automation, brand source assets, the archi
 
 Proposals only — **nothing here is executed without your explicit per-item yes.** Grouped by risk; each row is an independent approve/skip. The ⚠ badges in the index above cross-reference these tiers.
 
-### Tier A · clutter to gitignore/untrack
+### Tier A · clutter — RESOLVED 2026-07-16
 
-| File | Note |
-|------|------|
-| `capture.js` | UNTRACKED stray Puppeteer script writing into another repo (dath-portfolio). |
-| `docs/benchmarks/chunks/chunk_*.json (6 files)` | Per-chunk longmemeval intermediate outputs; ignored-but-tracked, gitignore rule now no-op. |
-| `scripts/preview-shoot.mjs` | Dev screenshot harness for preview.html; line 2 hardcodes one ephemeral /private/tmp session path. |
+Each item below was individually verified against the repo before action; three
+claims from the original broad scan (a committed `docs/.DS_Store`, a committed
+`docs/benchmarks/.fastembed_cache/` model-blob dir, and 18 stray `*.partial.jsonl`)
+turned out to be **false positives** — those paths exist on disk but were never
+tracked, so there was nothing to clean.
+
+| File | Verified finding | Outcome |
+|------|------------------|---------|
+| `docs/benchmarks/chunks/chunk_*.json (6 files)` | Regenerable resumability checkpoints written by `run_chunk.sh`, merged into the tracked `longmemeval-*.json` scorecards by `merge_reports.py`; matched `.gitignore:87` (`docs/benchmarks/chunks*/`) but were tracked, making the rule a silent no-op. Nothing depended on the committed copies; 7 newer siblings were already untracked. | **Untracked** (`3c6c4b7`), kept on disk. Ignored-but-tracked count is now 0. |
+| `scripts/preview-shoot.mjs` | Tracked but unreferenced (absent from `package.json`, `Makefile`, CI, docs) and non-functional: line 2 pinned an ephemeral Claude-session scratchpad path, so it could not run for anyone. Swept in accidentally by `df0b364`. | **Deleted** (`d55cf19`). Recover via `git show df0b364:scripts/preview-shoot.mjs`. |
+| `capture.js` | Untracked portfolio-screenshot script writing into the `dath-portfolio` repo. Verified **active** (modified 2026-07-16) and functional — it needs this repo's `puppeteer-core` dep and dev server, so it legitimately lives here. Not dead. | **Intentionally kept** as-is. |
 
 ### Tier B · dead code (zero importers)
 
