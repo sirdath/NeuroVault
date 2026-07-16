@@ -310,8 +310,8 @@ pub async fn audit_recent(
 // ---------------------------------------------------------------------------
 // POST /api/observations — Claude Code lifecycle-hook capture.
 //
-// Called by `scripts/neurovault_hook.py` (the shim wired into the user's
-// Claude Code settings.json) on every SessionStart, UserPromptSubmit,
+// Called by the native `neurovault-hook` binary (the shim wired into the
+// user's Claude Code settings.json) on every SessionStart, UserPromptSubmit,
 // PostToolUse, and SessionEnd event. Each event becomes an observation
 // engram tagged with the session id so the whole session can later be
 // retrieved as a unit.

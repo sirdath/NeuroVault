@@ -67,7 +67,11 @@ npm run tauri build        # or: make build
 #   neurovault-server --mcp-only
 ```
 
-> Optional: `server/` retains out-of-band Python helpers (PDF / Zotero ingest) spawned on demand — **not** needed for normal dev and **not** part of the MCP path.
+> No Python in the product: the app, the MCP server, and the Claude Code hooks are
+> all native Rust. (The archived `server/` prototype was removed in 2026-07.) The
+> only Python left is offline tooling the app never invokes: the `eval/` retrieval
+> harness, the `docs/benchmarks/` report mergers, and two icon generators in
+> `scripts/`.
 
 ## Rules
 
