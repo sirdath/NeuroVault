@@ -1903,7 +1903,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       {mode === "engine" && <GraphFilterPanel
         open={filterPanelOpen}
         onClose={() => setFilterPanelOpen(false)}
-        viewMode="atlas"
         nodeCount={nodes.length}
         orphanCount={nodes.filter((n) => (graphData.adjacency.get(n.id)?.size ?? 0) === 0).length}
         semanticEdgeCount={semanticEdgeCount}

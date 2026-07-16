@@ -154,35 +154,12 @@ interface GraphSettings {
   nodeSizeScale: number;
   /** Multiplicative scale on every link's drawn width. */
   linkThicknessScale: number;
-  /** globalScale threshold above which node titles render. Higher =
-   *  zoom in more before labels appear. Default 3.2. */
-  labelZoomThreshold: number;
   /** Draw arrowheads on directed edges (manual wikilinks). Default
    *  off — undirected look reads cleaner at typical zoom. */
   showArrows: boolean;
-  /** d3-force gentle "stay near origin" pull strength on every
-   *  non-pinned node. 0 disables, 0.04 default. Higher = tighter
-   *  cluster, less sprawl. */
-  centeringStrength: number;
-  /** d3-forceManyBody charge strength. More negative = more node
-   *  repulsion = more spread out. Default -90. */
-  chargeStrength: number;
-  /** d3-forceLink target distance for connected nodes. Default 26. */
-  linkDistance: number;
-  /** Layout shape for the connected component. "organic" is the
-   *  default d3-force layout; "circle" pulls connected nodes onto a
-   *  ring around the centre via forceRadial. */
-  layoutShape: GraphLayoutShape;
   /** Time-lapse playback speed in seconds (full graph reveal time).
    *  Lower = faster. Default 15 s. */
   timelapseSpeedSec: number;
-  /** Single "spread" macro (0..1). Moving it derives + sets
-   *  chargeStrength / linkDistance / centeringStrength together so the
-   *  user gets one knob; the individual sliders remain as fine-tuning. */
-  spread: number;
-  /** Master animation toggle. When false: 3D bloom + link particles are
-   *  disabled and 2D cools down fast — saves GPU/CPU. Default true. */
-  animations: boolean;
   /** Cluster-background style: "soft" circles (default) or "hull"
    *  convex-hull polygons (venn-diagram look, one colour per category). */
   groupingStyle: GraphGroupingStyle;
@@ -199,8 +176,6 @@ interface GraphSettings {
 }
 
 export type GraphGroupingStyle = "soft" | "hull";
-
-export type GraphLayoutShape = "organic" | "circle";
 
 const STORAGE_KEY = "nv.graph.settings";
 
@@ -220,15 +195,8 @@ const DEFAULTS: GraphSettings = {
   manualOnly: false,
   nodeSizeScale: 1.0,
   linkThicknessScale: 1.0,
-  labelZoomThreshold: 3.2,
   showArrows: false,
-  centeringStrength: 0.04,
-  chargeStrength: -90,
-  linkDistance: 26,
-  layoutShape: "organic",
   timelapseSpeedSec: 15,
-  spread: 0.5,
-  animations: true,
   groupingStyle: "soft",
   graphMode: "full",
   labelMode: "off",
@@ -271,8 +239,6 @@ function load(): GraphSettings {
         const v = parsed[key];
         return typeof v === "number" && v >= min && v <= max ? v : fallback;
       };
-      const layoutShape: GraphLayoutShape =
-        parsed.layoutShape === "circle" ? "circle" : "organic";
       const labelMode: GraphLabelMode =
         parsed.labelMode === "key" || parsed.labelMode === "all" ? parsed.labelMode : "off";
       const connectionMode: GraphConnectionMode =
@@ -295,15 +261,8 @@ function load(): GraphSettings {
         manualOnly: bool("manualOnly", false),
         nodeSizeScale: num("nodeSizeScale", 1.0, 0.3, 3.0),
         linkThicknessScale: num("linkThicknessScale", 1.0, 0.3, 3.0),
-        labelZoomThreshold: num("labelZoomThreshold", 3.2, 0.5, 8.0),
         showArrows: bool("showArrows", false),
-        centeringStrength: num("centeringStrength", 0.04, 0, 0.5),
-        chargeStrength: num("chargeStrength", -90, -300, -10),
-        linkDistance: num("linkDistance", 26, 5, 120),
-        layoutShape,
         timelapseSpeedSec: num("timelapseSpeedSec", 15, 3, 90),
-        spread: num("spread", 0.5, 0, 1),
-        animations: bool("animations", true),
         groupingStyle: parsed.groupingStyle === "hull" ? "hull" : "soft",
         graphMode:
           parsed.graphMode === "lite" || parsed.graphMode === "off"
@@ -340,17 +299,8 @@ interface GraphSettingsStore extends GraphSettings {
   setManualOnly: (v: boolean) => void;
   setNodeSizeScale: (v: number) => void;
   setLinkThicknessScale: (v: number) => void;
-  setLabelZoomThreshold: (v: number) => void;
   setShowArrows: (v: boolean) => void;
-  setCenteringStrength: (v: number) => void;
-  setChargeStrength: (v: number) => void;
-  setLinkDistance: (v: number) => void;
-  setLayoutShape: (v: GraphLayoutShape) => void;
   setTimelapseSpeedSec: (v: number) => void;
-  /** Spread macro — also derives charge/link/center. */
-  setSpread: (v: number) => void;
-  setAnimations: (v: boolean) => void;
-  toggleAnimations: () => void;
   setGroupingStyle: (v: GraphGroupingStyle) => void;
   setGraphMode: (m: GraphMode) => void;
   setLabelMode: (m: GraphLabelMode) => void;
@@ -441,24 +391,8 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   setManualOnly: (manualOnly) => { set({ manualOnly }); persist({ ...get(), manualOnly }); },
   setNodeSizeScale: (nodeSizeScale) => { set({ nodeSizeScale }); persist({ ...get(), nodeSizeScale }); },
   setLinkThicknessScale: (linkThicknessScale) => { set({ linkThicknessScale }); persist({ ...get(), linkThicknessScale }); },
-  setLabelZoomThreshold: (labelZoomThreshold) => { set({ labelZoomThreshold }); persist({ ...get(), labelZoomThreshold }); },
   setShowArrows: (showArrows) => { set({ showArrows }); persist({ ...get(), showArrows }); },
-  setCenteringStrength: (centeringStrength) => { set({ centeringStrength }); persist({ ...get(), centeringStrength }); },
-  setChargeStrength: (chargeStrength) => { set({ chargeStrength }); persist({ ...get(), chargeStrength }); },
-  setLinkDistance: (linkDistance) => { set({ linkDistance }); persist({ ...get(), linkDistance }); },
-  setLayoutShape: (layoutShape) => { set({ layoutShape }); persist({ ...get(), layoutShape }); },
   setTimelapseSpeedSec: (timelapseSpeedSec) => { set({ timelapseSpeedSec }); persist({ ...get(), timelapseSpeedSec }); },
-  setSpread: (spread) => {
-    // One knob -> the three force params. spread 0 = tight cluster,
-    // spread 1 = wide sprawl. Mirrors the slider ranges elsewhere.
-    const chargeStrength = Math.round(-10 - spread * 290);   // -10 .. -300
-    const linkDistance = Math.round(5 + spread * 115);       // 5 .. 120
-    const centeringStrength = +(0.3 * (1 - spread)).toFixed(3); // 0.3 .. 0
-    set({ spread, chargeStrength, linkDistance, centeringStrength });
-    persist({ ...get(), spread, chargeStrength, linkDistance, centeringStrength });
-  },
-  setAnimations: (animations) => { set({ animations }); persist({ ...get(), animations }); },
-  toggleAnimations: () => { const next = !get().animations; set({ animations: next }); persist({ ...get(), animations: next }); },
   setGroupingStyle: (groupingStyle) => { set({ groupingStyle }); persist({ ...get(), groupingStyle }); },
   setGraphMode: (graphMode) => { set({ graphMode }); persist({ ...get(), graphMode }); },
   setLabelMode: (labelMode) => { set({ labelMode }); persist({ ...get(), labelMode }); },
