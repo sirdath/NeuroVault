@@ -34,6 +34,8 @@ import {
   renderThreeGraphToPng,
   type ThreeGraphCaptureTarget,
 } from "../lib/graphExport";
+import { LabelSpriteCache, isKeyLabelNode, labelText } from "../lib/graphLabelSprite";
+import type { Object3D } from "three";
 import { toast } from "../stores/toastStore";
 
 type Composer = { addPass: (pass: unknown) => void; passes: unknown[] };
@@ -2213,6 +2215,36 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     const anchor = (n.labelRank ?? Number.POSITIVE_INFINITY) < 8;
     return anchor ? 3.4 : Math.min(2.6, 0.75 + Math.sqrt(Math.max(0, n.degree ?? 0)) * 0.22);
   }, []);
+
+  // Persistent 3D labels. Sprite textures are GPU resources with no finalizer,
+  // so the cache is disposed on unmount and whenever the label colour changes.
+  const labelSpriteCacheRef = useRef(new LabelSpriteCache());
+  useEffect(() => {
+    const cache = labelSpriteCacheRef.current;
+    return () => cache.dispose();
+  }, []);
+  useEffect(() => {
+    // Theme switch: every cached sprite is rasterised in the old colour.
+    labelSpriteCacheRef.current.dispose();
+  }, [graphTheme.text]);
+
+  const label3DFor = useCallback((rawNode: unknown) => {
+    if (labelMode === "off") return undefined;
+    const n = rawNode as SimNode & { labelRank?: number };
+    // Key = community anchors only, exactly as the 2D painter defines it.
+    // (2D additionally gates All behind zoom >= 1.2; 3D has no globalScale
+    // equivalent, so All means all.)
+    if (labelMode === "key" && !isKeyLabelNode(n.labelRank, snapshotModel.nodes.length)) {
+      return undefined;
+    }
+    const sprite = labelSpriteCacheRef.current.get(labelText(n.title), graphTheme.text);
+    if (!sprite) return undefined;
+    // One Sprite instance cannot sit at two positions in a scene graph, and the
+    // cache dedupes by text -- clone so notes sharing a title both get a label.
+    const instance = sprite.clone();
+    instance.position.set(0, 4.5, 0);
+    return instance;
+  }, [labelMode, graphTheme.text, snapshotModel.nodes.length]);
   // Precompute edgeConfidence per edge once (it depends only on the edge
   // fields + the bidi set). The per-frame linkColor / linkWidth callbacks
   // then do a Map lookup instead of recomputing confidence for thousands of
@@ -2556,6 +2588,16 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             backgroundColor={graphTheme.bg}
             rendererConfig={INTERACTIVE_WEBGL_RENDERER_CONFIG}
             nodeLabel={labelMode === "off" ? "" : (n: unknown) => (n as SimNode).title}
+            // Persistent labels. `nodeLabel` above is only a hover tooltip, so
+            // Key and All used to be identical props and All showed nothing
+            // until you hovered. Extend (not replace) so the default sphere
+            // still renders underneath the sprite.
+            // three-forcegraph's runtime contract accepts a falsy return
+            // ("use the default node object"), but its typings insist on
+            // Object3D. Cast at the boundary rather than allocate an empty
+            // Object3D for every unlabelled note.
+            nodeThreeObject={label3DFor as unknown as (node: object) => Object3D}
+            nodeThreeObjectExtend={true}
             nodeRelSize={2.5}
             nodeVal={nodeVal}
             nodeColor={nodeColor}
