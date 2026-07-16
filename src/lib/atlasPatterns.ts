@@ -1,10 +1,11 @@
 import type { AtlasVisualNode } from "./atlasVisualModel";
 
+/** One per shipped composition. "identity", "spiral" and "brain-warp" were
+ *  removed in 2026-07: they existed only for hand-authored imported patterns
+ *  and were the sole consumers of the ForceAtlas worker + IndexedDB layout
+ *  cache, all of which went with pattern import/export. */
 export type AtlasTransform =
-  | "identity"
-  | "spiral"
   | "radial-time"
-  | "brain-warp"
   | "islands"
   | "dendrite"
   | "halo"
@@ -91,60 +92,6 @@ export const ATLAS_BUILT_IN_PATTERNS: readonly AtlasPatternV1[] = BUILT_INS;
 
 export function atlasBuiltInPattern(id: string): AtlasPatternV1 {
   return BUILT_INS.find((pattern) => pattern.id === id) ?? BUILT_INS[0]!;
-}
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.max(min, Math.min(max, value));
-
-function finiteNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-/** Validate an imported declarative pattern. No URLs, callbacks, shaders, or
- * arbitrary code are accepted; custom patterns can only tune allowlisted
- * transforms and bounded numeric appearance settings. */
-export function parseAtlasPattern(input: unknown): AtlasPatternV1 | null {
-  if (!input || typeof input !== "object") return null;
-  const record = input as Record<string, unknown>;
-  const id = typeof record.id === "string" ? record.id.trim() : "";
-  const name = typeof record.name === "string" ? record.name.trim() : "";
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(id) || name.length < 1 || name.length > 60) return null;
-  const transformRaw = record.transform;
-  const appearanceRaw = record.appearance;
-  if (!transformRaw || typeof transformRaw !== "object") return null;
-  if (!appearanceRaw || typeof appearanceRaw !== "object") return null;
-  const transform = transformRaw as Record<string, unknown>;
-  const appearance = appearanceRaw as Record<string, unknown>;
-  const allowedTransforms = new Set<AtlasTransform>([
-    "identity",
-    "spiral",
-    "radial-time",
-    "brain-warp",
-    "islands",
-    "dendrite",
-    "halo",
-    "flow",
-    "globe",
-  ]);
-  if (typeof transform.type !== "string" || !allowedTransforms.has(transform.type as AtlasTransform)) return null;
-
-  return {
-    schemaVersion: 1,
-    id,
-    name,
-    version: Math.max(1, Math.min(10_000, Math.round(finiteNumber(record.version, 1)))),
-    transform: {
-      type: transform.type as AtlasTransform,
-      rotation: clamp(finiteNumber(transform.rotation, 0), -Math.PI * 4, Math.PI * 4),
-      intensity: clamp(finiteNumber(transform.intensity, 0.5), 0, 1),
-      clusterSpacing: clamp(finiteNumber(transform.clusterSpacing, 1), 0.5, 2.5),
-    },
-    appearance: {
-      atmosphere: clamp(finiteNumber(appearance.atmosphere, 0.35), 0, 1),
-      labelDensity: clamp(finiteNumber(appearance.labelDensity, 0.8), 0, 2),
-      edgeOpacity: clamp(finiteNumber(appearance.edgeOpacity, 0.5), 0, 1),
-    },
-  };
 }
 
 function normalizedPositions(nodes: readonly AtlasVisualNode[], positions: AtlasPositions): AtlasPositions {
@@ -391,22 +338,13 @@ export function transformAtlasPositions(
     return output;
   }
 
+  // Every shipped composition returns above. This keeps the function total and
+  // is what the removed "identity" transform did: place each note at its seed
+  // coordinate under the pattern's rotation. (The "spiral" and "brain-warp"
+  // branches that also lived here went with pattern import/export in 2026-07.)
   for (const node of stableNodes) {
     const point = normalized[node.id] ?? { x: 0, y: 0 };
-    if (pattern.transform.type === "spiral") {
-      const radius = Math.hypot(point.x, point.y);
-      const angle = Math.atan2(point.y, point.x) + radius * (1.2 + intensity * 3.1);
-      const warpedRadius = Math.pow(radius, 0.8 + intensity * 0.2);
-      output[node.id] = rotate(Math.cos(angle) * warpedRadius, Math.sin(angle) * warpedRadius);
-    } else if (pattern.transform.type === "brain-warp") {
-      const side = point.x < 0 ? -1 : 1;
-      const lobeX = side * (0.18 + Math.abs(point.x) * (0.78 + intensity * 0.25));
-      const taper = 1 - Math.min(0.38, Math.abs(point.y) * 0.12);
-      const lobeY = point.y * (0.88 + intensity * 0.16) * taper;
-      output[node.id] = rotate(lobeX, lobeY);
-    } else {
-      output[node.id] = rotate(point.x, point.y);
-    }
+    output[node.id] = rotate(point.x, point.y);
   }
   return output;
 }

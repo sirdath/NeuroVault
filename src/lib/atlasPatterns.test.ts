@@ -9,9 +9,7 @@
 import {
   ATLAS_BUILT_IN_PATTERNS,
   atlasBuiltInPattern,
-  parseAtlasPattern,
   transformAtlasPositions,
-  type AtlasPatternV1,
   type AtlasPositions,
 } from "./atlasPatterns";
 import type { AtlasVisualNode } from "./atlasVisualModel";
@@ -110,82 +108,6 @@ eq(
 );
 eq("built-ins — unknown id safely falls back to Time Rings", atlasBuiltInPattern("not-a-pattern").id, "timeline");
 eq("built-ins — lookup is deterministic", atlasBuiltInPattern("constellation"), atlasBuiltInPattern("constellation"));
-
-// ---------- parser validation and sanitization ----------
-
-{
-  const forbiddenCallback = (): void => undefined;
-  const parsed = parseAtlasPattern({
-    schemaVersion: 999,
-    id: "  my-pattern  ",
-    name: "  My Pattern  ",
-    version: 12.7,
-    transform: {
-      type: "spiral",
-      rotation: 99,
-      intensity: -4,
-      clusterSpacing: 100,
-      shader: "void main() {}",
-      callback: forbiddenCallback,
-    },
-    appearance: {
-      atmosphere: 4,
-      labelDensity: 0,
-      edgeOpacity: -1,
-      textureUrl: "https://example.invalid/pixel.png",
-    },
-    script: "alert(1)",
-  });
-
-  ok("parser — valid declarative custom pattern is accepted", parsed != null, "parser rejected an allowlisted pattern");
-  eq("parser — schema and strings are normalized", [parsed?.schemaVersion, parsed?.id, parsed?.name, parsed?.version], [1, "my-pattern", "My Pattern", 13]);
-  eq(
-    "parser — numeric controls are bounded",
-    parsed && [parsed.transform.rotation, parsed.transform.intensity, parsed.transform.clusterSpacing],
-    [Math.PI * 4, 0, 2.5],
-  );
-  eq("parser — appearance controls are bounded", parsed && Object.values(parsed.appearance), [1, 0, 0]);
-  eq("parser — arbitrary top-level fields are discarded", parsed && Object.keys(parsed).sort(), ["appearance", "id", "name", "schemaVersion", "transform", "version"]);
-  eq("parser — shaders and callbacks are discarded", parsed && Object.keys(parsed.transform).sort(), ["clusterSpacing", "intensity", "rotation", "type"]);
-  eq("parser — URLs are discarded", parsed && Object.keys(parsed.appearance).sort(), ["atmosphere", "edgeOpacity", "labelDensity"]);
-}
-
-eq("parser — rejects null", parseAtlasPattern(null), null);
-eq("parser — rejects executable transform value", parseAtlasPattern({ id: "x", name: "X", transform: () => undefined, appearance: {} }), null);
-eq("parser — rejects unknown transform", parseAtlasPattern({ id: "x", name: "X", transform: { type: "custom-shader" }, appearance: {} }), null);
-eq("parser — rejects URL-like id", parseAtlasPattern({ id: "https://evil", name: "X", transform: { type: "identity" }, appearance: {} }), null);
-eq("parser — rejects overlong name", parseAtlasPattern({ id: "valid", name: "x".repeat(61), transform: { type: "identity" }, appearance: {} }), null);
-
-{
-  const parsed = parseAtlasPattern({
-    id: "finite-defaults",
-    name: "Finite defaults",
-    version: Number.NaN,
-    transform: {
-      type: "identity",
-      rotation: Number.POSITIVE_INFINITY,
-      intensity: Number.NaN,
-      clusterSpacing: "1.4",
-    },
-    appearance: {
-      atmosphere: Number.NaN,
-      labelDensity: Number.NEGATIVE_INFINITY,
-      edgeOpacity: "0.9",
-    },
-  });
-  eq(
-    "parser — non-finite or non-numeric values get deterministic defaults",
-    parsed,
-    {
-      schemaVersion: 1,
-      id: "finite-defaults",
-      name: "Finite defaults",
-      version: 1,
-      transform: { type: "identity", rotation: 0, intensity: 0.5, clusterSpacing: 1 },
-      appearance: { atmosphere: 0.35, labelDensity: 0.8, edgeOpacity: 0.5 },
-    },
-  );
-}
 
 // ---------- deterministic transforms ----------
 
@@ -300,16 +222,13 @@ eq("parser — rejects overlong name", parseAtlasPattern({ id: "valid", name: "x
   );
 }
 
-// A parsed pattern is safe to execute even when the cached layout has missing
-// or corrupt points: the output remains finite for every requested node.
+// A composition is safe to execute even when its seed layout has missing or
+// corrupt points: the output stays finite for every requested node.
+// (This used to run through a hand-parsed "brain-warp" pattern. That legacy
+// transform and the JSON parser died with pattern import/export, so the same
+// invariant now runs against a shipped built-in.)
 {
-  const custom = parseAtlasPattern({
-    id: "safe-custom",
-    name: "Safe custom",
-    transform: { type: "brain-warp", rotation: 0.2, intensity: 0.9, clusterSpacing: 1.3 },
-    appearance: { atmosphere: 0.5, labelDensity: 1, edgeOpacity: 0.5 },
-  }) as AtlasPatternV1;
-  const positions = transformAtlasPositions(custom, [node("a"), node("missing")], {
+  const positions = transformAtlasPositions(atlasBuiltInPattern("globe"), [node("a"), node("missing")], {
     a: { x: Number.POSITIVE_INFINITY, y: 0 },
   });
   ok(

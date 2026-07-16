@@ -15,29 +15,19 @@ import { createNodeBorderProgram } from "@sigma/node-border";
 import { createEdgeCurveProgram } from "@sigma/edge-curve";
 import { toBlob } from "@sigma/export-image";
 import {
-  atlasLayoutEdges,
   type AtlasEdgeTier,
   type AtlasVisualModel,
 } from "../lib/atlasVisualModel";
 import {
   ATLAS_BUILT_IN_PATTERNS,
   atlasBuiltInPattern,
-  parseAtlasPattern,
   transformAtlasPositions,
-  type AtlasPatternV1,
   type AtlasPositions,
 } from "../lib/atlasPatterns";
-import {
-  atlasPositionsById,
-  atlasLayoutCacheKey,
-  getAtlasLayout,
-  getLatestAtlasLayout,
-  putAtlasLayout,
-} from "../lib/atlasLayoutCache";
+// atlasLayoutTypes survives the ForceAtlas removal: deterministicAtlasSeed
+// seeds EVERY composition, built-ins included.
 import {
   deterministicAtlasSeed,
-  type AtlasLayoutRequest,
-  type AtlasLayoutResponse,
   type AtlasPosition,
 } from "../lib/atlasLayoutTypes";
 import type { SimNode } from "../stores/graphStore";
@@ -52,7 +42,6 @@ import {
 } from "../stores/graphSettingsStore";
 
 type SemanticTier = "overview" | "medium" | "detail";
-type LayoutPhase = "seed" | "cache" | "layout" | "ready";
 
 interface AtlasNodeAttributes extends Attributes {
   x: number;
@@ -151,9 +140,7 @@ interface ThemeColors {
   warning: string;
 }
 
-const CUSTOM_PATTERNS_KEY = "nv.atlas.patterns.v1";
 const SELECTED_PATTERN_KEY = "nv.atlas.pattern";
-const MAX_CUSTOM_PATTERNS = 12;
 
 interface StyleMeta {
   eyebrow: string;
@@ -608,60 +595,6 @@ function initialPositions(nodes: readonly { id: string; degree: number }[]): Atl
   );
 }
 
-function loadCustomPatterns(): AtlasPatternV1[] {
-  try {
-    const raw = localStorage.getItem(CUSTOM_PATTERNS_KEY);
-    const decoded: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(decoded)) return [];
-    const result: AtlasPatternV1[] = [];
-    const seen = new Set<string>();
-    for (const item of decoded.slice(0, MAX_CUSTOM_PATTERNS * 2)) {
-      const parsed = parseAtlasPattern(item);
-      if (!parsed || seen.has(parsed.id)) continue;
-      seen.add(parsed.id);
-      result.push(parsed);
-      if (result.length >= MAX_CUSTOM_PATTERNS) break;
-    }
-    return result;
-  } catch {
-    return [];
-  }
-}
-
-function saveCustomPatterns(patterns: readonly AtlasPatternV1[]): void {
-  try {
-    localStorage.setItem(CUSTOM_PATTERNS_KEY, JSON.stringify(patterns.slice(0, MAX_CUSTOM_PATTERNS)));
-  } catch {
-    // Pattern persistence is optional; the imported pattern remains live.
-  }
-}
-
-function uniqueCustomId(input: string, patterns: readonly AtlasPatternV1[]): string {
-  const reserved = new Set([
-    ...ATLAS_BUILT_IN_PATTERNS.map((pattern) => pattern.id),
-    ...patterns.map((pattern) => pattern.id),
-  ]);
-  const base = (`custom-${input}`).slice(0, 40).replace(/-+$/g, "") || "custom-pattern";
-  if (!reserved.has(base)) return base;
-  for (let index = 2; index < 100; index += 1) {
-    const suffix = `-${index}`;
-    const candidate = `${base.slice(0, 40 - suffix.length)}${suffix}`;
-    if (!reserved.has(candidate)) return candidate;
-  }
-  return `custom-${Date.now().toString(36)}`.slice(0, 40);
-}
-
-function downloadBlob(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
 export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function AtlasGraph(
   {
     brainId,
@@ -686,11 +619,7 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   const rendererRef = useRef<Sigma<AtlasNodeAttributes, AtlasEdgeAttributes, AtlasGraphAttributes> | null>(null);
   const pulseRafRef = useRef<number | null>(null);
   const runtimeErrorReportedRef = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [layoutPhase, setLayoutPhase] = useState<LayoutPhase>("seed");
   const [rendererReady, setRendererReady] = useState(false);
-  const [patternNotice, setPatternNotice] = useState<string | null>(null);
-  const [customPatterns, setCustomPatterns] = useState<AtlasPatternV1[]>(loadCustomPatterns);
   const appTheme = useSettingsStore((state) => state.theme);
   const labelMode = useGraphSettingsStore((state) => state.labelMode);
   const connectionMode = useGraphSettingsStore((state) => state.connectionMode);
@@ -720,11 +649,8 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     }
     return result;
   }, [model.nodes, model.edges]);
-  const allPatterns = useMemo(
-    () => [...ATLAS_BUILT_IN_PATTERNS, ...customPatterns],
-    [customPatterns],
-  );
-  const pattern = allPatterns.find((item) => item.id === patternId) ?? atlasBuiltInPattern("timeline");
+  const pattern = ATLAS_BUILT_IN_PATTERNS.find((item) => item.id === patternId)
+    ?? atlasBuiltInPattern("timeline");
   const dendrite = useMemo(() => dendriteScene(model), [model]);
   const styleMeta = STYLE_META[pattern.id] ?? {
     eyebrow: "Custom",
@@ -741,13 +667,17 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     negative: appTheme.negative,
     warning: appTheme.accent,
   }), [appTheme]);
+  // Every built-in composition generates its own deterministic geometry from
+  // this seed; none simulates physics. (A ForceAtlas worker + IndexedDB layout
+  // cache used to sit behind `basePositions` here, but only the legacy
+  // identity/spiral/brain-warp transforms consumed them, and those were only
+  // reachable by hand-authoring a JSON pattern file -- removed 2026-07.)
   const seededPositions = useMemo(() => initialPositions(model.nodes), [model.nodes]);
-  const [basePositions, setBasePositions] = useState<AtlasPositions>(seededPositions);
   const displayPositions = useMemo(
     () => pattern.transform.type === "dendrite"
       ? dendrite.positions
-      : transformAtlasPositions(pattern, model.nodes, basePositions),
-    [pattern, model.nodes, basePositions, dendrite.positions],
+      : transformAtlasPositions(pattern, model.nodes, seededPositions),
+    [pattern, model.nodes, seededPositions, dendrite.positions],
   );
   const featuredEdgeIds = useMemo(
     () => pattern.transform.type === "dendrite"
@@ -777,106 +707,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     runtimeErrorReportedRef.current = true;
     onRuntimeError(error);
   }, [onRuntimeError]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let worker: Worker | null = null;
-    // Every curated V2 composition generates its own deterministic geometry.
-    // ForceAtlas is retained only for imported legacy transforms that actually
-    // consume a base layout, so opening the Graph Engine normally does zero
-    // layout simulation work.
-    const needsBaseLayout = pattern.transform.type === "identity"
-      || pattern.transform.type === "spiral"
-      || pattern.transform.type === "brain-warp";
-    if (!needsBaseLayout) {
-      setBasePositions(seededPositions);
-      setLayoutPhase("ready");
-      return () => undefined;
-    }
-    const key = atlasLayoutCacheKey(brainId || "default", model.fingerprint);
-    const requestId = `${model.fingerprint}-${Date.now().toString(36)}`;
-    const layoutEdges = atlasLayoutEdges(model);
-
-    setBasePositions(seededPositions);
-    setLayoutPhase("cache");
-
-    const run = async (): Promise<void> => {
-      const exact = await getAtlasLayout(key);
-      if (cancelled) return;
-      if (exact && exact.positions.length === model.nodes.length) {
-        setBasePositions(positionRecord(exact.positions));
-        setLayoutPhase("ready");
-        return;
-      }
-
-      const previous = await getLatestAtlasLayout(brainId || "default");
-      if (cancelled) return;
-      const seeds = deterministicAtlasSeed(
-        model.nodes.map((node) => ({ id: node.id, size: nodeSize(node) })),
-        atlasPositionsById(previous),
-      );
-      setBasePositions(positionRecord(seeds));
-
-      if (model.nodes.length < 2 || layoutEdges.length === 0) {
-        await putAtlasLayout(key, {
-          brainId: brainId || "default",
-          fingerprint: model.fingerprint,
-          positions: seeds,
-        });
-        if (!cancelled) setLayoutPhase("ready");
-        return;
-      }
-
-      setLayoutPhase("layout");
-      worker = new Worker(new URL("../workers/atlasLayout.worker.ts", import.meta.url), {
-        type: "module",
-        name: "neurovault-atlas-layout",
-      });
-      worker.onmessage = (event: MessageEvent<AtlasLayoutResponse>) => {
-        const response = event.data;
-        if (cancelled || response.requestId !== requestId) return;
-        if (response.type === "atlas-layout-error") {
-          setPatternNotice("Using the stable seed layout — refinement was unavailable.");
-          setLayoutPhase("ready");
-          worker?.terminate();
-          return;
-        }
-        const nextPositions = positionRecord(response.positions);
-        setBasePositions(nextPositions);
-        setLayoutPhase("ready");
-        void putAtlasLayout(key, {
-          brainId: brainId || "default",
-          fingerprint: model.fingerprint,
-          positions: response.positions,
-        });
-        worker?.terminate();
-      };
-      worker.onerror = () => {
-        if (cancelled) return;
-        setPatternNotice("Using the stable seed layout — refinement was unavailable.");
-        setLayoutPhase("ready");
-        worker?.terminate();
-      };
-      const request: AtlasLayoutRequest = {
-        type: "atlas-layout",
-        requestId,
-        nodes: seeds,
-        edges: layoutEdges.map((edge) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          weight: edge.weight,
-        })),
-      };
-      worker.postMessage(request);
-    };
-
-    void run();
-    return () => {
-      cancelled = true;
-      worker?.terminate();
-    };
-  }, [brainId, model, pattern.transform.type, seededPositions]);
 
   const graph = useMemo(() => {
     const next = new Graph<AtlasNodeAttributes, AtlasEdgeAttributes, AtlasGraphAttributes>({
@@ -1264,45 +1094,6 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
     try { localStorage.setItem(SELECTED_PATTERN_KEY, nextId); } catch { /* optional */ }
   }, []);
 
-  const importPattern = useCallback(async (file: File | undefined) => {
-    if (!file) return;
-    if (file.size > 64 * 1024) {
-      setPatternNotice("Pattern files must be smaller than 64 KB.");
-      return;
-    }
-    try {
-      const decoded: unknown = JSON.parse(await file.text());
-      const parsed = parseAtlasPattern(decoded);
-      if (!parsed) {
-        setPatternNotice("That file is not a valid Atlas pattern.");
-        return;
-      }
-      const imported = { ...parsed, id: uniqueCustomId(parsed.id, customPatterns) };
-      const next = [...customPatterns, imported].slice(-MAX_CUSTOM_PATTERNS);
-      setCustomPatterns(next);
-      saveCustomPatterns(next);
-      selectPattern(imported.id);
-      setPatternNotice(`Imported “${imported.name}”.`);
-    } catch {
-      setPatternNotice("That pattern file could not be read.");
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }, [customPatterns, selectPattern]);
-
-  const exportPattern = useCallback(() => {
-    const blob = new Blob([`${JSON.stringify(pattern, null, 2)}\n`], { type: "application/json" });
-    downloadBlob(blob, `${pattern.id}.neurovault-pattern.json`);
-    setPatternNotice("Saved this visual style as a reusable preset. Use Save image for a picture of the graph.");
-  }, [pattern]);
-
-  const phaseLabel = layoutPhase === "cache"
-    ? "Restoring composition…"
-    : layoutPhase === "layout"
-      ? "Composing snapshot…"
-      : layoutPhase === "seed"
-        ? "Preparing graph engine…"
-        : null;
   const atmosphereAlpha = 0.04 + pattern.appearance.atmosphere * 0.12;
   const shownRelationshipCount = connectionMode === "off"
     ? 0
@@ -1429,61 +1220,8 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
           </div>
         </div>
 
-        <div className="mt-3 flex items-center gap-1 border-t pt-2" style={{ borderColor: colorWithAlpha(colors.border, 0.55) }}>
-          {customPatterns.length > 0 && (
-            <select
-              value={pattern.id}
-              onChange={(event) => selectPattern(event.target.value)}
-              className="min-w-0 flex-1 rounded bg-transparent px-1 py-1 text-[9px] outline-none"
-              style={{ color: colors.dim }}
-              aria-label="Select a custom graph composition"
-            >
-              <option value={pattern.id}>{pattern.name}</option>
-              {customPatterns.filter((item) => item.id !== pattern.id).map((item) => (
-                <option key={item.id} value={item.id}>{item.name}</option>
-              ))}
-            </select>
-          )}
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="rounded px-2 py-1 text-[9px]"
-            style={{ color: colors.dim }}
-            title="Import a reusable visual style preset (.json)"
-          >
-            Import style
-          </button>
-          <button
-            type="button"
-            onClick={exportPattern}
-            className="rounded px-2 py-1 text-[9px]"
-            style={{ color: colors.dim }}
-            title="Save only this visual style as a reusable .json preset"
-          >
-            Save style
-          </button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(event) => { void importPattern(event.target.files?.[0]); }}
-        />
       </div>
 
-      {(phaseLabel || patternNotice) && (
-        <div
-          className="absolute top-4 left-[344px] z-20 rounded-lg px-2 py-1 text-[10px] font-[Geist,sans-serif]"
-          style={{
-            background: "var(--nv-surface)",
-            border: "1px solid var(--nv-border)",
-            color: "var(--nv-text-muted)",
-          }}
-        >
-          {patternNotice ?? phaseLabel}
-        </div>
-      )}
 
       <div
         className="absolute bottom-5 left-1/2 z-20 max-w-[calc(100%-32px)] -translate-x-1/2 overflow-x-auto rounded-2xl p-1.5 font-[Geist,sans-serif]"
