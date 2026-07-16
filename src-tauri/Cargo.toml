@@ -142,7 +142,7 @@ regex = "1"
 # unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
 # — we match so a row written by either runtime is seen as unchanged
 # by the other and doesn't trigger an unnecessary re-embed.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Phase 6: async runtime + HTTP server. `tokio` powers axum's event
 # loop. `axum` gives us the same `/api/*` surface the Python FastAPI
