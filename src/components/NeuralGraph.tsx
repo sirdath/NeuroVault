@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from "react";
-import type { SimulationNodeDatum } from "d3-force";
 import { useGraphStore } from "../stores/graphStore";
 import { GraphFilterPanel } from "./GraphFilterPanel";
 import type { SimNode } from "../stores/graphStore";
@@ -38,13 +37,6 @@ import { LabelSpriteCache, isKeyLabelNode, labelText } from "../lib/graphLabelSp
 import type { Object3D } from "three";
 import { toast } from "../stores/toastStore";
 
-type Composer = { addPass: (pass: unknown) => void; passes: unknown[] };
-type ForceGraph3DComposerAccess = { postProcessingComposer(): Composer };
-
-// Everyday views are snapshots. These explicit gates keep the legacy force
-// and bloom wiring inert while the Graph Engine remains independently rich.
-const ENABLE_EVERYDAY_LIVE_LAYOUT = false;
-const ENABLE_EVERYDAY_BLOOM = false;
 // react-force-graph ships heavy ThreeJS deps in its 3D variant. Lazy-load so
 // the 2D/Atlas modes don't pull in the whole 3D bundle until
 // the user actually toggles into 3D view. Cuts initial bundle size ~600 KB.
@@ -354,39 +346,6 @@ function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number;
   return lower.concat(upper);
 }
 
-function createClusterForce(strength: number = 0.08) {
-  type F = {
-    (alpha: number): void;
-    initialize?: (nodes: unknown[]) => void;
-  };
-  let nodes: Array<{ folder?: string; x?: number; y?: number; vx?: number; vy?: number }> = [];
-  const force: F = (alpha: number) => {
-    if (!nodes.length) return;
-    // Accumulate centroids by folder in one pass.
-    const sums = new Map<string, { x: number; y: number; n: number }>();
-    for (const n of nodes) {
-      if (n.x == null || n.y == null) continue;
-      const key = n.folder ?? "";
-      const s = sums.get(key);
-      if (s) { s.x += n.x; s.y += n.y; s.n += 1; }
-      else sums.set(key, { x: n.x, y: n.y, n: 1 });
-    }
-    const centroids = new Map<string, { x: number; y: number }>();
-    for (const [k, s] of sums) centroids.set(k, { x: s.x / s.n, y: s.y / s.n });
-
-    const k = strength * alpha;
-    for (const n of nodes) {
-      if (n.x == null || n.y == null) continue;
-      const c = centroids.get(n.folder ?? "");
-      if (!c) continue;
-      n.vx = (n.vx ?? 0) + (c.x - n.x) * k;
-      n.vy = (n.vy ?? 0) + (c.y - n.y) * k;
-    }
-  };
-  force.initialize = (ns: unknown[]) => { nodes = ns as typeof nodes; };
-  return force;
-}
-
 // "static" is a frozen, interactive 2D layout: the same ForceGraph2D canvas
 // as "2d" (pan/zoom/hover/click all work) but with the d3-force simulation
 // disabled, so there is no per-frame physics loop burning CPU. It exists for
@@ -427,8 +386,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const cameraFrameTokenRef = useRef(0);
   const atlasRef = useRef<AtlasGraphHandle>(null);
   const lastSnapshotModeRef = useRef<"2d" | "3d">(mode === "3d" ? "3d" : "2d");
-  const bloomAttachedRef = useRef(false);
-  const clusterAttachedRef = useRef(false);
   // Master performance switch. "lite" derives a low-power preset at read
   // time — the individual settings below are shadowed when lite is on, so
   // the user's real preferences are preserved and restored on switch back.
@@ -436,186 +393,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // renders in that mode.)
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
   const lite = graphMode === "lite";
-  const animations = false;
-  // Live snapshot the d3-force collide+link callbacks read on every
-  // tick. Keeping it in a ref avoids re-attaching the forces (which
-  // would restart the simulation) every time analytics state flips.
-  // Updated by the effect below whenever PR data or the toggle moves.
-  const analyticsRadiusRef = useRef<{
-    applyPRBoost: boolean;
-    prMap: Map<string, number> | null;
-  }>({ applyPRBoost: false, prMap: null });
 
-  // On toggle into 3D, lazy-import UnrealBloomPass and inject it into the
-  // composer. Kept separate from the 2D path so the bloom module (and its
-  // Three.js addons) only ship in the already-lazy 3D chunk.
-  useEffect(() => {
-    if (!ENABLE_EVERYDAY_BLOOM || mode !== "3d") return;
-    // Animations off → skip the bloom pass entirely. Bloom is the single
-    // biggest GPU cost in the 3D view; honouring the toggle here is the
-    // main "save compute" win the user asked for.
-    if (!animations) return;
-    let cancelled = false;
-    const tryAttach = async () => {
-      const fg = fg3dRef.current as ForceGraph3DComposerAccess | undefined;
-      if (!fg || bloomAttachedRef.current) return;
-      const composer = fg.postProcessingComposer?.();
-      if (!composer) return;
-      const [{ UnrealBloomPass }, { Vector2 }] = await Promise.all([
-        import("three/examples/jsm/postprocessing/UnrealBloomPass.js"),
-        import("three"),
-      ]);
-      if (cancelled) return;
-      // Tuned so "fresh" (brand blue) and "connected" (teal) nodes bleed light
-      // without drowning the rest of the scene. resolution scales with
-      // the container; strength/radius/threshold are the classic UE4
-      // bloom knobs (threshold 0.85 ≈ only bright colors bloom).
-      const pass = new UnrealBloomPass(
-        new Vector2(size.w, size.h),
-        0.9, // strength
-        0.6, // radius
-        0.1, // threshold (low so most bright colors contribute)
-      );
-      composer.addPass(pass);
-      bloomAttachedRef.current = true;
-    };
-    // The ref isn't populated synchronously when Suspense resolves, so
-    // retry a couple of times over the next few frames.
-    const id = window.setInterval(tryAttach, 200);
-    // Also try immediately in case it's ready already.
-    tryAttach();
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [mode, size.w, size.h, animations]);
-
-  // Clearing the flag on mode-switch so bloom re-attaches if the user
-  // toggles 3D → 2D → 3D (the composer is a fresh instance each time).
-  useEffect(() => {
-    // Any non-3D mode (2d or static) has no Three.js composer, so drop the
-    // bloom flag — it re-attaches if the user returns to 3D.
-    if (mode !== "3d") bloomAttachedRef.current = false;
-    // Same story for the cluster force — re-mounted ForceGraph instance
-    // means a fresh d3-force graph with no custom forces attached.
-    clusterAttachedRef.current = false;
-  }, [mode]);
-
-  // Install the folder-cluster force + tighter charge/collide tuning
-  // on the 2D graph's d3-force sim. Default force-graph parameters
-  // are tuned for ~100 nodes; at 250+ nodes with 30k+ edges the
-  // default charge (-30) and no-collide behaviour produce a hairball.
-  //
-  // Cluster strength 0.03 (was 0.08): gentler pull so folders are
-  // still visible as regions but don't clump into tight balls that
-  // hide intra-folder structure.
-  //
-  // Charge -120: ~4× default repulsion; spreads the graph into a
-  // more readable layout at our scale.
-  //
-  // Collide radius: matches the drawn `nodeRadius` + a 4-px buffer
-  // so nodes never overlap visually. `replace` rendering mode made
-  // the library's internal collision calc use `nodeVal` (which maps
-  // to a smaller radius than we actually draw) — this fixes the
-  // "nodes intertwine" symptom.
-  useEffect(() => {
-    if (!ENABLE_EVERYDAY_LIVE_LAYOUT || mode !== "2d") return;
-    if (clusterAttachedRef.current) return;
-    let cancelled = false;
-
-    type D3ForceAPI = {
-      d3Force: (name: string, force?: unknown) => D3ForceAPI;
-      d3ReheatSimulation?: () => void;
-    };
-
-    const tryAttach = async () => {
-      if (cancelled || clusterAttachedRef.current) return;
-      const fg = fg2dRef.current as D3ForceAPI | undefined;
-      if (!fg || typeof fg.d3Force !== "function") return;
-      try {
-        // Lazy-load d3-force. ~30 KB gzipped, already a transitive
-        // dep of react-force-graph-2d — no bundle cost.
-        const d3 = await import("d3-force");
-
-        // Force tuning — rebalanced for the smaller 2.5-7 px node
-        // size. Default force-graph is tuned for bigger nodes at
-        // ~100 count; our 250+ nodes at smaller draw size need
-        // less aggressive repulsion + tighter links to look tidy.
-        //
-        //   charge -90, distanceMax 280  → enough to separate
-        //     clusters without flinging outliers to the edge of
-        //     the canvas.
-        //   collide r + 1 px  → matched to the (smaller) drawn
-        //     radius; tight enough that the graph packs densely
-        //     but no overlap.
-        //   cluster 0.025 → folder pull is a visual hint, not a
-        //     vacuum.
-        //   link distance 26 → nodes connected by a strong edge
-        //     sit close, forming a readable "group". Was 50,
-        //     felt sparse against the smaller nodes.
-        fg.d3Force(
-          "charge",
-          d3.forceManyBody().strength(-90).distanceMax(280),
-        );
-        const collide = d3
-          .forceCollide<SimulationNodeDatum>()
-          .radius((node) => {
-            const n = node as SimulationNodeDatum & {
-              access_count?: number; degree?: number; id?: string;
-            };
-            const { applyPRBoost, prMap } = analyticsRadiusRef.current;
-            // +2 buffer (was +1) so even at the largest 11-px hub the
-            // gap between centres is ≥ 4 px — prevents the "two index
-            // hubs overlap" symptom when Analytics resize is on.
-            return effectiveNodeRadius(n, prMap, applyPRBoost) + 2;
-          })
-          .strength(0.95)
-          .iterations(2);
-        fg.d3Force("collide", collide);
-        fg.d3Force("cluster", createClusterForce(0.025));
-        // Containment forces. See README on store for `centeringStrength`.
-        // Initial values come from the store; a separate effect
-        // updates them live when the user moves the panel slider.
-        fg.d3Force("centerX", d3.forceX(0).strength(0.04));
-        fg.d3Force("centerY", d3.forceY(0).strength(0.04));
-        const linkForce = (fg as unknown as {
-          d3Force: (n: string) => {
-            distance?: (d: number | ((l: unknown) => number)) => unknown;
-          } | undefined;
-        }).d3Force("link");
-        if (linkForce && typeof linkForce.distance === "function") {
-          // Per-link distance instead of a fixed 26 — when Analytics
-          // resize is on, hubs need more room. Adds up to 8 px when
-          // either endpoint is a PR-boosted hub.
-          linkForce.distance((rawLink: unknown) => {
-            const { applyPRBoost, prMap } = analyticsRadiusRef.current;
-            if (!applyPRBoost || !prMap) return 26;
-            const l = rawLink as {
-              source: { id?: string } | string;
-              target: { id?: string } | string;
-            };
-            const sId = typeof l.source === "string" ? l.source : l.source.id;
-            const tId = typeof l.target === "string" ? l.target : l.target.id;
-            const sPr = sId ? (prMap.get(sId) ?? 1) : 1;
-            const tPr = tId ? (prMap.get(tId) ?? 1) : 1;
-            const maxBoost = Math.sqrt(Math.max(0, Math.max(sPr, tPr) - 1)) * 1.4;
-            return 26 + Math.min(8, maxBoost * 3);
-          });
-        }
-        fg.d3ReheatSimulation?.();
-        clusterAttachedRef.current = true;
-      } catch {
-        /* ref not ready yet — retry on next interval tick */
-      }
-    };
-
-    const id = window.setInterval(tryAttach, 200);
-    tryAttach();
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [mode]);
 
   const { nodes: rawNodes, edges: rawEdges, loadGraph, setSelected } = useGraphStore();
   const focusRequest = useGraphStore((s) => s.focusRequest);
@@ -650,10 +428,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const nodeSizeScale = useGraphSettingsStore((s) => s.nodeSizeScale);
   const linkThicknessScale = useGraphSettingsStore((s) => s.linkThicknessScale);
   const showArrows = useGraphSettingsStore((s) => s.showArrows);
-  const centeringStrength = useGraphSettingsStore((s) => s.centeringStrength);
-  const chargeStrengthRaw = useGraphSettingsStore((s) => s.chargeStrength);
-  const linkDistanceCfgRaw = useGraphSettingsStore((s) => s.linkDistance);
-  const layoutShape = useGraphSettingsStore((s) => s.layoutShape);
   const timelapseSpeedSec = useGraphSettingsStore((s) => s.timelapseSpeedSec);
   const groupingStyleRaw = useGraphSettingsStore((s) => s.groupingStyle);
   const labelMode = useGraphSettingsStore((s) => s.labelMode);
@@ -664,16 +438,13 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // Lite preset: derive the cheap overrides from `lite` so the user's
   // persisted choices are untouched and snap back when they pick Full again.
   // (Semantic-edge hairball off, code layer off, orphans hidden, manual-only
-  // edges, no cluster labels, soft tints, analytics off, labels only when
-  // zoomed in, and a wider/cheaper force tune.)
+  // edges, no cluster labels, soft tints, analytics off.)
   const showSemanticEdges = lite ? false : showSemanticEdgesRaw;
   const showOrphans = lite ? false : showOrphansRaw;
   const manualOnly = lite ? true : manualOnlyRaw;
   const showCode = lite ? false : showCodeRaw;
   const showClusterLabels = lite ? false : showClusterLabelsRaw;
   const analyticsMode = lite ? false : analyticsModeRaw;
-  const chargeStrength = lite ? -50 : chargeStrengthRaw;
-  const linkDistanceCfg = lite ? 18 : linkDistanceCfgRaw;
   const groupingStyle = lite ? "soft" : groupingStyleRaw;
 
   // Lite mode drops the high-volume `semantic` edges at the SOURCE (server
@@ -711,50 +482,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   const [tlProgress, setTlProgress] = useState(1);
   const tlActive = tlStartMs != null;
 
-  // Reactive force tuning — when the user moves a slider in the
-  // filter panel, mutate the existing force instances in place.
-  // Re-attaching the simulation would restart it (jarring); calling
-  // .strength() / .distance() on the already-attached force keeps
-  // positions and just retunes the gradient.
-  useEffect(() => {
-    if (!ENABLE_EVERYDAY_LIVE_LAYOUT || mode !== "2d") return;
-    type ForceWithSetters = {
-      strength?: (n: number) => unknown;
-      distance?: (n: number) => unknown;
-      radius?: (n: number) => unknown;
-    };
-    type ForceFactory = {
-      forceRadial: (radius: number, x: number, y: number) => ForceWithSetters;
-    };
-    const fg = fg2dRef.current as
-      | {
-          d3Force: (n: string, f?: unknown) => ForceWithSetters | undefined;
-          d3ReheatSimulation?: () => void;
-        }
-      | undefined;
-    if (!fg || typeof fg.d3Force !== "function") return;
-    fg.d3Force("centerX")?.strength?.(centeringStrength);
-    fg.d3Force("centerY")?.strength?.(centeringStrength);
-    fg.d3Force("charge")?.strength?.(chargeStrength);
-    fg.d3Force("link")?.distance?.(linkDistanceCfg);
-    // Layout shape: "circle" attaches a forceRadial pulling every
-    // (non-pinned) node onto a ring at radius 200 with strength 0.08.
-    // "organic" clears it so the d3 default reasserts itself.
-    if (layoutShape === "circle") {
-      // Lazy import keeps d3-force out of the initial bundle for the
-      // organic-layout default.
-      import("d3-force").then((d3) => {
-        const factory = d3 as unknown as ForceFactory;
-        const ring = factory.forceRadial(220, 0, 0);
-        ring.strength?.(0.08);
-        fg.d3Force("ring", ring);
-        fg.d3ReheatSimulation?.();
-      });
-    } else {
-      fg.d3Force("ring", null);
-    }
-    fg.d3ReheatSimulation?.();
-  }, [mode, centeringStrength, chargeStrength, linkDistanceCfg, layoutShape]);
 
   // Every visible mode exports an actual PNG. Atlas renders a temporary Sigma
   // image; 2D captures its fixed canvas. The 3D path renders one explicit
@@ -1380,17 +1107,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   useEffect(() => {
     focusClusterRef.current = analyticsData?.com ?? null;
   }, [analyticsData]);
-
-  // Keep the d3-force radius/distance ref in sync with the live
-  // analytics state. Re-heating the simulation when this flips lets
-  // the existing collide+link forces relax with the new sizes — no
-  // need to detach/re-attach forces (which would feel jumpy).
-  useEffect(() => {
-    analyticsRadiusRef.current = {
-      applyPRBoost: analyticsMode && analyticsResizeByImportance,
-      prMap: analyticsData?.pr ?? null,
-    };
-  }, [analyticsMode, analyticsResizeByImportance, analyticsData]);
 
   // (Hover-driven tip bar copy lives further down, after focusedNodeId
   //  is declared.)
