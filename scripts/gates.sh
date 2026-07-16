@@ -48,6 +48,16 @@ if [ "${GATES_FRONTEND:-1}" = "1" ]; then
   echo "── release hardening invariants"
   (cd .. && npm run test:hardening) || fail "release hardening"
 
+  # This gate ran neither test:graph nor test:durability, and vitest's include
+  # ("src/**/*.test.tsx") skips every .ts suite — so graphExport, consumerHealth
+  # and noteDrafts were run by nothing at all. The graph replay guarantee ("a
+  # refresh with unchanged content must not move a single note") therefore went
+  # unverified through ~2,100 lines of graph deletions in 2026-07. They happened
+  # to still pass; that was luck, not a gate. run-lib-tests.mjs discovers the
+  # suites instead of listing them, so a new orphan cannot appear.
+  echo "── lib suites (graph replay, durability, export, health, drafts)"
+  (cd .. && npm run test:lib) || fail "lib suites"
+
   echo "── component accessibility tests"
   (cd .. && npm run test:ui) || fail "component accessibility"
 
