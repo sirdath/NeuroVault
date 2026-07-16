@@ -18,6 +18,27 @@ fn list_notes_is_brain_scoped() {
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("NEUROVAULT_HOME", &home);
 
+    // Resolving a brain opens its db, which load_extension()s sqlite-vec; the
+    // server's default candidate paths don't resolve from target/<profile>/deps/,
+    // so point at the shipped extension — as the other integration suites do.
+    let vec0_file = if cfg!(target_os = "windows") {
+        "vec0.dll"
+    } else if cfg!(target_os = "macos") {
+        "vec0.dylib"
+    } else {
+        "vec0.so"
+    };
+    let vec0 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(vec0_file);
+    assert!(
+        vec0.exists(),
+        "{vec0_file} missing at {vec0:?} — build resources are incomplete \
+         (CI downloads it on Linux; for a local run, fetch the matching \
+         sqlite-vec loadable into src-tauri/resources/)"
+    );
+    std::env::set_var("NEUROVAULT_VEC_EXTENSION", &vec0);
+
     // Two brains, a distinct note in each.
     for (brain, title) in [("alpha", "Alpha-only note"), ("beta", "Beta-only note")] {
         let ctx = BrainContext::resolve(Some(brain), paths::vault_dir(brain)).unwrap();
