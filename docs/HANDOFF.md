@@ -1,7 +1,10 @@
-# NeuroVault — Session Handoff (2026-06-23)
+# NeuroVault — Session Handoff
 
 Context transfer for a fresh Claude session. Read this top-to-bottom, then
 do **§7 Immediate next task**.
+
+> Living document — kept current as the code changes (last updated 2026-07-16);
+> it is not a snapshot of any one session. §7 is the only time-sensitive part.
 
 ---
 

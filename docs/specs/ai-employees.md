@@ -1,6 +1,7 @@
 # AI Employees on NeuroVault — spec v1 (2026-07-05)
 
-> Status: DRAFT, internal (deliberately untracked, like HANDOFF.md).
+> Status: DRAFT, internal. Tracked in-repo (as is `docs/HANDOFF.md`), but
+> internal-facing: it describes an intended design, not shipped behaviour.
 > Decision owner: Dath. Engine principle preserved throughout: NeuroVault
 > stays a coordination/memory SUBSTRATE; it never runs or schedules agents.
 > The runner is a separate companion process.
