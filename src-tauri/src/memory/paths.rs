@@ -123,11 +123,19 @@ mod tests {
         assert!(d.ends_with("brains/test-brain") || d.ends_with("brains\\test-brain"));
     }
 
+    // Asserted from ONE db_path() call on purpose. This used to also call
+    // brain_dir() and assert db.starts_with(brain_dir) -- but both resolve
+    // through nv_home(), which reads $NEUROVAULT_HOME at call time. Sibling
+    // tests (journal, consolidate, proposals, retriever) set and remove that
+    // var, and cargo runs tests as parallel threads sharing one process
+    // environment, so a flip landing between the two reads resolved them
+    // against different roots and failed the assert at random. Same invariant,
+    // no race.
     #[test]
     fn db_path_sits_inside_brain_dir() {
         let db = db_path("test-brain");
-        let br = brain_dir("test-brain");
-        assert!(db.starts_with(&br));
         assert_eq!(db.file_name().and_then(|s| s.to_str()), Some("brain.db"));
+        let parent = db.parent().expect("db path must have a parent dir");
+        assert!(parent.ends_with("brains/test-brain") || parent.ends_with("brains\\test-brain"));
     }
 }

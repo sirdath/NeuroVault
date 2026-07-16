@@ -33,16 +33,24 @@ test.beforeEach(async ({ page }) => {
 
 test("the consumer shell boots, navigates, and has no serious structural accessibility violations", async ({ page }) => {
   await page.goto("/");
+  // The primary nav is deliberately small: Memories / Graph / Today (see
+  // PRIMARY_NAV_ITEMS in ConsumerNavigation.tsx). Search moved to the command
+  // palette and Privacy & Trust is reached from the health pill -- neither is a
+  // nav button any more, and SettingsView.test.tsx asserts "Privacy & Trust" is
+  // NOT a button. Asserting them here contradicted that and broke CI.
   await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Memories", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Graph", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Privacy & Trust", exact: true })).toBeVisible();
   await expect(page.getByText("Something crashed while rendering")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  // Settings must not be a trap: the nav rail stays put. Query the real
+  // landmark -- "Main navigation" labels the <aside> (role=complementary); the
+  // navigation role belongs to the <nav aria-label="NeuroVault"> inside it, so
+  // getByRole("navigation", {name: "Main navigation"}) could never match.
+  await expect(page.getByRole("navigation", { name: "NeuroVault" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open settings" })).toHaveAttribute("aria-current", "page");
 
   const audit = await new AxeBuilder({ page }).analyze();

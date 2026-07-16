@@ -94,8 +94,18 @@ jobs:
 
       # The headless check deliberately excludes src/app.rs. Keep a second
       # gate for the real Tauri target so native menu/window code is compiled.
+      #
+      # TAURI_CONFIG empties `externalBin` for this step only. build.rs
+      # (tauri_build) validates that the sidecar staged by scripts/stage-sidecar.mjs
+      # exists on EVERY compile of the crate, so on a clean checkout this step
+      # died in build.rs ("resource path binaries/neurovault-server-<triple>
+      # doesn't exist") before clippy ever ran. Linting doesn't bundle anything,
+      # so we reuse the same escape hatch stage-sidecar.mjs itself documents
+      # rather than spend minutes building a 38 MB binary just to lint.
       - name: Clippy — desktop GUI (deny warnings)
         working-directory: src-tauri
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests
