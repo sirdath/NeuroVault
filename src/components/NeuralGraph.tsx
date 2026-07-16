@@ -27,7 +27,7 @@ import { buildAtlasVisualModel } from "../lib/atlasVisualModel";
 import { graphSnapshot2D, graphSnapshot3D } from "../lib/graphSnapshots";
 import {
   INTERACTIVE_WEBGL_RENDERER_CONFIG,
-  canvasToPngBlob,
+  canvasToPngBlobWithBackground,
   copyPngToClipboard,
   downloadBlob,
   graphImageFilename,
@@ -769,10 +769,16 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       if (!fg3dRef.current) return null;
       return renderThreeGraphToPng(fg3dRef.current as ThreeGraphCaptureTarget);
     }
+    // force-graph mounts the visible scene canvas first and may mount a second
+    // canvas for pointer picking, so take the first explicitly rather than
+    // relying on there being only one.
     const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
     if (!canvas) return null;
-    return canvasToPngBlob(canvas);
-  }, [mode]);
+    // The 2D canvas is transparent (backgroundColor="rgba(0,0,0,0)"); its
+    // backdrop is CSS on the container, which toBlob() cannot see. Composite
+    // the theme background in or the PNG exports invisible on light surfaces.
+    return canvasToPngBlobWithBackground(canvas, graphTheme.bg);
+  }, [mode, graphTheme.bg]);
 
   const handleSaveImage = useCallback(async () => {
     try {
@@ -1294,7 +1300,10 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           pinned: true,
         };
       }),
-      links: snapshotLinks,
+      // Own copies. force-graph resolves link.source from an id string into the
+      // actual node OBJECT and writes it back onto the link, so a shared array
+      // would leave 3D holding 2D's nodes (and vice versa). See snapshot3DData.
+      links: snapshotLinks.map((link) => ({ ...link })),
     };
   }, [graphData, snapshotLinks, snapshotModel]);
 
@@ -1318,7 +1327,15 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
           pinned: true,
         };
       }),
-      links: snapshotLinks,
+      // Own copies — this is the bug that made 3D draw links that connect
+      // nothing. Both snapshots used to share ONE snapshotLinks array while
+      // each built FRESH node objects. d3-force resolved link.source from the
+      // "id" string into a 2D node object and wrote it back; d3-force-3d then
+      // saw `typeof link.source === "object"` and skipped re-resolution, so 3D
+      // links stayed bound to 2D nodes and were drawn at the 2D packing radius
+      // (~330) flattened to z=0, while 3D nodes sit on a Fibonacci shell of
+      // radius 90-220. Wrong space, wrong plane, touching no node.
+      links: snapshotLinks.map((link) => ({ ...link })),
     };
   }, [graphData, snapshotLinks, snapshotModel]);
 
@@ -2501,6 +2518,14 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             nodeCanvasObject={paintNode2D}
             nodeCanvasObjectMode={() => "replace"}
             nodePointerAreaPaint={paintPointerArea2D}
+            // Bind through `from`/`to`, not the default `source`/`target`. The
+            // library does `link.source = link[linkSource]` on every data bind:
+            // with the default that is a self-assign no-op once d3 has replaced
+            // the id string with a node object, so a link can never be rebound
+            // to a different graph's nodes. `from`/`to` are never mutated, so
+            // this restores the id each bind and lets d3 re-resolve correctly.
+            linkSource="from"
+            linkTarget="to"
             linkLabel={linkLabel}
             linkColor={linkColor}
             linkWidth={linkWidth}
@@ -2535,11 +2560,24 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
             nodeVal={nodeVal}
             nodeColor={nodeColor}
             nodeOpacity={0.9}
+            // See the 2D comment: bind through the never-mutated `from`/`to`.
+            linkSource="from"
+            linkTarget="to"
             linkLabel={linkLabel}
             linkColor={linkColor}
-            linkWidth={linkWidth}
+            // 0 renders THREE.Line (a crisp 1px line) instead of a cylinder.
+            // linkWidth returns ~0.24-0.38, which three-forcegraph treats as a
+            // cylinder of WORLD radius ~0.12-0.19 inside a 90-220 unit scene --
+            // i.e. sub-pixel. Lines are also far cheaper across thousands of
+            // edges; confidence stays encoded in linkColor's alpha.
+            linkWidth={0}
             linkCurvature={linkCurvature}
-            linkOpacity={0.38}
+            // 1, not 0.38: three-forcegraph computes
+            // `opacity = linkOpacity * colorAlpha(color)`, and linkColor already
+            // bakes in alpha (0.065-0.117). Multiplying by 0.38 gave an
+            // effective 2.5-4.4% -- invisible. 2D applies that alpha exactly
+            // once, which is why only 3D looked broken.
+            linkOpacity={1}
             linkDirectionalParticles={0}
             onNodeHover={handleNodeHover}
             onNodeClick={handleNodeClick}

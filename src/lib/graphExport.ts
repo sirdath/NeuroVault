@@ -35,6 +35,33 @@ export function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 /**
+ * Encode a canvas onto an opaque background.
+ *
+ * The 2D graph renders with `backgroundColor="rgba(0,0,0,0)"` and gets its dark
+ * backdrop from CSS on the container — which `canvas.toBlob()` cannot see. The
+ * exported PNG was therefore fully transparent, so every dark node fill and
+ * label turned invisible the moment it was pasted onto a light background
+ * (Slack, Docs, Keynote). That was the default mode's Save/Copy image.
+ *
+ * Compositing here rather than making the live canvas opaque keeps on-screen
+ * rendering byte-identical; only the exported image changes.
+ */
+export function canvasToPngBlobWithBackground(
+  canvas: HTMLCanvasElement,
+  background: string,
+): Promise<Blob> {
+  const out = document.createElement("canvas");
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext("2d");
+  if (!ctx) return canvasToPngBlob(canvas);
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(canvas, 0, 0);
+  return canvasToPngBlob(out);
+}
+
+/**
  * Render one fresh frame immediately before encoding a 3D graph. This keeps
  * normal interaction on the cheaper non-preserved WebGL buffer without
  * turning Save/Copy image into a blank canvas.
