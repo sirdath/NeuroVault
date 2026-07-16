@@ -42,6 +42,30 @@ fn consulting_room_story() {
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("NEUROVAULT_HOME", &home);
 
+    // open_brain() load_extension()s sqlite-vec. Running from
+    // target/<profile>/deps/ none of the server's default candidate paths
+    // resolve (one even looks for target/src-tauri/resources/vec0.*), so point
+    // at the shipped extension explicitly -- same approach, and same reason, as
+    // retrieval_integration.rs. Windows/macOS commit vec0.dll/.dylib; CI
+    // downloads vec0.so for Linux.
+    let vec0_file = if cfg!(target_os = "windows") {
+        "vec0.dll"
+    } else if cfg!(target_os = "macos") {
+        "vec0.dylib"
+    } else {
+        "vec0.so"
+    };
+    let vec0 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(vec0_file);
+    assert!(
+        vec0.exists(),
+        "{vec0_file} missing at {vec0:?} — build resources are incomplete \
+         (CI downloads it on Linux; for a local run, fetch the matching \
+         sqlite-vec loadable into src-tauri/resources/)"
+    );
+    std::env::set_var("NEUROVAULT_VEC_EXTENSION", &vec0);
+
     let brain_id = "scenario";
     let brain = db::open_brain(brain_id).expect("open temp brain");
     let scope = Scope::room(brain_id, "clients/acme");
