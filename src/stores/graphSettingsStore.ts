@@ -104,15 +104,15 @@ interface GraphSettings {
    *  times (the original behaviour). When false, only the cluster of
    *  the focused node is labelled (Phase 4 default). */
   showClusterLabels: boolean;
-  /** Master toggle for the Analytics layer (PageRank-driven node
-   *  sizing + community tints + tip bar). Default: off. Toggled via
-   *  the toolbar pill or Cmd+Shift+A. Persisted so the user's choice
-   *  survives reloads. */
+  /** Master toggle for the Analytics layer (community tints, cluster
+   *  legend, tip bar). Default: off. Toggled via the toolbar pill or
+   *  Cmd+Shift+A. Persisted so the user's choice survives reloads.
+   *  NOTE: this no longer resizes nodes by PageRank. The fixed snapshots
+   *  size by degree via snapshotNodeRadius; the old PR boost survived only
+   *  in the invisible pointer hit area, which made the click target ~2.7x
+   *  the drawn dot. Removed 2026-07 along with analyticsResizeByImportance,
+   *  a setting that had no UI to toggle it. */
   analyticsMode: boolean;
-  /** When analyticsMode is on: also resize nodes by importance
-   *  (PageRank). User can opt out per-layer in Settings → Graph
-   *  without disabling analytics entirely. */
-  analyticsResizeByImportance: boolean;
   /** When analyticsMode is on: also tint backgrounds by community. */
   analyticsGroupByCommunity: boolean;
   /** When false (default), edges with link_type === "semantic" are
@@ -184,7 +184,6 @@ const DEFAULTS: GraphSettings = {
   nodeShape: "circle",
   showClusterLabels: false,
   analyticsMode: false,
-  analyticsResizeByImportance: true,
   analyticsGroupByCommunity: true,
   showSemanticEdges: false,
   folderColors: {},
@@ -250,7 +249,6 @@ function load(): GraphSettings {
         nodeShape,
         showClusterLabels: bool("showClusterLabels", false),
         analyticsMode: bool("analyticsMode", false),
-        analyticsResizeByImportance: bool("analyticsResizeByImportance", true),
         analyticsGroupByCommunity: bool("analyticsGroupByCommunity", true),
         showSemanticEdges: bool("showSemanticEdges", false),
         folderColors: sanitizeColorMap(parsed.folderColors),
@@ -282,7 +280,6 @@ interface GraphSettingsStore extends GraphSettings {
   setShowClusterLabels: (v: boolean) => void;
   setAnalyticsMode: (v: boolean) => void;
   toggleAnalyticsMode: () => void;
-  setAnalyticsResizeByImportance: (v: boolean) => void;
   setAnalyticsGroupByCommunity: (v: boolean) => void;
   setShowSemanticEdges: (v: boolean) => void;
   toggleShowSemanticEdges: () => void;
@@ -335,10 +332,6 @@ export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
     const next = !get().analyticsMode;
     set({ analyticsMode: next });
     persist({ ...get(), analyticsMode: next });
-  },
-  setAnalyticsResizeByImportance: (analyticsResizeByImportance) => {
-    set({ analyticsResizeByImportance });
-    persist({ ...get(), analyticsResizeByImportance });
   },
   setAnalyticsGroupByCommunity: (analyticsGroupByCommunity) => {
     set({ analyticsGroupByCommunity });

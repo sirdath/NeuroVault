@@ -80,49 +80,29 @@ function edgeColor(linkType: string, alpha: number): string {
   }
 }
 
-/** Node radius curve — tasteful, not domineering. Hand-tuned against
- *  Obsidian + Cosmograph references.
+/** The radius the fixed snapshot actually paints.
  *
- *  Sized by graph DEGREE (number of incident edges), with a small
- *  access-count boost. Why degree first:
- *    - "Importance" in a knowledge graph correlates with how often a
- *      note is referenced, not how often the user clicked it. A hub
- *      that everyone wikilinks to should look big even if the user
- *      hasn't reread it lately.
- *    - access_count alone produced ~3-4 outliers (the user's most-
- *      opened recent note) ballooning while the actual graph hubs
- *      stayed tiny — visually misleading.
+ *  THE painter, the pointer hit area and the focus pulse must all call this.
+ *  They used to disagree: the painter had this curve inline (cap 4.8 px) while
+ *  the hit area and pulse used a separate `effectiveNodeRadius` (cap 9-11 px,
+ *  plus an Analytics PageRank boost). The click target was ~2.7x the visible
+ *  dot, so you could click blank canvas and select a note, and the pulse ring
+ *  bloomed from the wrong size. The removed function's own comment warned
+ *  about exactly this -- "centralised so the painter, the pointer hit area and
+ *  the collision force agree" -- and then the snapshot painter drifted off it.
  *
- *  Curve: 2.5 px floor (isolated nodes) up to ~9 px cap (a hub with
- *  ~50 incident edges). Square root keeps the long tail compressed
- *  so 200-edge superhubs don't dominate the canvas. */
-function nodeRadius(node: { degree?: number; access_count?: number }): number {
-  const degree = Math.max(0, node.degree ?? 0);
-  const access = Math.max(0, node.access_count ?? 0);
-  const base = 2.5 + Math.sqrt(degree) * 0.8;
-  // Access count is a secondary signal — clamp the boost so a
-  // hot-but-isolated note grows modestly, not as much as a hub.
-  const accessBoost = Math.min(1.5, Math.sqrt(access) * 0.2);
-  return Math.min(9, base + accessBoost);
-}
-
-/** Radius the user actually sees, after the optional Analytics-mode
- *  PageRank boost. Centralised so the painter, the pointer hit area,
- *  and the d3-force collision force agree on the same number — when
- *  they don't (e.g. collide using `nodeRadius` while paint uses the
- *  PR-boosted size), big hub nodes overlap. PR mean is 1.0; sqrt-
- *  scaled boost compresses the long tail (a PR=10 hub stays ~9px,
- *  capped at 11px). */
-function effectiveNodeRadius(
-  node: { id?: string; degree?: number; access_count?: number },
-  prMap: Map<string, number> | null,
-  applyPRBoost: boolean,
+ *  Sized by DEGREE: importance in a knowledge graph is how often a note is
+ *  referenced, not how often it was clicked. sqrt keeps the long tail
+ *  compressed so superhubs don't dominate. Community anchors get a flat
+ *  bump instead of scaling, so the eye reads structure, not magnitude. */
+function snapshotNodeRadius(
+  node: { degree?: number; labelRank?: number },
+  nodeCount: number,
+  nodeSizeScale: number,
 ): number {
-  const r = nodeRadius(node);
-  if (!applyPRBoost || !prMap || !node.id) return r;
-  const pr = prMap.get(node.id) ?? 1;
-  const prBoost = Math.min(2.5, Math.sqrt(Math.max(0, pr - 1)) * 1.4);
-  return Math.min(11, r + prBoost);
+  const degree = Math.max(0, node.degree ?? 0);
+  const anchor = isKeyLabelNode(node.labelRank, nodeCount);
+  return Math.min(4.8, anchor ? 3.2 : 1.65 + Math.sqrt(degree) * 0.24) * nodeSizeScale;
 }
 
 /** Trace a node-shape path on the given canvas context. Caller is
@@ -299,7 +279,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
   // booleans decide which specific overlays light up.
   const analyticsModeRaw = useGraphSettingsStore((s) => s.analyticsMode);
   const toggleAnalyticsMode = useGraphSettingsStore((s) => s.toggleAnalyticsMode);
-  const analyticsResizeByImportance = useGraphSettingsStore((s) => s.analyticsResizeByImportance);
   const analyticsGroupByCommunity = useGraphSettingsStore((s) => s.analyticsGroupByCommunity);
   const showSemanticEdgesRaw = useGraphSettingsStore((s) => s.showSemanticEdges);
   // -- v0.1.8 graph filter panel inputs ----------------------------------
@@ -1313,7 +1292,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       const inFocus = !focusedNodeId || focusedNodeId === node.id || neighbours?.has(node.id) === true;
       const stateAlpha = node.state === "dormant" ? 0.5 : 0.9;
       const alpha = stateAlpha * searchAlpha * (inFocus ? 1 : 0.08) * (orphan ? 0.55 : 1);
-      const radius = Math.min(4.8, (keyNode ? 3.2 : 1.65 + Math.sqrt(degree) * 0.24)) * nodeSizeScale;
+      const radius = snapshotNodeRadius(node, nodes.length, nodeSizeScale);
 
       ctx.save();
       if (keyNode && inFocus) {
@@ -1349,22 +1328,20 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       }
       return;
     }
-  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode, graphTheme]);
+  }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode, graphTheme]);
 
   // Pointer hit area for custom-drawn nodes — drawn in the same shape so
   // hover/click respond where the node visually is.
   const paintPointerArea2D = useCallback((rawNode: unknown, color: string, ctx: CanvasRenderingContext2D) => {
-    const node = rawNode as SimNode & { x?: number; y?: number; degree?: number };
+    const node = rawNode as SimNode & { x?: number; y?: number; degree?: number; labelRank?: number };
     if (node.x == null || node.y == null) return;
-    const r = effectiveNodeRadius(
-      node,
-      analyticsData?.pr ?? null,
-      analyticsMode && analyticsResizeByImportance,
-    ) + 2;
+    // Same radius the painter draws, +2px of touch slop. Anything more and the
+    // click target stops matching the dot the user is aiming at.
+    const r = snapshotNodeRadius(node, nodes.length, nodeSizeScale) + 2;
     ctx.fillStyle = color;
     drawNodeShape(ctx, node.x, node.y, r, nodeShape);
     ctx.fill();
-  }, [nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData]);
+  }, [nodeShape, nodes.length, nodeSizeScale]);
 
   /** Native hover tooltip for edges. react-force-graph-2d reads this
    *  and renders a lightweight DOM tooltip on mouseover — no extra
@@ -1485,7 +1462,7 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       if (target && target.x != null && target.y != null) {
         const elapsed = (Date.now() - focusPulse.start) / 1500;
         if (elapsed >= 0 && elapsed <= 1) {
-          const baseR = nodeRadius(target);
+          const baseR = snapshotNodeRadius(target, nodes.length, nodeSizeScale);
           // Ring 1: expands fast, fades out.
           const r1 = baseR + 4 + elapsed * 60;
           const a1 = Math.max(0, 0.8 * (1 - elapsed));

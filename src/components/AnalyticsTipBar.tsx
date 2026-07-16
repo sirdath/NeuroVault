@@ -28,7 +28,7 @@ import { useCallback, useEffect, useState } from "react";
 const SESSION_DISMISS_KEY = "nv.graph.tipBar.dismissed";
 
 const DEFAULT_IDLE_COPY =
-  "Node size = how often referenced · ring colour = health · tint = category. The legend (bottom-left) lists every cluster — click one to frame it.";
+  "Node size = how often referenced · tint = category · faded = dormant. The legend (bottom-left) lists every cluster — click one to frame it.";
 
 interface AnalyticsTipBarProps {
   visible: boolean;
@@ -177,9 +177,9 @@ function AnalyticsHelpModal({ onClose }: { onClose: () => void }) {
             vault orbits around.
           </p>
           <p>
-            <strong>The ring</strong> around each node shows its health:
-            teal = active and well-connected, amber = freshly added, dim grey
-            = dormant (rarely accessed). A thicker ring means a stronger memory.
+            <strong>Faded nodes</strong> are dormant — ones you haven't touched
+            in a while. A <strong>thin rim</strong> marks the notes worth
+            starting from: your biggest hubs, and anything freshly added.
           </p>
           <p>
             <strong>Fill colour and background tints</strong> mark category —
@@ -189,9 +189,8 @@ function AnalyticsHelpModal({ onClose }: { onClose: () => void }) {
           <p style={{ color: "var(--nv-text-muted)" }}>
             The <strong>legend</strong> (bottom-left) lists every cluster
             NeuroVault found, biggest first — click one to fly the camera to
-            it. All of this runs locally; nothing is sent anywhere. The math
-            (PageRank for sizing, Louvain for clusters) recomputes only when
-            your vault changes.
+            it. All of this runs locally; nothing is sent anywhere. The
+            clustering (Louvain) recomputes only when your vault changes.
           </p>
         </div>
         <div className="flex justify-end mt-5">
