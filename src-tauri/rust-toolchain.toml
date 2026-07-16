@@ -1,0 +1,16 @@
+# Pin the toolchain so a local `scripts/gates.sh` run and CI compile with the
+# EXACT same rustc/clippy.
+#
+# Born from a real incident (2026-07-16): CI failed four `useless_borrows_in_formatting`
+# clippy errors while gates.sh reported "ALL GATES GREEN" locally. Nothing was wrong
+# with the gate's logic — the local toolchain was simply one release behind
+# (1.96.0 vs CI's `@stable` = 1.97.0), so the lint did not exist locally. A green
+# gate that cannot see CI's compiler is not a green gate.
+#
+# rustup reads this file for every cargo invocation in this directory, and CI's
+# `dtolnay/rust-toolchain@stable` step defers to it — so both sides are locked here.
+# Bumping Rust is now a deliberate, reviewable one-line change instead of a surprise
+# red build the next time upstream ships a new stable.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]

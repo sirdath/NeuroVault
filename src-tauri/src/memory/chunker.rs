@@ -174,7 +174,7 @@ pub fn hierarchical_chunk(content: &str, engram_id: &str) -> Vec<HierChunk> {
             continue;
         }
         let clipped = clip_chars(&window_text, 1200).to_string();
-        let embed = format!("{}{}", title_prefix, &clipped);
+        let embed = format!("{}{}", title_prefix, clipped);
         chunks.push(HierChunk {
             id: format!("{}-para-{}", engram_id, idx),
             engram_id: engram_id.to_string(),
@@ -197,7 +197,7 @@ pub fn hierarchical_chunk(content: &str, engram_id: &str) -> Vec<HierChunk> {
             continue;
         }
         let clipped = clip_chars(&window_text, 500).to_string();
-        let embed = format!("{}{}", title_prefix, &clipped);
+        let embed = format!("{}{}", title_prefix, clipped);
         chunks.push(HierChunk {
             id: format!("{}-sent-{}", engram_id, idx),
             engram_id: engram_id.to_string(),

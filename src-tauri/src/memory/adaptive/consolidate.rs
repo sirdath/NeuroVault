@@ -236,8 +236,8 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
                     title: a.title.clone().unwrap_or_default(),
                     reason: format!(
                         "two notes with strongly colliding titles in the same room; newer {} may supersede older {}",
-                        &b.object_id.chars().take(8).collect::<String>(),
-                        &a.object_id.chars().take(8).collect::<String>()
+                        b.object_id.chars().take(8).collect::<String>(),
+                        a.object_id.chars().take(8).collect::<String>()
                     ),
                     band: Band::Medium,
                     evidence,
