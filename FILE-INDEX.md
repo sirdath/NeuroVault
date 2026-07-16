@@ -1,7 +1,8 @@
 # NeuroVault — File Index
 
-> **Every tracked file in this repo, with a one-line purpose.** 400 files, grouped by area.
-> Generated 2026-07-15, updated 2026-07-16. Build artifacts are excluded (`node_modules/`, `src-tauri/target/`, `dist/`, `.fastembed_cache/`, `.git/`).
+> **Every tracked file in this repo, with a one-line purpose.** 384 files, grouped by area.
+> Generated 2026-07-15, updated 2026-07-16 after the Tier A–C cleanup (22 files removed).
+> Build artifacts are excluded (`node_modules/`, `src-tauri/target/`, `dist/`, `.fastembed_cache/`, `.git/`).
 
 **How to read this.** Find your area below, scan for the file. A ⚠ _[X]_ badge marks a
 [cleanup candidate](#cleanup-candidates) (X = tier). Large binary/generated bulk (icon sets,
@@ -18,7 +19,7 @@ same spirit here, this file describes the tree, it isn't the tree.
 | **Frontend** — `src/` | React/TS UI in the Tauri webview: editor, neural graph, settings | `src/App.tsx` |
 | **Docs** — `docs/` + root | Specs, guides, handoffs, branding, benchmark data | `docs/HOW-NEUROVAULT-WORKS.md` |
 | **Sub-projects** | VS Code extension, npm-publish scaffolding, Python eval, e2e | `vscode-extension/src/extension.ts` |
-| **Config, CI & root** | CI workflows, build scripts, brand assets, archived Python, governance | `.github/workflows/ci.yml` |
+| **Config, CI & root** | CI workflows, build scripts, brand assets, governance | `.github/workflows/ci.yml` |
 
 ## Rust backend — `src-tauri/`
 
@@ -144,9 +145,7 @@ A React/TypeScript app rendered in the Tauri webview. `main.tsx` picks a window 
 | `preview.html` | Vite HTML shell serving the Memory Review dev preview |
 | `src/App.shortcuts.test.tsx` | Test locking number-row view shortcuts to a stable map |
 | `src/App.tsx` | Top-level view router and app shell wiring consumer surfaces |
-| `src/assets/vault-logo.png` | 717KB logo; byte-identical to assets/brand/neurovault-logo-dark.png, no importers ⚠ _[C]_ |
 | `src/assets/vault-mark-transparent.png` | Transparent vault mark; imported by splash, minitab, settings, nav |
-| `src/assets/vault-mark.png` | Opaque vault mark; zero importers, superseded by transparent variant ⚠ _[J]_ |
 | `src/graph-preview-main.tsx` | Dev-only harness rendering NeuralGraph standalone via graph-preview.html |
 | `src/index.css` | Global design-system stylesheet: theme CSS vars, Tailwind (617 lines) |
 | `src/main.tsx` | React entry; routes main/minitab/employee windows by query param |
@@ -158,7 +157,6 @@ A React/TypeScript app rendered in the Tauri webview. `main.tsx` picks a window 
 
 | File | Purpose |
 |------|---------|
-| `src/components/ActivityBar.tsx` | Collapsed activity-rail expand button; zero importers ⚠ _[B]_ |
 | `src/components/ActivityPanel.tsx` | Memory activity feed panel, embedded inside TrustCenter |
 | `src/components/AnalyticsTipBar.tsx` | On-graph contextual tip bar for analytics mode |
 | `src/components/AtlasGraph.tsx` | Sigma.js graph-engine renderer for large atlas snapshots ⚠ _[D]_ |
@@ -186,11 +184,9 @@ A React/TypeScript app rendered in the Tauri webview. `main.tsx` picks a window 
 | `src/components/ErrorBoundary.tsx` | Top-level React error boundary wrapping the app tree |
 | `src/components/GraphFilterPanel.tsx` | Slide-out graph controls: filters, display, forces, time-lapse |
 | `src/components/GraphLegend.tsx` | On-canvas analytics-mode color/shape legend |
-| `src/components/HireMenu.tsx` | Employee catalog + dropdown; zero importers ⚠ _[B]_ |
 | `src/components/Home.test.tsx` | Tests for Home pulse view |
 | `src/components/Home.tsx` | Compact daily memory-pulse dashboard view |
 | `src/components/HoverPreview.tsx` | Cached hover tooltip previewing a note's content |
-| `src/components/MarkdownPreview.tsx` | react-markdown reader mode; zero importers ⚠ _[B]_ |
 | `src/components/MemoryInspector.tsx` | Context Trace inspector UI; mounted only by preview harness ⚠ _[J]_ |
 | `src/components/MemoryReview.test.tsx` | Tests for MemoryReview |
 | `src/components/MemoryReview.tsx` | Trust-ceremony review of pending remembered memories |
@@ -214,14 +210,12 @@ A React/TypeScript app rendered in the Tauri webview. `main.tsx` picks a window 
 | `src/components/TrustCenter.test.tsx` | Tests for TrustCenter |
 | `src/components/TrustCenter.tsx` | Trust hub (overview/history) embedding ActivityPanel |
 | `src/components/UpdateButton.tsx` | Top-bar update pill: checks and installs releases |
-| `src/components/WikiLink.tsx` | [[wiki-link]] renderer; dead only via MarkdownPreview — remove the two as a pair. ⚠ _[B]_ |
 
 ### Logic & state — `src/lib` · `src/stores` · `src/hooks` · `src/workers`
 
 | File | Purpose |
 |------|---------|
 | `src/hooks/useHoverPreview.ts` | Hook returning mouseenter/leave handlers for the preview card |
-| `src/hooks/useKeyboard.ts` | Keyboard-shortcut hook, no importers anywhere (Tier B dead) ⚠ _[B]_ |
 | `src/lib/api.ts` | HTTP client for the in-process Rust backend at 127.0.0.1:8765 |
 | `src/lib/atlasLayoutCache.ts` | IndexedDB cache of computed Atlas graph layouts, keyed by fingerprint |
 | `src/lib/atlasLayoutTypes.ts` | Clone-safe protocol types shared by Atlas renderer and layout worker |
@@ -398,6 +392,7 @@ Continuous integration, build/release automation, brand source assets, the archi
 | `CODE_OF_CONDUCT.md` | Contributor Covenant code of conduct |
 | `CONTRIBUTING.md` | Contributor guide: layout, dev loop, PR expectations |
 | `CORE-COVENANT.md` | Public-core commitments: local-first, files-yours, open-source promises |
+| `FILE-INDEX.md` | This file — every tracked file with a one-line purpose |
 | `LICENSE` | MIT License |
 | `llms.txt` | LLM-oriented project summary + doc links (llms.txt convention) |
 | `Makefile` | Dev convenience targets: dev/build/install/typecheck/test/clean |
@@ -414,15 +409,6 @@ Continuous integration, build/release automation, brand source assets, the archi
 | `scripts/stage-sidecar.mjs` | Build + stage neurovault-server as Tauri externalBin sidecar (breaks build.rs circularity) |
 | `scripts/verify-macos-release.sh` | Verify macOS app codesign/notarization of built .app and .dmg |
 | `SECURITY.md` | Security policy, threat model, vulnerability reporting |
-| `server/.gitignore` | Ignore Python caches/venvs in archived server tree ⚠ _[B]_ |
-| `server/.python-version` | Pins Python 3.13 for archived Python tooling ⚠ _[B]_ |
-| `server/benchmarks/bench_longmemory.py` | Archived LoCoMo-style long-memory recall benchmark ⚠ _[B]_ |
-| `server/benchmarks/bench_usefulness.py` | Archived usefulness + token-savings recall benchmark ⚠ _[B]_ |
-| `server/pyproject.toml` | Archived Python package metadata for the retired MCP proxy shims ⚠ _[B]_ |
-| `server/README.md` | Marks server/ archived; references now-deleted mcp_proxy.py etc. ⚠ _[B]_ |
-| `server/scripts/__init__.py` | Empty package marker for archived server/scripts ⚠ _[B]_ |
-| `server/scripts/neurovault_hook.py` | Archived Claude Code lifecycle hook shim posting events to backend ⚠ _[B]_ |
-| `server/uv.lock` | uv lockfile for archived Python server dependencies ⚠ _[B]_ |
 | `THIRD-PARTY-NOTICES.md` | Inventory of third-party components and their licenses |
 | `tsconfig.json` | TypeScript strict config for the frontend (noEmit, bundler resolution) |
 | `vite.config.ts` | Vite config: React + Tailwind plugins, port 1420 |
@@ -446,33 +432,34 @@ tracked, so there was nothing to clean.
 | `scripts/preview-shoot.mjs` | Tracked but unreferenced (absent from `package.json`, `Makefile`, CI, docs) and non-functional: line 2 pinned an ephemeral Claude-session scratchpad path, so it could not run for anyone. Swept in accidentally by `df0b364`. | **Deleted** (`d55cf19`). Recover via `git show df0b364:scripts/preview-shoot.mjs`. |
 | `capture.js` | Untracked portfolio-screenshot script writing into the `dath-portfolio` repo. Verified **active** (modified 2026-07-16) and functional — it needs this repo's `puppeteer-core` dep and dev server, so it legitimately lives here. Not dead. | **Intentionally kept** as-is. |
 
-### Tier B · dead code (zero importers)
+### Tier B · dead code — RESOLVED 2026-07-16
 
-| File | Note |
-|------|------|
-| `server/.gitignore` | Ignore Python caches/venvs in archived server tree |
-| `server/.python-version` | Pins Python 3.13 for archived Python tooling |
-| `server/benchmarks/bench_longmemory.py` | Archived LoCoMo-style long-memory recall benchmark |
-| `server/benchmarks/bench_usefulness.py` | Archived usefulness + token-savings recall benchmark |
-| `server/pyproject.toml` | Archived Python package metadata for the retired MCP proxy shims |
-| `server/README.md` | Marks server/ archived; references now-deleted mcp_proxy.py etc. |
-| `server/scripts/__init__.py` | Empty package marker for archived server/scripts |
-| `server/scripts/neurovault_hook.py` | Archived Claude Code lifecycle hook shim posting events to backend |
-| `server/uv.lock` | uv lockfile for archived Python server dependencies |
-| `src/components/ActivityBar.tsx` | Collapsed activity-rail expand button; zero importers |
-| `src/components/HireMenu.tsx` | Employee catalog + dropdown; zero importers |
-| `src/components/MarkdownPreview.tsx` | react-markdown reader mode; zero importers |
-| `src/components/WikiLink.tsx` | [[wiki-link]] renderer; dead only via MarkdownPreview — remove the two as a pair. |
-| `src/hooks/useKeyboard.ts` | Keyboard-shortcut hook, no importers anywhere (Tier B dead) |
+Every file was proven unreferenced before removal: no static, dynamic, or `lazy()`
+import; no barrel re-export; no test file; no config/CI reference. The full gate
+(`scripts/gates.sh`) was green after each removal.
 
-### Tier C · duplicate / overlap
+| Removed | Verified finding | Commit |
+|---------|------------------|--------|
+| `src/components/ActivityBar.tsx` (98) | Zero importers. Its live sibling `ActivityPanel` stays (used by `TrustCenter`). `release-hardening.test.mjs:123` asserts ActivityBar's *absence* from `App.tsx`, so removal keeps that test green. | `8974b73` |
+| `src/components/HireMenu.tsx` (150) | Zero references anywhere — even the dormant `EmployeeManager` never imported it. | `8974b73` |
+| `src/components/MarkdownPreview.tsx` (190) + `src/components/WikiLink.tsx` (34) | Dead **as a pair** — WikiLink's only importer was MarkdownPreview. Superseded by the CodeMirror `editor/livePreview.ts` path. Also orphaned `react-markdown` + `remark-gfm`, both dropped from `package.json`. | `8974b73` |
+| `src/hooks/useKeyboard.ts` (41) | Zero references; superseded by `CommandPalette` + inline handlers. `src/hooks/` now holds only the live `useHoverPreview`. | `8974b73` |
+| `server/` (9 files) | The pre-Rust Python prototype. Its own README declared it archived while describing `mcp_proxy.py`/`.venv` that no longer exist; no code, CI job, or npm script spawned it; and the live Claude Code hooks invoke the native `neurovault-hook` binary, **not** `server/scripts/neurovault_hook.py`. | `9c04a42` |
 
-| File | Note |
-|------|------|
-| `assets/brand/neurovault-logo-dark.png` | README dark-mode logo; byte-identical to src/assets/vault-logo.png |
-| `docs/HANDOFF.md` | Stale 2026-06-23 session handoff; split from docs/handoffs/ dir |
-| `src-tauri/src/bin/neurovault-api.rs` | Headless external HTTP API-gateway binary; near-duplicate of neurovault-server's gateway startup. |
-| `src/assets/vault-logo.png` | 717KB logo; byte-identical to assets/brand/neurovault-logo-dark.png, no importers |
+**513 lines of dead UI code + the whole Python prototype removed.** Two false claims
+it left behind were corrected in the same commits: `HOW-NEUROVAULT-WORKS.md` had
+documented the dead ActivityBar as a live feature, and `CLAUDE.md` advertised
+"PDF / Zotero ingest" helpers in `server/` that never existed.
+
+### Tier C · duplicate / overlap — RESOLVED 2026-07-16
+
+| File | Verified finding | Outcome |
+|------|------------------|---------|
+| `src/assets/vault-logo.png` (704K) | md5 `807e5492…` — **byte-identical** to `assets/brand/neurovault-logo-dark.png`, and zero references by exact path. The README uses the brand copy. | **Deleted** (`5344f9b`) |
+| `src/assets/vault-mark.png` (32K) | Zero references; superseded by `vault-mark-transparent.png`, which is live in four components and asserted by the hardening test. | **Deleted** (`5344f9b`) |
+| `assets/brand/*` (4 files) | All live: the README's light/dark logos, plus the mark that `make-app-icon.py` and `make-dmg-background.py` read. | **Kept** |
+| `docs/HANDOFF.md` | **Not stale — the original flag was wrong.** Updated 2026-07-15 (`c68fa71`) and its content matches the current architecture (55 MCP tools, the real tier counts, in-process Rust backend). A living context-transfer doc. | **Kept**; misleading date header removed |
+| `src-tauri/src/bin/neurovault-api.rs` | Genuinely overlaps `neurovault-server`'s gateway startup — but consolidating two binaries is a **refactor, not cleanup**. Left for a deliberate change. | **Deferred** → see Tier D |
 
 ### Tier D · structural / oversized (flag only)
 
@@ -499,6 +486,5 @@ tracked, so there was nothing to clean.
 | `src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml` | Android adaptive-icon def: foreground drawable + background color |
 | `src-tauri/icons/android/values/ic_launcher_background.xml` | Defines ic_launcher_background color (#fff) for adaptive icon |
 | `src-tauri/icons/ios/AppIcon-*.png (18 files)` | iOS AppIcon set at all required sizes and @1x/2x/3x scales |
-| `src/assets/vault-mark.png` | Opaque vault mark; zero importers, superseded by transparent variant |
 | `src/components/MemoryInspector.tsx` | Context Trace inspector UI; mounted only by preview harness |
 
