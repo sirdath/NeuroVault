@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { isAtlasPatternId, type AtlasPatternId } from "../lib/atlasPatterns";
+
 /**
  * User-tweakable visual options for the graph view.
  *
@@ -98,6 +100,9 @@ export function folderColor(
 }
 
 interface GraphSettings {
+  /** Which view is on screen. See GraphPreset — this replaced the old
+   *  mode + patternId split. */
+  preset: GraphPreset;
   palette: GraphPalette;
   nodeShape: GraphNodeShape;
   /** When true, every cluster centroid gets a folder label at all
@@ -177,9 +182,64 @@ interface GraphSettings {
 
 export type GraphGroupingStyle = "soft" | "hull";
 
+/**
+ * Which view the graph is showing — the ONE source of truth for it.
+ *
+ * Until 2026-07 this was spread across three competing mechanisms that could
+ * disagree with each other:
+ *   1. `mode` ("2d" | "3d" | "engine") in an ad-hoc "nv.graph.mode" key,
+ *      written by NeuralGraph -- and "engine" was deliberately never persisted,
+ *      so a reload always dumped you back into a snapshot.
+ *   2. `patternId` in AtlasGraph's own private "nv.atlas.pattern" key.
+ *   3. Everything else, here.
+ *
+ * A preset flattens (mode + patternId) into one value: the two fixed snapshots
+ * plus the six compositions are all just presets on one bar. `presetRenderer`
+ * is the only place that maps a preset back to a renderer.
+ */
+export type GraphPreset = "2d" | "3d" | AtlasPatternId;
+
+/** Which renderer draws a given preset. The snapshots use force-graph 2D/3D;
+ *  every composition is drawn by AtlasGraph (Sigma/WebGL). */
+export function presetRenderer(preset: GraphPreset): "2d" | "3d" | "engine" {
+  if (preset === "2d") return "2d";
+  if (preset === "3d") return "3d";
+  return "engine";
+}
+
+export function isGraphPreset(value: unknown): value is GraphPreset {
+  return value === "2d" || value === "3d" || isAtlasPatternId(value);
+}
+
 const STORAGE_KEY = "nv.graph.settings";
 
+/** Pre-2026-07 keys, read once by `migratePreset` then deleted. */
+const LEGACY_MODE_KEY = "nv.graph.mode";
+const LEGACY_PATTERN_KEY = "nv.atlas.pattern";
+
+/**
+ * One-shot migration off the two legacy keys.
+ *
+ * Only "2d"/"3d" are recoverable: the old code never persisted "engine", so a
+ * user sitting in the Engine at reload had already been silently returned to a
+ * snapshot. That means the old pattern key cannot tell us they *wanted* the
+ * Engine, and honouring it would drop users into a composition they never
+ * chose to persist. So the composition choice becomes the preset only when the
+ * legacy mode is absent -- i.e. never for existing users -- and we clear both
+ * keys either way so this runs exactly once.
+ */
+function migratePreset(): GraphPreset {
+  try {
+    const legacyMode = localStorage.getItem(LEGACY_MODE_KEY);
+    localStorage.removeItem(LEGACY_MODE_KEY);
+    localStorage.removeItem(LEGACY_PATTERN_KEY);
+    if (legacyMode === "3d") return "3d";
+  } catch { /* private mode */ }
+  return "2d";
+}
+
 const DEFAULTS: GraphSettings = {
+  preset: "2d",
   palette: "warm",
   nodeShape: "circle",
   showClusterLabels: false,
@@ -245,6 +305,9 @@ function load(): GraphSettings {
           ? parsed.connectionMode
           : "featured";
       return {
+        // A stored preset wins. Anything else -- first run after the upgrade,
+        // or a corrupt/unknown value -- falls back to the legacy keys.
+        preset: isGraphPreset(parsed.preset) ? parsed.preset : migratePreset(),
         palette,
         nodeShape,
         showClusterLabels: bool("showClusterLabels", false),
@@ -271,10 +334,15 @@ function load(): GraphSettings {
       };
     }
   } catch { /* corrupt / private mode */ }
-  return DEFAULTS;
+  // No settings blob yet: still honour a legacy mode key, so upgrading users
+  // who had never opened Settings don't get silently reset to 2D.
+  return { ...DEFAULTS, preset: migratePreset() };
 }
 
 interface GraphSettingsStore extends GraphSettings {
+  /** Switch the view. One call replaces the old setModePersist +
+   *  openGraphEngine + closeGraphEngine + AtlasGraph's private setter. */
+  setPreset: (p: GraphPreset) => void;
   setPalette: (p: GraphPalette) => void;
   setNodeShape: (s: GraphNodeShape) => void;
   setShowClusterLabels: (v: boolean) => void;
@@ -312,6 +380,10 @@ function persist(s: GraphSettings) {
 
 export const useGraphSettingsStore = create<GraphSettingsStore>((set, get) => ({
   ...load(),
+  setPreset: (preset) => {
+    set({ preset });
+    persist({ ...get(), preset });
+  },
   setPalette: (palette) => {
     set({ palette });
     persist({ ...get(), palette });

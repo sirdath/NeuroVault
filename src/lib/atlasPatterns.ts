@@ -12,9 +12,22 @@ export type AtlasTransform =
   | "flow"
   | "globe";
 
+/** The six shipped compositions, as a closed set. This is a literal union
+ *  rather than `string` so GraphPreset can be derived from it: the preset bar
+ *  offers "2d" | "3d" | AtlasPatternId, and tsc rejects a preset that names a
+ *  composition we don't ship. Since pattern import/export was removed, these
+ *  ids are the only ones that can ever exist. */
+export type AtlasPatternId =
+  | "timeline"
+  | "constellation"
+  | "dendrite"
+  | "halo"
+  | "flow"
+  | "globe";
+
 export interface AtlasPatternV1 {
   schemaVersion: 1;
-  id: string;
+  id: AtlasPatternId;
   name: string;
   version: number;
   transform: {
@@ -89,6 +102,14 @@ const BUILT_INS: readonly AtlasPatternV1[] = [
 ] as const;
 
 export const ATLAS_BUILT_IN_PATTERNS: readonly AtlasPatternV1[] = BUILT_INS;
+
+/** Every shipped composition id, derived from the patterns themselves so the
+ *  preset validator can never drift from what we actually render. */
+export const ATLAS_PATTERN_IDS: readonly AtlasPatternId[] = BUILT_INS.map((p) => p.id);
+
+export function isAtlasPatternId(value: unknown): value is AtlasPatternId {
+  return typeof value === "string" && ATLAS_PATTERN_IDS.includes(value as AtlasPatternId);
+}
 
 export function atlasBuiltInPattern(id: string): AtlasPatternV1 {
   return BUILT_INS.find((pattern) => pattern.id === id) ?? BUILT_INS[0]!;
