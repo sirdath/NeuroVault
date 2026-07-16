@@ -59,6 +59,29 @@ async fn graphify_end_to_end_over_http() {
     fs::create_dir_all(&home).unwrap();
     std::env::set_var("NEUROVAULT_HOME", &home);
 
+    // Opening the brain over HTTP load_extension()s sqlite-vec, and the
+    // server's default candidate paths don't resolve from target/<profile>/deps/
+    // — same reason retrieval_integration.rs and adaptive_scenario.rs point at
+    // it explicitly. Without this the graphify call returns an error body and
+    // the assert below reports a confusing `left: Null`.
+    let vec0_file = if cfg!(target_os = "windows") {
+        "vec0.dll"
+    } else if cfg!(target_os = "macos") {
+        "vec0.dylib"
+    } else {
+        "vec0.so"
+    };
+    let vec0 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(vec0_file);
+    assert!(
+        vec0.exists(),
+        "{vec0_file} missing at {vec0:?} — build resources are incomplete \
+         (CI downloads it on Linux; for a local run, fetch the matching \
+         sqlite-vec loadable into src-tauri/resources/)"
+    );
+    std::env::set_var("NEUROVAULT_VEC_EXTENSION", &vec0);
+
     fs::write(
         home.join("brains.json"),
         r#"{"active":"codetest","brains":[{"id":"codetest","name":"Code Test"}]}"#,
