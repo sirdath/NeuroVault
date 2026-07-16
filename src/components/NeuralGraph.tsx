@@ -166,133 +166,15 @@ function drawNodeShape(
   }
 }
 
-/** Cache derived colours (lighten / darken / desaturate) — string
- *  parsing + math is the hot path of `paintNode2D` at 60fps × 250+
- *  nodes. Keyed by `${op}${amount.toFixed(2)}_${hex}` so the same
- *  request returns the same string in O(1). Cleared implicitly on
- *  page reload; no eviction needed at our scale (≤ ~50 distinct
- *  hexes × 3 ops = ~150 entries max).
- */
-const COLOR_DERIV_CACHE = new Map<string, string>();
 
-function toHexByte(n: number): string {
-  return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
-}
+// A sprite cache (getNodeSprite), desaturateHex and lighten/darken helpers
+// lived here to make the live 2D simulation's per-frame orb painting
+// affordable: gradients and shadowBlur baked once per (colour, size, shape)
+// at 6x supersample, then stamped. The everyday views became fixed snapshots
+// painting a much simpler node, which left all of it unreachable. Removed
+// 2026-07 with the rest of the simulation wiring.
 
-/** Blend `hex` toward pure white (`target=255`) or black (`target=0`)
- *  by fraction `t` (0..1). 0 returns the input, 1 returns the target.
- *  Cheap RGB-space blend — gamma is wrong, but for graph node shading
- *  the perceptual difference is invisible and the cost is one-eighth
- *  of a proper sRGB↔linear conversion. */
-function blendHex(hex: string, target: number, t: number): string {
-  if (!(hex.startsWith("#") && hex.length === 7)) return hex;
-  const k = `B${target}_${t.toFixed(2)}_${hex}`;
-  const cached = COLOR_DERIV_CACHE.get(k);
-  if (cached) return cached;
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const out = `#${toHexByte(r + (target - r) * t)}${toHexByte(g + (target - g) * t)}${toHexByte(b + (target - b) * t)}`;
-  COLOR_DERIV_CACHE.set(k, out);
-  return out;
-}
 
-const lightenHex = (hex: string, t: number) => blendHex(hex, 255, t);
-const darkenHex  = (hex: string, t: number) => blendHex(hex, 0, t);
-
-/** Reduce the saturation of `hex` toward grayscale by fraction
- *  `amount` (0..1). 1 = full grayscale. Used for `dormant` nodes —
- *  combined with a small alpha drop, dormant reads as "this exists
- *  but isn't currently part of the live conversation" without
- *  vanishing. */
-/**
- * SPRITE CACHE — the graph's dominant per-frame cost was rebuilding two
- * radial gradients and enabling shadowBlur for EVERY node on EVERY
- * frame (paintNode2D at 60fps × N nodes). Everything zoom-independent
- * about the orb (shadow, 3-stop gradient, specular, dark rim) is baked
- * ONCE per unique (color, size-bucket, shape, dormant) into an
- * offscreen canvas at 6× supersample, then stamped with drawImage —
- * which is 10-30× cheaper and stays crisp well past the label-zoom
- * threshold. Zoom-DEPENDENT strokes (health ring, hairline rim width,
- * labels) stay live in paintNode2D.
- */
-const SPRITE_SS = 6; // supersample factor (crispness under zoom)
-const SPRITE_PAD = 4; // world-units of padding for the drop shadow
-const spriteCache = new Map<string, HTMLCanvasElement>();
-
-function getNodeSprite(
-  baseColor: string,
-  r: number,
-  shape: GraphNodeShape,
-): HTMLCanvasElement | null {
-  // Quantize the radius so the cache stays small (0.5-unit buckets).
-  const rq = Math.max(1, Math.round(r * 2) / 2);
-  const key = `${baseColor}|${shape}|${rq}`;
-  const hit = spriteCache.get(key);
-  if (hit) return hit;
-  if (spriteCache.size > 512) spriteCache.clear(); // palette churn guard
-
-  const world = 2 * (rq + SPRITE_PAD);
-  const px = Math.ceil(world * SPRITE_SS);
-  const cnv = document.createElement("canvas");
-  cnv.width = px;
-  cnv.height = px;
-  const c = cnv.getContext("2d");
-  if (!c) return null;
-  c.scale(SPRITE_SS, SPRITE_SS);
-  const cx = rq + SPRITE_PAD;
-  const cy = rq + SPRITE_PAD;
-
-  // Drop shadow + gradient orb (same recipe as the previous per-frame
-  // paint — visuals unchanged, cost moved to once-per-key).
-  c.save();
-  c.shadowColor = "rgba(0, 0, 0, 0.45)";
-  c.shadowBlur = 3 * SPRITE_SS * 0.5;
-  c.shadowOffsetY = 0.5;
-  const gx = cx - rq * 0.32;
-  const gy = cy - rq * 0.38;
-  const grad = c.createRadialGradient(gx, gy, rq * 0.1, cx, cy, rq * 1.05);
-  const lighter = lightenHex(baseColor, 0.34);
-  const darker = darkenHex(baseColor, 0.22);
-  grad.addColorStop(0, lighter);
-  grad.addColorStop(0.55, baseColor);
-  grad.addColorStop(1, darker);
-  drawNodeShape(c, cx, cy, rq, shape);
-  c.fillStyle = grad;
-  c.fill();
-  c.restore();
-
-  // Specular highlight (baked; skipped for squares as before).
-  if (shape !== "square" && rq >= 3) {
-    const sx = cx - rq * 0.42;
-    const sy = cy - rq * 0.46;
-    const sr = Math.max(0.7, rq * 0.3);
-    const spec = c.createRadialGradient(sx, sy, 0, sx, sy, sr);
-    spec.addColorStop(0, "rgba(255, 255, 255, 0.42)");
-    spec.addColorStop(1, "rgba(255, 255, 255, 0)");
-    c.fillStyle = spec;
-    c.beginPath();
-    c.arc(sx, sy, sr, 0, Math.PI * 2);
-    c.fill();
-  }
-  spriteCache.set(key, cnv);
-  return cnv;
-}
-
-function desaturateHex(hex: string, amount: number): string {
-  if (!(hex.startsWith("#") && hex.length === 7)) return hex;
-  const k = `D${amount.toFixed(2)}_${hex}`;
-  const cached = COLOR_DERIV_CACHE.get(k);
-  if (cached) return cached;
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  // Rec.601 luma — close enough to perceptual grey for our purposes.
-  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-  const out = `#${toHexByte(r + (lum - r) * amount)}${toHexByte(g + (lum - g) * amount)}${toHexByte(b + (lum - b) * amount)}`;
-  COLOR_DERIV_CACHE.set(k, out);
-  return out;
-}
 
 /** Turn a CSS/hex color into an rgba() with the given alpha. Handles
  *  both `#rrggbb` + `rgba(...)` input shapes — folder colors are hex,
@@ -346,10 +228,10 @@ function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number;
   return lower.concat(upper);
 }
 
-// "static" is a frozen, interactive 2D layout: the same ForceGraph2D canvas
-// as "2d" (pan/zoom/hover/click all work) but with the d3-force simulation
-// disabled, so there is no per-frame physics loop burning CPU. It exists for
-// large graphs that are too heavy to animate continuously.
+// "2d" and "3d" are fixed snapshots: pan/zoom/hover/click all work, but the
+// coordinates are pinned and no simulation runs, so there is no per-frame
+// physics loop burning CPU. "engine" is the Sigma/WebGL composition gallery.
+// (This comment described a fourth "static" mode that no longer exists.)
 type GraphViewMode = "2d" | "3d" | "engine";
 
 interface HoverCard {
@@ -1409,6 +1291,11 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       communityId?: number | null;
     };
     if (node.x == null || node.y == null) return;
+    // Always true where this runs: ForceGraph2D is rendered only when mode is
+    // neither "engine" nor "3d", and GraphViewMode has no fourth value. The
+    // guard stays as a cheap assertion; ~177 lines of live-simulation painting
+    // used to sit after it, permanently unreachable, and were removed in
+    // 2026-07 with the rest of the force wiring.
     if (mode === "2d") {
       const degree = Math.max(0, node.degree ?? 0);
       const orphan = degree === 0;
@@ -1461,183 +1348,6 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
         ctx.restore();
       }
       return;
-    }
-    // Orphan = degree 0 = pinned to a ring around the connected
-    // brain by the graphData layout. Render them smaller and with
-    // muted alpha so the eye reads them as peripheral satellites,
-    // not equal-weight peers of the linked notes.
-    const isOrphan = (node.degree ?? 0) === 0;
-    // showOrphans=false: skip painting orphans entirely (they are
-    // still in the simulation, just invisible). Time-lapse: skip
-    // nodes whose chronological fraction is past the current playback
-    // progress.
-    if (isOrphan && !showOrphans) return;
-    if (!isNodeVisibleAtTl(node.id)) return;
-    const orphanScale = isOrphan ? 0.55 : 1.0;
-    const orphanAlphaMult = isOrphan ? 0.65 : 1.0;
-    // Search dim: non-matching nodes render at low alpha so the user
-    // can still see the surrounding context but the matches pop.
-    const searchAlphaMult =
-      searchMatches && !searchMatches.has(node.id) ? 0.18 : 1.0;
-    const r = effectiveNodeRadius(
-      node,
-      analyticsData?.pr ?? null,
-      analyticsMode && analyticsResizeByImportance,
-    ) * orphanScale * nodeSizeScale;
-    const keyLabelLimit = Math.max(10, Math.ceil(nodes.length * 0.035));
-    const isKeyLabel = (node.labelRank ?? Number.POSITIVE_INFINITY) < keyLabelLimit;
-    const nameEnabled = labelMode === "all" || (labelMode === "key" && isKeyLabel);
-
-    const isDormant = node.state === "dormant";
-    const isFresh = node.state === "fresh";
-
-    // Resolve base colour, then apply state finish in colour-space:
-    // dormant → desaturate 60% (grey-shifted), fresh/connected/active
-    // → keep the saturated folder colour. Alpha is still used for
-    // strength fade, but no longer carries the dormant signal alone.
-    const folderHue = folderColor(node.folder ?? "", palette, folderColors);
-    // CATEGORY drives the FILL — saturated and strength-independent so a
-    // node's category reads at a glance. Health/strength + state now live
-    // in the ring (drawn below), not in the fill's alpha. Dormant gets a
-    // light desaturate so it still reads as "fading".
-    //
-    // Graphified code files (kind='code') get a distinct gold fill so a
-    // codebase reads as its own layer, separate from authored notes — and
-    // matches the gold 'calls' dependency edges. Everything else keeps the
-    // folder/cluster hue.
-    const categoryHue =
-      (node as { kind?: string }).kind === "code" ? "#f5c350" : folderHue;
-    const baseColor = isDormant ? desaturateHex(categoryHue, 0.35) : categoryHue;
-
-    // Hover-focus dimming unchanged — still the right UX.
-    let focusAlpha = 1;
-    if (focusedNodeId) {
-      const neighbours = graphData.adjacency.get(focusedNodeId);
-      const isSelf = node.id === focusedNodeId;
-      const isNeighbour = neighbours?.has(node.id) ?? false;
-      focusAlpha = (isSelf || isNeighbour) ? 1 : 0.08;
-    }
-
-    const alpha = 0.94 * focusAlpha * orphanAlphaMult * searchAlphaMult;
-
-    // Lite (low-power) mode: a single flat fill, no radial gradient, drop
-    // shadow, specular highlight, health ring, or label. The glassy per-node
-    // paint is the dominant cost at scale; the preset trades it for speed.
-    if (lite || nodes.length > 800) {
-      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
-      ctx.fillStyle = withAlpha(baseColor, alpha);
-      ctx.fill();
-      if (nameEnabled) {
-        const fontSize = 10 / Math.max(1, globalScale);
-        ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = withAlpha(graphTheme.text, Math.max(0.45, focusAlpha));
-        const title = node.title.length > 28 ? `${node.title.slice(0, 26)}…` : node.title;
-        ctx.fillText(title, node.x, node.y + r + 5 / globalScale);
-      }
-      return;
-    }
-
-    // Cached-sprite stamp: shadow, gradient orb, and specular are baked
-    // once per (color, size, shape) — see getNodeSprite. Alpha (focus /
-    // orphan / search dims) applies via globalAlpha over the stamp, so
-    // the dimming behavior is identical to the old per-frame paint.
-    const sprite = getNodeSprite(baseColor, r, nodeShape);
-    if (sprite) {
-      const world = 2 * (Math.max(1, Math.round(r * 2) / 2) + 4);
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(sprite, node.x - world / 2, node.y - world / 2, world, world);
-      ctx.restore();
-    } else {
-      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
-      ctx.fillStyle = withAlpha(baseColor, alpha);
-      ctx.fill();
-    }
-
-    // HEALTH RING — drawn after fill, before the canvas-coloured rim. This is the
-    // node's health/strength signal, decoupled from the fill (which now
-    // carries category). Ring COLOUR encodes state; ring WIDTH + OPACITY
-    // scale with node.strength so a strong, well-connected memory gets a
-    // bold halo and a weak one barely a hairline. Colours match the
-    // status semantics used elsewhere: dormant=dim, fresh=brand blue,
-    // active/connected=positive, default=muted.
-    if (focusAlpha > 0.4) {
-      const strength = Math.max(0, Math.min(1, node.strength ?? 0.5));
-      const ringColor = isDormant
-        ? graphTheme.textDim
-        : isFresh
-        ? graphTheme.accent
-        : node.state === "active" || node.state === "connected"
-        ? graphTheme.positive
-        : graphTheme.textMuted;
-      // Width 0.6 → 2.2 px (zoom-independent) and opacity 0.25 → 0.85.
-      const ringWidth = (0.6 + strength * 1.6) / globalScale;
-      const ringAlpha = (0.25 + strength * 0.6) * focusAlpha;
-      const ringGap = (1.2 + strength * 1.4) / globalScale;
-      ctx.save();
-      drawNodeShape(ctx, node.x, node.y, r + ringGap, nodeShape);
-      ctx.lineWidth = ringWidth;
-      ctx.strokeStyle = withAlpha(ringColor, ringAlpha);
-      // Fresh nodes additionally get a soft glow to "pop" as just-added.
-      if (isFresh) {
-        ctx.shadowColor = withAlpha(graphTheme.accent, 0.55);
-        ctx.shadowBlur = 4;
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Thin BG-coloured rim so any pair of near-colour nodes still
-    // separates visually. 0.5 px divided by zoom so it stays
-    // consistently thin regardless of how close the user is.
-    if (focusAlpha > 0.2) {
-      drawNodeShape(ctx, node.x, node.y, r, nodeShape);
-      ctx.lineWidth = 0.5 / globalScale;
-      ctx.strokeStyle = withAlpha(graphTheme.bg, 0.75 * focusAlpha);
-      ctx.stroke();
-    }
-
-    // Labels only on zoom-in (>1.4×) OR for neighbours during
-    // hover-focus — the overview zoom should read as a shape, not
-    // a wall of text. Smaller font than before (was 12 px) to
-    // match the smaller nodes.
-    const focusLabelBoost = focusAlpha === 1 && focusedNodeId != null;
-    // Threshold is user-tunable in the Filters panel (Display →
-    // "Show labels at zoom"). Default 3.2. Hovering / focus-mode
-    // still surface the label early via focusLabelBoost regardless.
-    if (nameEnabled || (labelMode !== "off" && focusLabelBoost)) {
-      const fontSize = (focusLabelBoost ? 11 : 10) / Math.max(1, globalScale);
-      ctx.font = `${fontSize}px "Geist", system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      const truncated = node.title.length > 28 ? node.title.slice(0, 26) + "…" : node.title;
-      // Measure + draw a semi-transparent rounded pill behind the label so
-      // text never bleeds into a neighbouring node or its own orb. Padding
-      // and corner radius scale with zoom so the pill stays proportional.
-      const labelAlpha = Math.max(0.35, focusAlpha);
-      const textW = ctx.measureText(truncated).width;
-      const padX = 3 / globalScale;
-      const padY = 1.5 / globalScale;
-      const labelY = node.y + r + 6 / globalScale;
-      const boxX = node.x - textW / 2 - padX;
-      const boxY = labelY - padY;
-      const boxW = textW + padX * 2;
-      const boxH = fontSize + padY * 2;
-      const radius = 2 / globalScale;
-      ctx.save();
-      ctx.beginPath();
-      if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(boxX, boxY, boxW, boxH, radius);
-      } else {
-        ctx.rect(boxX, boxY, boxW, boxH);
-      }
-      ctx.fillStyle = withAlpha(graphTheme.surfaceElevated, 0.72 * labelAlpha);
-      ctx.fill();
-      ctx.restore();
-      ctx.fillStyle = withAlpha(graphTheme.text, labelAlpha);
-      ctx.fillText(truncated, node.x, labelY);
     }
   }, [focusedNodeId, graphData.adjacency, palette, folderColors, nodeShape, analyticsMode, analyticsResizeByImportance, analyticsData, isNodeVisibleAtTl, searchMatches, showOrphans, nodeSizeScale, clusterColors, lite, nodes.length, labelMode, mode, graphTheme]);
 
