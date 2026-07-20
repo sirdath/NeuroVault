@@ -1,9 +1,13 @@
 {
   "name": "@neurovault/mcp-darwin-x64",
-  "version": "0.5.2",
-  "description": "NeuroVault headless MCP server — prebuilt binary for macOS Intel (x64).",
-  "os": ["darwin"],
-  "cpu": ["x64"],
+  "version": "0.6.0",
+  "description": "NeuroVault headless MCP server \u2014 prebuilt binary for macOS Intel (x64).",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "files": [
     "bin/neurovault-server",
     "bin/vec0.dylib"

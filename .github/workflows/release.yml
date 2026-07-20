@@ -153,6 +153,83 @@ jobs:
           fi
           ls -lh src-tauri/resources/
 
+      # --- Sign vec0.dylib (macOS only) --------------------------------------
+      # MUST run before `tauri build`, and is not optional on a signed build.
+      # Two independent failures happen without it:
+      #
+      #   1. Notarization is rejected. Apple's notary requires every nested
+      #      Mach-O in the bundle to carry a Developer ID signature with
+      #      hardened runtime. vec0.dylib arrives from the sqlite-vec release
+      #      adhoc-signed (TeamIdentifier=not set).
+      #   2. Even if accepted, the app would be BROKEN. Tauri enables hardened
+      #      runtime by default and signs the outer bundle WITHOUT `--deep`
+      #      (`copy_resources` never adds resources to sign_paths). Library
+      #      validation then refuses to dlopen a dylib not signed by our Team
+      #      ID, sqlite3_load_extension fails, and per sqlite_vec.rs "every
+      #      brain-DB open fails".
+      #
+      # Signing with OUR identity is the right fix rather than granting
+      # `com.apple.security.cs.disable-library-validation`: a same-team dylib
+      # passes validation, so we keep the protection instead of disabling it.
+      #
+      # This has never run before — the APPLE_* secrets landed after v0.5.2,
+      # so every previous mac build was unsigned and hardened runtime was off.
+      # Skipped when the cert secret is absent (fork PRs), matching the guard
+      # the verify step already uses.
+      - name: Sign vec0.dylib for hardened runtime
+        if: matrix.os-label == 'macos-arm64'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          DYLIB="src-tauri/resources/vec0.dylib"
+          if [ ! -f "$DYLIB" ]; then
+            echo "::error::$DYLIB missing — the download step did not produce it"
+            exit 1
+          fi
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "::warning::No APPLE_CERTIFICATE — leaving vec0.dylib adhoc-signed."
+            echo "This build is a DEVELOPMENT artifact: it cannot be notarized, and"
+            echo "under hardened runtime it would fail to open any brain DB."
+            exit 0
+          fi
+
+          # Import the cert into a temporary keychain. tauri-action does the
+          # same for its own signing, but it runs later — an identity is
+          # needed NOW, before the bundle is sealed.
+          KEYCHAIN="$RUNNER_TEMP/vec0-signing.keychain-db"
+          KEYCHAIN_PWD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          codesign --force --timestamp --options runtime \
+            --sign "$APPLE_SIGNING_IDENTITY" "$DYLIB"
+
+          # Assert the OUTCOME rather than trusting the exit code: an adhoc
+          # signature also exits 0, and shipping one is the entire failure.
+          codesign -dv --verbose=2 "$DYLIB" 2>&1 | tee /tmp/vec0-sig.txt
+          if grep -q "Signature=adhoc" /tmp/vec0-sig.txt; then
+            echo "::error::vec0.dylib is still adhoc-signed after codesign"
+            exit 1
+          fi
+          if ! grep -q "TeamIdentifier=" /tmp/vec0-sig.txt; then
+            echo "::error::vec0.dylib has no TeamIdentifier — library validation will reject it"
+            exit 1
+          fi
+          codesign --verify --strict "$DYLIB"
+          echo "vec0.dylib signed and verified for hardened runtime"
+
       # --- Frontend ----------------------------------------------------------
       - name: Install npm deps
         run: npm ci
@@ -244,6 +321,49 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      # --- Notarize + staple the DMG -----------------------------------------
+      # tauri-bundler notarizes and staples the .app, then wraps it in a DMG —
+      # but it never notarizes the DMG itself. Verified in the CLI version this
+      # workflow resolves (2.10.1): tauri-bundler's dmg/mod.rs only *signs* the
+      # DMG; there is no notarize or staple call in that file.
+      #
+      # That matters because the DMG is what users actually download. An
+      # unstapled DMG makes Gatekeeper phone Apple on first open — so it fails
+      # closed offline or behind a captive portal — and it is why
+      # verify-macos-release.sh's `stapler validate` on the DMG would fail.
+      #
+      # Stapling here is the fix rather than dropping that assertion: the check
+      # was right, the pipeline was missing a step.
+      - name: Notarize and staple the DMG
+        if: matrix.os-label == 'macos-arm64'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Apple signing secrets are not configured; skipping DMG notarization."
+            exit 0
+          fi
+          DMG_PATH=$(find "src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg" \
+            -maxdepth 1 -name '*.dmg' -print -quit)
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::no DMG produced by the build"
+            exit 1
+          fi
+          echo "Notarizing $DMG_PATH"
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 30m
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+          echo "DMG notarized and stapled"
+
       - name: Verify Developer ID signature and notarization
         if: matrix.os-label == 'macos-arm64'
         shell: bash
@@ -257,6 +377,21 @@ jobs:
           APP_PATH=$(find "src-tauri/target/${{ matrix.rust-target }}/release/bundle/macos" -maxdepth 1 -name '*.app' -print -quit)
           DMG_PATH=$(find "src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg" -maxdepth 1 -name '*.dmg' -print -quit)
           bash scripts/verify-macos-release.sh "$APP_PATH" "$DMG_PATH"
+
+          # The whole point of the vec0 signing step is that the SHIPPED
+          # bundle contains a Team-ID-signed extension. Assert it on the real
+          # artifact — a passing `codesign --verify` on the outer bundle does
+          # NOT cover resources, which is exactly how this was missed.
+          VEC0="$APP_PATH/Contents/Resources/resources/vec0.dylib"
+          if [ ! -f "$VEC0" ]; then
+            echo "::error::vec0.dylib missing from the bundle — the app cannot open any brain DB"
+            exit 1
+          fi
+          codesign -dv --verbose=2 "$VEC0" 2>&1 | tee /tmp/vec0-bundled.txt
+          if grep -q "Signature=adhoc" /tmp/vec0-bundled.txt; then
+            echo "::error::bundled vec0.dylib is adhoc-signed — hardened runtime will refuse to load it"
+            exit 1
+          fi
 
       - name: Attest installer provenance
         uses: actions/attest@f6bf1532d7d6793fce74eac584813a8eee607999 # v4

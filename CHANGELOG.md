@@ -12,45 +12,299 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ## [Unreleased]
 
+_Nothing yet._
+
+---
+
+## [0.6.0] — 2026-07-20
+
+The release where memory stops waiting to be asked. NeuroVault can now feed
+Claude Code relevant context automatically — and shows you every decision it
+made, including the times it deliberately stayed quiet. Alongside that: a
+rebuilt desktop app with light themes and a simplified navigation rail, a
+code-indexing layer that puts your repo and your notes in one graph, a
+headless `npx` install path, and the fixes from a pre-release security and
+crash audit.
+
 ### Added
+
+- **Automatic memory for Claude Code (Ambient Recall).** Opt in from
+  Settings → "Automatic Memory (Claude Code)" and NeuroVault installs Claude
+  Code hooks that recall against your vault on every prompt and at session
+  start. Relevant memories arrive in the model's context with **zero tool
+  calls** — the agent no longer has to decide to remember. It is engineered
+  to prefer silence: an absolute relevance floor, a conversational-glue
+  filter, per-session de-duplication and a hard 3.5 s budget mean an
+  irrelevant prompt injects nothing. It fails open — if the app is down or
+  anything errors, the hook prints nothing and exits 0, so a prompt can
+  never be blocked. Injected text is sanitized, bounded, and framed as
+  reference data rather than instructions.
+- **Memory Review.** A calm, one-at-a-time inbox for NeuroVault's own
+  proposals about your memory ("this note has been superseded", "this task
+  finished"). Every card shows the observation, the evidence behind it, what
+  will change in plain English, and what happens if you approve. Reject, edit
+  before approving, or approve — with keyboard review (A / E / R and arrows).
+  There is deliberately **no bulk approval**, and your verdict history is
+  immutable. Nothing is applied that you did not approve.
+- **Privacy & Trust, and Context history.** A dedicated surface showing local
+  service health, an enable/pause switch for automatic context, plain-language
+  "observed / stored / shared" explanations, and **context receipts** — when
+  memories were injected, when NeuroVault stayed quiet, and why. Rate any
+  injection Useful / Wrong vault / Outdated.
+- **Today.** A compact memory pulse: automatic-context activity, times
+  NeuroVault correctly stayed quiet, memories surfaced, notes changed, the
+  pending review count, and a "continue where you left off" card that appears
+  only when the work is genuinely recent.
+- **Adaptive context.** Prompts are routed by intent (continuing work,
+  asking a question, drafting, "what did I miss?") to a recipe that
+  reconstructs *situational* context rather than returning ranked chunks.
+  Memories now age, supersede each other, and are ranked by a transparent
+  salience score; superseded, rejected, archived and dormant memories are
+  never auto-injected regardless of relevance. New `get_relevant_context` MCP
+  tool (standard tier).
+- **Change briefs.** "What did I miss?" / "since last time" returns a real
+  brief — the important changes with before → after and why they matter —
+  ranked by importance of the change, not by timestamp. When nothing
+  meaningful happened it says so instead of padding.
+- **The Event Journal.** An append-only, per-brain record of what actually
+  happened (notes created and updated, supersessions, task transitions,
+  corrections, session events), kept in monthly segment files that are never
+  discarded. It is the evidence behind change briefs and review proposals.
+  Paths under `_private` / `.private` / dot-segments and content marked
+  sensitive never enter the journal.
+- **Graphify — index a codebase into the graph.** Point NeuroVault at a
+  repository and it parses it on-device with tree-sitter into symbols,
+  imports and call edges: **Rust, Python, TypeScript/TSX, Go, Java, C# and
+  Ruby**. Six new full-tier MCP tools — `graphify`, `where_defined`,
+  `whats_in_file`, `who_calls`, `blast_radius`, and `fuse`, which links a note
+  to the code file defining a symbol the note mentions in `backticks`. Your
+  source is never copied into the vault; the repo stays the system of record.
+  Code files appear in the graph view behind a "Code layer" toggle.
 - **Multi-agent coordination: `handoff` + `agent_inbox`.** Agents route a
-  directed, inert message to another agent through the shared local brain, then
-  read the open handoffs addressed to them. Pull-based and zero-LLM: they reuse
-  the append-only `todos.jsonl` queue, so nothing auto-runs. `session_start`
-  now accepts an optional `agent` argument that scopes the wake-up to that
-  agent's own recent engrams and inbox instead of the brain-wide view. Both
-  tools land in the `standard` tier; the MCP surface is now **55 tools**.
+  directed, inert message to another agent through the shared local brain,
+  then read the open handoffs addressed to them. Pull-based and zero-LLM:
+  they reuse the append-only `todos.jsonl` queue, so nothing auto-runs.
+  `session_start` now accepts an optional `agent` argument that scopes the
+  wake-up to that agent's own recent engrams and inbox instead of the
+  brain-wide view. Both land in the `standard` tier.
 - **Confidence on every recall hit.** Each hit carries a `confidence` value
-  (0-1): how much to trust the fact, distinct from the relevance `score`. It is
-  structural and zero-LLM (derived from provenance and kind), so agents can
-  weigh facts, especially ones written by other agents.
-- **Settings toggle + `~/.neurovault/rerank.txt` preference for the reranker.**
-  A one-click switch and a plain-text preference file turn the cross-encoder
-  reranker off for a lighter, faster app, or back on.
-- **`nv-bench` gains `--compare-ablate`, `--only <ids|@file>`, and `--offset`**
-  for isolated A/B ablations, targeted question subsets, and sharded runs.
+  (0-1): how much to trust the fact, distinct from the relevance `score`. It
+  is structural and zero-LLM (derived from provenance and kind), so agents
+  can weigh facts, especially ones written by other agents.
+- **Headless install via npm.** `claude mcp add neurovault -- npx -y
+  @neurovault/mcp` gives you NeuroVault with no GUI and no installer — useful
+  on a server, in Docker, or to sidestep the macOS Gatekeeper warning on the
+  unsigned app. Ships for macOS (Apple Silicon + Intel), Linux x64, and
+  Windows x64; the binary links no GUI frameworks and no OpenSSL.
+- **Sources.** Settings → Sources is now the single place to bring knowledge
+  in: use a Markdown/Obsidian folder as a vault, mirror additional folders
+  without touching the originals (enable, disable, preview and apply sync),
+  and index code repositories into the graph.
+- **Light themes and a theme gallery.** Eight themes across both modes — four
+  light (Light, Glacier, Parchment, Sage) and four dark (Dark, Abyss,
+  Graphite, Synapse) — previewable in Settings, with full coverage across the
+  editor, graph, and every panel.
+- **Graph Engine.** Six deterministic visual patterns (Time Rings,
+  Constellation Islands, Neural Arbor, Connectome Halo, Memory Flow,
+  Knowledge Globe), a Full / Lite / Off performance level, a frozen-layout
+  mode that uses zero idle CPU, real persistent labels in the 3D snapshot,
+  and allowlisted custom-style JSON import/export.
+- **Live-preview editor.** One always-live surface, Obsidian style — markdown
+  reads as a formatted document and the raw syntax reappears only on the line
+  your cursor is in. Plus multi-tab persistence with drag reorder, one-second
+  autosave with explicit Retry / Save a copy / Discard, and draft recovery.
+- **Dedicated Search screen** (`Cmd+/`) with Everything / Notes / Remembered
+  filters, exact and semantic results, and an offline exact fallback.
+- **Quick Capture** (`Cmd+Shift+Space`) — a capture overlay that works while
+  another app is focused; first line becomes the title, `Cmd+Enter` saves.
+- **Published retrieval benchmark.** The full 470-question LongMemEval
+  scorecard, reproducible from `docs/benchmarks/`, plus `nv-bench` — the
+  harness that produced it (targeted re-runs, sharded/chunked runs, paired
+  A/B ablations, throttled background modes).
+- **New app icon** and a launch animation.
+- **Settings toggle + `~/.neurovault/rerank.txt` preference for the
+  reranker.** A one-click switch and a plain-text preference file turn the
+  cross-encoder reranker off for a lighter, faster app, or back on.
+- **Core Covenant** (`CORE-COVENANT.md`) — the written commitments the public
+  core is held to: works without an account, files stay yours as plain
+  Markdown, no remote kill switch, no selling or training on your vault.
 
 ### Changed
+
+- **The desktop app was reorganized around three places to work.**
+  **Memories** (`Cmd+2`) is the default landing and the canonical
+  writing/browsing workspace, **Graph** (`Cmd+3`) the visual one, and
+  **Review** is always in the rail with a badge when proposals are waiting.
+  **Today** (`Cmd+1`), Search, Privacy & Trust and Settings sit around them.
+  The navigation rail collapses and remembers it. Only Memories, Graph or
+  Today are ever restored as the next launch's front door.
+- **Closing the window no longer stops NeuroVault.** The red X / `Cmd+W` now
+  hides the window while the local memory service keeps running, so a Claude
+  Code session in another app keeps its memory. Only an explicit Quit stops
+  the service (and still flushes pending work and closes the databases
+  cleanly). A one-time system notification explains this the first time.
 - **The cross-encoder reranker (BAAI/bge-reranker-base) is now ON by default
   for recall.** It lazy-loads a ~1 GB on-device model and adds ~50-100 ms per
   recall in exchange for a measurable precision lift; disable it per call
   (`rerank=false`) or globally (Settings toggle or `rerank.txt`). Fully local,
   no network call.
+- **Automatic update checks are now off by default.** Launching the app no
+  longer makes an unexpected network request. Turn checks back on in
+  Settings → Updates; the Update pill and manual check are unchanged. **If
+  you want to be told about 0.6.1, enable this after upgrading.**
+- **Your theme will be reset to Light on upgrade.** The previous seven dark
+  themes (Midnight, Claude, OpenAI, GitHub Dark, Rosé Pine, Nord, Obsidian)
+  were replaced by the new eight-theme set; a saved theme id that no longer
+  exists falls back to the new default. Pick your theme again in Settings →
+  Appearance.
+- **The MCP surface grew from 46 tools to 55.** Tier sizes are now minimal 3
+  / lite 8 (default) / standard 21 / full 55.
+- **Retrieval accuracy improvements** beyond the reranker fix: chunk-level
+  search goes deeper before cutting candidates, the candidate pool widened,
+  scores are normalized when recalling across brains, KNN oversampling is
+  clamped to sqlite-vec's limit, and ranking ties break deterministically so
+  the same query returns the same order.
+- **Retrieving a memory no longer makes it look more important.** Automatic
+  and adaptive retrieval stopped incrementing access counts — otherwise
+  "retrieved once → ranked higher → retrieved more" feeds on itself.
+  Explicit user recall still counts.
+- **TROUBLESHOOTING no longer tells you to delete `brain.db`.** That step
+  destroyed three things with no Markdown copy — core memory blocks, engram
+  version history, and compile drafts. It now says *rename*, explains exactly
+  what is not mirrored to disk, and adds a verification step before you throw
+  the old file away.
+- **Faster ingest and a leaner index.** Chunk writes for a note are committed
+  in one transaction, and a redundant chunk index was dropped.
 - **Release-readiness housekeeping for the open-source launch.** The Rust tree
-  is now `rustfmt`-clean (CI will enforce fmt + clippy + tests), and the public
-  docs, metadata, and licensing were reconciled.
+  is `rustfmt`-clean with zero clippy warnings, CI enforces fmt + clippy +
+  the full test suite, and the public docs, metadata and licensing were
+  reconciled (`THIRD-PARTY-NOTICES.md` added).
 
 ### Fixed
-- **Reranker now sees the matched chunk.** The cross-encoder scored each note's
-  title and first 400 chars rather than the passage retrieval actually matched,
-  so it re-ranked partly blind. Feeding it the matched chunk lifts the full
-  470-question LongMemEval retrieval score **hit@5 0.9362 → 0.9745**
-  (reranker-on vs engine-only, a paired A/B on the same ingested brains), every
-  metric up (hit@10 0.9851, recall@5 0.9383, MRR 0.9021). Forensics and the
-  per-question receipts:
-  [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
 
----
+- **Reranker now sees the matched chunk.** The cross-encoder scored each
+  note's title and first 400 chars rather than the passage retrieval actually
+  matched, so it re-ranked partly blind. Feeding it the matched chunk lifts
+  the full 470-question LongMemEval retrieval score **hit@5 0.9362 → 0.9745**
+  (reranker-on vs engine-only, a paired A/B on the same ingested brains),
+  every metric up (hit@10 0.9851, recall@5 0.9383, MRR 0.9021). Forensics and
+  the per-question receipts:
+  [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
+- **Non-ASCII text could kill the whole app.** Five places sliced strings at a
+  byte count instead of a character boundary. Because release builds aborted
+  on panic, each one took down the entire desktop app — editor, window,
+  watcher and server together — rather than failing one request. The triggers
+  were ordinary: a recall query in Japanese, a note title with an accent, a
+  journal entry containing an emoji. All five now snap to a character
+  boundary, with regression tests proven by reintroducing each bug.
+- **Notes with text above their first heading were indexed from a mangled
+  body.** The chunker cut the body at the heading's *length* instead of its
+  *offset* — identical only when the `# Title` is line 1. Any note with a
+  preamble (frontmatter, an intro line — common in folder imports) had its
+  paragraph and sentence chunks built from a corrupted body, quietly
+  degrading retrieval for exactly those notes. It also panicked outright when
+  that offset landed mid-character. Reachable from saving a note, the file
+  watcher picking up an external edit, folder import, and MCP `remember`.
+  **Re-index affected brains to rebuild their chunks correctly.**
+- **A crashing request no longer takes the app with it.** Panic-unwinding was
+  restored and both HTTP routers now contain a handler panic to that one
+  request, returning a 500 while the app keeps serving.
+- **`graphify` reported success when nothing had been saved.** The commit
+  result was discarded, so it returned the parse counts
+  (`{"files": 1900, "symbols": 41000}`) whether or not a single row landed —
+  and a failed commit left a transaction open that silently rolled the whole
+  pass back later, so `where_defined` / `who_calls` / `blast_radius` came up
+  empty against a code graph the tool had just said it built. Failures now
+  roll back explicitly and report zero.
+- **3D graph links connected nothing.** Edges rendered detached from their
+  nodes in the 3D view.
+- **Graph image export was transparent.** Save PNG / Copy image now export
+  what you actually see.
+- **The graph legend described an encoding the renderer wasn't drawing.**
+- **Claude Code hooks could block every prompt.** After the 2026-07-07
+  lockout, hook installation now snapshots the binary to
+  `~/.neurovault/bin/` (so no rebuild or branch switch can change it under
+  you) and installed commands carry a shell-level fail-open, so any hook
+  failure — including a version mismatch — exits 0. A prompt can no longer be
+  blocked. Uninstall removes every event it installed.
+- **Automatic recall fired on conversational filler.** "then lets continue and
+  make sure that it works well" passed the old length check and injected
+  plausible-but-useless neighbours. Prompts now need at least one contentful
+  word outside a conversational stoplist; glue prompts cost ~5 ms and make no
+  HTTP call at all.
+- **Note lists could show another brain's notes.** `/api/notes` is now
+  brain-scoped, and the app resolves the active vault before loading
+  brain-scoped paths on a cold launch.
+- **Headless server used the wrong model cache directory** — the reranker
+  defaulted to the process working directory instead of
+  `~/.neurovault/.fastembed_cache`, which is wrong for a server started from
+  an arbitrary folder.
+- **Documentation described a product that no longer exists.** Stale Python
+  build instructions (`cd server && uv sync` against a deleted directory),
+  Python prerequisites in the README and architecture diagram, and an
+  unreceipted benchmark claim in HOW-NEUROVAULT-WORKS were all corrected
+  against the actual tree.
+
+### Security
+
+Three issues found in a pre-release audit, all present in shipped 0.5.x
+binaries. All are local-attack-surface issues — NeuroVault still binds
+loopback only by default and still makes no outbound connection for memory
+operations — but each was genuinely reachable.
+
+- **Arbitrary file write outside the vault via note saving.** The filename
+  from `PUT /api/notes` and the `remember` MCP tool was joined onto the vault
+  path with no validation. Because joining an *absolute* path discards the
+  base, `filename: "/Users/you/.zshrc"` wrote straight there, and `../`
+  escaped just as easily; the write happened before the step that rejects
+  non-`.md` files, so the stray file survived even when the request then
+  failed. `remember` ships in the default `lite` MCP tier, so every connected
+  agent had it. The correct path guard already existed in the codebase and
+  was only applied to trash-restore; it now runs before any filesystem work,
+  and covers the `folder` parameter too.
+- **Path traversal via the `brain` parameter.** The brain id was used
+  verbatim after an is-empty check, so `brain: "../../../tmp/x"` relocated
+  `brain.db` and `vault/` anywhere on disk. That parameter rides on nearly
+  every HTTP route and MCP tool. Brain ids must now be a single ordinary path
+  component, with backslash rejected explicitly rather than left to
+  platform-dependent path parsing — which would have held on macOS and Linux
+  while leaking on Windows.
+- **Cross-site request forgery against the local API.** CORS correctly stopped
+  a malicious web page from *reading* a response, but a "simple" bodyless
+  cross-origin `POST` triggers no preflight, so the side effect still ran and
+  the browser merely hid the reply. That made
+  `POST /api/brains/<id>/reset?vault=true` a one-request vault wipe from any
+  page you visited — recursively deleting the canonical Markdown, not the
+  rebuildable index. `/activate`, `/reindex_embeddings`,
+  `/rebuild_wikilinks` and `/sources/sync` had the same shape with a smaller
+  blast radius. State-changing requests carrying an untrusted `Origin` are
+  now rejected outright. Requests with **no** `Origin` still pass — curl, the
+  MCP forwarder, your own agents — because browsers always attach `Origin` to
+  cross-origin writes. Verified against a running server: no Origin → 200,
+  `tauri://localhost` → 200, `https://evil.example` → 403.
+- **A malformed request can no longer take the server down.** Handler panics
+  are now contained per-request instead of aborting the process. This matters
+  most for the optional external API gateway, which can bind beyond loopback
+  and whose key you may have given to a third party.
+- **`SECURITY.md` described a trust boundary that does not exist** — an
+  optional Python subprocess bridge, removed in 2026-05. A security policy
+  presenting non-existent attack surface as live-and-mitigated is worse than
+  stale; it has been replaced with what is actually true.
+
+### Removed
+
+- **The Python MCP proxy is gone.** `server/mcp_proxy.py`, deprecated in
+  0.4.0, has been deleted along with the entire archived `server/` prototype.
+  The product — app, MCP server and Claude Code hooks — is now Rust
+  end-to-end. The only Python left in the repo is offline tooling the app
+  never invokes.
+- **The editor's Preview / Edit toggle**, superseded by live preview. There is
+  one always-live editor; the separate read-only preview mode and its
+  `Edit` / `Done` button are gone.
+- **Roughly 2,000 lines of unreachable graph code** — a pattern import/export
+  stack, force/bloom wiring behind permanently-off kill switches, half of the
+  2D node painter, and filter controls no user could reach — plus the
+  now-unused `d3-force` dependency and four dead UI components.
 
 ## [0.5.2] — 2026-06-09
 

@@ -1,6 +1,6 @@
 [package]
 name = "neurovault"
-version = "0.5.2"
+version = "0.6.0"
 description = "Local-first, AI-native memory for Claude and other LLM agents: markdown-canonical vault, hybrid retrieval, native MCP server"
 authors = ["NeuroVault contributors"]
 license = "MIT"
