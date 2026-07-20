@@ -420,6 +420,16 @@ fn router() -> Router {
         // no-preflight POST from any website still executed — including
         // the vault-deleting reset route. See `reject_foreign_origin`.
         .layer(axum::middleware::from_fn(reject_foreign_origin))
+        // Last line of defence: contain a handler panic to the request
+        // that caused it (500) instead of taking the desktop app with
+        // it. Requires `panic = unwind`, which is why the release
+        // profile no longer sets `abort` — see Cargo.toml.
+        //
+        // This is belt-and-braces, not a licence to panic: the five
+        // UTF-8 boundary panics found in the pre-release audit are all
+        // fixed at the source. But a memory app should not lose the
+        // user's editor session to one malformed note.
+        .layer(tower_http::catch_panic::CatchPanicLayer::new())
         .with_state(ServerState {})
 }
 
@@ -459,6 +469,42 @@ mod tests {
         ] {
             assert!(!is_trusted_origin(bad.as_bytes()), "must reject {bad:?}");
         }
+    }
+
+    /// A handler panic must become a 500, not a dead process.
+    ///
+    /// This is the layer that makes the release profile's switch from
+    /// `panic = abort` back to unwind worth anything. Without both, a
+    /// single malformed request takes the editor and unsaved work with
+    /// it. Asserted by actually panicking inside a route.
+    #[tokio::test]
+    async fn a_panicking_handler_returns_500_and_the_server_survives() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        async fn boom() -> &'static str {
+            panic!("simulated handler panic")
+        }
+
+        let app: axum::Router = axum::Router::new()
+            .route("/boom", axum::routing::get(boom))
+            .route("/ok", axum::routing::get(|| async { "fine" }))
+            .layer(tower_http::catch_panic::CatchPanicLayer::new());
+
+        let res = app
+            .clone()
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // The process is still here, and still serving.
+        let res = app
+            .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 
     /// Suffix-style lookalikes must not sneak past the prefix match.

@@ -36,7 +36,12 @@
 - Idle RAM: **~35 MB** (was 500 MB – 3 GB with the old Python sidecar).
 - Cold start: **<500 ms** to interactive.
 - Recall latency: **~20-50 ms** median engine-only; the cross-encoder reranker (on by default) adds **~50-100 ms**.
-- Quality (internal eval set, 30 queries): **86.67% hit@1 / MRR 0.867** engine-only, **93.33% hit@1 / MRR 0.933** with the reranker (the shipped default).
+- Quality (internal eval set, 30 queries): **83.33% hit@1 / MRR 0.861** engine-only
+  ([committed baseline](../eval/baselines/2026-04-23-tier1-real.json)). The
+  headline retrieval number is measured on LongMemEval, not this set —
+  **97.45% hit@5** over 470 questions, reproducible from
+  [docs/benchmarks/](benchmarks/). Note this small set dates from 2026-04
+  and predates the chunking and reranker work.
 
 ---
 

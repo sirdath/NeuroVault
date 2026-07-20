@@ -315,6 +315,13 @@ fn router() -> Router {
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
+        // Outermost: contain a handler panic to its own request. This
+        // gateway mounts the SAME handler functions as the loopback
+        // server but can bind beyond loopback (`bind_kind = "lan"`), so
+        // without it a single malformed request from any reachable host
+        // would abort the whole desktop app — a remote DoS on a surface
+        // whose API key the user may have handed to a third party.
+        .layer(tower_http::catch_panic::CatchPanicLayer::new())
         .with_state(handlers::ServerState {})
 }
 

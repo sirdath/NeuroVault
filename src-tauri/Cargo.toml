@@ -37,10 +37,27 @@ tauri-build = { version = "2", features = [] }
 #   strip = "symbols"    — removes debug symbols; ~25% smaller exe.
 #                          Release binaries don't need them; users
 #                          can't read them anyway.
-#   panic = "abort"      — no unwinding machinery; smaller binary +
-#                          slightly faster code. We never catch
-#                          panics anyway (Tauri's event loop converts
-#                          them to process exits).
+#   panic = unwind       — the default, restored 2026-07-20. This was
+#                          "abort" for a smaller binary, justified as
+#                          "we never catch panics anyway (Tauri's event
+#                          loop converts them to process exits)". True
+#                          of the GUI thread, FALSE of the axum server:
+#                          hyper serves each connection in its own tokio
+#                          task, so unwinding contains a handler panic
+#                          to that one request. `abort` threw that
+#                          isolation away.
+#
+#                          The cost was severe and invisible. A pre-
+#                          release audit found five UTF-8 boundary
+#                          panics reachable from ordinary input (a
+#                          Japanese recall query, an accented note
+#                          title). Under `abort` each was a SIGABRT
+#                          killing the whole desktop app — editor,
+#                          webview, watcher, unsaved work — while
+#                          `cargo test` and `tauri dev` build with
+#                          unwind and showed only a dropped connection.
+#                          Those five are fixed; the next one should
+#                          cost a request, not the app.
 #
 # Dev profile intentionally NOT touched — we don't want 4-minute
 # incremental rebuilds during iteration.
@@ -48,7 +65,6 @@ tauri-build = { version = "2", features = [] }
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
-panic = "abort"
 
 [features]
 # `gui` pulls in Tauri + all desktop plugins and compiles `app.rs`. Default ON
@@ -157,7 +173,7 @@ axum = "0.7"
 # (no LAN exposure) so permissive CORS doesn't widen any attack
 # surface — it just lets the same machine's webview talk to its own
 # backend.
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.5", features = ["cors", "catch-panic"] }
 
 # API gateway (the optional external HTTP API). blake3 hashes API
 # keys at rest — fast, constant-time-able, plenty of entropy for
@@ -227,3 +243,10 @@ ignore = "0.4"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 netstat2 = "0.9"
 sysinfo = "0.30"
+
+[dev-dependencies]
+# `tower::ServiceExt::oneshot` lets router tests drive the axum app
+# in-process without binding a port. Used by the panic-isolation test
+# in memory::http_server, which asserts a handler panic becomes a 500
+# rather than killing the process.
+tower = { version = "0.5", features = ["util"] }
