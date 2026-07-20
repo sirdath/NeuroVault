@@ -6225,6 +6225,19 @@ pub async fn brains_create(
         }
         brains_arr.push(entry);
 
+        // Create ~/.neurovault before writing brains.json into it.
+        //
+        // The desktop app gets away without this by accident: its startup
+        // does create_dir_all on the default vault, which builds the whole
+        // chain. The headless server (`neurovault-server --http-only`, the
+        // npm and Docker path) never does — so on a machine that had never
+        // run NeuroVault, the very first "create a brain" call died right
+        // here with an unhelpful `i/o error: No such file or directory`
+        // and HTTP 500. Reproduced against a fresh NEUROVAULT_HOME.
+        if let Some(parent) = registry_path.parent() {
+            fs::create_dir_all(parent).map_err(MemoryError::Io)?;
+        }
+
         let tmp = registry_path.with_extension("json.tmp");
         fs::write(
             &tmp,

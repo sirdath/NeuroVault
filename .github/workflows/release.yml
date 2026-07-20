@@ -68,9 +68,22 @@ jobs:
             vec_arch: x86_64
             vec_archive_ext: tar.gz
     runs-on: ${{ matrix.os }}
-    # Bound a stuck job (e.g. a flaky/slow macOS runner) so it can't hang
-    # the run for hours. A cold lto=fat build is ~6 min; 60 is generous.
-    timeout-minutes: 60
+    # Bound a stuck job so it can't hang the run for hours.
+    #
+    # Raised 60 -> 150 after v0.6.0's first attempt died at exactly 60.2
+    # minutes. The build itself was fine (~19 min); the job was killed
+    # mid-`notarytool`, 41 minutes into waiting on Apple, and the cleanup
+    # log shows "Terminate orphan process: (notarytool)".
+    #
+    # 60 was generous for a BUILD and far too tight for this pipeline. The
+    # Apple secrets landed after v0.5.2, so no release had ever notarized
+    # before — the wait was invisible until it wasn't. Apple's notary is a
+    # queue with no SLA; single submissions can take well over 30 minutes,
+    # and this job now makes TWO (tauri notarizes the .app, then the DMG is
+    # notarized and stapled separately).
+    #
+    # The ceiling exists to catch a hang, not to bound Apple's queue.
+    timeout-minutes: 150
     permissions:
       contents: write   # creates / updates GitHub Releases
       actions: read     # lets the SBOM action attach its release asset
