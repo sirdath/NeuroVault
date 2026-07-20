@@ -2148,7 +2148,13 @@ pub async fn playbook_rule_create(
             .as_ref()
             .map(|r| format!("{r}/playbook"))
             .unwrap_or_else(|| "playbook".to_string());
-        let filename = format!("{prefix}/{}-{short}.md", &slug[..slug.len().min(48)]);
+        // `slug` is NOT ASCII: it is built with Unicode `is_alphanumeric`
+        // and `to_ascii_lowercase`, so `é`/`日` survive into it. Slicing
+        // at a fixed byte count would split them.
+        let filename = format!(
+            "{prefix}/{}-{short}.md",
+            crate::memory::text::truncate_bytes(&slug, 48)
+        );
         let ctx = super::write_ops::BrainContext::resolve(Some(&id), super::paths::vault_dir(&id))?;
         let res = super::write_ops::save_note(&ctx, &filename, &md)?;
         {
@@ -2423,7 +2429,10 @@ pub async fn recall_multi(
             "[recall_multi] brain={} q_count={} primary={:?}",
             id,
             queries.len(),
-            queries.first().map(|s| &s[..s.len().min(60)]).unwrap_or("")
+            queries
+                .first()
+                .map(|s| crate::memory::text::truncate_bytes(s, 60))
+                .unwrap_or("")
         );
 
         // Run each query through the full pipeline. Per-query failures

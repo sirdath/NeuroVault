@@ -2604,6 +2604,15 @@ mod channel_scores_tests {
 
         // Isolation: unique temp NEUROVAULT_HOME + explicit vec0 path,
         // mirroring tests/retrieval_integration.rs.
+        //
+        // Take the SHARED home lock. Env vars are process-global, so a
+        // test that sets NEUROVAULT_HOME without it races every other
+        // test that reads one — they wipe each other's homes. The lock
+        // in journal.rs names "retrieval" as having been bitten by this
+        // before; this call site was still unguarded.
+        let _guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let home = std::env::temp_dir().join(format!("nv-chscores-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("mk temp home");

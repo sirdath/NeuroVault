@@ -134,14 +134,35 @@ pub fn hierarchical_chunk(content: &str, engram_id: &str) -> Vec<HierChunk> {
         format!("{}: ", title)
     };
 
-    // Strip the title line from `content` for chunking. Python walks
-    // lines and cuts at the first `# ` prefix; we do the same.
+    // Strip the title line from `content` for chunking: cut everything
+    // up to and including the first `# ` line.
+    //
+    // This used to slice at `content[line.len()..]` — the LENGTH of the
+    // heading line, not its OFFSET in `content`. Those coincide only when
+    // the H1 is the very first line. Two bugs fell out of it:
+    //
+    //   1. Silent corruption. A note with any text above its H1 was cut
+    //      at a meaningless offset, so the paragraph/sentence chunks that
+    //      get embedded and BM25-indexed were built from a mangled body —
+    //      degrading retrieval on exactly those notes, invisibly.
+    //   2. A hard panic. When that offset landed inside a multi-byte
+    //      character, slicing a `str` panics ("byte index N is not a char
+    //      boundary"). Release builds set `panic = "abort"`, so this took
+    //      down the entire desktop app — and it is reachable from the
+    //      hottest write paths there are: saving a note, the watcher
+    //      picking up an external edit, folder import, and MCP `remember`.
+    //      Any note mixing non-ASCII text with a non-leading H1 hit it.
     let mut body = content.to_string();
+    let mut offset = 0usize;
     for line in content.split('\n') {
         if line.trim_start().starts_with("# ") {
-            body = content[line.len()..].trim().to_string();
+            // `offset + line.len()` is always a char boundary: it lands
+            // on the '\n' that ended this line, or at end-of-string.
+            let after = (offset + line.len()).min(content.len());
+            body = content[after..].trim().to_string();
             break;
         }
+        offset += line.len() + 1; // +1 for the '\n' that `split` consumed
     }
 
     // Level 1 — document. First 2000 chars of the RAW content (not
@@ -319,6 +340,90 @@ mod tests {
         );
         for chunk in &c {
             assert!(chunk.embed_text.starts_with("MyTitle: "));
+        }
+    }
+
+    // ---- Regression: the title-stripping offset bug -----------------
+    //
+    // `body` was sliced at `content[line.len()..]` — the LENGTH of the
+    // heading line rather than its OFFSET. Correct only when the H1 is
+    // line 1. Reached from every write path: note save, watcher, folder
+    // import, MCP `remember`.
+
+    #[test]
+    fn body_is_cut_after_a_non_leading_heading() {
+        // Sentinels chosen so the assertion survives the mangling. With
+        // the bug the cut landed mid-way through the INTRO, so the body
+        // kept the intro's tail AND the heading line itself. Asserting
+        // on the intro's opening words would pass even when broken —
+        // the corrupted body simply starts after them.
+        let intro = "ZZINTRO alpha bravo charlie delta echo foxtrot golf \
+                     hotel india juliet kilo lima mike november oscar QQTAIL.";
+        let body = "The actual body text also needs to be sufficiently long \
+                    so that it produces its own paragraph chunk downstream.";
+        let content = format!("{intro}\n# Real Title\n\n{body}");
+        let c = hierarchical_chunk(&content, "e1");
+
+        let body_chunks: Vec<&str> = c
+            .iter()
+            .filter(|x| x.granularity != "document")
+            .map(|x| x.content.as_str())
+            .collect();
+        assert!(!body_chunks.is_empty(), "expected body-derived chunks");
+
+        for chunk in &body_chunks {
+            // QQTAIL sits at the END of the intro, so it survives a
+            // wrong-offset cut and proves text above the heading leaked.
+            assert!(
+                !chunk.contains("QQTAIL"),
+                "text above the heading leaked into a body chunk: {chunk:?}"
+            );
+            // The heading line itself must never reach a body chunk.
+            assert!(
+                !chunk.contains("Real Title"),
+                "heading leaked into a body chunk: {chunk:?}"
+            );
+        }
+        assert!(
+            body_chunks.iter().any(|t| t.contains("actual body text")),
+            "real body missing from chunks: {body_chunks:?}"
+        );
+    }
+
+    #[test]
+    fn a_leading_heading_still_behaves_as_before() {
+        // The case that always worked must not change.
+        let content = "# T\n\nAlpha beta gamma delta epsilon zeta eta theta \
+                       iota kappa lambda mu nu xi omicron pi rho sigma.";
+        let c = hierarchical_chunk(content, "e1");
+        let body_chunks: Vec<&str> = c
+            .iter()
+            .filter(|x| x.granularity != "document")
+            .map(|x| x.content.as_str())
+            .collect();
+        assert!(
+            body_chunks.iter().any(|t| t.contains("Alpha beta")),
+            "{body_chunks:?}"
+        );
+        for chunk in &body_chunks {
+            assert!(
+                !chunk.contains("# T"),
+                "heading leaked into body: {chunk:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn assorted_non_ascii_shapes_survive() {
+        for content in [
+            "émoji intro 🧠\n# Heading\n\nbody text here.",
+            "Ünicode ölé\n\n# Später\n\nDeutscher Text hier.",
+            "前置き\n# 見出し\n\n本文がここにあります。",
+            "# 日本語だけ\n\n本文。",
+            "no heading at all, just body text",
+            "",
+        ] {
+            let _ = hierarchical_chunk(content, "e1");
         }
     }
 }

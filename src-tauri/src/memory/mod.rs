@@ -70,6 +70,7 @@ pub mod source_mirror;
 pub mod spread;
 pub mod sqlite_vec;
 pub mod summaries;
+pub mod text;
 pub mod throttle;
 pub mod todos;
 pub mod tool_audit;

@@ -207,10 +207,13 @@ fn propose(events: &[Event]) -> (Vec<Proposal>, Vec<String>) {
                     .collect::<String>()
             };
             let (ta, tb) = (norm(&a.title), norm(&b.title));
+            // `norm` filters on Unicode `is_alphanumeric`, so `é`/`日`
+            // survive — a fixed 12-byte prefix could split one and panic.
+            // Behaviour is unchanged for ASCII titles.
             if ta.len() >= 12
                 && tb.len() >= 12
-                && (ta.starts_with(&tb[..12.min(tb.len())])
-                    || tb.starts_with(&ta[..12.min(ta.len())]))
+                && (ta.starts_with(crate::memory::text::truncate_bytes(&tb, 12))
+                    || tb.starts_with(crate::memory::text::truncate_bytes(&ta, 12)))
             {
                 let evidence = vec![a.event_id.clone(), b.event_id.clone()];
                 let fields = vec![

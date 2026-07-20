@@ -225,9 +225,15 @@ pub fn append_idempotent(event: &Event) -> Result<bool> {
     if let Some(key) = &event.idempotency_key {
         let path = journal_dir(&event.brain_id).join(segment_for(&event.ts));
         if let Ok(raw) = fs::read_to_string(&path) {
-            let tail_start = raw.len().saturating_sub(64 * 1024);
+            // `saturating_sub` stopped the underflow but not the real
+            // hazard: `len - 64KiB` is an arbitrary byte index into a
+            // file full of user-supplied titles and room names, and
+            // slicing a `str` mid-character panics. Every append shifts
+            // the length, so this re-sampled a fresh offset each time —
+            // for any journal containing an accent or emoji it was a
+            // question of how many events, not whether.
             let needle = format!("\"idempotency_key\":\"{key}\"");
-            if raw[tail_start..].contains(&needle) {
+            if crate::memory::text::tail_bytes(&raw, 64 * 1024).contains(&needle) {
                 return Ok(false);
             }
         }
