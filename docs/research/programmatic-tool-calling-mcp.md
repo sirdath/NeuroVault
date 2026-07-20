@@ -183,7 +183,7 @@ single-call flows.)
 
 NeuroVault is unusually well-positioned to generate a typed code SDK **for free**:
 
-- Its native rmcp server exposes 54 tools via a **data-driven registry**.
+- Its native rmcp server exposes 55 tools via a **data-driven registry**.
   [`registry.rs`](../../src-tauri/src/memory/mcp/registry.rs)'s `ToolDef` already
   carries `name`, `description`, a full JSON-Schema `input_schema`, and a
   declarative `CallSpec { method, path, path_params, query, body, special }`.
@@ -250,7 +250,7 @@ the code path and the sandbox cost is acceptable. *(Finding 19 — medium.)*
 
 **Don't adopt PTC now. Revisit behind a flag later.** The pattern is real,
 current, and a genuinely good fit for *huge* tool surfaces with heavy
-intermediate data. NeuroVault is neither: 54 tools already tamed by tiers, and a
+intermediate data. NeuroVault is neither: 55 tools already tamed by tiers, and a
 common path (`recall` → answer) that PTC can make *slower and pricier*. The
 honest, evidence-weighted position:
 

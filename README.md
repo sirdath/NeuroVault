@@ -69,7 +69,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
 - **Import inbox** — drag a file onto the window to copy it into a private staging area without changing the original. Connected workflows can turn staged material into indexed notes. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
-- **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them. (Optional Claude Code hook; the one feature that uses a tiny Python script.)
+- **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them. (Optional Claude Code hook, run by the same native `neurovault-server` binary — no Python.)
 - **Multiple vaults** — separate files and databases per project; switch from the vault picker or command palette.
 - **Per-folder boundaries** — drop a `.neurovault` file in a project directory to scope that folder's connected memory to its own vault (opt-in).
 - **Agent auto-start** — your MCP agent starts the memory backend for you on first use; no need to open the app first.
@@ -211,7 +211,7 @@ Top fixes:
 
 ## Quick start (developers)
 
-**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. ([Python](https://www.python.org/) + [uv](https://docs.astral.sh/uv/) are optional, only for the out-of-band advanced ingest helpers in `server/` — PDF/Zotero — not for MCP.)
+**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. No Python is needed to build or run anything. (The only Python in the repo is offline tooling the app never invokes: the `eval/` retrieval harness, the `docs/benchmarks/` report mergers, and two icon generators in `scripts/`.)
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git
@@ -283,9 +283,8 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **55 tools*
 External:
   + neurovault-server --mcp-only — native Rust stdio<->HTTP MCP server
     (rmcp; bundled binary). Your agent spawns it per session; no Python.
-  + server/ — optional out-of-band Python helpers (PDF / Zotero ingest)
-    + scripts/neurovault_hook.py (Claude Code lifecycle hook).
-    mcp_proxy.py is the deprecated former (Python) MCP bridge.
+    The same binary also serves the Claude Code lifecycle hooks
+    (`neurovault-server hook …`). No Python anywhere in the product.
 ```
 
 Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your memories. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).

@@ -569,9 +569,8 @@ The places a future maintainer will actually be reading/editing:
 - `lib/tauri.ts` — Tauri command wrappers with browser fallbacks.
 - `lib/api.ts` — HTTP API client, prefers `nv_*` Tauri commands with graceful fallback.
 
-**MCP proxy (`server/`):**
-- `src-tauri/src/bin/neurovault-server.rs` + `src-tauri/src/memory/mcp/` — the native Rust MCP server and its data-driven tool registry. (`server/mcp_proxy.py` is the archived Python predecessor.)
-- `neurovault_server/` — Python codebase kept for advanced ingest helpers (pdf ingest, zotero). Spawned on-demand via `run_python_job` Tauri command, not as a persistent process.
+**MCP server (native Rust):**
+- `src-tauri/src/bin/neurovault-server.rs` + `src-tauri/src/memory/mcp/` — the MCP server and its data-driven tool registry. Built from the same crate as the app and bundled next to it. The Python `mcp_proxy.py` predecessor and the `server/` tree were deleted in 2026-07; nothing spawns Python.
 
 **Eval (`eval/`):**
 - `testset.jsonl` — 30 hand-curated queries with expected title matches.

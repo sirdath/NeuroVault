@@ -19,7 +19,7 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
   the append-only `todos.jsonl` queue, so nothing auto-runs. `session_start`
   now accepts an optional `agent` argument that scopes the wake-up to that
   agent's own recent engrams and inbox instead of the brain-wide view. Both
-  tools land in the `standard` tier; the MCP surface is now **54 tools**.
+  tools land in the `standard` tier; the MCP surface is now **55 tools**.
 - **Confidence on every recall hit.** Each hit carries a `confidence` value
   (0-1): how much to trust the fact, distinct from the relevance `score`. It is
   structural and zero-LLM (derived from provenance and kind), so agents can

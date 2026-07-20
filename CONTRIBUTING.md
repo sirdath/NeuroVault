@@ -8,9 +8,10 @@ If you're here to file a bug, see [the issue templates](.github/ISSUE_TEMPLATE/)
 For anything security-related, see [SECURITY.md](SECURITY.md).
 
 > **You do NOT need Python.** NeuroVault's backend and MCP server are
-> native **Rust**, running in-process inside the Tauri app. The `server/`
-> Python tree is archived (it was the original prototype) and is not part
-> of the build, the app, or the MCP path.
+> native **Rust**, running in-process inside the Tauri app. The original
+> `server/` Python prototype was deleted in 2026-07; the only Python
+> left in the repo is offline tooling the app never invokes (`eval/`,
+> the `docs/benchmarks/` mergers, and two icon scripts).
 
 ---
 
@@ -33,7 +34,6 @@ NeuroVault/
 │           ├── tools.json   #       the 55 tools (name, schema, /api/* mapping)
 │           ├── registry.rs  #       loads tools.json + the tier allow-lists
 │           └── forward.rs   #       forwards each MCP call over loopback HTTP
-├── server/                  # ARCHIVED Python prototype (not built, not shipped)
 ├── scripts/                 # build helpers (stage-sidecar, make-app-icon, …)
 ├── eval/                    # retrieval eval set + baselines (run_eval.py)
 ├── docs/                    # in-repo docs (HOW-NEUROVAULT-WORKS, api, troubleshooting…)
@@ -55,8 +55,8 @@ Prerequisites — **just two**:
 - **Node.js 20+**
 - **Rust** (`rustup default stable`)
 
-(Python is *not* required. It's only relevant if you specifically work on the
-archived helpers in `server/`.)
+(Python is *not* required to build or run anything. It's only used by the
+offline `eval/` harness and a couple of build scripts.)
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git

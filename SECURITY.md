@@ -105,11 +105,21 @@ we'll prioritize the fix regardless and appreciate your patience.
 - The legacy Rust sidecar command (not a webview shell permission) can only
   resolve the bundled `neurovault-server` binary; arbitrary executable paths
   and arbitrary argument vectors are not accepted.
-- Filename validation on rename/move: absolute paths and `..`
-  components are rejected.
-- NeuroVault executes no agent-supplied code. The optional Python
-  helpers (PDF / Zotero ingest) run as short-lived local subprocesses
-  with the app's own privileges, spawned only on explicit user action.
+- Filename validation on every write path — note save, `remember`, and
+  rename/move: absolute paths, `..` components and non-`.md`
+  extensions are rejected before any filesystem work.
+- Brain ids are validated as a single path segment, so the `brain`
+  parameter carried by nearly every route and tool cannot relocate a
+  vault or database outside `~/.neurovault/brains/`.
+- Requests from untrusted browser origins are refused outright, not
+  merely denied a CORS header. A "simple" cross-origin POST fires no
+  preflight, so withholding the header would have hidden the response
+  while still letting the side effect run.
+- NeuroVault executes no agent-supplied code, and spawns no
+  interpreter. The Python-subprocess bridge this section used to
+  describe (`run_python_job`) was removed in 2026-05 with the Python
+  server package; there is no PDF/Zotero helper process and no
+  `python` invocation anywhere in the product.
 - The cross-encoder reranker is a bundled on-device ONNX model
   (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
   the app and no network call. Recall falls back to the fusion ranker if

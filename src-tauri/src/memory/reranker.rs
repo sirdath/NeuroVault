@@ -6,9 +6,28 @@
 //! a single input and can attend across both — yields measurably
 //! better top-1 precision at the cost of ~50-100 ms per call.
 //!
-//! Off by default. Enabled per-recall via `RecallOpts::use_reranker`.
-//! The singleton is lazy — the model only loads on first enable,
-//! so users who never turn it on pay zero memory cost.
+//! ## Default state — read this before trusting anything else
+//!
+//! This header used to read: "Off by default … users who never turn it
+//! on pay zero memory cost." That is FALSE as shipped, and the gap
+//! matters because the model is ~1 GB.
+//!
+//! `RecallOpts::default()` does set `use_reranker: false`, but the
+//! HTTP/MCP layer overrides it: `handlers::rerank_enabled()` returns
+//! `true` when the rerank pref file is absent — which is every fresh
+//! install. So on a new machine the first keyword-shaped recall
+//! triggers a ~1 GB download, then pins ~1 GB resident for the life of
+//! the process (`OnceCell`, never unloaded). Nobody pays "zero".
+//!
+//! The repo currently argues with itself about whether ON is right:
+//! the comment in `instance()` below records the reranker as NEUTRAL
+//! vs engine-only at scale on LongMemEval, while `docs/benchmarks/`
+//! credits it with the headline +3.83pp hit@5 (0.9362 → 0.9745). Both
+//! cannot describe the same configuration. Until that is re-measured
+//! the default is left ON, so the shipped product matches the
+//! published benchmark — but the cost is now stated instead of denied.
+//!
+//! Users opt out in Settings, which writes `off` to the pref file.
 
 use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
 use once_cell::sync::OnceCell;

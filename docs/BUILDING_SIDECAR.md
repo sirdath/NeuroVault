@@ -1,72 +1,46 @@
-# Building the sidecar binary
+# Building the sidecar binary (historical)
 
-> **As of v0.1.0+, this is no longer required for normal use.** The Rust
-> HTTP backend now lives in-process inside the Tauri desktop binary —
-> `127.0.0.1:8765` is auto-served the moment NeuroVault launches; no
-> separate Python sidecar to start, no PyInstaller bundle to ship.
->
-> This document is kept for two reasons:
->
-> 1. Users who want to run the **advanced-feature helpers** (PDF
->    ingest, Zotero) can still build the Python sidecar and have
->    NeuroVault spawn it on demand via `run_python_job`. (Code-graph
->    and compile are native Rust now, not part of this sidecar.)
-> 2. Historical reference for the original v0.0.x architecture.
+> **This describes a build process that no longer exists.** It is kept
+> only so links from `CHANGELOG.md` still resolve. Nothing here applies
+> to NeuroVault today — do not follow these steps. Earlier revisions of
+> this file gave a `cd server && uv sync` recipe against a directory
+> that has since been deleted.
 
-NeuroVault originally shipped as a Tauri desktop app that talked to a
-Python MCP server on `127.0.0.1:8765`. For a true one-click install
-experience, the Python server could be packaged as a standalone
-Windows/macOS/Linux executable and bundled into the Tauri installer as a
-**sidecar**.
+## What this used to be
 
-The sidecar binary is **not checked into git** — it's ~275 MB on Windows
-because of torch + sentence-transformers. (The PyInstaller
-`neurovault_server.spec` was removed when `server/` was trimmed for the
-open-source release; this document is retained for historical reference.)
+NeuroVault v0.0.x shipped as a Tauri desktop app talking to a **Python**
+MCP server on `127.0.0.1:8765`. To get a one-click install, that server
+was packaged with PyInstaller into a standalone executable and bundled
+into the installer as a Tauri "sidecar" (~275 MB on Windows, thanks to
+torch + sentence-transformers). This document was the guide to producing
+that bundle.
 
-## Build locally (Windows)
+## Why it's gone
 
-```powershell
-cd server
-uv sync --extra dev          # installs PyInstaller into .venv
-.venv\Scripts\python.exe -m PyInstaller neurovault_server.spec --clean --noconfirm
+Every piece of that has been removed:
+
+- The Rust HTTP backend moved **in-process** inside the Tauri binary, so
+  `127.0.0.1:8765` is served the moment NeuroVault launches. There is no
+  separate server process left to package.
+- The MCP server was rewritten as a native Rust binary
+  (`neurovault-server --mcp-only`, built on `rmcp`) from the same crate
+  as the app — no PyInstaller, no Python runtime, no `.spec` file.
+- The Python-subprocess bridge (`run_python_job`) was deleted in
+  2026-05, and the `server/` tree itself in 2026-07. The "advanced
+  helpers" this doc referenced (PDF / Zotero ingest) were never wired to
+  any UI.
+- Embeddings and reranking are on-device ONNX via `fastembed-rs`, so the
+  torch dependency that made the old bundle enormous is gone too.
+
+## What to read instead
+
+The MCP binary is built and staged by the normal build:
+
+```bash
+npm run tauri build     # or: make build
 ```
 
-The resulting single-file exe lands at `server/dist/neurovault-server.exe`.
-Copy it to the Tauri sidecar path:
-
-```powershell
-copy server\dist\neurovault-server.exe src-tauri\binaries\neurovault-server-x86_64-pc-windows-msvc.exe
-```
-
-Then re-enable the sidecar in `src-tauri/tauri.conf.json` by adding:
-
-```json
-"externalBin": [
-  "binaries/neurovault-server"
-]
-```
-
-and uncomment the sidecar spawn block in `src-tauri/src/lib.rs`. Rebuild
-with `npx tauri build`. The resulting installer (at
-`src-tauri/target/release/bundle/{msi,nsis}/`) contains the sidecar and
-will auto-spawn it on launch.
-
-## Why it's not committed
-
-- **Size**: ~275 MB on Windows. Git LFS is avoided because of GitHub's
-  1 GB/month bandwidth quota on free public repos.
-- **Per-platform**: one binary per target triple
-  (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, etc.). PyInstaller
-  cannot cross-compile, so each target needs its own build machine.
-- **Reproducible**: any developer with the server venv can build it from
-  the spec in a few minutes.
-
-## Long-term plan
-
-The sidecar will eventually be:
-1. Slimmed by swapping `sentence-transformers` → Qdrant's
-   [`fastembed`](https://github.com/qdrant/fastembed) (drops `torch`,
-   cuts bundle from 275 MB to ~60-80 MB), then
-2. Built in CI via `tauri-apps/tauri-action` on release-tag pushes,
-3. Attached to GitHub Releases as installer assets.
+`scripts/stage-sidecar.mjs` places `neurovault-server` next to the app
+binary (declared as `externalBin` in `src-tauri/tauri.conf.json`). For
+architecture, see [HOW-NEUROVAULT-WORKS.md](HOW-NEUROVAULT-WORKS.md);
+for contributor setup, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

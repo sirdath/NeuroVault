@@ -1,4 +1,4 @@
-.PHONY: dev build install typecheck test test-rust clean help
+.PHONY: dev build install typecheck test test-rust gate clean help
 
 help:
 	@echo "NeuroVault dev targets"
@@ -10,15 +10,15 @@ help:
 	@echo "  make build        Build the production app and produce installers"
 	@echo "                    under src-tauri/target/release/bundle/."
 	@echo "  make typecheck    TypeScript strict check (no JS emit)."
-	@echo "  make test         Rust unit tests (cargo test) — fast."
+	@echo "  make test         Rust unit tests (cargo test) — fast inner loop."
+	@echo "  make gate         FULL verification gate (what CI runs) — before pushing."
 	@echo "  make clean        Drop dist/, target/, vite cache."
 	@echo ""
 
 # === Install ===
 
-# JS is all you need: the in-process Rust backend handles everything.
-# (To run the MCP proxy from source for a Claude client, also:
-#  cd server && uv sync — see README "Connect your agent".)
+# JS is all you need: the in-process Rust backend handles everything,
+# and the MCP server is the same native Rust binary. No Python.
 install:
 	npm install
 
@@ -43,10 +43,16 @@ build:
 typecheck:
 	npx tsc --noEmit
 
-# Rust unit tests — covers the in-process HTTP server, retriever,
-# graph metrics, etc. JS has no test suite yet.
+# Rust unit tests only — fast inner loop. This is NOT the full gate:
+# the JS side has real suites too (vitest components/stores, the tsx
+# lib suites, Playwright e2e), all of which CI runs. Use `make gate`
+# before pushing, or you are testing a fraction of what CI will.
 test test-rust:
 	cd src-tauri && cargo test --no-default-features
+
+# The full verification gate — identical to what CI runs.
+gate:
+	./scripts/gates.sh
 
 # === Cleanup ===
 

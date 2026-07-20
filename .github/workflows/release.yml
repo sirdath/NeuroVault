@@ -18,7 +18,7 @@
 #
 #  Replaces the pre-v0.1.0 workflow that built a Python sidecar via
 #  PyInstaller. Sidecar was retired in the Rust migration; advanced
-#  features now spawn `python -m neurovault_server.cli.<job>` on demand.
+#  the MCP server is the same native Rust binary; nothing spawns Python.
 
 name: Release
 

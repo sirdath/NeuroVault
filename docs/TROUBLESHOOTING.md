@@ -115,14 +115,31 @@ manually one last time from the [releases page](https://github.com/sirdath/Neuro
 
 ## Recovering from a corrupt index
 
-Because `vault/*.md` is the source of truth, a damaged `brain.db` is
-recoverable:
+Your notes live in `vault/*.md` and are never at risk here — `brain.db`
+is rebuilt from them.
+
+> **Move it aside, don't delete it.** A few things live *only* in
+> `brain.db` and have no markdown copy, so a rebuild starts them empty:
+>
+> - **Core memory blocks** — the persistent "who the user is / what
+>   they're working on" context agents maintain via `core_memory_*`
+>   and see in every `session_start`.
+> - **Note history** — the per-note version trail behind
+>   `engram_history`. After a rebuild every note is version 1 again.
+> - **Drafts** — anything in the compile/draft workflow.
+>
+> Keeping the old file means you can copy those back or ask for help
+> recovering them. Deleting it means they're gone for good.
 
 1. Quit NeuroVault.
-2. Delete (or move aside) `brain.db`, `brain.db-wal`, `brain.db-shm` in the
-   brain folder.
-3. Relaunch — NeuroVault re-ingests the vault and rebuilds the index. (Large
-   vaults take a few minutes the first time.)
+2. **Rename** (don't delete) `brain.db`, `brain.db-wal`, `brain.db-shm`
+   in the brain folder — e.g. `brain.db.bak`. Keep them until you've
+   confirmed everything you care about survived.
+3. Relaunch — NeuroVault re-ingests the vault and rebuilds the index.
+   (Large vaults take a few minutes the first time.)
+4. Check that your core memory is intact (ask your agent "what do you
+   remember about me", or open Settings → Memory). If it isn't, stop
+   and restore the `.bak` files rather than continuing.
 
 ## Uninstall
 
