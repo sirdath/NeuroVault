@@ -82,8 +82,16 @@ jobs:
     # and this job now makes TWO (tauri notarizes the .app, then the DMG is
     # notarized and stapled separately).
     #
-    # The ceiling exists to catch a hang, not to bound Apple's queue.
-    timeout-minutes: 150
+    # Raised again 150 -> 330 for v0.6.0's second attempt, which was still
+    # inside tauri's .app notarization at 126 minutes. Apple's status page
+    # reported the notary itself operational but App Store Connect and its
+    # API had both had incidents that day — notarization runs on that
+    # infrastructure, so submissions were sitting behind a backlog.
+    #
+    # The ceiling exists to catch a HANG, not to bound Apple's queue. 330
+    # is under GitHub's 360 hard cap and costs nothing on a normal day,
+    # when the whole job finishes in ~25 minutes.
+    timeout-minutes: 330
     permissions:
       contents: write   # creates / updates GitHub Releases
       actions: read     # lets the SBOM action attach its release asset
@@ -347,8 +355,29 @@ jobs:
       #
       # Stapling here is the fix rather than dropping that assertion: the check
       # was right, the pipeline was missing a step.
-      - name: Notarize and staple the DMG
+      # BEST-EFFORT, deliberately. Read before making it fatal again.
+      #
+      # tauri-bundler notarizes and staples the .app, then wraps it in a DMG
+      # it never notarizes (its dmg/mod.rs only signs). Stapling the DMG too
+      # is real hardening: it lets Gatekeeper validate the download without
+      # calling Apple, so a first open works offline or behind a captive
+      # portal.
+      #
+      # But it is a SECOND notary submission, and it is not what makes the
+      # app work. The .app inside already carries its own stapled ticket, so
+      # Gatekeeper validates it offline regardless of the DMG's state.
+      #
+      # v0.6.0 proved why that distinction matters: with Apple's queue backed
+      # up behind an App Store Connect incident, one submission took over two
+      # hours. A hard-failing second submission means Apple's queue depth can
+      # block a release that is otherwise complete and correct — trading a
+      # real outcome for a marginal one. So this warns instead of failing,
+      # and the verify step reports the DMG's staple state without gating on
+      # it. The .app's notarization and staple remain HARD requirements.
+      - name: Notarize and staple the DMG (best-effort)
+        id: dmg_notarize
         if: matrix.os-label == 'macos-arm64'
+        continue-on-error: true
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -356,7 +385,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "${APPLE_CERTIFICATE:-}" ]; then
             echo "Apple signing secrets are not configured; skipping DMG notarization."
             exit 0
@@ -368,11 +397,15 @@ jobs:
             exit 1
           fi
           echo "Notarizing $DMG_PATH"
-          xcrun notarytool submit "$DMG_PATH" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 30m
+          # Bounded so a backlogged queue costs 45 minutes, not the job.
+          if ! xcrun notarytool submit "$DMG_PATH" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" \
+                --wait --timeout 45m; then
+            echo "::warning::DMG notarization did not complete (Apple queue). The .app inside is notarized and stapled, so Gatekeeper still validates it offline; the DMG itself will require a network check on first open."
+            exit 1
+          fi
           xcrun stapler staple "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"
           echo "DMG notarized and stapled"

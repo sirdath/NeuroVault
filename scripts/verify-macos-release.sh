@@ -29,7 +29,19 @@ if [ -n "$DMG_PATH" ]; then
     echo "DMG path does not exist: $DMG_PATH" >&2
     exit 2
   fi
-  xcrun stapler validate "$DMG_PATH"
+  # Reported, NOT gated. The .app's own ticket is validated above and is the
+  # hard requirement — it is what lets Gatekeeper approve the app offline.
+  # A stapled DMG additionally spares the *download* a network check on first
+  # open, which is worth having but is not worth blocking a release on: it
+  # needs a second Apple notary submission, and Apple's queue has no SLA.
+  # (v0.6.0 hit a multi-hour backlog behind an App Store Connect incident.)
+  if xcrun stapler validate "$DMG_PATH" >/dev/null 2>&1; then
+    echo "DMG staple: valid"
+  else
+    echo "DMG staple: ABSENT — the app inside is still notarized and stapled," \
+         "so Gatekeeper approves it offline; the DMG itself will do a network" \
+         "check on first open. Not a release blocker."
+  fi
 fi
 
 echo "macOS release verification passed"
