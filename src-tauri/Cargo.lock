@@ -3192,7 +3192,7 @@ dependencies = [
  "blake3",
  "dirs",
  "fastembed",
- "getrandom 0.2.17",
+ "getrandom 0.4.2",
  "ignore",
  "netstat2",
  "notify",
