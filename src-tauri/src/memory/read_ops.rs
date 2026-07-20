@@ -21,7 +21,7 @@
 //! surface a clean error to the UI.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +113,36 @@ pub struct BrainSummary {
 
 // ---- Brain resolution -----------------------------------------------------
 
+/// Is `id` safe to use as a directory name under `~/.neurovault/brains/`?
+///
+/// Brain ids flow straight into `brain_dir()`, which is a bare
+/// `brains_root().join(id)`. `join` discards the base for an absolute
+/// path, and `..` walks out of it — so without this an unvalidated
+/// `brain` parameter relocated `brain.db` and `vault/` anywhere on
+/// disk. Nearly every HTTP route and MCP tool takes that parameter.
+///
+/// One `Normal` path component only: no separators, no `..`, no `.`,
+/// no drive prefix. Every real id is a plain slug (`main`, `swe-cs`,
+/// `code-demo`), so this rejects attacks without touching valid input.
+///
+/// Backslash is rejected explicitly rather than left to `Path`, whose
+/// component parsing is platform-dependent: `"a\\b"` is ONE component
+/// on Unix but TWO on Windows. Relying on the host's rules would make
+/// this guard hold on the maintainer's Mac and on Linux CI while
+/// leaking on the Windows builds we ship — the worst possible split.
+pub fn is_safe_brain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.contains('\0')
+        && !id.contains('/')
+        && !id.contains('\\')
+        && Path::new(id).components().count() == 1
+        && matches!(
+            Path::new(id).components().next(),
+            Some(Component::Normal(_))
+        )
+}
+
 /// Resolve a brain id. `None` means "the one marked `active` in
 /// `brains.json`". Errors when the registry is missing / malformed /
 /// has no active id — that's an invariant violation, not a "no
@@ -121,6 +151,12 @@ pub struct BrainSummary {
 pub fn resolve_brain_id(explicit: Option<&str>) -> Result<String> {
     if let Some(id) = explicit {
         if !id.is_empty() {
+            if !is_safe_brain_id(id) {
+                return Err(MemoryError::Other(format!(
+                    "invalid brain id {id:?}: must be a single path segment \
+                     with no separators or `..`"
+                )));
+            }
             return Ok(id.to_string());
         }
     }
@@ -566,4 +602,55 @@ pub fn resolve_vault_path(brain_id: &str) -> Result<std::path::PathBuf> {
         }
     }
     Ok(super::paths::vault_dir(brain_id))
+}
+
+#[cfg(test)]
+mod brain_id_tests {
+    use super::is_safe_brain_id;
+
+    /// Every real brain id is a plain slug. The guard must not
+    /// disturb any of them.
+    #[test]
+    fn real_brain_ids_are_accepted() {
+        for ok in [
+            "default",
+            "main",
+            "swe-cs",
+            "code-demo",
+            "dathhub",
+            "ml-ai",
+            "adaptive-demo",
+            "NeuroVaultBrain1",
+            "brain_1",
+        ] {
+            assert!(is_safe_brain_id(ok), "should accept {ok}");
+        }
+    }
+
+    /// The `brain` parameter rides on nearly every HTTP route and MCP
+    /// tool, and fed a bare `brains_root().join(id)`. `join` discards
+    /// the base for an absolute path and `..` walks out of it, so
+    /// these relocated brain.db and vault/ anywhere on disk.
+    #[test]
+    fn traversal_attempts_are_rejected() {
+        for bad in [
+            "../../../tmp/x",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            "/tmp/evil",
+            "",
+            "foo/../../bar",
+        ] {
+            assert!(!is_safe_brain_id(bad), "must reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn absurd_ids_are_rejected() {
+        assert!(!is_safe_brain_id(&"a".repeat(129)));
+        assert!(!is_safe_brain_id("has\0null"));
+    }
 }

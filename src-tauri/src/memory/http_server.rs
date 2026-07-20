@@ -19,6 +19,10 @@
 
 use std::net::SocketAddr;
 
+use axum::extract::Request;
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -26,6 +30,56 @@ use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use super::handlers::*;
+
+/// The only browser origins allowed to talk to the loopback API.
+///
+/// Shared by the CORS layer and `reject_foreign_origin` so the two can
+/// never drift — a read allowlist that disagrees with the write
+/// allowlist is how CSRF holes reopen.
+fn is_trusted_origin(origin: &[u8]) -> bool {
+    origin == b"tauri://localhost"
+        || origin == b"https://tauri.localhost"
+        || origin == b"http://tauri.localhost"
+        || origin == b"http://localhost:1420"
+        || origin.starts_with(b"vscode-webview://")
+}
+
+/// Reject browser requests from origins we don't trust.
+///
+/// CORS alone did NOT protect this API. It correctly withholds the
+/// `Access-Control-Allow-Origin` header from unknown origins, so a
+/// malicious page cannot *read* a response — but a "simple" request
+/// (a bodyless `fetch(url, {method:'POST', mode:'no-cors'})`) triggers
+/// no preflight, so **the side effect still ran**. The browser merely
+/// hid the reply.
+///
+/// That mattered because the loopback API is unauthenticated by design
+/// and has destructive routes. The worst:
+///
+/// ```text
+/// POST http://127.0.0.1:8765/api/brains/<id>/reset?vault=true
+/// ```
+///
+/// which recursively deletes the vault's markdown — the canonical user
+/// data, not the rebuildable index. Any website the user visited while
+/// NeuroVault was running could fire it. Same shape, smaller blast
+/// radius: `/activate`, `/reindex_embeddings`, `/rebuild_wikilinks`,
+/// `/sources/sync`, and the employee tick/stop routes.
+///
+/// The rule: a request carrying an untrusted `Origin` is refused
+/// outright. A request with NO `Origin` is allowed — that is curl, the
+/// MCP forwarder, and user-built agents, none of which a hostile web
+/// page can impersonate, since browsers always attach `Origin` to
+/// cross-origin writes. This keeps the local-first "trust the machine"
+/// contract while closing the browser-driven path into it.
+async fn reject_foreign_origin(req: Request, next: Next) -> Result<Response, StatusCode> {
+    if let Some(origin) = req.headers().get(axum::http::header::ORIGIN) {
+        if !is_trusted_origin(origin.as_bytes()) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+    Ok(next.run(req).await)
+}
 
 /// Default bind port. Matches Python's `SERVER_PORT` default. Kept as
 /// a const rather than reading the env at bind time so stopping +
@@ -356,15 +410,61 @@ fn router() -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _req| {
-                    let o = origin.as_bytes();
-                    o == b"tauri://localhost"
-                        || o == b"https://tauri.localhost"
-                        || o == b"http://tauri.localhost"
-                        || o == b"http://localhost:1420"
-                        || o.starts_with(b"vscode-webview://")
+                    is_trusted_origin(origin.as_bytes())
                 }))
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
+        // Runs BEFORE the handlers: CORS decides what a browser may
+        // read, this decides what it may trigger. Without it, a simple
+        // no-preflight POST from any website still executed — including
+        // the vault-deleting reset route. See `reject_foreign_origin`.
+        .layer(axum::middleware::from_fn(reject_foreign_origin))
         .with_state(ServerState {})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_trusted_origin;
+
+    /// The allowlist must accept exactly the surfaces we ship and
+    /// nothing else. It is shared by the CORS layer and the
+    /// origin guard, so a mistake here opens both at once.
+    #[test]
+    fn trusted_origins_are_the_shipped_surfaces() {
+        for ok in [
+            "tauri://localhost",
+            "https://tauri.localhost",
+            "http://tauri.localhost",
+            "http://localhost:1420",
+            "vscode-webview://abc123",
+        ] {
+            assert!(is_trusted_origin(ok.as_bytes()), "should trust {ok}");
+        }
+    }
+
+    /// A hostile page could previously fire a bodyless POST at
+    /// /api/brains/<id>/reset?vault=true and delete the user's
+    /// markdown. CORS hid the response but the write still landed.
+    #[test]
+    fn a_hostile_web_origin_is_not_trusted() {
+        for bad in [
+            "https://evil.example",
+            "http://evil.example",
+            "null",
+            "https://localhost:1420.evil.example",
+            "https://tauri.localhost.evil.example",
+            "http://127.0.0.1:8765",
+            "",
+        ] {
+            assert!(!is_trusted_origin(bad.as_bytes()), "must reject {bad:?}");
+        }
+    }
+
+    /// Suffix-style lookalikes must not sneak past the prefix match.
+    #[test]
+    fn lookalike_origins_do_not_pass() {
+        assert!(!is_trusted_origin(b"https://nottauri://localhost"));
+        assert!(!is_trusted_origin(b"http://localhost:14200"));
+    }
 }

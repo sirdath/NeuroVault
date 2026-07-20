@@ -236,7 +236,23 @@ pub fn restore_note(ctx: &BrainContext, trashed_filename: &str) -> Result<WriteR
 /// ingest. `filename` is a POSIX-style path relative to the vault
 /// root (e.g. `agent/foo.md`). Parent folders are created on
 /// demand.
+///
+/// The path is validated BEFORE any filesystem work. `PathBuf::join`
+/// silently discards the base when given an absolute path, so an
+/// unchecked `filename` of `/Users/you/.zshrc` wrote straight there,
+/// and `../` escaped just as easily. Worse, the write landed before
+/// the ingest step that rejects non-`.md` files, so the stray file
+/// survived even when the request went on to 500.
+///
+/// This reaches the network: `PUT /api/notes` on the loopback API and
+/// the `remember` MCP tool, which ships in the DEFAULT `lite` tier.
 pub fn save_note(ctx: &BrainContext, filename: &str, content: &str) -> Result<WriteResult> {
+    if !safe_markdown_relative_path(filename) {
+        return Err(MemoryError::Other(format!(
+            "refusing to write outside the vault: {filename:?} must be a \
+             relative .md path with no `..` segments"
+        )));
+    }
     let target = ctx.vault.join(filename);
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
