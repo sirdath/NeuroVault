@@ -528,7 +528,22 @@ pub fn graphify_into_brain(root: &Path, db: &Arc<BrainDb>) -> GraphifyStats {
             stats.symbols += pf.symbols.len();
         }
     }
-    let _ = conn.execute_batch("COMMIT");
+    // The COMMIT result used to be discarded, so the counts below came
+    // purely from the in-memory parse: a user saw {"files": 1900,
+    // "symbols": 41000} whether or not a single row landed. Worse, a
+    // failed COMMIT left the transaction OPEN on this shared cached
+    // connection, so the next `unchecked_transaction()` in ingest rolled
+    // the whole graphify pass back on drop — and `where_defined` /
+    // `who_calls` / `blast_radius` then returned nothing against a graph
+    // we had just reported as successfully built.
+    if let Err(e) = conn.execute_batch("COMMIT") {
+        eprintln!("[graphify] COMMIT failed, rolling back: {e}");
+        // Close the transaction explicitly rather than leaving it open
+        // for an unrelated caller to inherit.
+        let _ = conn.execute_batch("ROLLBACK");
+        // Nothing was persisted — say so instead of reporting the parse.
+        return GraphifyStats::default();
+    }
     // Now that every symbol is in the DB, drop calls to names defined nowhere in
     // the codebase (stdlib/builtin noise) so who_calls / blast_radius stay about
     // THIS code, then count what remains.
