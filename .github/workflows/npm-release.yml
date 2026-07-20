@@ -35,13 +35,15 @@ jobs:
             link_tool: otool -L
             forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
             ort_cache: ~/Library/Caches/ort.pyke.io
-          - os: macos-13
-            triple: x86_64-apple-darwin
-            subpkg: mcp-darwin-x64
-            binfile: neurovault-server
-            link_tool: otool -L
-            forbidden: 'WebKit|AppKit|Carbon|OSAKit|GTK|libonnxruntime'
-            ort_cache: ~/Library/Caches/ort.pyke.io
+          # NOTE: no Intel-Mac (macos-13 / x86_64) job. It never once
+          # produced an artifact — the job sat in GitHub's Intel-runner queue
+          # for ~24h and was cancelled by the timeout on every run. release.yml
+          # and release-vscode.yml already dropped theirs for the same reason.
+          #
+          # It would also have shipped broken: build-headless.mjs maps both mac
+          # triples to the same arm64-only vec0.dylib, and sqlite_vec::load is
+          # fatal in db.rs::open_new, so every brain open would fail. Re-adding
+          # this needs BOTH a reliable Intel runner and an x64 vec0.
           - os: ubuntu-22.04
             triple: x86_64-unknown-linux-gnu
             subpkg: mcp-linux-x64

@@ -12,5 +12,11 @@
     "bin/neurovault-server.exe",
     "bin/vec0.dll"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sirdath/NeuroVault.git",
+    "directory": "dist-npm/packages/mcp-win32-x64"
+  },
+  "homepage": "https://github.com/sirdath/NeuroVault#readme"
 }

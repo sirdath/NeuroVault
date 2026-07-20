@@ -23,7 +23,13 @@ const SRC = join(ROOT, 'src-tauri');
 // until then so we never ship a dead-on-arrival package.
 const TARGETS = {
   'aarch64-apple-darwin': { subpkg: 'mcp-darwin-arm64', vec: 'vec0.dylib', bin: 'neurovault-server' },
-  'x86_64-apple-darwin': { subpkg: 'mcp-darwin-x64', vec: 'vec0.dylib', bin: 'neurovault-server' },
+  // NO x86_64-apple-darwin row. It used to point at the SAME vec0.dylib as the
+  // arm64 row above — and that file is arm64-only (`lipo -archs` → arm64).
+  // There is no x64 or universal vec0 in the pipeline, and sqlite_vec::load is
+  // fatal in db.rs::open_new, so an Intel package built from this map would
+  // have failed to open any brain. It never actually shipped: the macos-13 job
+  // never got a runner. Re-adding needs BOTH an x64 vec0 and a reliable Intel
+  // runner — see the note in .github/workflows/npm-release.yml.
   // vec0.so is NOT committed (a glibc-built .so can't be vendored portably) —
   // CI builds it from sqlite-vec source into src-tauri/resources/ before this runs.
   'x86_64-unknown-linux-gnu': { subpkg: 'mcp-linux-x64', vec: 'vec0.so', bin: 'neurovault-server' },

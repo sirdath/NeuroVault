@@ -12,7 +12,6 @@
   ],
   "optionalDependencies": {
     "@neurovault/mcp-darwin-arm64": "0.6.0",
-    "@neurovault/mcp-darwin-x64": "0.6.0",
     "@neurovault/mcp-linux-x64": "0.6.0",
     "@neurovault/mcp-win32-x64": "0.6.0"
   },
@@ -32,5 +31,14 @@
     "embeddings",
     "rag",
     "neurovault"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sirdath/NeuroVault.git",
+    "directory": "dist-npm"
+  },
+  "homepage": "https://github.com/sirdath/NeuroVault#readme",
+  "bugs": {
+    "url": "https://github.com/sirdath/NeuroVault/issues"
+  }
 }
