@@ -1,9 +1,10 @@
 [package]
 name = "neurovault"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local-first, AI-native memory for Claude and other LLM agents: markdown-canonical vault, hybrid retrieval, native MCP server"
 authors = ["NeuroVault contributors"]
 license-file = "../LICENSE"
+publish = false
 repository = "https://github.com/sirdath/NeuroVault"
 keywords = ["mcp", "memory", "ai", "local-first", "tauri"]
 edition = "2021"
@@ -20,6 +21,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
 
 # Release-build tuning. Cargo's default release profile is already
 # `opt-level = 3` (Tauri does NOT override this), so the wins here
@@ -68,24 +70,39 @@ strip = "symbols"
 
 [features]
 # `gui` pulls in Tauri + all desktop plugins and compiles `app.rs`. Default ON
-# so `cargo build` / `tauri dev` build the full app. A `--no-default-features`
-# build (used for the headless `neurovault-server` shipped via npm) drops Tauri
-# entirely, so the binary links no WebKit/GTK and runs on a headless host.
-default = ["gui"]
+# so `cargo build` builds the full app. `tauri dev` and the direct release
+# config additionally activate `direct-distribution`; the App Store overlay
+# activates `app-store` instead. A headless `neurovault-server` build uses
+# `--no-default-features --features model-download`: it drops Tauri entirely
+# while retaining the explicit model-acquisition capability needed by Core.
+default = ["gui", "direct-distribution"]
 gui = [
   "dep:tauri",
   "dep:tauri-plugin-fs",
+  "dep:tauri-plugin-dialog",
+]
+# Developer ID / direct-download flavor. These capabilities do not enter the
+# Store feature graph, including Tauri's private macOS API feature.
+direct-distribution = [
+  "model-download",
+  "tauri/macos-private-api",
   "dep:tauri-plugin-shell",
   "dep:tauri-plugin-global-shortcut",
-  "dep:tauri-plugin-dialog",
-  "dep:tauri-plugin-deep-link",
-  "dep:tauri-plugin-single-instance",
   "dep:tauri-plugin-updater",
   "dep:tauri-plugin-process",
+  "dep:tauri-plugin-deep-link",
+  "dep:tauri-plugin-single-instance",
 ]
+# Runtime Hugging Face access is deliberately its own capability. Direct and
+# headless distributions opt in; the App Store feature graph cannot download
+# a model and only accepts the pinned files bundled as app resources.
+model-download = ["fastembed/hf-hub-rustls-tls"]
+# Marker for Store-only cfg branches. Every Store build must use
+# `--no-default-features`; the Store overlay injects `gui,app-store`.
+app-store = ["dep:sqlite-vec"]
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"], optional = true }
+tauri = { version = "2", features = [], optional = true }
 tauri-plugin-fs = { version = "2", optional = true }
 tauri-plugin-shell = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
@@ -121,7 +138,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # `bundled` vendors SQLite so we don't link against a system libsqlite
 # that may lack load_extension. `buildtime_bindgen` lets us expose the
 # load_extension C entry that sqlite-vec needs at runtime.
-rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
+rusqlite = { version = "0.32", features = ["backup", "bundled", "load_extension"] }
+
+# The sandboxed App Store flavor registers sqlite-vec as a statically linked
+# SQLite extension. Direct/headless builds keep their existing loadable
+# extension path for backwards compatibility with released Core packages.
+sqlite-vec = { version = "=0.1.9", optional = true }
 
 # ONNX Runtime inference + text embedding (Phase 3). fastembed-rs
 # downloads the exact same BGE-small-en-v1.5 model the Python side
@@ -129,14 +151,12 @@ rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
 # on first Rust invocation for existing users.
 #
 # `ort-download-binaries` keeps onnxruntime fetched + STATICALLY linked (verified
-# via otool: no libonnxruntime). `hf-hub-rustls-tls` (instead of the default
-# `hf-hub-native-tls`) routes the model download through pure-Rust rustls + a
-# bundled CA store rather than system OpenSSL — so the headless binary needs no
-# libssl.so at runtime and no libssl-dev at build time, which is what makes a
-# slim/Alpine/Docker Linux build viable.
+# via otool: no libonnxruntime). The `model-download` distribution feature adds
+# `hf-hub-rustls-tls` for direct/headless builds only. The Store graph therefore
+# retains local ONNX inference but contains no Hugging Face client or runtime
+# model-download code.
 fastembed = { version = "4", default-features = false, features = [
     "ort-download-binaries",
-    "hf-hub-rustls-tls",
 ] }
 
 # Synchronisation primitives the ported modules will use:
@@ -166,13 +186,10 @@ sha2 = "0.10"
 # keeps working unchanged while Python is retired.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "io-util"] }
 axum = "0.7"
-# CORS for the localhost HTTP server. The Tauri webview's origin is
-# `tauri://localhost` (or `https://tauri.localhost`); plain `fetch()`
-# from there to `http://127.0.0.1:8765` is cross-origin and fails the
-# preflight without these headers. The server binds to 127.0.0.1 only
-# (no LAN exposure) so permissive CORS doesn't widen any attack
-# surface — it just lets the same machine's webview talk to its own
-# backend.
+# CORS and origin enforcement for the direct build's localhost HTTP server.
+# Loopback alone does not stop a hostile website from attempting browser
+# requests to `127.0.0.1`; the router permits only shipped local-app/dev
+# origins and rejects foreign-origin state changes before handlers run.
 tower-http = { version = "0.5", features = ["cors", "catch-panic"] }
 
 # API gateway (the optional external HTTP API). blake3 hashes API

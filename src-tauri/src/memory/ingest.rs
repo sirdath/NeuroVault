@@ -26,17 +26,17 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use super::bm25;
-use super::chunker::{extract_typed_wikilinks, hierarchical_chunk, LINK_TYPES};
+use super::chunker::{extract_typed_wikilinks, hierarchical_chunk, HierChunk, LINK_TYPES};
 use super::db::{BrainDb, EMBEDDING_DIM};
 use super::embedder;
 use super::entities::{extract_entities_locally, store_entities};
 use super::recall_cache;
 use super::summaries::generate_summaries_default;
-use super::types::Result;
+use super::types::{MemoryError, Result};
 
 /// Minimum cosine similarity for an automatic `semantic` link.
 /// Matches `LINK_THRESHOLD` in `ingest.py`.
@@ -193,147 +193,72 @@ pub fn ingest_file(
 /// round-trip through the filesystem.
 ///
 /// Keeps the same "skip if unchanged" fast path as the file-based
-/// version: if a row with the same filename + content_hash already
-/// exists, return `Ok(None)` without touching anything else.
+/// version, but only when the corresponding chunk/vector index is
+/// complete. An older interrupted ingest with the same content hash is
+/// retried instead of being mistaken for a permanent no-op.
 pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Result<Option<String>> {
     let title = extract_title(content, filename);
     let new_hash = content_hash(content);
     let kind = infer_kind(filename);
 
-    // Fast phase — under the lock, commit, release. Everything
-    // after (chunk, embed, links) runs on its own short locks.
-    let existing_id: Option<String>;
-    {
+    // Resolve the stable engram id before chunking because every chunk id is
+    // derived from it. This is read-only: the embedding model must succeed
+    // before any database row is changed.
+    let existing = {
         let conn = db.lock();
-        let found: Option<(String, String, String)> = conn
-            .query_row(
-                "SELECT id, content_hash, COALESCE(state, 'fresh') FROM engrams WHERE filename = ?1",
-                [filename],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
-            )
-            .ok();
-        if let Some((_, ref h, ref state)) = found {
-            if h == &new_hash && state != "dormant" {
-                return Ok(None);
-            }
-        }
-        existing_id = found.map(|(id, _, _)| id);
-    }
+        conn.query_row(
+            "SELECT id, content_hash, COALESCE(state, 'fresh') FROM engrams WHERE filename = ?1",
+            [filename],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    };
 
-    let engram_id = existing_id
-        .clone()
+    let engram_id = existing
+        .as_ref()
+        .map(|(id, _, _)| id.clone())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    // 0. Snapshot the old version before we overwrite it. Only
-    // fires when an engram with this id already exists (the
-    // hash-equality fast path returned early on no-op re-ingests).
-    // Best-effort: failure to snapshot is logged but doesn't abort
-    // the ingest — version history is a recoverability feature, not
-    // a correctness invariant.
-    if existing_id.is_some() {
-        let conn = db.lock();
-        let prev: Option<(String, String, String)> = conn
-            .query_row(
-                "SELECT title, content, content_hash FROM engrams WHERE id = ?1",
-                [&engram_id],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .ok();
-        if let Some((prev_title, prev_content, prev_hash)) = prev {
-            // Only snapshot if the content actually changed; the hash
-            // check up top normally handles this but the title alone
-            // may have shifted (rename / frontmatter tweak) — in that
-            // case we still capture so the audit trail stays clean.
-            if prev_hash != new_hash {
-                let next_version: i64 = conn
-                    .query_row(
-                        "SELECT COALESCE(MAX(version), 0) + 1 FROM engram_versions WHERE engram_id = ?1",
-                        [&engram_id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(1);
-                let snapshot_id = uuid::Uuid::new_v4().to_string();
-                if let Err(e) = conn.execute(
-                    "INSERT INTO engram_versions (id, engram_id, version, title, content, content_hash) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![&snapshot_id, &engram_id, next_version, &prev_title, &prev_content, &prev_hash],
-                ) {
-                    eprintln!("[ingest] snapshot {} v{} skipped: {}", engram_id, next_version, e);
-                }
-            }
-        }
-    }
-
-    // 1. Upsert engram row + set kind. Use millisecond timestamps
-    // like Python does — 1-second `datetime('now')` ties break
-    // recency sorting when ingest fires in a tight loop.
-    {
-        let conn = db.lock();
-        conn.execute(
-            "INSERT INTO engrams (id, filename, title, content, content_hash,
-                                   created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5,
-                     strftime('%Y-%m-%d %H:%M:%f', 'now'),
-                     strftime('%Y-%m-%d %H:%M:%f', 'now'))
-             ON CONFLICT(id) DO UPDATE SET
-               title=excluded.title,
-               content=excluded.content,
-               content_hash=excluded.content_hash,
-               state='fresh',
-               updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')",
-            params![&engram_id, filename, &title, content, &new_hash],
-        )?;
-        conn.execute(
-            "UPDATE engrams SET kind = ?1 WHERE id = ?2",
-            params![kind, &engram_id],
-        )?;
-    }
-
-    // 2. Replace chunks. Delete + insert is the same pattern Python
-    // uses; keeps us out of "did an ALTER land on a different row"
-    // territory.
-    delete_chunks(db, &engram_id)?;
-
-    // 3. Chunk + 4. Embed + 5. Persist chunks with embeddings.
+    // Chunking is deterministic and cheap enough to run on the unchanged
+    // path. A matching content hash is only a real no-op when the complete
+    // expected chunk/vector index is present. This repairs databases left by
+    // older builds that persisted the hash and then failed during embedding.
     let chunks = hierarchical_chunk(content, &engram_id);
-    if !chunks.is_empty() {
-        let embed_texts: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
-        let embeddings = embedder::encode_batch(&embed_texts)?;
-        debug_assert_eq!(embeddings.len(), chunks.len());
-        let conn = db.lock();
-        // One transaction for the whole chunk batch: a long note writes
-        // 100+ rows here, and per-statement autocommit overhead dominated
-        // bulk imports. `unchecked_transaction` rolls back on drop, so an
-        // error mid-batch can't leave the shared connection mid-transaction.
-        let tx = conn.unchecked_transaction()?;
-        for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
-            tx.execute(
-                "INSERT OR REPLACE INTO chunks (id, engram_id, content, granularity, chunk_index)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    &chunk.id,
-                    &chunk.engram_id,
-                    &chunk.content,
-                    &chunk.granularity,
-                    chunk.chunk_index,
-                ],
-            )?;
-            // vec0 tables don't honour INSERT OR REPLACE semantics —
-            // explicit DELETE first, matching the Python side.
-            tx.execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [&chunk.id])?;
-            tx.execute(
-                "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?1, ?2)",
-                params![&chunk.id, &serialize_float32(embedding)],
-            )?;
+    if let Some((_, previous_hash, state)) = &existing {
+        if previous_hash == &new_hash
+            && state != "dormant"
+            && index_is_complete(db, &engram_id, &chunks)?
+        {
+            return Ok(None);
         }
-        tx.commit()?;
     }
+
+    // Embedding is the fallible, expensive part of the fast phase. Finish it
+    // entirely before mutating SQLite. If model initialisation/inference
+    // fails, the prior engram and its prior index remain byte-for-byte live.
+    let embed_texts: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
+    let embeddings = embedder::encode_batch(&embed_texts)?;
+
+    // Engram metadata, the old-version snapshot, and the complete replacement
+    // chunk/vector index are one transaction. Any insert failure restores the
+    // previous searchable state instead of exposing a half-updated note.
+    persist_fast_phase(
+        db,
+        &engram_id,
+        filename,
+        &title,
+        content,
+        &new_hash,
+        kind,
+        &chunks,
+        &embeddings,
+    )?;
 
     // --- Slow phase (synchronous in this port). Each step is
     // wrapped in a sub-result so a failure in one doesn't block the
@@ -439,8 +364,196 @@ pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Resul
     Ok(Some(engram_id))
 }
 
+/// A content hash only proves that the engram body is current; it says
+/// nothing about whether a previous process reached the chunk/vector writes.
+/// Verify the exact deterministic chunk set and a correctly-sized embedding
+/// for every row before taking the unchanged fast path.
+fn index_is_complete(db: &BrainDb, engram_id: &str, expected: &[HierChunk]) -> Result<bool> {
+    let conn = db.lock();
+    let actual_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE engram_id = ?1",
+        [engram_id],
+        |r| r.get(0),
+    )?;
+    if actual_count != expected.len() as i64 {
+        return Ok(false);
+    }
+
+    for chunk in expected {
+        let stored: Option<(String, String, i64)> = conn
+            .query_row(
+                "SELECT content, granularity, chunk_index
+                 FROM chunks WHERE id = ?1 AND engram_id = ?2",
+                params![&chunk.id, engram_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if stored.as_ref()
+            != Some(&(
+                chunk.content.clone(),
+                chunk.granularity.clone(),
+                chunk.chunk_index,
+            ))
+        {
+            return Ok(false);
+        }
+
+        let embedding: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT embedding FROM vec_chunks WHERE chunk_id = ?1",
+                [&chunk.id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if embedding
+            .as_ref()
+            .map(|blob| blob.len() != EMBEDDING_DIM * std::mem::size_of::<f32>())
+            .unwrap_or(true)
+        {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+/// Commit the searchable fast phase as a single unit. Chunking and embedding
+/// have already succeeded before this function is entered. The version
+/// snapshot remains best-effort (matching the historical contract), but when
+/// it succeeds it commits or rolls back with the engram and its whole index.
+#[allow(clippy::too_many_arguments)]
+fn persist_fast_phase(
+    db: &BrainDb,
+    engram_id: &str,
+    filename: &str,
+    title: &str,
+    content: &str,
+    new_hash: &str,
+    kind: &str,
+    chunks: &[HierChunk],
+    embeddings: &[Vec<f32>],
+) -> Result<()> {
+    if embeddings.len() != chunks.len() {
+        return Err(MemoryError::Other(format!(
+            "embedder returned {} vectors for {} chunks",
+            embeddings.len(),
+            chunks.len()
+        )));
+    }
+    if let Some((index, embedding)) = embeddings
+        .iter()
+        .enumerate()
+        .find(|(_, embedding)| embedding.len() != EMBEDDING_DIM)
+    {
+        return Err(MemoryError::Other(format!(
+            "embedding {index} has {} dimensions, expected {EMBEDDING_DIM}",
+            embedding.len()
+        )));
+    }
+
+    let conn = db.lock();
+    let tx = conn.unchecked_transaction()?;
+
+    // Snapshot the old version before overwriting it. This is intentionally
+    // best-effort just as before: version history is a recoverability feature,
+    // while the engram/index transaction below is the correctness boundary.
+    let prev: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT title, content, content_hash FROM engrams WHERE id = ?1",
+            [engram_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((prev_title, prev_content, prev_hash)) = prev {
+        if prev_hash != new_hash {
+            let next_version: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) + 1
+                     FROM engram_versions WHERE engram_id = ?1",
+                    [engram_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(1);
+            let snapshot_id = uuid::Uuid::new_v4().to_string();
+            if let Err(error) = tx.execute(
+                "INSERT INTO engram_versions
+                   (id, engram_id, version, title, content, content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &snapshot_id,
+                    engram_id,
+                    next_version,
+                    &prev_title,
+                    &prev_content,
+                    &prev_hash
+                ],
+            ) {
+                eprintln!(
+                    "[ingest] snapshot {} v{} skipped: {}",
+                    engram_id, next_version, error
+                );
+            }
+        }
+    }
+
+    // Millisecond timestamps match the prior ingest path and avoid ties in
+    // recency ordering when several notes land in one second.
+    tx.execute(
+        "INSERT INTO engrams (id, filename, title, content, content_hash,
+                               created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5,
+                 strftime('%Y-%m-%d %H:%M:%f', 'now'),
+                 strftime('%Y-%m-%d %H:%M:%f', 'now'))
+         ON CONFLICT(id) DO UPDATE SET
+           title=excluded.title,
+           content=excluded.content,
+           content_hash=excluded.content_hash,
+           state='fresh',
+           updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')",
+        params![engram_id, filename, title, content, new_hash],
+    )?;
+    tx.execute(
+        "UPDATE engrams SET kind = ?1 WHERE id = ?2",
+        params![kind, engram_id],
+    )?;
+
+    let old_chunk_ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM chunks WHERE engram_id = ?1")?;
+        let rows = stmt.query_map([engram_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for chunk_id in old_chunk_ids {
+        tx.execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [chunk_id])?;
+    }
+    tx.execute("DELETE FROM chunks WHERE engram_id = ?1", [engram_id])?;
+
+    for (chunk, embedding) in chunks.iter().zip(embeddings) {
+        tx.execute(
+            "INSERT INTO chunks (id, engram_id, content, granularity, chunk_index)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &chunk.id,
+                &chunk.engram_id,
+                &chunk.content,
+                &chunk.granularity,
+                chunk.chunk_index,
+            ],
+        )?;
+        // vec0 does not implement INSERT OR REPLACE semantics reliably. Old
+        // rows were removed above, so a plain INSERT is both strict and atomic.
+        tx.execute(
+            "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?1, ?2)",
+            params![&chunk.id, &serialize_float32(embedding)],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
 /// Remove all chunk + vec rows for the given engram. Used on ingest
-/// (replace) and on soft-delete.
+/// maintenance and on soft-delete. Normal ingest replaces these rows inside
+/// `persist_fast_phase` so the engram and index share one transaction.
 fn delete_chunks(db: &BrainDb, engram_id: &str) -> Result<()> {
     let conn = db.lock();
     let mut stmt = conn.prepare("SELECT id FROM chunks WHERE engram_id = ?1")?;
@@ -1237,25 +1350,197 @@ fn l2_norm(v: &[f32]) -> f32 {
 /// pass through to the rest of the pipeline.
 pub fn lookup_engram_by_filename(db: &BrainDb, filename: &str) -> Result<Option<String>> {
     let conn = db.lock();
-    let row: Option<String> = conn
-        .query_row(
-            "SELECT id FROM engrams WHERE filename = ?1",
-            [filename],
-            |r| r.get::<_, String>(0),
-        )
-        .ok();
-    Ok(row)
+    conn.query_row(
+        "SELECT id FROM engrams WHERE filename = ?1",
+        [filename],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn ingest_test_db(label: &str) -> BrainDb {
+        let path = std::env::temp_dir().join(format!(
+            "neurovault-ingest-{label}-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = crate::memory::db::open_file(&path).unwrap();
+        {
+            let conn = db.lock();
+            // Unit tests do not load sqlite-vec. This ordinary table has the
+            // same columns needed to prove transaction and completeness
+            // semantics without downloading the embedding model.
+            conn.execute_batch(
+                "CREATE TABLE vec_chunks (
+                    chunk_id TEXT PRIMARY KEY,
+                    embedding BLOB NOT NULL
+                 );",
+            )
+            .unwrap();
+        }
+        db
+    }
+
+    fn fake_embeddings(chunks: &[HierChunk]) -> Vec<Vec<f32>> {
+        chunks.iter().map(|_| vec![0.125; EMBEDDING_DIM]).collect()
+    }
+
     #[test]
     fn content_hash_matches_known_python_output() {
         // `hashlib.sha256(b"hello").hexdigest()` in Python.
         let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert_eq!(content_hash("hello"), expected);
+    }
+
+    #[test]
+    fn unchanged_hash_is_not_complete_when_a_vector_is_missing() {
+        let db = ingest_test_db("incomplete");
+        let engram_id = "engram-incomplete";
+        let content = "# Durable note\n\nThe markdown survives even when its derived search index needs repair.";
+        let chunks = hierarchical_chunk(content, engram_id);
+        let embeddings = fake_embeddings(&chunks);
+        persist_fast_phase(
+            &db,
+            engram_id,
+            "durable.md",
+            "Durable note",
+            content,
+            &content_hash(content),
+            "note",
+            &chunks,
+            &embeddings,
+        )
+        .unwrap();
+        assert!(index_is_complete(&db, engram_id, &chunks).unwrap());
+
+        let missing_id = &chunks[0].id;
+        db.lock()
+            .execute("DELETE FROM vec_chunks WHERE chunk_id = ?1", [missing_id])
+            .unwrap();
+
+        assert!(
+            !index_is_complete(&db, engram_id, &chunks).unwrap(),
+            "a matching engram hash must retry when any derived vector is absent"
+        );
+    }
+
+    #[test]
+    fn failed_vector_replacement_rolls_back_engram_chunks_and_snapshot() {
+        let db = ingest_test_db("rollback");
+        let engram_id = "engram-atomic";
+        let old_content =
+            "# Atomic note\n\nThe prior searchable version must remain intact after failure.";
+        let old_hash = content_hash(old_content);
+        let old_chunks = hierarchical_chunk(old_content, engram_id);
+        persist_fast_phase(
+            &db,
+            engram_id,
+            "atomic.md",
+            "Atomic note",
+            old_content,
+            &old_hash,
+            "note",
+            &old_chunks,
+            &fake_embeddings(&old_chunks),
+        )
+        .unwrap();
+
+        db.lock()
+            .execute_batch(
+                "CREATE TRIGGER reject_new_vectors
+                 BEFORE INSERT ON vec_chunks
+                 BEGIN
+                   SELECT RAISE(ABORT, 'synthetic vector failure');
+                 END;",
+            )
+            .unwrap();
+
+        let new_content = "# Atomic note\n\nA replacement body that must never become visible without all of its vectors.";
+        let new_hash = content_hash(new_content);
+        let new_chunks = hierarchical_chunk(new_content, engram_id);
+        let error = persist_fast_phase(
+            &db,
+            engram_id,
+            "atomic.md",
+            "Atomic note",
+            new_content,
+            &new_hash,
+            "note",
+            &new_chunks,
+            &fake_embeddings(&new_chunks),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("synthetic vector failure"));
+
+        let conn = db.lock();
+        let stored: (String, String) = conn
+            .query_row(
+                "SELECT content, content_hash FROM engrams WHERE id = ?1",
+                [engram_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (old_content.to_string(), old_hash));
+        let chunk_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE engram_id = ?1",
+                [engram_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let vector_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vec_chunks", [], |row| row.get(0))
+            .unwrap();
+        let version_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM engram_versions WHERE engram_id = ?1",
+                [engram_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(chunk_count, old_chunks.len() as i64);
+        assert_eq!(vector_count, old_chunks.len() as i64);
+        assert_eq!(
+            version_count, 0,
+            "the uncommitted snapshot must roll back too"
+        );
+        drop(conn);
+
+        // Once the vector store is writable, the identical prepared update
+        // succeeds and preserves the old engram as version 1, exactly as the
+        // pre-atomic ingest path did.
+        db.lock()
+            .execute("DROP TRIGGER reject_new_vectors", [])
+            .unwrap();
+        persist_fast_phase(
+            &db,
+            engram_id,
+            "atomic.md",
+            "Atomic note",
+            new_content,
+            &new_hash,
+            "note",
+            &new_chunks,
+            &fake_embeddings(&new_chunks),
+        )
+        .unwrap();
+        let conn = db.lock();
+        let snapshot: (i64, String, String) = conn
+            .query_row(
+                "SELECT version, content, content_hash
+                 FROM engram_versions WHERE engram_id = ?1",
+                [engram_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            snapshot,
+            (1, old_content.to_string(), content_hash(old_content))
+        );
     }
 
     #[test]

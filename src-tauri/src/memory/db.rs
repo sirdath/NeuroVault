@@ -149,6 +149,10 @@ fn open_new(brain_id: &str) -> Result<BrainDb> {
     }
 
     let path = db_path(brain_id);
+    // The App Store flavor registers sqlite-vec's statically linked entrypoint
+    // before SQLite creates the connection. Direct/Core builds leave this as
+    // a no-op and load their existing platform extension immediately below.
+    sqlite_vec::prepare()?;
     let conn = Connection::open(&path)?;
     apply_startup_pragmas(&conn)?;
     sqlite_vec::load(&conn)?;

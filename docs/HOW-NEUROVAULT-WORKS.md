@@ -2,6 +2,14 @@
 
 *A comprehensive engineering reference — enough depth that a future maintainer (or agent) can pick up exactly where the current author left off without re-reading the whole repo.*
 
+> **Scope note (2026-07-21):** much of this document describes the historical
+> 0.6 Direct architecture. The Store candidate uses a narrowed native IPC
+> surface, bundles BGE-small, excludes the reranker/sidecar/updater/hooks, and
+> does not start or expose loopback HTTP. Shared server/transport modules and
+> dependencies may still be statically compiled. Treat old size, timing,
+> process, release, and platform passages as historical unless a current build
+> receipt confirms them.
+
 ---
 
 ## Table of contents
@@ -31,10 +39,7 @@
 - It is **not** trying to beat LightRAG or Graphiti on academic benchmarks. It optimises for a different axis: "single user, many agents, no cost per ingest, under 100 ms per retrieval."
 - It is **not** a Python app anymore. Phase 0-9 of the migration moved the entire hot path into Rust in-process.
 
-**Concrete numbers** (Rust build; the app + bundled MCP server):
-- Download: **~24 MB** (macOS DMG) / **~26 MB** (Windows installer); ~50 MB installed. A fraction of an Electron app's 150 MB+.
-- Idle RAM: **~35 MB** (was 500 MB – 3 GB with the old Python sidecar).
-- Cold start: **<500 ms** to interactive.
+**Historical measurements** (older Direct builds; remeasure before marketing):
 - Recall latency: **~20-50 ms** median engine-only; the cross-encoder reranker (on by default) adds **~50-100 ms**.
 - Quality (internal eval set, 30 queries): **83.33% hit@1 / MRR 0.861** engine-only
   ([committed baseline](../eval/baselines/2026-04-23-tier1-real.json)). The
@@ -81,7 +86,9 @@
 
 **Why this shape**, specifically:
 
-- **One process.** Python had two processes (desktop + sidecar). That meant two fastembed loads, two SQLite connections, two sources of truth. The Rust version collapses that: the memory layer runs *inside* the Tauri process.
+- **One heavy Direct app process, plus a thin MCP process per connected
+  client.** The memory layer runs inside Tauri; `neurovault-server --mcp-only`
+  is a separate native bridge when an MCP client uses the Direct flavor.
 - **Tauri, not Electron.** WebView2 is Chromium already installed on Windows — no shipping a second browser. The installer drops to 9 MB instead of 150 MB.
 - **HTTP server for agents, Tauri IPC for the UI.** Same code answers both: the UI calls `nv_recall` via Tauri's zero-copy command bus; agents call `/api/recall` over loopback HTTP. Both hit the same `memory::retriever::hybrid_retrieve_throttled`.
 - **The MCP server is a separate tiny process.** Claude Code spawns `neurovault-server --mcp-only` (native Rust, built on the official `rmcp` SDK) fresh each session; it loads no model and opens no database — it just forwards stdio JSON-RPC to the HTTP server over loopback. The actual memory work lives in the always-running app. This is the single most important architectural decision: **the heavy stuff never runs in the agent's process tree.**
@@ -105,13 +112,17 @@ Everything NeuroVault persists lives under `~/.neurovault/`:
         ├── audit.jsonl             ← append-only tool-call log
         ├── trash/                  ← soft-deleted files
         └── vault/
-            ├── *.md                ← user-facing markdown (source of truth)
+            ├── *.md                ← canonical note/engram content
             ├── index.md            ← auto-maintained wiki index
             ├── log.md              ← append-only activity feed
             └── <subdirs>/          ← user-organised folders
 ```
 
-**The markdown files are the source of truth.** If `brain.db` is ever deleted, it can be rebuilt deterministically by re-ingesting every `.md` file. This is a hard invariant — no memory exists only in the database.
+**Markdown is canonical for note/engram content.** Derived chunks, embeddings,
+and graph indexes can be recreated by re-ingesting `.md` files. `brain.db`
+also holds structured-only state such as core-memory blocks, drafts, and
+version history, so deleting it loses information and a complete backup must
+include both the vault and database.
 
 **Key tables in `brain.db`** (full schema in `src-tauri/src/memory/schema.sql`, 24 tables):
 
@@ -493,8 +504,9 @@ Every one of these was a real choice between alternatives. Written so a future m
 - A Settings toggle (and `~/.neurovault/rerank.txt`) turns it off for a lighter, faster app; agents can also pass `rerank=false` per call.
 - Feeds the reranker the title + the matched chunk, not the note's first 400 chars, which is where most of that lift came from.
 
-### MCP stdio proxy forwarding to loopback HTTP, not stdio-native Rust server
-- The proxy is ~30 MB Python (stdlib only). Claude Code spawns it per session.
+### Native MCP stdio bridge forwarding to loopback HTTP (Direct flavor)
+- `neurovault-server --mcp-only` is native Rust, not Python. An MCP client
+  spawns it per session in the Direct flavor.
 - Avoids spawning a full `neurovault.exe` per MCP client. Heavy state stays in the desktop app.
 - Loopback HTTP is safer than stdio against CVE-2026-30623 (stdio command-injection).
 
@@ -503,8 +515,10 @@ Every one of these was a real choice between alternatives. Written so a future m
 - Deleting a brain is `rm -rf` the directory; no residual rows elsewhere.
 - Backup is "copy this folder."
 
-### Markdown files as source of truth, not database-only
-- User can edit notes in any editor. Git commits work. If the DB corrupts, rebuild by walking the vault.
+### Markdown note content, plus structured SQLite state
+- Users can edit notes in any editor and rebuild derived retrieval indexes by
+  walking the vault. Preserve `brain.db` when core-memory blocks, drafts, and
+  version history matter.
 - File watcher (`notify` crate) catches external edits; 500 ms per-file debounce coalesces editor save bursts.
 
 ### Strength decay (Ebbinghaus), not static scores

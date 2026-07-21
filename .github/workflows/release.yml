@@ -288,6 +288,12 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
+      # Attribution is shipped inside every app bundle. Re-derive it from the
+      # exact lockfiles and fail before packaging if a dependency change left
+      # the checked-in inventory or preserved license texts stale.
+      - name: Verify third-party notices
+        run: node scripts/generate-third-party-notices.mjs --check
+
       # --- Release notes from CHANGELOG.md ----------------------------------
       # Pulls the section under `## [<version>]` for the current tag so
       # the release body matches the changelog without hand-copying.

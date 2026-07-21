@@ -42,7 +42,6 @@ pub mod core_memory;
 pub mod db;
 pub mod diagnostic;
 pub mod embedder;
-pub mod employee;
 pub mod entities;
 pub mod facts;
 pub mod graphify;
@@ -64,7 +63,6 @@ pub mod recall_cache;
 pub mod related;
 pub mod reranker;
 pub mod retriever;
-pub mod roles;
 pub mod rrf;
 pub mod source_mirror;
 pub mod spread;
@@ -99,6 +97,7 @@ pub use source_mirror::{sync as source_sync, SourceStatus, SyncReport};
 pub use summaries::{generate_summaries, generate_summaries_default};
 pub use types::{Brain, Chunk, Engram, EngramLink, Entity, MemoryError, Result, SourceFolder};
 pub use write_ops::{
-    create_note, delete_note, list_trash, restore_note, save_note, set_source_folders,
-    supersede_note, BrainContext, TrashEntry, WriteResult,
+    create_note, delete_note, index_brain, ingest_existing_note, is_safe_markdown_relative_path,
+    list_trash, read_note_content, rename_note, restore_note, save_note, set_source_folders,
+    supersede_note, BrainContext, IndexBrainResult, IndexFileError, TrashEntry, WriteResult,
 };

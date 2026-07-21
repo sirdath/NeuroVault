@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { useNoteStore } from "./noteStore";
+import { IS_APP_STORE } from "../lib/distribution";
+import { assertStoreRuntimeReady, useStoreRuntimeStore } from "./storeRuntimeStore";
 
 export interface BrainInfo {
   id: string;
@@ -75,6 +77,8 @@ interface BrainStore {
   activeBrainName: string;
   loading: boolean;
   ingest: IngestProgress | null;
+  lastMutationError: string | null;
+  lastMutationNotice: string | null;
 
   loadBrains: () => Promise<void>;
   /** Activate a vault after draining the current editor buffer.
@@ -100,26 +104,30 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
   activeBrainName: "Default",
   loading: false,
   ingest: null,
+  lastMutationError: null,
+  lastMutationNotice: null,
 
   loadBrains: async () => {
     // Try the HTTP server first — richer payload (created_at, is_external).
     // Fall back to the Tauri filesystem command when the sidecar is off so
     // the BrainSelector dropdown still lists every vault the user has.
-    try {
-      const res = await fetch(`${API}/api/brains`);
-      if (res.ok) {
-        const brains: BrainInfo[] = await res.json();
-        const active = brains.find((b) => b.is_active);
-        set({
-          brains,
-          activeBrainId: active?.id ?? null,
-          activeBrainName: active?.name ?? "Default",
-        });
-        useNoteStore.setState({ brainId: active?.id ?? null });
-        return;
+    if (!IS_APP_STORE) {
+      try {
+        const res = await fetch(`${API}/api/brains`);
+        if (res.ok) {
+          const brains: BrainInfo[] = await res.json();
+          const active = brains.find((b) => b.is_active);
+          set({
+            brains,
+            activeBrainId: active?.id ?? null,
+            activeBrainName: active?.name ?? "Default",
+          });
+          useNoteStore.setState({ brainId: active?.id ?? null });
+          return;
+        }
+      } catch {
+        // Server unreachable — fall through to disk.
       }
-    } catch {
-      // Server unreachable — fall through to disk.
     }
 
     try {
@@ -155,6 +163,13 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
 
   switchBrain: async (brainId: string) => {
     if (brainId === get().activeBrainId) return true;
+    if (IS_APP_STORE) {
+      try {
+        assertStoreRuntimeReady();
+      } catch {
+        return false;
+      }
+    }
 
     const noteStore = useNoteStore.getState();
     // The backend resolves note writes against a process-global active brain.
@@ -169,13 +184,13 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
     // progress instead of freezing silently. Both run concurrently —
     // FastAPI handles sync endpoints in a thread pool so the poll
     // doesn't stall behind the activate.
-    const poller = window.setInterval(async () => {
+    const poller = IS_APP_STORE ? null : window.setInterval(async () => {
       try {
         const r = await fetch(`${API}/api/brains/${brainId}/ingest_status`);
         if (!r.ok) return;
         const p = await r.json();
         set({ ingest: p });
-        if (p.phase === "ready") window.clearInterval(poller);
+        if (p.phase === "ready") window.clearInterval(poller!);
       } catch { /* ignore — will retry */ }
     }, 500);
 
@@ -187,19 +202,21 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       let usedServer = false;
       let activatedBrainId = brainId;
       let activatedBrainName = get().brains.find((brain) => brain.id === brainId)?.name ?? brainId;
-      try {
-        const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
-          method: "POST",
-        });
-        if (res.ok) {
-          const data = await res.json() as { brain_id?: string; active?: string; name?: string };
-          const activated = normalizeBrainActivation(data, brainId, activatedBrainName);
-          activatedBrainId = activated.id;
-          activatedBrainName = activated.name;
-          usedServer = true;
+      if (!IS_APP_STORE) {
+        try {
+          const res = await fetch(`${API}/api/brains/${brainId}/activate`, {
+            method: "POST",
+          });
+          if (res.ok) {
+            const data = await res.json() as { brain_id?: string; active?: string; name?: string };
+            const activated = normalizeBrainActivation(data, brainId, activatedBrainName);
+            activatedBrainId = activated.id;
+            activatedBrainName = activated.name;
+            usedServer = true;
+          }
+        } catch {
+          /* fall through to offline path */
         }
-      } catch {
-        /* fall through to offline path */
       }
 
       if (!usedServer) {
@@ -231,14 +248,55 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       await useNoteStore.getState().initVault();
       return true;
     } finally {
-      window.clearInterval(poller);
+      if (poller !== null) window.clearInterval(poller);
       set({ loading: false, ingest: null });
       useNoteStore.getState().finishBrainSwitch();
     }
   },
 
   createBrain: async (name: string, description: string, vaultPath?: string) => {
+    set({ lastMutationError: null });
     try {
+      if (IS_APP_STORE) {
+        assertStoreRuntimeReady();
+        const { invoke } = await import("@tauri-apps/api/core");
+        const created = await invoke<{
+          brain_id: string;
+          name: string;
+          vault_path: null;
+          is_external: false;
+        }>("create_brain_offline", { name, description });
+        if (vaultPath) {
+          try {
+            await invoke<number>("import_folder_as_vault", {
+              source: vaultPath,
+              targetBrainId: created.brain_id,
+            });
+          } catch (error) {
+            // Import is offered only while creating a new Store library. If
+            // the permission grant disappears or any copy fails, remove that
+            // new library so the UI cannot strand an empty/partial vault.
+            // The user-selected source is never modified.
+            try {
+              await invoke<void>("delete_brain_offline", {
+                brainId: created.brain_id,
+              });
+            } catch (rollbackError) {
+              await get().loadBrains();
+              throw new Error(
+                `The import failed (${String(error)}), and NeuroVault could not remove the incomplete library (${String(rollbackError)}). The library list has been refreshed; do not treat that library as a completed import.`,
+              );
+            }
+            throw error;
+          }
+          // The copied Markdown is already durable and can be opened
+          // immediately. Build search/graph state beside the UI and report
+          // the real summary through the Store index banner.
+          void useStoreRuntimeStore.getState().indexBrain(created.brain_id, true);
+        }
+        await get().loadBrains();
+        return { ...created, vault_path: undefined, is_external: false };
+      }
       const body: Record<string, unknown> = { name, description };
       if (vaultPath) body.vault_path = vaultPath;
       const res = await fetch(`${API}/api/brains`, {
@@ -256,13 +314,32 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       if (typeof brainId !== "string" || !brainId) return null;
       await get().loadBrains();
       return { ...data, brain_id: brainId };
-    } catch {
+    } catch (error) {
+      set({
+        lastMutationError: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   },
 
   updateBrain: async (brainId: string, patch: { name?: string; description?: string }) => {
+    set({ lastMutationError: null });
     try {
+      if (IS_APP_STORE) {
+        assertStoreRuntimeReady();
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke<void>("update_brain_offline", {
+          brainId,
+          name: patch.name ?? null,
+          description: patch.description ?? null,
+        });
+        set((state) => ({
+          brains: state.brains.map((brain) => brain.id === brainId ? { ...brain, ...patch } : brain),
+          activeBrainName: state.activeBrainId === brainId && patch.name ? patch.name : state.activeBrainName,
+        }));
+        await get().loadBrains();
+        return true;
+      }
       const res = await fetch(`${API}/api/brains/${brainId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -282,20 +359,43 @@ export const useBrainStore = create<BrainStore>((set, get) => ({
       }));
       await get().loadBrains();
       return true;
-    } catch {
+    } catch (error) {
+      set({
+        lastMutationError: error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
   },
 
   deleteBrain: async (brainId: string) => {
+    set({ lastMutationError: null, lastMutationNotice: null });
     try {
+      if (IS_APP_STORE) {
+        assertStoreRuntimeReady();
+        const { invoke } = await import("@tauri-apps/api/core");
+        const result = await invoke<{
+          cleanup_pending: boolean;
+          recovery_path: string | null;
+        }>("delete_brain_offline", { brainId });
+        if (result.cleanup_pending) {
+          set({
+            lastMutationNotice:
+              "The library was removed from NeuroVault, but macOS could not finish deleting all of its local files. Restart NeuroVault and try cleanup again before relying on the storage being erased.",
+          });
+        }
+        await get().loadBrains();
+        return true;
+      }
       const res = await fetch(`${API}/api/brains/${brainId}`, {
         method: "DELETE",
       });
       if (!res.ok) return false;
       await get().loadBrains();
       return true;
-    } catch {
+    } catch (error) {
+      set({
+        lastMutationError: error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
   },

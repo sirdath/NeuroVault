@@ -6,10 +6,12 @@ otherwise.
 
 This repository contains differently licensed material.
 
-1. Pre-boundary NeuroVault. The source code and assets as they existed at Git
-   tag v0.6.0 (commit 90b7883070bd76c243282e58558c9ee5f050d3f0) were released
-   under the MIT License. Changing the repository's visibility does not
-   withdraw or alter those permissions. See
+1. Pre-boundary NeuroVault. First-party material covered by this repository's
+   MIT License at Git tag v0.6.0 (commit
+   90b7883070bd76c243282e58558c9ee5f050d3f0) remains available under that
+   license. Third-party material and trademarks retain their separate terms.
+   Changing the repository's visibility does not withdraw or alter the MIT
+   permissions. See
    LICENSES/NeuroVault-v0.6.0-MIT.txt.
 
 2. NeuroVault Core. The separately published NeuroVault Core project is

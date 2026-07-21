@@ -25,7 +25,7 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 
 <br>
 
-NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Your notes stay as plain `.md` files and the local database is rebuildable; selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
+NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Note/engram content stays in plain `.md` files and can be re-indexed; SQLite also holds structured state such as core-memory blocks, drafts, and version history, so a complete brain backup includes both the vault and database. Selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
 
 The open engine follows the [Core Covenant](CORE-COVENANT.md) and now lives in
 [NeuroVault Core](https://github.com/sirdath/neurovault-core). This repository
@@ -48,7 +48,26 @@ received it under those terms. Its license is preserved at
 `LICENSES/NeuroVault-v0.6.0-MIT.txt`. New commercial Desktop work begins after
 the `desktop-mit-final-v0.6.0` provenance tag.
 
-## What you get
+There are currently two build flavors, and their capabilities must not be
+confused:
+
+| Flavor | Current purpose | Current capability |
+| --- | --- | --- |
+| Direct distribution | Internal development and the historical Direct app | Full automatic-context hooks, MCP/HTTP integration, Review/Trust, Today, updater, minitab, and external-vault workflows described below. |
+| Mac App Store | Sandboxed release candidate | Standalone local Libraries, Memories, Search, Graph, editing, import/export, themes, and a bundled on-device embedding model. It includes no sidecar, hook installer, updater, reranker, or external-AI connection. Some shared transport/server modules and dependencies remain statically compiled today, but the Store IPC surface is narrowed and it does not start or expose the loopback HTTP server. |
+
+The Store flavor is an architecture scaffold, **not the paid product promised
+by the rest of this README yet**. It is not credible at the planned price until
+it regains the automatic, source-backed memory loop through an App
+Store-compliant connection design. See
+[App Store readiness](docs/APP-STORE-READINESS.md) and
+[commercial strategy](docs/COMMERCIAL-STRATEGY.md). Do not copy the direct-only
+claims below into App Store metadata.
+
+## Full direct-distribution capability set
+
+The following is the implemented direct/internal flavor, not the current
+sandboxed Store feature set.
 
 - **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your active vault: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your connected AI can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. NeuroVault does not upload source while building the graph.
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
@@ -65,6 +84,9 @@ the `desktop-mit-final-v0.6.0` provenance tag.
 - **Local-first, with an exact network contract.** No NeuroVault account or telemetry. The server is loopback-only on `127.0.0.1:8765`; selected context leaves the Mac only through AI providers you deliberately connect, and model/update downloads are disclosed in [PRIVACY.md](PRIVACY.md).
 
 ## Connect your agent (MCP)
+
+> **Direct-distribution flavor only.** The current Mac App Store flavor does
+> not bundle this server or write another application's configuration.
 
 **Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
@@ -88,6 +110,9 @@ the `desktop-mit-final-v0.6.0` provenance tag.
 It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765`. You don't need to open the app first — the MCP server **auto-starts the backend** if it isn't already running (disable with `NEUROVAULT_AUTOSTART=0`). Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
 
 ## Automatic memory (zero effort)
+
+> **Direct-distribution flavor only.** A Store-compliant automatic-context
+> transport is still a launch blocker.
 
 MCP memory has a known weakness: the agent only remembers if it *decides* to call `recall` — and models routinely don't. NeuroVault fixes this with **automatic recall** for Claude Code: relevant memories are injected into every prompt automatically, no tool call needed.
 
@@ -197,6 +222,10 @@ Top fixes:
 
 ## Quick start (developers)
 
+This section is for maintainers with access to the private Desktop repository.
+Public engine development belongs in
+[NeuroVault Core](https://github.com/sirdath/neurovault-core).
+
 **Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. No Python is needed to build or run anything. (The only Python in the repo is offline tooling the app never invokes: the `eval/` retrieval harness, the `docs/benchmarks/` report mergers, and two icon generators in `scripts/`.)
 
 ```bash
@@ -212,11 +241,16 @@ npx tauri dev
 npx tauri build
 ```
 
-**First run downloads** (once, then cached — instant after that):
+**Direct-flavor model downloads** (once, then cached):
 
-- the embedding model **BGE-small-en-v1.5** (~130 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
+- **BGE-small-en-v1.5** (~130 MB) on first ingest/recall, and the separate
+  **BGE reranker** (~1 GB) on first reranked recall. The Store flavor bundles
+  BGE-small for offline first use and excludes the reranker.
 
-The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. The macOS build we ship is **arm64 and macOS 14+ only**: that is the deployment target of the bundled extension, and it is loaded on every brain open. Building on an Intel Mac does **not** produce a working app — the repo carries only the arm64 `vec0.dylib`, so an x86_64 build gets a library it cannot load. Intel support needs an x86_64 (or universal) `vec0` build first.
+The `sqlite-vec` (`vec0`) native extension is bundled with Direct builds. The
+currently verified Direct macOS target is **Apple Silicon on macOS 14+**. The
+repo carries only the arm64 loadable extension, so an Intel build is not a
+working distribution until an x86_64 or universal `vec0` is supplied.
 
 ## MCP tools
 
@@ -243,7 +277,10 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **55 tools*
 
 ## Architecture
 
-**[Full technical reference map](docs/reference.html)** — the whole system on one page: topology, the hybrid retrieval core, ingest, storage, the 55-tool MCP surface, and why every path is on-device (no external model calls, no paid path).
+**[Full technical reference map](docs/reference.html)** — the historical Direct
+topology, hybrid retrieval core, ingest, storage, and 55-tool MCP surface.
+Inference runs on-device; disclosed model acquisition, updates, and connected
+AI-provider flows are covered in [PRIVACY.md](PRIVACY.md).
 
 [![NeuroVault technical reference](docs/reference.png)](docs/reference.html)
 
@@ -273,7 +310,11 @@ External:
     (`neurovault-server hook …`). No Python anywhere in the product.
 ```
 
-Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your memories. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
+Markdown in `vault/` is canonical for note/engram content, and `raw/` retains
+imported inputs. Retrieval indexes can be rebuilt from those files, but
+`brain.db` also contains structured state without Markdown mirrors (including
+core-memory blocks, drafts, and version history). Export or back up the whole
+brain for complete recovery. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
 
 ## Tech stack
 
@@ -299,7 +340,12 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Recall (with reranker) | ~133 ms median |
 | Full vault ingest (25 notes) | ~4 s cold start |
 
-**Retrieval quality** — measured on the full **470-question [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark** (long multi-session histories, facts that get updated and contradicted, temporal reasoning), using NeuroVault's real `recall()` path (cross-encoder reranker on, the default) with **100% on-device** embeddings:
+**Retrieval quality** — measured on the **470 answerable questions** in the
+cleaned LongMemEval-S set (the 30 abstention questions are excluded), using
+NeuroVault's real `recall()` implementation with the reranker on while
+ablating production recency and synthetic-title boosts for reproducibility.
+This is a retrieval benchmark configuration, not the full shipped runtime
+configuration or an end-to-end answer-quality score:
 
 | hit@5 | hit@10 | recall@5 | MRR | hit@1 |
 |-------|--------|----------|-----|-------|

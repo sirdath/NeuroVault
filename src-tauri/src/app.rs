@@ -2,11 +2,10 @@ use serde::Serialize;
 use slug::slugify;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::SystemTime;
+#[cfg(feature = "direct-distribution")]
 use tauri_plugin_shell::process::CommandChild;
 use uuid::Uuid;
 
@@ -17,7 +16,75 @@ use uuid::Uuid;
 use crate::memory;
 
 /// Shared state holding the Python sidecar child process (if running).
+#[cfg(feature = "direct-distribution")]
 struct ServerState(Mutex<Option<CommandChild>>);
+
+/// The Store build has no child-process capability, but the command surface
+/// keeps an inert state marker so frontend calls can return an explicit error.
+#[cfg(feature = "app-store")]
+struct ServerState;
+
+/// Store setup failures are recoverable UI state, never a reason to abort the
+/// process and strand the user's sandbox. React reads this before enabling any
+/// vault mutation and can offer export/recovery guidance.
+struct StoreStartupState(Mutex<Option<String>>);
+
+/// Serialises every native read-modify-write of `brains.json` and the long
+/// import/export operations that depend on a registry entry staying alive.
+/// Atomic rename prevents torn JSON; this lock additionally prevents two IPC
+/// commands from each publishing a valid but stale copy over the other.
+static BRAIN_REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_brain_registry() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    BRAIN_REGISTRY_LOCK
+        .lock()
+        .map_err(|_| "vault registry lock was poisoned".to_string())
+}
+
+#[derive(serde::Serialize)]
+struct StoreStartupStatus {
+    ready: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn store_startup_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, StoreStartupState>,
+) -> StoreStartupStatus {
+    #[cfg(feature = "app-store")]
+    {
+        let should_retry = state.0.lock().map(|guard| guard.is_some()).unwrap_or(false);
+        if should_retry {
+            let retry_error = prepare_store_environment(&app).err();
+            if let Ok(mut guard) = state.0.lock() {
+                *guard = retry_error;
+            }
+        }
+    }
+    #[cfg(not(feature = "app-store"))]
+    let _ = app;
+
+    let error = state
+        .0
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| Some("startup status lock was poisoned".to_string()));
+    StoreStartupStatus {
+        ready: error.is_none(),
+        error,
+    }
+}
+
+#[cfg(feature = "direct-distribution")]
+fn server_state() -> ServerState {
+    ServerState(Mutex::new(None))
+}
+
+#[cfg(feature = "app-store")]
+fn server_state() -> ServerState {
+    ServerState
+}
 
 // Explicit Quit is a two-phase handshake: ExitRequested asks the frontend to
 // flush its revisioned note buffer; only `quit_after_save` opens this gate.
@@ -40,6 +107,9 @@ pub struct NoteMeta {
 /// app launches BEFORE the Python server has had a chance to migrate, this
 /// helper still finds the vault so the UI isn't empty.
 fn nv_home() -> PathBuf {
+    if let Some(configured) = std::env::var_os("NEUROVAULT_HOME") {
+        return PathBuf::from(configured);
+    }
     let home = dirs::home_dir().expect("Could not determine home directory");
     let new_home = home.join(".neurovault");
     if new_home.exists() {
@@ -69,12 +139,19 @@ fn vault_dir() -> PathBuf {
         if let Ok(data) = fs::read_to_string(&registry_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
+                    if !memory::read_ops::is_safe_brain_id(active_id) {
+                        eprintln!(
+                            "[neurovault] refusing unsafe active vault id from brains.json: {active_id:?}"
+                        );
+                        return nv_home.join("brains").join("default").join("vault");
+                    }
                     if let Some(brains) = parsed.get("brains").and_then(|v| v.as_array()) {
                         for b in brains {
                             let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
                             if id != active_id {
                                 continue;
                             }
+                            #[cfg(not(feature = "app-store"))]
                             if let Some(ext) = b.get("vault_path").and_then(|v| v.as_str()) {
                                 let p = PathBuf::from(ext);
                                 if p.is_dir() {
@@ -89,8 +166,6 @@ fn vault_dir() -> PathBuf {
                         }
                     }
                     let vault = nv_home.join("brains").join(active_id).join("vault");
-                    fs::create_dir_all(&vault).ok();
-                    seed_welcome_note(&vault);
                     return vault;
                 }
             }
@@ -124,6 +199,23 @@ fn seed_welcome_note(vault: &PathBuf) {
     if has_notes {
         return;
     }
+    #[cfg(feature = "app-store")]
+    let welcome = "# Welcome to NeuroVault\n\n\
+**A private home for the knowledge you want to keep.**\n\n\
+NeuroVault stores your notes and memory index locally inside this app's\n\
+sandbox. Nothing is uploaded by NeuroVault.\n\n\
+## Quick start\n\n\
+- **Cmd+N** — create a note\n\
+- **Cmd+K** — open the command palette\n\
+- **Cmd+/** — search inside notes\n\
+- **Cmd+2** — see your notes and their connections\n\
+- Type `[[` in the editor to link notes together\n\n\
+Use the vault menu to create another private vault or import a Markdown\n\
+folder. Importing copies the Markdown files into NeuroVault; the original\n\
+folder stays unchanged and is not watched in the background.\n\n\
+You can export a vault as a ZIP at any time. Delete this welcome note when\n\
+you're ready to make the space your own.\n";
+    #[cfg(not(feature = "app-store"))]
     let welcome = "# Welcome to NeuroVault\n\n\
 **Your AI memory system.**\n\n\
 Claude forgets you after every conversation. NeuroVault doesn't.\n\n\
@@ -154,32 +246,6 @@ Delete this note when you're ready to start your own.\n";
     let _ = fs::write(&path, welcome);
 }
 
-fn trash_dir() -> PathBuf {
-    let nv_home = nv_home();
-
-    let registry_path = nv_home.join("brains.json");
-    if registry_path.exists() {
-        if let Ok(data) = fs::read_to_string(&registry_path) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
-                if let Some(active_id) = parsed.get("active").and_then(|v| v.as_str()) {
-                    let trash = nv_home.join("brains").join(active_id).join("trash");
-                    fs::create_dir_all(&trash).ok();
-                    return trash;
-                }
-            }
-        }
-    }
-
-    let legacy_trash = nv_home.join("trash");
-    if legacy_trash.exists() {
-        return legacy_trash;
-    }
-
-    let default_trash = nv_home.join("brains").join("default").join("trash");
-    fs::create_dir_all(&default_trash).expect("Could not create trash directory");
-    default_trash
-}
-
 fn extract_title(content: &str, filename: &str) -> String {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -197,10 +263,15 @@ fn extract_title(content: &str, filename: &str) -> String {
 }
 
 fn vault_dir_for(brain_id: Option<&str>) -> Result<PathBuf, String> {
-    match brain_id.filter(|id| !id.trim().is_empty()) {
-        Some(id) => memory::resolve_vault_path(id).map_err(|error| error.to_string()),
-        None => Ok(vault_dir()),
+    let id = memory::resolve_brain_id(brain_id).map_err(|error| error.to_string())?;
+    let vault = memory::resolve_vault_path(&id).map_err(|error| error.to_string())?;
+    if !vault.is_dir() {
+        return Err(format!(
+            "vault directory is missing for registered brain {id:?}: {}",
+            vault.display()
+        ));
     }
+    Ok(vault)
 }
 
 #[tauri::command]
@@ -219,6 +290,590 @@ struct BrainInfoOffline {
     description: Option<String>,
     vault_path: Option<String>,
     is_active: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrainMutationOffline {
+    brain_id: String,
+    name: String,
+    vault_path: Option<String>,
+    is_external: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BrainDeletionOffline {
+    cleanup_pending: bool,
+    recovery_path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DeletedBrainCleanupMarker {
+    brain_id: String,
+    archive_name: String,
+}
+
+fn is_valid_deleted_brain_cleanup_marker(marker: &DeletedBrainCleanupMarker) -> bool {
+    if !memory::read_ops::is_safe_brain_id(&marker.brain_id) {
+        return false;
+    }
+    let archive_name = std::path::Path::new(&marker.archive_name);
+    let Some(name) = archive_name.to_str() else {
+        return false;
+    };
+    if archive_name.components().count() != 1
+        || !matches!(
+            archive_name.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return false;
+    }
+    let Some(uuid) = name.strip_prefix(&format!("{}-", marker.brain_id)) else {
+        return false;
+    };
+    Uuid::parse_str(uuid).is_ok()
+}
+
+fn remove_deleted_cleanup_tombstone(
+    registry: &mut serde_json::Value,
+    target: &DeletedBrainCleanupMarker,
+) -> bool {
+    let Some(tombstones) = registry
+        .get_mut("deleted_cleanup")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    let before = tombstones.len();
+    tombstones.retain(|value| {
+        serde_json::from_value::<DeletedBrainCleanupMarker>(value.clone())
+            .map_or(true, |marker| marker != *target)
+    });
+    before != tombstones.len()
+}
+
+/// Best-effort physical erasure after the registry has committed the logical
+/// deletion. The registry tombstone is the durable retry authority; this
+/// sidecar marker preserves compatibility and observability, but failure to
+/// write it must never stop an immediate attempt to erase the archive.
+fn cleanup_deleted_archive_now(
+    archive_root: &std::path::Path,
+    archive: &std::path::Path,
+    marker: &DeletedBrainCleanupMarker,
+) -> bool {
+    let marker_path = archive_root.join(format!("{}.cleanup.json", marker.archive_name));
+    match serde_json::to_vec_pretty(marker) {
+        Ok(marker_bytes) => {
+            if let Err(error) = fs::write(&marker_path, marker_bytes) {
+                eprintln!(
+                    "[neurovault] cleanup marker write failed for {}: {error}; attempting immediate erasure",
+                    archive.display()
+                );
+            }
+        }
+        Err(error) => eprintln!(
+            "[neurovault] cleanup marker serialization failed for {}: {error}; attempting immediate erasure",
+            archive.display()
+        ),
+    }
+
+    if archive.exists() {
+        if let Err(error) = fs::remove_dir_all(archive) {
+            eprintln!(
+                "[neurovault] deleted vault {:?}, but cleanup remains at {}: {error}",
+                marker.brain_id,
+                archive.display()
+            );
+            return false;
+        }
+    }
+    let _ = fs::remove_file(marker_path);
+    true
+}
+
+fn write_brain_registry(parsed: &serde_json::Value) -> Result<(), String> {
+    let path = nv_home().join("brains.json");
+    let parent = path
+        .parent()
+        .ok_or_else(|| "brains.json has no parent directory".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| format!("create data directory: {e}"))?;
+    let tmp = parent.join(format!(".brains-{}.json.tmp", Uuid::new_v4()));
+    let serialised = serde_json::to_vec_pretty(parsed)
+        .map_err(|e| format!("failed to serialise registry: {e}"))?;
+    fs::write(&tmp, serialised).map_err(|e| format!("write temporary registry: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("replace brains.json: {e}"))?;
+    }
+    if let Err(error) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("replace brains.json: {error}"));
+    }
+    Ok(())
+}
+
+/// Create a valid first vault for a sandboxed install before React asks for
+/// the registry. Existing data is never replaced: a malformed registry is a
+/// visible startup error, not an excuse to reset the user's memories.
+#[cfg(feature = "app-store")]
+fn ensure_store_default_brain() -> Result<String, String> {
+    let _registry_guard = lock_brain_registry()?;
+    let path = nv_home().join("brains.json");
+    if path.exists() {
+        let raw = fs::read_to_string(&path).map_err(|e| format!("read brains.json: {e}"))?;
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("brains.json is malformed: {e}"))?;
+        let brains = parsed
+            .get("brains")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| "brains.json has no brains array".to_string())?;
+        if brains.is_empty() {
+            return Err("brains.json contains no vaults".to_string());
+        }
+        for brain in brains {
+            let id = brain
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "a vault in brains.json has no id".to_string())?;
+            if !memory::read_ops::is_safe_brain_id(id) {
+                return Err(format!("brains.json contains an unsafe vault id: {id:?}"));
+            }
+        }
+        let active_is_valid = parsed
+            .get("active")
+            .and_then(|value| value.as_str())
+            .is_some_and(|active| {
+                brains
+                    .iter()
+                    .any(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(active))
+            });
+        let mut registry_needs_repair = false;
+        let active_id = if active_is_valid {
+            parsed
+                .get("active")
+                .and_then(|value| value.as_str())
+                .expect("validated active vault must be a string")
+                .to_string()
+        } else {
+            let first = brains[0]
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "first vault has no id".to_string())?
+                .to_string();
+            parsed["active"] = serde_json::Value::String(first);
+            registry_needs_repair = true;
+            parsed["active"]
+                .as_str()
+                .expect("new active vault must be a string")
+                .to_string()
+        };
+        let vault = nv_home().join("brains").join(&active_id).join("vault");
+        if !vault.is_dir() {
+            return Err(format!(
+                "registered vault {active_id:?} is missing from disk: {}",
+                vault.display()
+            ));
+        }
+        // Repair the active pointer only after proving the selected existing
+        // vault is usable. Missing user data is a visible recovery state and
+        // is never replaced with an empty Welcome library.
+        if registry_needs_repair {
+            write_brain_registry(&parsed)?;
+        }
+        return Ok(active_id);
+    }
+
+    let created_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    let parsed = serde_json::json!({
+        "active": "default",
+        "brains": [{
+            "id": "default",
+            "name": "My Memory",
+            "description": "Private local memory",
+            "created_at": created_at
+        }]
+    });
+    let vault = nv_home().join("brains").join("default").join("vault");
+    fs::create_dir_all(&vault).map_err(|e| format!("create default vault: {e}"))?;
+    fs::create_dir_all(nv_home().join("brains").join("default").join("trash"))
+        .map_err(|e| format!("create default trash: {e}"))?;
+    seed_welcome_note(&vault);
+    write_brain_registry(&parsed)?;
+    Ok("default".to_string())
+}
+
+#[cfg(feature = "app-store")]
+fn prepare_store_environment(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    use tauri::Manager;
+
+    let data_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("resolve sandbox data directory: {error}"))?
+        .join("Core");
+    let model_root = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("resolve application resources: {error}"))?
+        .join("appstore-model")
+        .join("bge-small-en-v1.5");
+    for required in [
+        "model.onnx",
+        "tokenizer.json",
+        "config.json",
+        "special_tokens_map.json",
+        "tokenizer_config.json",
+    ] {
+        if !model_root.join(required).is_file() {
+            return Err(format!(
+                "bundled embedding model is incomplete: missing {required}"
+            ));
+        }
+    }
+    fs::create_dir_all(&data_root)
+        .map_err(|error| format!("create sandbox data directory: {error}"))?;
+    std::env::set_var("NEUROVAULT_HOME", &data_root);
+    std::env::set_var("NEUROVAULT_BUNDLED_MODEL_DIR", &model_root);
+    ensure_store_default_brain().map_err(|error| format!("prepare first local vault: {error}"))?;
+    retry_deleted_cleanup(&data_root);
+    Ok((data_root, model_root))
+}
+
+fn retry_deleted_cleanup(data_root: &std::path::Path) {
+    let Ok(_registry_guard) = lock_brain_registry() else {
+        return;
+    };
+    let Ok(raw_registry) = fs::read_to_string(data_root.join("brains.json")) else {
+        return;
+    };
+    let Ok(mut registry) = serde_json::from_str::<serde_json::Value>(&raw_registry) else {
+        return;
+    };
+    let Some(brains) = registry.get("brains").and_then(|value| value.as_array()) else {
+        return;
+    };
+    let registered = brains
+        .iter()
+        .filter_map(|brain| brain.get("id").and_then(|value| value.as_str()))
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+    let deleted_root = data_root.join("deleted-brains");
+    let registry_tombstones = registry
+        .get("deleted_cleanup")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| serde_json::from_value::<DeletedBrainCleanupMarker>(value.clone()).ok())
+        .collect::<Vec<_>>();
+    let mut cleared = Vec::new();
+
+    // Registry tombstones are committed atomically with logical deletion, so
+    // they remain a safe retry authority even when a full disk prevented the
+    // optional sidecar marker from being written.
+    for marker in registry_tombstones {
+        if !is_valid_deleted_brain_cleanup_marker(&marker) || registered.contains(&marker.brain_id)
+        {
+            continue;
+        }
+        let archive = deleted_root.join(&marker.archive_name);
+        if !archive.exists() || fs::remove_dir_all(&archive).is_ok() {
+            let marker_path = deleted_root.join(format!("{}.cleanup.json", marker.archive_name));
+            let _ = fs::remove_file(marker_path);
+            cleared.push(marker);
+        } else {
+            eprintln!(
+                "[neurovault] deferred deleted-library cleanup still pending at {}",
+                archive.display()
+            );
+        }
+    }
+
+    // Continue accepting sidecar markers created by older builds. Strictly
+    // validate their brain-id/UUID naming contract and registry state before
+    // touching any path; arbitrary unmarked directories are never enumerated
+    // for deletion.
+    if let Ok(entries) = fs::read_dir(&deleted_root) {
+        for entry in entries.flatten() {
+            let marker_path = entry.path();
+            if !entry.file_type().is_ok_and(|kind| kind.is_file())
+                || !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".cleanup.json")
+            {
+                continue;
+            }
+            let Some(marker) = fs::read_to_string(&marker_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<DeletedBrainCleanupMarker>(&raw).ok())
+            else {
+                continue;
+            };
+            if !is_valid_deleted_brain_cleanup_marker(&marker)
+                || registered.contains(&marker.brain_id)
+            {
+                continue;
+            }
+            let archive = deleted_root.join(&marker.archive_name);
+            if !archive.exists() || fs::remove_dir_all(&archive).is_ok() {
+                let _ = fs::remove_file(&marker_path);
+                cleared.push(marker);
+            } else {
+                eprintln!(
+                    "[neurovault] deferred deleted-library cleanup still pending at {}",
+                    archive.display()
+                );
+            }
+        }
+    }
+
+    let mut registry_changed = false;
+    for marker in &cleared {
+        registry_changed |= remove_deleted_cleanup_tombstone(&mut registry, marker);
+    }
+    if registry_changed {
+        if let Err(error) = write_brain_registry(&registry) {
+            // A stale registry tombstone is safe: the next launch sees the
+            // archive is already absent and retries only the metadata cleanup.
+            eprintln!("[neurovault] could not clear completed cleanup tombstones: {error}");
+        }
+    }
+}
+
+#[tauri::command]
+fn create_brain_offline(name: String, description: String) -> Result<BrainMutationOffline, String> {
+    let _registry_guard = lock_brain_registry()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the vault a name".to_string());
+    }
+
+    let path = nv_home().join("brains.json");
+    let raw = fs::read_to_string(&path).map_err(|e| format!("read brains.json: {e}"))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("brains.json malformed: {e}"))?;
+    let base = slugify(name);
+    if base.is_empty() || !memory::read_ops::is_safe_brain_id(&base) {
+        return Err("The vault name could not be converted into a safe identifier".to_string());
+    }
+    let brains = parsed
+        .get("brains")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "brains.json has no brains array".to_string())?;
+    let mut id = base.clone();
+    let mut suffix = 2usize;
+    while brains
+        .iter()
+        .any(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(&id))
+        || nv_home().join("brains").join(&id).exists()
+    {
+        id = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+
+    // Prepare the new app-owned directory before publishing it in the
+    // registry. A disk-full or permission error must not leave a selectable
+    // vault whose files were never created.
+    let brain_root = nv_home().join("brains").join(&id);
+    let vault = brain_root.join("vault");
+    if let Err(error) =
+        fs::create_dir_all(&vault).and_then(|_| fs::create_dir_all(brain_root.join("trash")))
+    {
+        let _ = fs::remove_dir_all(&brain_root);
+        return Err(format!("create local vault: {error}"));
+    }
+    seed_welcome_note(&vault);
+
+    let created_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    parsed
+        .get_mut("brains")
+        .and_then(|value| value.as_array_mut())
+        .expect("brains array was validated above")
+        .push(serde_json::json!({
+            "id": id,
+            "name": name,
+            "description": description.trim(),
+            "created_at": created_at
+        }));
+    if parsed
+        .get("active")
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        parsed["active"] = serde_json::Value::String(id.clone());
+    }
+    if let Err(error) = write_brain_registry(&parsed) {
+        let _ = fs::remove_dir_all(&brain_root);
+        return Err(error);
+    }
+
+    Ok(BrainMutationOffline {
+        brain_id: id,
+        name: name.to_string(),
+        vault_path: None,
+        is_external: false,
+    })
+}
+
+#[tauri::command]
+fn update_brain_offline(
+    brain_id: String,
+    name: Option<String>,
+    description: Option<String>,
+) -> Result<(), String> {
+    let _registry_guard = lock_brain_registry()?;
+    if !memory::read_ops::is_safe_brain_id(&brain_id) {
+        return Err("Invalid vault identifier".to_string());
+    }
+    let path = nv_home().join("brains.json");
+    let raw = fs::read_to_string(&path).map_err(|e| format!("read brains.json: {e}"))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("brains.json malformed: {e}"))?;
+    let brain = parsed
+        .get_mut("brains")
+        .and_then(|value| value.as_array_mut())
+        .and_then(|brains| {
+            brains
+                .iter_mut()
+                .find(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(&brain_id))
+        })
+        .ok_or_else(|| format!("vault '{brain_id}' not found"))?;
+    if let Some(name) = name {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("Vault name cannot be empty".to_string());
+        }
+        brain["name"] = serde_json::Value::String(trimmed.to_string());
+    }
+    if let Some(description) = description {
+        brain["description"] = serde_json::Value::String(description.trim().to_string());
+    }
+    write_brain_registry(&parsed)
+}
+
+#[tauri::command]
+fn delete_brain_offline(brain_id: String) -> Result<BrainDeletionOffline, String> {
+    let _registry_guard = lock_brain_registry()?;
+    // Wait for any native save/index/export touching the app-owned tree.
+    // An Arc<BrainDb> held by a detached index task remains writable even
+    // after the cache entry is closed, so deletion must share its mutation
+    // boundary rather than racing a database that has just been archived.
+    let _mutation_guard = memory::write_ops::NOTE_MUTATION_LOCK.lock();
+    if !memory::read_ops::is_safe_brain_id(&brain_id) {
+        return Err("Invalid vault identifier".to_string());
+    }
+    let path = nv_home().join("brains.json");
+    let raw = fs::read_to_string(&path).map_err(|e| format!("read brains.json: {e}"))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("brains.json malformed: {e}"))?;
+    let brains = parsed
+        .get_mut("brains")
+        .and_then(|value| value.as_array_mut())
+        .ok_or_else(|| "brains.json has no brains array".to_string())?;
+    if brains.len() <= 1 {
+        return Err("Keep at least one vault".to_string());
+    }
+    let index = brains
+        .iter()
+        .position(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(&brain_id))
+        .ok_or_else(|| format!("vault '{brain_id}' not found"))?;
+    brains.remove(index);
+    if parsed.get("active").and_then(|value| value.as_str()) == Some(&brain_id) {
+        let replacement = parsed["brains"][0]["id"]
+            .as_str()
+            .ok_or_else(|| "replacement vault has no id".to_string())?
+            .to_string();
+        parsed["active"] = serde_json::Value::String(replacement);
+    }
+
+    #[cfg(feature = "direct-distribution")]
+    memory::watcher::stop_for_brain(&brain_id);
+    memory::db::close_brain(&brain_id);
+    let brain_dir = nv_home().join("brains").join(&brain_id);
+    let archive_root = nv_home().join("deleted-brains");
+    fs::create_dir_all(&archive_root).map_err(|e| format!("create recovery folder: {e}"))?;
+    let archive = archive_root.join(format!("{}-{}", brain_id, Uuid::new_v4()));
+    let moved = if brain_dir.exists() {
+        fs::rename(&brain_dir, &archive)
+            .map_err(|e| format!("archive vault before delete: {e}"))?;
+        true
+    } else {
+        false
+    };
+    let cleanup_marker = moved.then(|| DeletedBrainCleanupMarker {
+        brain_id: brain_id.clone(),
+        archive_name: archive
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("UUID deletion archive names are valid UTF-8")
+            .to_string(),
+    });
+    if let Some(marker) = cleanup_marker.as_ref() {
+        let cleanup_value = parsed
+            .as_object_mut()
+            .expect("registry with a brains array is an object")
+            .entry("deleted_cleanup")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        let Some(cleanup) = cleanup_value.as_array_mut() else {
+            let rollback = fs::rename(&archive, &brain_dir);
+            return match rollback {
+                Ok(()) => Err("brains.json has an invalid deleted_cleanup field".to_string()),
+                Err(rollback_error) => Err(format!(
+                    "brains.json has an invalid deleted_cleanup field; CRITICAL rollback failure: {rollback_error}; intact recovery data remains at {}",
+                    archive.display()
+                )),
+            };
+        };
+        cleanup.push(
+            serde_json::to_value(marker)
+                .expect("deleted cleanup markers contain only serializable strings"),
+        );
+    }
+    if let Err(error) = write_brain_registry(&parsed) {
+        if moved {
+            if let Err(rollback_error) = fs::rename(&archive, &brain_dir) {
+                return Err(format!(
+                    "write registry after archiving vault: {error}; CRITICAL rollback failure: {rollback_error}; intact recovery data remains at {}",
+                    archive.display()
+                ));
+            }
+        }
+        return Err(error);
+    }
+    if let Some(marker) = cleanup_marker.as_ref() {
+        if !cleanup_deleted_archive_now(&archive_root, &archive, marker) {
+            // Recursive deletion may already have removed part of the tree,
+            // so pretending we can roll it back would republish a damaged
+            // library. The registry removal and its tombstone are one durable
+            // commit; startup will retry only this validated archive path.
+            return Ok(BrainDeletionOffline {
+                cleanup_pending: true,
+                recovery_path: Some(archive.to_string_lossy().to_string()),
+            });
+        }
+        if remove_deleted_cleanup_tombstone(&mut parsed, marker) {
+            if let Err(error) = write_brain_registry(&parsed) {
+                // Physical erasure succeeded. A stale tombstone contains no
+                // user data and startup can clear it idempotently.
+                eprintln!(
+                    "[neurovault] deleted vault {brain_id:?}, but could not clear its completed cleanup tombstone: {error}"
+                );
+            }
+        }
+    }
+    Ok(BrainDeletionOffline {
+        cleanup_pending: false,
+        recovery_path: None,
+    })
 }
 
 /// List every brain from ``brains.json`` on disk, no HTTP server needed.
@@ -249,6 +904,10 @@ fn list_brains_offline() -> Vec<BrainInfoOffline> {
         .iter()
         .filter_map(|b| {
             let id = b.get("id").and_then(|v| v.as_str())?.to_string();
+            if !memory::read_ops::is_safe_brain_id(&id) {
+                eprintln!("[neurovault] skipping unsafe vault id in brains.json: {id:?}");
+                return None;
+            }
             let name = b
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -258,10 +917,13 @@ fn list_brains_offline() -> Vec<BrainInfoOffline> {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(String::from);
+            #[cfg(not(feature = "app-store"))]
             let vault_path = b
                 .get("vault_path")
                 .and_then(|v| v.as_str())
                 .map(String::from);
+            #[cfg(feature = "app-store")]
+            let vault_path = None;
             let is_active = id == active_id;
             Some(BrainInfoOffline {
                 id,
@@ -283,6 +945,10 @@ fn list_brains_offline() -> Vec<BrainInfoOffline> {
 /// immediately fetch the note list for the switched-to vault.
 #[tauri::command]
 fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
+    let _registry_guard = lock_brain_registry()?;
+    if !memory::read_ops::is_safe_brain_id(&brain_id) {
+        return Err("Invalid vault identifier".to_string());
+    }
     let registry_path = nv_home().join("brains.json");
     let data =
         fs::read_to_string(&registry_path).map_err(|e| format!("brains.json not readable: {e}"))?;
@@ -303,24 +969,30 @@ fn set_active_brain_offline(brain_id: String) -> Result<String, String> {
         return Err(format!("brain '{brain_id}' not found in registry"));
     }
 
-    parsed["active"] = serde_json::Value::String(brain_id.clone());
-    let serialised = serde_json::to_string_pretty(&parsed)
-        .map_err(|e| format!("failed to serialise registry: {e}"))?;
-    fs::write(&registry_path, serialised)
-        .map_err(|e| format!("could not write brains.json: {e}"))?;
-
-    // Rotate the vault watcher to the newly-active brain. "Single
-    // vault at a time" invariant keeps the ingest pipeline from
-    // racing two brains' writes against the same BM25 index.
-    // Watcher failures are non-fatal: a brain with a missing vault
-    // should still switch (user may have just rebooted with an
-    // external drive unmounted). We log and continue.
-    memory::watcher::stop_all();
-    if let Err(e) = memory::watcher::start_for_brain(&brain_id, vault_dir()) {
-        eprintln!("[neurovault] watcher start failed for {}: {}", brain_id, e);
+    let target_vault = memory::resolve_vault_path(&brain_id).map_err(|e| e.to_string())?;
+    if !target_vault.is_dir() {
+        return Err(format!(
+            "registered vault {brain_id:?} is missing from disk: {}",
+            target_vault.display()
+        ));
     }
 
-    Ok(vault_dir().to_string_lossy().to_string())
+    parsed["active"] = serde_json::Value::String(brain_id.clone());
+    write_brain_registry(&parsed)?;
+
+    // Direct builds watch external folders and serialize their changes into
+    // the ingest pipeline. Store libraries are app-owned and use explicit
+    // native save + background-index operations guarded by NOTE_MUTATION_LOCK;
+    // starting a second watcher there would create a competing write path.
+    #[cfg(feature = "direct-distribution")]
+    {
+        memory::watcher::stop_all();
+        if let Err(e) = memory::watcher::start_for_brain(&brain_id, target_vault.clone()) {
+            eprintln!("[neurovault] watcher start failed for {}: {}", brain_id, e);
+        }
+    }
+
+    Ok(target_vault.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -340,11 +1012,17 @@ fn list_notes(brain_id: Option<String>) -> Result<Vec<NoteMeta>, String> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 walk(&path, vault_root, out);
                 continue;
             }
-            if path.extension().is_some_and(|ext| ext == "md") {
+            if file_type.is_file() && path.extension().is_some_and(|ext| ext == "md") {
                 let rel = path
                     .strip_prefix(vault_root)
                     .unwrap_or(&path)
@@ -379,56 +1057,32 @@ fn list_notes(brain_id: Option<String>) -> Result<Vec<NoteMeta>, String> {
 
 #[tauri::command]
 fn read_note(filename: String, brain_id: Option<String>) -> Result<String, String> {
-    fs::read_to_string(vault_dir_for(brain_id.as_deref())?.join(&filename))
-        .map_err(|e| format!("Failed to read note: {e}"))
+    let ctx = write_context(brain_id.as_deref())?;
+    memory::read_note_content(&ctx, &filename).map_err(|e| format!("Failed to read note: {e}"))
 }
 
 #[tauri::command]
 fn save_note(filename: String, content: String) -> Result<(), String> {
-    let path = vault_dir().join(&filename);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create folder: {e}"))?;
-    }
-    fs::write(&path, &content).map_err(|e| format!("Failed to save note: {e}"))
+    let ctx = write_context(None)?;
+    memory::save_note(&ctx, &filename, &content)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to save note: {e}"))
 }
 
 #[tauri::command]
 fn create_note(title: String) -> Result<String, String> {
-    let vault = vault_dir();
-    let slug = slugify(&title);
-    let id = &Uuid::new_v4().to_string()[..8];
-    let filename = format!("{slug}-{id}.md");
-    let content = format!("# {title}\n\n");
-    fs::write(vault.join(&filename), &content)
-        .map_err(|e| format!("Failed to create note: {e}"))?;
-    Ok(filename)
+    let ctx = write_context(None)?;
+    memory::create_note(&ctx, &title)
+        .map(|result| result.filename)
+        .map_err(|e| format!("Failed to create note: {e}"))
 }
 
 #[tauri::command]
 fn delete_note(filename: String) -> Result<(), String> {
-    // `filename` may be a nested path like `agent/foo.md` now that notes
-    // live inside folders. Trash is intentionally flat — if the leaf name
-    // collides, suffix with a short uuid so nothing gets clobbered.
-    let src = vault_dir().join(&filename);
-    if !src.exists() {
-        return Err(format!("Note not found: {filename}"));
-    }
-    let trash = trash_dir();
-    fs::create_dir_all(&trash).map_err(|e| format!("Failed to prep trash: {e}"))?;
-    let leaf = std::path::Path::new(&filename)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or(filename.clone());
-    let mut dst = trash.join(&leaf);
-    if dst.exists() {
-        let stem = std::path::Path::new(&leaf)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| leaf.clone());
-        let id = &Uuid::new_v4().to_string()[..8];
-        dst = trash.join(format!("{stem}-{id}.md"));
-    }
-    fs::rename(&src, &dst).map_err(|e| format!("Failed to move note to trash: {e}"))
+    let ctx = write_context(None)?;
+    memory::delete_note(&ctx, &filename)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to delete note: {e}"))
 }
 
 /// Import an external folder as a NeuroVault vault. Copies all .md files
@@ -436,55 +1090,234 @@ fn delete_note(filename: String) -> Result<(), String> {
 /// directory. Returns the number of files imported.
 #[tauri::command]
 fn import_folder_as_vault(source: String, target_brain_id: String) -> Result<usize, String> {
+    let _registry_guard = lock_brain_registry()?;
+    let _mutation_guard = memory::write_ops::NOTE_MUTATION_LOCK.lock();
+    if !memory::read_ops::is_safe_brain_id(&target_brain_id) {
+        return Err("Invalid target vault identifier".to_string());
+    }
+    let registry_raw = fs::read_to_string(nv_home().join("brains.json"))
+        .map_err(|error| format!("read brains.json before import: {error}"))?;
+    let registry: serde_json::Value = serde_json::from_str(&registry_raw)
+        .map_err(|error| format!("brains.json malformed before import: {error}"))?;
+    let target_exists = registry
+        .get("brains")
+        .and_then(|value| value.as_array())
+        .is_some_and(|brains| {
+            brains.iter().any(|brain| {
+                brain.get("id").and_then(|value| value.as_str()) == Some(&target_brain_id)
+            })
+        });
+    if !target_exists {
+        return Err(format!(
+            "target vault {target_brain_id:?} is not registered"
+        ));
+    }
     let src_path = PathBuf::from(&source);
     if !src_path.exists() || !src_path.is_dir() {
         return Err(format!("Source folder not found: {source}"));
     }
 
-    let home = dirs::home_dir().ok_or_else(|| "home dir not found".to_string())?;
-    let nv_home = {
-        let n = home.join(".neurovault");
-        if n.exists() {
-            n
-        } else {
-            home.join(".engram")
-        }
-    };
-    let target_vault = nv_home.join("brains").join(&target_brain_id).join("vault");
-    fs::create_dir_all(&target_vault)
-        .map_err(|e| format!("Could not create target vault dir: {e}"))?;
+    // Imports always copy into the app-owned vault. In the Store flavor the
+    // source path is a temporary user-selected sandbox grant; persisting that
+    // raw path would stop working after relaunch without a security-scoped
+    // bookmark. A one-shot copy is both durable and honest about ownership.
+    let target_root = nv_home().join("brains").join(&target_brain_id);
+    let target_vault = target_root.join("vault");
+    if !target_vault.is_dir() {
+        return Err(format!(
+            "Registered target vault is missing: {}",
+            target_vault.display()
+        ));
+    }
 
-    // Walk the source folder, copy every .md file into target/vault/
-    fn copy_md_files(src: &PathBuf, dst: &PathBuf, count: &mut usize) -> Result<(), String> {
-        let entries = fs::read_dir(src).map_err(|e| format!("read_dir {src:?}: {e}"))?;
-        for entry in entries.flatten() {
+    let source_root =
+        fs::canonicalize(&src_path).map_err(|e| format!("Could not resolve source folder: {e}"))?;
+    let canonical_target = fs::canonicalize(&target_vault)
+        .map_err(|e| format!("Could not resolve target vault: {e}"))?;
+    if source_root.starts_with(&canonical_target) || canonical_target.starts_with(&source_root) {
+        return Err("Choose a folder outside the destination vault".to_string());
+    }
+
+    struct RemoveDirOnDrop(PathBuf);
+    impl Drop for RemoveDirOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // Assemble a complete replacement beside the live vault. No imported
+    // file becomes visible until every source file has copied successfully.
+    let stage = target_root.join(format!(".import-{}", Uuid::new_v4()));
+    fs::create_dir(&stage).map_err(|e| format!("create import staging folder: {e}"))?;
+    let stage_guard = RemoveDirOnDrop(stage.clone());
+
+    fn copy_owned_tree(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+        for entry in
+            fs::read_dir(src).map_err(|e| format!("read existing vault {}: {e}", src.display()))?
+        {
+            let entry = entry.map_err(|e| format!("read existing vault entry: {e}"))?;
             let path = entry.path();
-            if path.is_dir() {
-                // Recurse but flatten into dst (no subdir nesting)
-                copy_md_files(&path, dst, count)?;
-            } else if path.extension().and_then(|x| x.to_str()) == Some("md") {
-                let filename = path
-                    .file_name()
-                    .and_then(|x| x.to_str())
-                    .unwrap_or("note.md");
-                let target = dst.join(filename);
-                // If filename already exists, suffix with counter
-                let target = if target.exists() {
-                    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("note");
-                    dst.join(format!("{stem}-imported-{count}.md"))
-                } else {
-                    target
-                };
-                fs::copy(&path, &target).map_err(|e| format!("copy {path:?}: {e}"))?;
-                *count += 1;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("inspect existing vault item {}: {e}", path.display()))?;
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "Existing vault contains a symbolic link that cannot be imported safely: {}",
+                    path.display()
+                ));
+            }
+            let entry_name = entry.file_name();
+            let Some(entry_name_text) = entry_name.to_str() else {
+                return Err("Existing vault paths must use valid UTF-8 filenames".to_string());
+            };
+            if entry_name_text.contains('\\') || entry_name_text == "." || entry_name_text == ".." {
+                return Err(format!(
+                    "Existing vault contains an unsafe filename: {entry_name_text:?}"
+                ));
+            }
+            let target = dst.join(entry_name);
+            if file_type.is_dir() {
+                fs::create_dir(&target)
+                    .map_err(|e| format!("stage existing folder {}: {e}", target.display()))?;
+                copy_owned_tree(&path, &target)?;
+            } else if file_type.is_file() {
+                fs::copy(&path, &target)
+                    .map_err(|e| format!("stage existing note {}: {e}", path.display()))?;
             }
         }
         Ok(())
     }
+    copy_owned_tree(&target_vault, &stage)?;
 
-    let mut count: usize = 0;
-    copy_md_files(&src_path, &target_vault, &mut count)?;
-    Ok(count)
+    // Walk the source folder, preserve its Markdown hierarchy, skip symlinks,
+    // and never overwrite a file already owned by the destination vault.
+    fn copy_md_files(
+        src: &PathBuf,
+        source_root: &PathBuf,
+        dst: &PathBuf,
+        copied: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let entries = fs::read_dir(src).map_err(|e| format!("read_dir {src:?}: {e}"))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("read entry in {src:?}: {error}"))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("inspect {path:?}: {e}"))?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                copy_md_files(&path, source_root, dst, copied)?;
+                continue;
+            }
+            let is_markdown = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("md"));
+            if !file_type.is_file() || !is_markdown {
+                continue;
+            }
+
+            let relative = path
+                .strip_prefix(source_root)
+                .map_err(|e| format!("resolve relative import path: {e}"))?;
+            for component in relative.components() {
+                let std::path::Component::Normal(name) = component else {
+                    return Err(format!("Unsafe import path: {}", relative.display()));
+                };
+                let Some(name) = name.to_str() else {
+                    return Err("Import paths must use valid UTF-8 filenames".to_string());
+                };
+                // A literal backslash is a legal macOS filename character but
+                // becomes a ZIP separator in many extractors. Reject it at
+                // ingress so one note can never turn into a `../` archive path
+                // or an unopenable frontend filename later.
+                if name.contains('\\') || name == "." || name == ".." {
+                    return Err(format!("Unsafe import filename: {name:?}"));
+                }
+            }
+            // The ingest/read surfaces use canonical lowercase `.md` paths.
+            // Accept `.MD` from a user-selected source, but normalize the
+            // copied filename so it cannot be reported as imported while
+            // remaining invisible to Memories and graph indexing.
+            let mut normalized_relative = relative.to_path_buf();
+            normalized_relative.set_extension("md");
+            let requested_target = dst.join(normalized_relative);
+            let mut target = requested_target.clone();
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("create import folder {parent:?}: {e}"))?;
+            }
+            let mut input = fs::File::open(&path).map_err(|e| format!("open {path:?}: {e}"))?;
+            loop {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                {
+                    Ok(mut output) => {
+                        if let Err(error) =
+                            std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all())
+                        {
+                            drop(output);
+                            let _ = fs::remove_file(&target);
+                            return Err(format!("copy {path:?}: {error}"));
+                        }
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let stem = requested_target
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("note");
+                        let collision =
+                            format!("{stem}-imported-{}.md", &Uuid::new_v4().to_string()[..8]);
+                        target = requested_target.with_file_name(collision);
+                    }
+                    Err(error) => {
+                        return Err(format!("create imported note {target:?}: {error}"));
+                    }
+                }
+            }
+            let imported_filename = target
+                .strip_prefix(dst)
+                .map_err(|e| format!("resolve imported Markdown path: {e}"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            copied.push(imported_filename);
+        }
+        Ok(())
+    }
+
+    let mut copied = Vec::new();
+    copy_md_files(&source_root, &source_root, &stage, &mut copied)?;
+
+    // Publish the fully staged tree. If the second rename fails, restore the
+    // original directory before returning so callers never observe a partial
+    // import while believing the operation simply failed.
+    let backup = target_root.join(format!(".pre-import-{}", Uuid::new_v4()));
+    fs::rename(&target_vault, &backup)
+        .map_err(|e| format!("prepare atomic import publish: {e}"))?;
+    if let Err(error) = fs::rename(&stage, &target_vault) {
+        let rollback = fs::rename(&backup, &target_vault);
+        return match rollback {
+            Ok(()) => Err(format!("publish imported vault: {error}")),
+            Err(rollback_error) => Err(format!(
+                "publish imported vault: {error}; CRITICAL rollback failure: {rollback_error}; original data remains at {}",
+                backup.display()
+            )),
+        };
+    }
+    drop(stage_guard);
+    fs::remove_dir_all(&backup).map_err(|e| {
+        format!(
+            "import published, but the pre-import recovery copy could not be removed at {}: {e}",
+            backup.display()
+        )
+    })?;
+
+    Ok(copied.len())
 }
 
 /// Start the bundled Python MCP server as a sidecar process.
@@ -494,62 +1327,84 @@ fn start_server(
     app: tauri::AppHandle,
     state: tauri::State<'_, ServerState>,
 ) -> Result<String, String> {
-    use std::env;
-    use tauri_plugin_shell::ShellExt;
-
-    let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
-    if guard.is_some() {
-        return Err("Server is already running".into());
+    #[cfg(feature = "app-store")]
+    {
+        let _ = (app, state);
+        return Err(
+            "The Mac App Store build does not install or launch an MCP sidecar. \
+             NeuroVault Core runs separately and does not share this app's memories."
+                .into(),
+        );
     }
 
-    // Log where we're looking for the sidecar so we can diagnose failures
-    let current_exe = env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "<unknown>".into());
-    let exe_dir = env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.display().to_string()))
-        .unwrap_or_else(|| "<unknown>".into());
-    eprintln!("[start_server] main exe: {current_exe}");
-    eprintln!("[start_server] exe dir:  {exe_dir}");
+    #[cfg(feature = "direct-distribution")]
+    {
+        use std::env;
+        use tauri_plugin_shell::ShellExt;
 
-    // Check what files actually exist in the exe directory
-    if let Ok(dir) = fs::read_dir(&exe_dir) {
-        eprintln!("[start_server] files in exe dir:");
-        for entry in dir.flatten() {
-            let name = entry.file_name();
-            eprintln!("[start_server]   - {}", name.to_string_lossy());
+        let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+        if guard.is_some() {
+            return Err("Server is already running".into());
         }
+
+        // Log where we're looking for the sidecar so we can diagnose failures
+        let current_exe = env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".into());
+        let exe_dir = env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.display().to_string()))
+            .unwrap_or_else(|| "<unknown>".into());
+        eprintln!("[start_server] main exe: {current_exe}");
+        eprintln!("[start_server] exe dir:  {exe_dir}");
+
+        // Check what files actually exist in the exe directory
+        if let Ok(dir) = fs::read_dir(&exe_dir) {
+            eprintln!("[start_server] files in exe dir:");
+            for entry in dir.flatten() {
+                let name = entry.file_name();
+                eprintln!("[start_server]   - {}", name.to_string_lossy());
+            }
+        }
+
+        let cmd = app.shell().sidecar("neurovault-server").map_err(|e| {
+            eprintln!("[start_server] sidecar() returned Err: {e}");
+            format!("sidecar binary not found: {e}")
+        })?;
+
+        eprintln!("[start_server] sidecar command built, spawning with --http-only");
+
+        let (_rx, child) = cmd.args(["--http-only"]).spawn().map_err(|e| {
+            eprintln!("[start_server] spawn() failed: {e}");
+            format!("failed to spawn: {e}")
+        })?;
+
+        let pid = child.pid();
+        eprintln!("[start_server] spawned successfully, pid={pid}");
+        *guard = Some(child);
+        Ok(format!("Server started (pid {})", pid))
     }
-
-    let cmd = app.shell().sidecar("neurovault-server").map_err(|e| {
-        eprintln!("[start_server] sidecar() returned Err: {e}");
-        format!("sidecar binary not found: {e}")
-    })?;
-
-    eprintln!("[start_server] sidecar command built, spawning with --http-only");
-
-    let (_rx, child) = cmd.args(["--http-only"]).spawn().map_err(|e| {
-        eprintln!("[start_server] spawn() failed: {e}");
-        format!("failed to spawn: {e}")
-    })?;
-
-    let pid = child.pid();
-    eprintln!("[start_server] spawned successfully, pid={pid}");
-    *guard = Some(child);
-    Ok(format!("Server started (pid {})", pid))
 }
 
 /// Stop the running sidecar server. Returns Ok whether or not anything
 /// was actually running (idempotent).
 #[tauri::command]
 fn stop_server(state: tauri::State<'_, ServerState>) -> Result<String, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
-    if let Some(child) = guard.take() {
-        child.kill().map_err(|e| format!("failed to kill: {e}"))?;
-        Ok("Server stopped".into())
-    } else {
-        Ok("Server was not running".into())
+    #[cfg(feature = "app-store")]
+    {
+        let _ = state;
+        return Ok("The Mac App Store build has no sidecar process".into());
+    }
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let mut guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+        if let Some(child) = guard.take() {
+            child.kill().map_err(|e| format!("failed to kill: {e}"))?;
+            Ok("Server stopped".into())
+        } else {
+            Ok("Server was not running".into())
+        }
     }
 }
 
@@ -558,27 +1413,84 @@ fn stop_server(state: tauri::State<'_, ServerState>) -> Result<String, String> {
 /// spawned the server vs someone else started it externally.
 #[tauri::command]
 fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
-    let guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
-    Ok(guard.is_some())
+    #[cfg(feature = "app-store")]
+    {
+        let _ = state;
+        return Ok(false);
+    }
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let guard = state.0.lock().map_err(|e| format!("lock: {e}"))?;
+        Ok(guard.is_some())
+    }
 }
 
-/// Zip up a brain's vault + DB into a single archive at `dest_path`.
-/// Internal brains get bundled complete (DB + vault/ + raw/ +
-/// consolidated/); external-folder brains get just vault/ + DB since
-/// the vault lives outside our tree anyway. The user picks the
-/// destination via a Tauri save dialog on the frontend.
+/// Zip up a brain's Markdown and structured state into a single archive at
+/// `dest_path`. SQLite's online-backup API supplies a transactionally
+/// consistent `brain.db`; live WAL/SHM files are never copied. Internal brains
+/// include the remaining app-owned tree, while direct-distribution external
+/// brains also include a read-only copy of their Markdown folder.
 #[tauri::command]
 fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, String> {
-    use std::io::{Read, Write};
+    use std::io::Write;
+    let _registry_guard = lock_brain_registry()?;
+    // One coherent boundary covers the SQLite snapshot and every file read.
+    // Native save/index/delete/import commands share this same lock.
+    let _mutation_guard = memory::write_ops::NOTE_MUTATION_LOCK.lock();
+    if !memory::read_ops::is_safe_brain_id(&brain_id) {
+        return Err("Invalid vault identifier".to_string());
+    }
     let nv_home = nv_home();
     let brain_root = nv_home.join("brains").join(&brain_id);
     if !brain_root.is_dir() {
         return Err(format!("brain not found: {brain_id}"));
     }
 
+    let requested_dest = PathBuf::from(dest_path);
+    let requested_parent = requested_dest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let dest_parent = fs::canonicalize(requested_parent)
+        .map_err(|e| format!("resolve export destination: {e}"))?;
+    let dest_name = requested_dest
+        .file_name()
+        .ok_or_else(|| "Choose a ZIP filename, not a directory".to_string())?;
+    let dest_name = dest_name
+        .to_str()
+        .ok_or_else(|| "Export filenames must use valid UTF-8".to_string())?;
+    if dest_name.starts_with('.')
+        || dest_name.contains('/')
+        || dest_name.contains('\\')
+        || dest_name.chars().any(char::is_control)
+        || !dest_name.to_ascii_lowercase().ends_with(".zip")
+        || dest_name.len() <= ".zip".len()
+    {
+        return Err("Choose a safe filename ending in .zip".to_string());
+    }
+    let dest_path = dest_parent.join(dest_name);
+    let canonical_nv_home = fs::canonicalize(&nv_home)
+        .map_err(|e| format!("resolve NeuroVault data directory before export: {e}"))?;
+    if dest_parent.starts_with(&canonical_nv_home) {
+        return Err(
+            "Choose an export destination outside NeuroVault's private data directory".into(),
+        );
+    }
+    if dest_path.exists() {
+        return Err("An item already exists at the export destination; choose another name".into());
+    }
+    let canonical_brain_root =
+        fs::canonicalize(&brain_root).map_err(|e| format!("resolve vault before export: {e}"))?;
+    if dest_parent.starts_with(&canonical_brain_root) {
+        return Err("Choose an export destination outside this vault".to_string());
+    }
+
     // Resolve the external vault_path if this is an external-folder brain
     // so we can include the user's markdown alongside the internal DB.
+    #[cfg(not(feature = "app-store"))]
     let registry = nv_home.join("brains.json");
+    #[cfg(not(feature = "app-store"))]
     let external_vault: Option<PathBuf> = fs::read_to_string(&registry)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -598,31 +1510,116 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
                 })
         });
 
-    let file = fs::File::create(&dest_path).map_err(|e| format!("create zip: {e}"))?;
+    // Store libraries always live in the sandbox container. Even if a
+    // hand-edited registry contains a stale host path, the Store flavor must
+    // not treat it as an implicitly authorised external source.
+    #[cfg(feature = "app-store")]
+    let external_vault: Option<PathBuf> = None;
+
+    #[cfg(not(feature = "app-store"))]
+    if let Some(external) = external_vault.as_ref().filter(|path| path.is_dir()) {
+        let canonical_external = fs::canonicalize(external)
+            .map_err(|e| format!("resolve external vault before export: {e}"))?;
+        if dest_parent.starts_with(&canonical_external) {
+            return Err("Choose an export destination outside the source Markdown folder".into());
+        }
+    }
+
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    // Never archive a live `brain.db` beside independently changing WAL/SHM
+    // files. The SQLite backup API observes one consistent database snapshot
+    // while ordinary reads and writes continue safely.
+    let live_db = brain_root.join("brain.db");
+    let db_snapshot = if live_db.is_file() {
+        let snapshot = std::env::temp_dir().join(format!(
+            "neurovault-export-{}-{}.db",
+            brain_id,
+            Uuid::new_v4()
+        ));
+        let handle =
+            memory::db::open_brain(&brain_id).map_err(|e| format!("open index for export: {e}"))?;
+        handle
+            .lock()
+            .backup(rusqlite::DatabaseName::Main, &snapshot, None)
+            .map_err(|e| format!("create consistent index snapshot: {e}"))?;
+        Some(RemoveOnDrop(snapshot))
+    } else {
+        None
+    };
+
+    // Build beside the destination and publish only after ZIP finalisation.
+    // A failed export therefore leaves neither a half-written archive nor a
+    // truncated previous backup at the user-selected path.
+    let output_tmp = dest_parent.join(format!(".{}.{}.tmp", dest_name, Uuid::new_v4()));
+    let output_guard = RemoveOnDrop(output_tmp.clone());
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_tmp)
+        .map_err(|e| format!("create temporary zip: {e}"))?;
+
     let mut zip = zip::ZipWriter::new(file);
     let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     let mut count: usize = 0;
 
-    // Recursive file walker: adds every file under `src_root` into the
-    // zip at `zip_prefix/<relative path>`. Skips symlinks to avoid
-    // escaping the tree and silently swallows unreadable files so one
-    // corrupt DB-wal shard doesn't abort the whole export.
+    // Recursive file walker: adds every readable regular file under
+    // `src_root` into the ZIP and skips symlinks. For the app-owned brain tree
+    // it excludes the live SQLite files, which are replaced by the consistent
+    // snapshot above.
     fn add_tree<W: Write + std::io::Seek>(
         zip: &mut zip::ZipWriter<W>,
         src_root: &std::path::Path,
         zip_prefix: &str,
         options: zip::write::SimpleFileOptions,
         count: &mut usize,
+        skip_live_db: bool,
     ) -> Result<(), String> {
+        fn zip_entry_name(prefix: &str, relative: &std::path::Path) -> Result<String, String> {
+            let mut parts = Vec::new();
+            for component in relative.components() {
+                let std::path::Component::Normal(name) = component else {
+                    return Err(format!(
+                        "unsafe relative export path: {}",
+                        relative.display()
+                    ));
+                };
+                let Some(name) = name.to_str() else {
+                    return Err("Export paths must use valid UTF-8 filenames".to_string());
+                };
+                if name.contains('\\') || name.contains('/') || name == "." || name == ".." {
+                    return Err(format!("Unsafe export filename: {name:?}"));
+                }
+                parts.push(name);
+            }
+            if parts.is_empty() {
+                return Err("Refusing an empty ZIP entry name".to_string());
+            }
+            Ok(format!(
+                "{}/{}",
+                prefix.trim_end_matches('/'),
+                parts.join("/")
+            ))
+        }
+
         let mut stack: Vec<PathBuf> = vec![src_root.to_path_buf()];
         while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
+            let entries = fs::read_dir(&dir)
+                .map_err(|e| format!("read export folder {}: {e}", dir.display()))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    format!("read an entry in export folder {}: {e}", dir.display())
+                })?;
                 let path = entry.path();
-                let Ok(ft) = entry.file_type() else { continue };
+                let ft = entry
+                    .file_type()
+                    .map_err(|e| format!("inspect export item {}: {e}", path.display()))?;
                 if ft.is_symlink() {
                     continue;
                 }
@@ -631,25 +1628,25 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
                     continue;
                 }
                 if ft.is_file() {
-                    let Ok(rel) = path.strip_prefix(src_root) else {
-                        continue;
-                    };
-                    let name = format!(
-                        "{}/{}",
-                        zip_prefix.trim_end_matches('/'),
-                        rel.to_string_lossy().replace('\\', "/"),
-                    );
-                    zip.start_file(&name, options)
-                        .map_err(|e| format!("zip entry {name}: {e}"))?;
-                    let mut f = match fs::File::open(&path) {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
-                    let mut buf = Vec::new();
-                    if f.read_to_end(&mut buf).is_err() {
+                    let rel = path
+                        .strip_prefix(src_root)
+                        .map_err(|e| format!("resolve export path {}: {e}", path.display()))?;
+                    if skip_live_db
+                        && rel.components().count() == 1
+                        && matches!(
+                            rel.file_name().and_then(|name| name.to_str()),
+                            Some("brain.db" | "brain.db-wal" | "brain.db-shm")
+                        )
+                    {
                         continue;
                     }
-                    zip.write_all(&buf).map_err(|e| format!("zip write: {e}"))?;
+                    let mut input = fs::File::open(&path)
+                        .map_err(|e| format!("open export file {}: {e}", path.display()))?;
+                    let name = zip_entry_name(zip_prefix, rel)?;
+                    zip.start_file(&name, options)
+                        .map_err(|e| format!("zip entry {name}: {e}"))?;
+                    std::io::copy(&mut input, zip)
+                        .map_err(|e| format!("stream export file {}: {e}", path.display()))?;
                     *count += 1;
                 }
             }
@@ -659,27 +1656,480 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
 
     // Internal scratch (DB, fingerprint, trash, raw, consolidated, and
     // — for non-external brains — vault/).
-    add_tree(&mut zip, &brain_root, &brain_id, options, &mut count)?;
+    add_tree(&mut zip, &brain_root, &brain_id, options, &mut count, true)?;
+
+    if let Some(snapshot) = db_snapshot.as_ref() {
+        let mut input = fs::File::open(&snapshot.0)
+            .map_err(|e| format!("open consistent index snapshot: {e}"))?;
+        let name = format!("{brain_id}/brain.db");
+        zip.start_file(&name, options)
+            .map_err(|e| format!("zip entry {name}: {e}"))?;
+        std::io::copy(&mut input, &mut zip).map_err(|e| format!("stream index snapshot: {e}"))?;
+        count += 1;
+    }
 
     // External vault markdown goes under `<brain_id>/external_vault/`
     // so the archive is self-describing when the user unzips it.
     if let Some(ext) = external_vault {
         if ext.is_dir() {
             let prefix = format!("{brain_id}/external_vault");
-            add_tree(&mut zip, &ext, &prefix, options, &mut count)?;
+            add_tree(&mut zip, &ext, &prefix, options, &mut count, false)?;
         }
     }
 
-    zip.finish().map_err(|e| format!("finalize zip: {e}"))?;
+    let output = zip.finish().map_err(|e| format!("finalize zip: {e}"))?;
+    output
+        .sync_all()
+        .map_err(|e| format!("flush completed zip: {e}"))?;
+    // A sibling hard link is an atomic, no-clobber publish: unlike rename it
+    // fails if another file appeared after our initial collision check. The
+    // temporary link is then removed by the guard, leaving exactly the final
+    // user-visible archive.
+    fs::hard_link(&output_tmp, &dest_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            "An item already exists at the export destination; choose another name".to_string()
+        } else {
+            format!("publish completed zip without overwriting: {error}")
+        }
+    })?;
+    drop(output_guard);
     Ok(count)
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::io::Read;
+
+    struct TestEnvironment {
+        root: PathBuf,
+        extra_roots: Vec<PathBuf>,
+        brain_id: String,
+        previous_home: Option<OsString>,
+        previous_vec: Option<OsString>,
+    }
+
+    impl Drop for TestEnvironment {
+        fn drop(&mut self) {
+            memory::db::close_brain(&self.brain_id);
+            match self.previous_home.take() {
+                Some(value) => std::env::set_var("NEUROVAULT_HOME", value),
+                None => std::env::remove_var("NEUROVAULT_HOME"),
+            }
+            match self.previous_vec.take() {
+                Some(value) => std::env::set_var("NEUROVAULT_VEC_EXTENSION", value),
+                None => std::env::remove_var("NEUROVAULT_VEC_EXTENSION"),
+            }
+            let _ = fs::remove_dir_all(&self.root);
+            for root in &self.extra_roots {
+                let _ = fs::remove_dir_all(root);
+            }
+        }
+    }
+
+    #[cfg(feature = "app-store")]
+    #[test]
+    fn store_startup_never_reseeds_or_recreates_an_existing_registered_library() {
+        let _home_guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let brain_id = format!("startup-{}", Uuid::new_v4().simple());
+        let root = std::env::temp_dir().join(format!("neurovault-startup-test-{brain_id}"));
+        fs::create_dir_all(&root).unwrap();
+        let environment = TestEnvironment {
+            root: root.clone(),
+            extra_roots: Vec::new(),
+            brain_id: brain_id.clone(),
+            previous_home: std::env::var_os("NEUROVAULT_HOME"),
+            previous_vec: std::env::var_os("NEUROVAULT_VEC_EXTENSION"),
+        };
+        std::env::set_var("NEUROVAULT_HOME", &root);
+
+        let vault = root.join("brains").join(&brain_id).join("vault");
+        fs::create_dir_all(vault.join("projects")).unwrap();
+        fs::write(vault.join("projects/proof.md"), "# Existing nested note\n").unwrap();
+        fs::write(
+            root.join("brains.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "active": brain_id,
+                "brains": [{ "id": brain_id, "name": "Existing" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(ensure_store_default_brain().unwrap(), brain_id);
+        assert!(vault.join("projects/proof.md").is_file());
+        assert!(
+            !vault.join("welcome.md").exists(),
+            "resolution must not recreate a welcome note the user deleted"
+        );
+
+        fs::remove_dir_all(&vault).unwrap();
+        let error = ensure_store_default_brain().unwrap_err();
+        assert!(error.contains("missing from disk"));
+        assert!(
+            !vault.exists(),
+            "missing registered data must stay a visible recovery error"
+        );
+
+        drop(environment);
+    }
+
+    #[test]
+    fn cleanup_still_erases_archive_when_sidecar_marker_cannot_be_written() {
+        let brain_id = format!("deleted-{}", Uuid::new_v4().simple());
+        let archive_root =
+            std::env::temp_dir().join(format!("neurovault-cleanup-marker-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&archive_root).unwrap();
+        let marker = DeletedBrainCleanupMarker {
+            brain_id: brain_id.clone(),
+            archive_name: format!("{brain_id}-{}", Uuid::new_v4()),
+        };
+        let archive = archive_root.join(&marker.archive_name);
+        fs::create_dir_all(&archive).unwrap();
+        fs::write(archive.join("private.md"), "erase me").unwrap();
+
+        // A directory at the marker filename makes fs::write fail reliably on
+        // every platform without relying on permission behavior.
+        let marker_path = archive_root.join(format!("{}.cleanup.json", marker.archive_name));
+        fs::create_dir_all(&marker_path).unwrap();
+
+        assert!(cleanup_deleted_archive_now(
+            &archive_root,
+            &archive,
+            &marker
+        ));
+        assert!(!archive.exists(), "marker failure must not block erasure");
+        let _ = fs::remove_dir_all(archive_root);
+    }
+
+    #[test]
+    fn cleanup_retries_registry_tombstones_and_leaves_unmarked_archives_alone() {
+        let _home_guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root =
+            std::env::temp_dir().join(format!("neurovault-cleanup-retry-test-{}", Uuid::new_v4()));
+        let default_id = format!("default-{}", Uuid::new_v4().simple());
+        let removed_id = format!("removed-{}", Uuid::new_v4().simple());
+        let environment = TestEnvironment {
+            root: root.clone(),
+            extra_roots: Vec::new(),
+            brain_id: default_id.clone(),
+            previous_home: std::env::var_os("NEUROVAULT_HOME"),
+            previous_vec: std::env::var_os("NEUROVAULT_VEC_EXTENSION"),
+        };
+        std::env::set_var("NEUROVAULT_HOME", &root);
+
+        let deleted_root = root.join("deleted-brains");
+        let marker = DeletedBrainCleanupMarker {
+            brain_id: removed_id.clone(),
+            archive_name: format!("{removed_id}-{}", Uuid::new_v4()),
+        };
+        let archive = deleted_root.join(&marker.archive_name);
+        let unmarked = deleted_root.join(format!("unmarked-{}", Uuid::new_v4()));
+        fs::create_dir_all(&archive).unwrap();
+        fs::create_dir_all(&unmarked).unwrap();
+        fs::write(archive.join("private.md"), "retry erasure").unwrap();
+        fs::write(unmarked.join("keep.md"), "not authorised for deletion").unwrap();
+        fs::write(
+            root.join("brains.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "active": default_id,
+                "brains": [{ "id": default_id, "name": "Keep" }],
+                "deleted_cleanup": [marker]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        retry_deleted_cleanup(&root);
+
+        assert!(!archive.exists(), "registry tombstone must authorize retry");
+        assert!(
+            unmarked.is_dir(),
+            "unmarked directories must never be deleted"
+        );
+        let registry: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("brains.json")).unwrap()).unwrap();
+        assert_eq!(
+            registry["deleted_cleanup"].as_array().unwrap().len(),
+            0,
+            "completed cleanup tombstone should be removed"
+        );
+
+        drop(environment);
+    }
+
+    #[test]
+    fn export_uses_a_consistent_sqlite_snapshot_and_never_archives_itself() {
+        let _home_guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let brain_id = format!("export-{}", Uuid::new_v4().simple());
+        let root = std::env::temp_dir().join(format!("neurovault-export-test-{brain_id}"));
+        fs::create_dir_all(&root).unwrap();
+        let export_root = std::env::temp_dir().join(format!("neurovault-exports-{brain_id}"));
+        fs::create_dir_all(&export_root).unwrap();
+        let environment = TestEnvironment {
+            root: root.clone(),
+            extra_roots: vec![export_root.clone()],
+            brain_id: brain_id.clone(),
+            previous_home: std::env::var_os("NEUROVAULT_HOME"),
+            previous_vec: std::env::var_os("NEUROVAULT_VEC_EXTENSION"),
+        };
+        std::env::set_var("NEUROVAULT_HOME", &root);
+
+        #[cfg(not(feature = "app-store"))]
+        {
+            let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join(if cfg!(target_os = "windows") {
+                    "vec0.dll"
+                } else if cfg!(target_os = "macos") {
+                    "vec0.dylib"
+                } else {
+                    "vec0.so"
+                });
+            std::env::set_var("NEUROVAULT_VEC_EXTENSION", extension);
+        }
+
+        let brain_root = root.join("brains").join(&brain_id);
+        let vault = brain_root.join("vault");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(
+            vault.join("proof.md"),
+            "# Durable proof\n\nMarkdown survives.",
+        )
+        .unwrap();
+        fs::write(
+            root.join("brains.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "active": brain_id,
+                "brains": [{ "id": brain_id, "name": "Export test" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let db = memory::db::open_brain(&environment.brain_id).unwrap();
+        db.lock()
+            .execute_batch(
+                "CREATE TABLE export_probe(value TEXT NOT NULL);\
+                 INSERT INTO export_probe(value) VALUES ('committed');",
+            )
+            .unwrap();
+
+        let archive_path = export_root.join("backup.zip");
+        let count = export_brain_as_zip(
+            environment.brain_id.clone(),
+            archive_path.to_string_lossy().to_string(),
+        )
+        .unwrap();
+        assert!(
+            count >= 2,
+            "Markdown and the database snapshot must both ship"
+        );
+
+        let file = fs::File::open(&archive_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let names = archive.file_names().map(str::to_string).collect::<Vec<_>>();
+        assert!(names.contains(&format!("{}/vault/proof.md", environment.brain_id)));
+        assert!(names.contains(&format!("{}/brain.db", environment.brain_id)));
+        assert!(!names.iter().any(|name| name.ends_with("brain.db-wal")));
+        assert!(!names.iter().any(|name| name.ends_with("brain.db-shm")));
+        assert!(!names.iter().any(|name| name.ends_with("backup.zip")));
+
+        let extracted_db = root.join("exported-brain.db");
+        let mut db_bytes = Vec::new();
+        archive
+            .by_name(&format!("{}/brain.db", environment.brain_id))
+            .unwrap()
+            .read_to_end(&mut db_bytes)
+            .unwrap();
+        fs::write(&extracted_db, db_bytes).unwrap();
+        let exported = rusqlite::Connection::open(extracted_db).unwrap();
+        let value: String = exported
+            .query_row("SELECT value FROM export_probe", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "committed");
+
+        let unsafe_destination = vault.join("recursive-backup.zip");
+        let error = export_brain_as_zip(
+            environment.brain_id.clone(),
+            unsafe_destination.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("outside NeuroVault's private data directory"));
+        assert!(!unsafe_destination.exists());
+
+        let non_zip_destination = export_root.join("backup.txt");
+        let error = export_brain_as_zip(
+            environment.brain_id.clone(),
+            non_zip_destination.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("safe filename ending in .zip"));
+        assert!(!non_zip_destination.exists());
+
+        let unsafe_basename = export_root.join(r"..\forged.zip");
+        let error = export_brain_as_zip(
+            environment.brain_id.clone(),
+            unsafe_basename.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("safe filename ending in .zip"));
+        assert!(!unsafe_basename.exists());
+
+        let original_archive = fs::read(&archive_path).unwrap();
+        let error = export_brain_as_zip(
+            environment.brain_id.clone(),
+            archive_path.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("already exists"));
+        assert_eq!(fs::read(&archive_path).unwrap(), original_archive);
+
+        let archive_size = fs::metadata(&archive_path).unwrap().len();
+        fs::write(vault.join(r"..\..\escape.md"), "# Unsafe archive name\n").unwrap();
+        let unsafe_content_destination = export_root.join("unsafe-content.zip");
+        let error = export_brain_as_zip(
+            environment.brain_id.clone(),
+            unsafe_content_destination.to_string_lossy().to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("Unsafe export filename"));
+        assert!(!unsafe_content_destination.exists());
+        assert_eq!(
+            fs::metadata(&archive_path).unwrap().len(),
+            archive_size,
+            "a failed export must preserve the previous good archive"
+        );
+
+        drop(exported);
+        drop(archive);
+        drop(db);
+        drop(environment);
+    }
+
+    #[test]
+    fn import_is_copy_only_normalises_markdown_and_never_overwrites() {
+        let _home_guard = crate::memory::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let brain_id = format!("import-{}", Uuid::new_v4().simple());
+        let root = std::env::temp_dir().join(format!("neurovault-import-test-{brain_id}"));
+        fs::create_dir_all(&root).unwrap();
+        let environment = TestEnvironment {
+            root: root.clone(),
+            extra_roots: Vec::new(),
+            brain_id: brain_id.clone(),
+            previous_home: std::env::var_os("NEUROVAULT_HOME"),
+            previous_vec: std::env::var_os("NEUROVAULT_VEC_EXTENSION"),
+        };
+        std::env::set_var("NEUROVAULT_HOME", &root);
+
+        let source = root.join("selected-source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested/idea.MD"), "# Imported idea\n").unwrap();
+        fs::write(source.join("second.md"), "# Second note\n").unwrap();
+        fs::write(source.join("ignored.txt"), "not Markdown\n").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = root.join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("secret.md"), "# Must not follow\n").unwrap();
+            symlink(&outside, source.join("linked-folder")).unwrap();
+        }
+
+        let destination = root.join("brains").join(&brain_id).join("vault");
+        fs::create_dir_all(destination.join("nested")).unwrap();
+        fs::write(destination.join("nested/idea.md"), "# Existing note\n").unwrap();
+        fs::write(
+            root.join("brains.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "active": brain_id,
+                "brains": [{ "id": brain_id, "name": "Import test" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let imported = import_folder_as_vault(
+            source.to_string_lossy().to_string(),
+            environment.brain_id.clone(),
+        )
+        .unwrap();
+        assert_eq!(imported, 2);
+        assert_eq!(
+            fs::read_to_string(destination.join("nested/idea.md")).unwrap(),
+            "# Existing note\n"
+        );
+        let collision = fs::read_dir(destination.join("nested"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("idea-imported-") && name.ends_with(".md"))
+            })
+            .expect("the imported collision must get a unique lowercase .md name");
+        assert_eq!(fs::read_to_string(collision).unwrap(), "# Imported idea\n");
+        assert_eq!(
+            fs::read_to_string(destination.join("second.md")).unwrap(),
+            "# Second note\n"
+        );
+        assert!(!destination.join("ignored.txt").exists());
+        assert!(!destination.join("linked-folder/secret.md").exists());
+        assert_eq!(
+            fs::read_to_string(source.join("nested/idea.MD")).unwrap(),
+            "# Imported idea\n",
+            "the user-selected source must remain untouched"
+        );
+
+        let registry = fs::read_to_string(root.join("brains.json")).unwrap();
+        assert!(!registry.contains(&source.to_string_lossy().to_string()));
+
+        fs::write(
+            source.join(r"..\..\escape.MD"),
+            "# Must remain a literal source filename\n",
+        )
+        .unwrap();
+        let error = import_folder_as_vault(
+            source.to_string_lossy().to_string(),
+            environment.brain_id.clone(),
+        )
+        .unwrap_err();
+        assert!(error.contains("Unsafe import filename"));
+        assert_eq!(
+            fs::read_to_string(destination.join("second.md")).unwrap(),
+            "# Second note\n",
+            "a rejected staged import must not alter the live library"
+        );
+        assert!(!root.join("escape.md").exists());
+
+        drop(environment);
+    }
 }
 
 /// Is automatic recall (Claude Code hooks) currently installed?
 #[tauri::command]
 fn nv_auto_recall_status() -> bool {
+    #[cfg(feature = "app-store")]
+    {
+        return false;
+    }
+
+    #[cfg(not(feature = "app-store"))]
     memory::hooks::hooks_installed_at(&memory::hooks::claude_settings_path())
 }
 
+#[cfg(feature = "direct-distribution")]
 fn set_automatic_context_menu_state(app: &tauri::AppHandle, enabled: bool) {
     use tauri::menu::MenuItemKind;
     let Some(menu) = app.menu() else { return };
@@ -698,21 +2148,34 @@ fn set_automatic_context_menu_state(app: &tauri::AppHandle, enabled: bool) {
 /// path). The hooks themselves fail open when the app isn't running.
 #[tauri::command]
 fn nv_auto_recall_set(app: tauri::AppHandle, enabled: bool) -> std::result::Result<String, String> {
-    let settings = memory::hooks::claude_settings_path();
-    let result = if enabled {
-        let sidecar = mcp_sidecar_path();
-        if sidecar.is_empty() {
-            return Err("sidecar binary not found next to the app".into());
-        }
-        memory::hooks::install_hooks_at(&settings, std::path::Path::new(&sidecar))
-            .map_err(|e| e.to_string())
-    } else {
-        memory::hooks::uninstall_hooks_at(&settings).map_err(|e| e.to_string())
-    };
-    if result.is_ok() {
-        set_automatic_context_menu_state(&app, enabled);
+    #[cfg(feature = "app-store")]
+    {
+        let _ = (app, enabled);
+        return Err(
+            "The Mac App Store sandbox cannot edit Claude Code settings. \
+             NeuroVault Core runs separately and does not share this app's memories."
+                .into(),
+        );
     }
-    result
+
+    #[cfg(not(feature = "app-store"))]
+    {
+        let settings = memory::hooks::claude_settings_path();
+        let result = if enabled {
+            let sidecar = mcp_sidecar_path();
+            if sidecar.is_empty() {
+                return Err("sidecar binary not found next to the app".into());
+            }
+            memory::hooks::install_hooks_at(&settings, std::path::Path::new(&sidecar))
+                .map_err(|e| e.to_string())
+        } else {
+            memory::hooks::uninstall_hooks_at(&settings).map_err(|e| e.to_string())
+        };
+        if result.is_ok() {
+            set_automatic_context_menu_state(&app, enabled);
+        }
+        result
+    }
 }
 
 /// Return the resolved absolute path to the `neurovault-server` sidecar
@@ -723,35 +2186,43 @@ fn nv_auto_recall_set(app: tauri::AppHandle, enabled: bool) -> std::result::Resu
 /// then shows a friendly "install the server first" message instead.
 #[tauri::command]
 fn mcp_sidecar_path() -> String {
-    use std::env;
-    let exe_dir = match env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    #[cfg(feature = "app-store")]
     {
-        Some(d) => d,
-        None => return String::new(),
-    };
-    let suffix = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    let candidates = [
-        format!("neurovault-server{suffix}"),
-        #[cfg(target_os = "windows")]
-        format!("neurovault-server-x86_64-pc-windows-msvc{suffix}"),
-        #[cfg(target_os = "macos")]
-        format!("neurovault-server-aarch64-apple-darwin{suffix}"),
-        #[cfg(target_os = "macos")]
-        format!("neurovault-server-x86_64-apple-darwin{suffix}"),
-    ];
-    for name in candidates.iter() {
-        let p = exe_dir.join(name);
-        if p.exists() {
-            return p.display().to_string();
-        }
+        return String::new();
     }
-    String::new()
+
+    #[cfg(not(feature = "app-store"))]
+    {
+        use std::env;
+        let exe_dir = match env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            Some(d) => d,
+            None => return String::new(),
+        };
+        let suffix = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
+        let candidates = [
+            format!("neurovault-server{suffix}"),
+            #[cfg(target_os = "windows")]
+            format!("neurovault-server-x86_64-pc-windows-msvc{suffix}"),
+            #[cfg(target_os = "macos")]
+            format!("neurovault-server-aarch64-apple-darwin{suffix}"),
+            #[cfg(target_os = "macos")]
+            format!("neurovault-server-x86_64-apple-darwin{suffix}"),
+        ];
+        for name in candidates.iter() {
+            let p = exe_dir.join(name);
+            if p.exists() {
+                return p.display().to_string();
+            }
+        }
+        String::new()
+    }
 }
 
 /// Return the OS-specific path to Claude Desktop's MCP config file.
@@ -818,65 +2289,75 @@ struct McpRegisterResult {
 /// mid-write can never leave `~/.claude.json` truncated.
 #[tauri::command]
 fn register_claude_code_mcp() -> Result<McpRegisterResult, String> {
-    let sidecar = mcp_sidecar_path();
-    if sidecar.is_empty() {
-        return Err(
-            "neurovault-server sidecar not found next to the app — reinstall NeuroVault".into(),
-        );
+    #[cfg(feature = "app-store")]
+    {
+        return Err("The Mac App Store sandbox cannot modify ~/.claude.json. \
+             NeuroVault Core runs separately and does not share this app's memories."
+            .into());
     }
-    let home = dirs::home_dir().ok_or("could not resolve home directory")?;
-    let path = home.join(".claude.json");
 
-    // Load existing config. Crucially, a parse failure must NOT fall through
-    // to an empty object — that would overwrite a real (just malformed) file
-    // and wipe the user's login. Only a genuinely missing file starts empty.
-    let (mut root, created) = match fs::read_to_string(&path) {
-        Ok(text) => {
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-                format!(
+    #[cfg(not(feature = "app-store"))]
+    {
+        let sidecar = mcp_sidecar_path();
+        if sidecar.is_empty() {
+            return Err(
+                "neurovault-server sidecar not found next to the app — reinstall NeuroVault".into(),
+            );
+        }
+        let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+        let path = home.join(".claude.json");
+
+        // Load existing config. Crucially, a parse failure must NOT fall through
+        // to an empty object — that would overwrite a real (just malformed) file
+        // and wipe the user's login. Only a genuinely missing file starts empty.
+        let (mut root, created) = match fs::read_to_string(&path) {
+            Ok(text) => {
+                let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                    format!(
                     "~/.claude.json exists but isn't valid JSON ({e}). Refusing to overwrite it \
                      (it holds your Claude Code login). Fix the file, or register manually."
                 )
-            })?;
-            (v, false)
-        }
-        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => (serde_json::json!({}), true),
-        Err(e) => return Err(format!("read ~/.claude.json: {e}")),
-    };
+                })?;
+                (v, false)
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => (serde_json::json!({}), true),
+            Err(e) => return Err(format!("read ~/.claude.json: {e}")),
+        };
 
-    let obj = root
-        .as_object_mut()
-        .ok_or("~/.claude.json is not a JSON object; refusing to modify it")?;
-    let servers = obj
-        .entry("mcpServers")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or("\"mcpServers\" in ~/.claude.json is not an object; refusing to modify it")?;
+        let obj = root
+            .as_object_mut()
+            .ok_or("~/.claude.json is not a JSON object; refusing to modify it")?;
+        let servers = obj
+            .entry("mcpServers")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or("\"mcpServers\" in ~/.claude.json is not an object; refusing to modify it")?;
 
-    let updated = servers.contains_key("neurovault");
-    servers.insert(
-        "neurovault".to_string(),
-        serde_json::json!({
-            "type": "stdio",
-            "command": sidecar,
-            "args": ["--mcp-only"],
-        }),
-    );
+        let updated = servers.contains_key("neurovault");
+        servers.insert(
+            "neurovault".to_string(),
+            serde_json::json!({
+                "type": "stdio",
+                "command": sidecar,
+                "args": ["--mcp-only"],
+            }),
+        );
 
-    let pretty =
-        serde_json::to_string_pretty(&root).map_err(|e| format!("serialize config: {e}"))?;
-    let tmp = path.with_extension("json.nv-tmp");
-    fs::write(&tmp, pretty.as_bytes()).map_err(|e| format!("write temp config: {e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("replace ~/.claude.json: {e}")
-    })?;
+        let pretty =
+            serde_json::to_string_pretty(&root).map_err(|e| format!("serialize config: {e}"))?;
+        let tmp = path.with_extension("json.nv-tmp");
+        fs::write(&tmp, pretty.as_bytes()).map_err(|e| format!("write temp config: {e}"))?;
+        fs::rename(&tmp, &path).map_err(|e| {
+            let _ = fs::remove_file(&tmp);
+            format!("replace ~/.claude.json: {e}")
+        })?;
 
-    Ok(McpRegisterResult {
-        path: path.display().to_string(),
-        created,
-        updated,
-    })
+        Ok(McpRegisterResult {
+            path: path.display().to_string(),
+            created,
+            updated,
+        })
+    }
 }
 
 /// Reveal the MCP config file in the OS file manager so the user can
@@ -884,31 +2365,40 @@ fn register_claude_code_mcp() -> Result<McpRegisterResult, String> {
 /// uses `open -R`. No-op on Linux (most distros' file managers vary).
 #[tauri::command]
 fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    // Only the Windows and macOS arms below spawn anything; the Linux arm is a
-    // deliberate no-op, so an unconditional import is dead there and trips
-    // `-D warnings` on the Linux CI runner.
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    use std::process::Command;
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| format!("explorer failed: {e}"))?;
-        Ok(())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| format!("open failed: {e}"))?;
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(feature = "app-store")]
     {
         let _ = path;
-        Err("reveal_in_file_manager not supported on this platform".into())
+        return Err("Reveal is unavailable in the Mac App Store build".into());
+    }
+
+    #[cfg(not(feature = "app-store"))]
+    {
+        // Only the Windows and macOS arms below spawn anything; the Linux arm is a
+        // deliberate no-op, so an unconditional import is dead there and trips
+        // `-D warnings` on the Linux CI runner.
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        use std::process::Command;
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("explorer")
+                .args(["/select,", &path])
+                .spawn()
+                .map_err(|e| format!("explorer failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .args(["-R", &path])
+                .spawn()
+                .map_err(|e| format!("open failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let _ = path;
+            Err("reveal_in_file_manager not supported on this platform".into())
+        }
     }
 }
 
@@ -924,7 +2414,7 @@ fn notify_hidden_once() {
     }
     let _ = fs::create_dir_all(flag.parent().unwrap_or(&flag));
     let _ = fs::write(&flag, "1");
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(feature = "app-store")))]
     {
         let _ = std::process::Command::new("osascript")
             .arg("-e")
@@ -1001,22 +2491,6 @@ fn show_minitab(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("minitab") {
         park_minitab_top_right(&w);
         w.show().map_err(|e| format!("show minitab: {e}"))?;
-        let _ = w.set_focus();
-    }
-    Ok(())
-}
-
-/// Show + focus the Employees window (the AI Employee Manager). The
-/// window is pre-declared hidden in tauri.conf.json with its own
-/// capability; we reveal it on demand, like the minitab. Creating a
-/// webview from JS needs a permission the main window deliberately
-/// withholds, so the reveal lives here in Rust.
-#[tauri::command]
-fn open_employee_manager(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("employee-manager") {
-        let _ = w.unminimize();
-        w.show().map_err(|e| format!("show employees: {e}"))?;
         let _ = w.set_focus();
     }
     Ok(())
@@ -1284,6 +2758,36 @@ fn nv_create_note(
     memory::create_note(&ctx, &title).map_err(|e| e.to_string())
 }
 
+/// Rename or move one Markdown note in-process. The memory layer retains the
+/// stable engram id and either preserves the existing derived index (a path
+/// only move) or rebuilds it when the Markdown title changes.
+#[tauri::command]
+fn nv_rename_note(
+    filename: String,
+    new_filename: String,
+    new_title: Option<String>,
+    brain_id: Option<String>,
+) -> std::result::Result<memory::WriteResult, String> {
+    let ctx = write_context(brain_id.as_deref())?;
+    memory::rename_note(&ctx, &filename, &new_filename, new_title.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Rescan regular Markdown already inside one vault. Embedding can take long
+/// enough to block the webview on a copied vault, so run the synchronous
+/// memory pipeline on Tauri's blocking pool and return per-file failures.
+#[tauri::command]
+async fn nv_index_brain(
+    brain_id: Option<String>,
+) -> std::result::Result<memory::IndexBrainResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ctx = write_context(brain_id.as_deref())?;
+        memory::index_brain(&ctx).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("vault indexing task failed: {error}"))?
+}
+
 /// Soft-delete the engram backing `filename` and move the file to the
 /// per-brain trash. Returns the engram id so the frontend can
 /// optimistically drop it from the sidebar store.
@@ -1327,18 +2831,6 @@ fn nv_inbox_add(
 ) -> std::result::Result<Vec<String>, String> {
     let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
     memory::inbox::add_files(&id, &paths).map_err(|e| e.to_string())
-}
-
-/// Copy dropped meeting transcripts into the active brain's meetings
-/// inbox for the Curator. Rust-side copy: the webview needs no fs
-/// scope (same reasoning as nv_inbox_add).
-#[tauri::command]
-fn nv_meetings_add(
-    paths: Vec<String>,
-    brain_id: Option<String>,
-) -> std::result::Result<Vec<String>, String> {
-    let id = memory::resolve_brain_id(brain_id.as_deref()).map_err(|e| e.to_string())?;
-    memory::employee::add_meeting_files(&id, &paths).map_err(|e| e.to_string())
 }
 
 /// List files currently waiting in the active brain's inbox. Mirrors
@@ -1463,7 +2955,21 @@ fn nv_get_cluster_names(
 /// Separate from `ServerState` (which tracks the legacy Python
 /// sidecar) so both can coexist during the migration window — the
 /// user can run one, the other, or (briefly, for debugging) neither.
+#[cfg(feature = "direct-distribution")]
 struct RustServerState(tokio::sync::Mutex<Option<memory::http_server::ServerHandle>>);
+
+#[cfg(feature = "app-store")]
+struct RustServerState;
+
+#[cfg(feature = "direct-distribution")]
+fn rust_server_state() -> RustServerState {
+    RustServerState(tokio::sync::Mutex::new(None))
+}
+
+#[cfg(feature = "app-store")]
+fn rust_server_state() -> RustServerState {
+    RustServerState
+}
 
 /// Start the in-process Rust HTTP server on 127.0.0.1:8765. Takes
 /// over the port the Python sidecar used to own, so `mcp_proxy.py`
@@ -1473,14 +2979,27 @@ async fn nv_start_rust_server(
     state: tauri::State<'_, RustServerState>,
     port: Option<u16>,
 ) -> std::result::Result<String, String> {
-    let mut guard = state.0.lock().await;
-    if guard.is_some() {
-        return Err("Rust HTTP server is already running".to_string());
+    #[cfg(feature = "app-store")]
+    {
+        let _ = (state, port);
+        return Err(
+            "Loopback serving is unavailable in the Mac App Store build. \
+             NeuroVault Core runs separately and does not share this app's memories."
+                .into(),
+        );
     }
-    let handle = memory::http_server::start_server(port).await?;
-    let port = handle.port;
-    *guard = Some(handle);
-    Ok(format!("Rust HTTP server listening on 127.0.0.1:{}", port))
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let mut guard = state.0.lock().await;
+        if guard.is_some() {
+            return Err("Rust HTTP server is already running".to_string());
+        }
+        let handle = memory::http_server::start_server(port).await?;
+        let port = handle.port;
+        *guard = Some(handle);
+        Ok(format!("Rust HTTP server listening on 127.0.0.1:{}", port))
+    }
 }
 
 /// Stop the Rust HTTP server. Idempotent — no error if not running.
@@ -1488,11 +3007,20 @@ async fn nv_start_rust_server(
 async fn nv_stop_rust_server(
     state: tauri::State<'_, RustServerState>,
 ) -> std::result::Result<(), String> {
-    let mut guard = state.0.lock().await;
-    if let Some(mut handle) = guard.take() {
-        handle.stop().await;
+    #[cfg(feature = "app-store")]
+    {
+        let _ = state;
+        return Ok(());
     }
-    Ok(())
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let mut guard = state.0.lock().await;
+        if let Some(mut handle) = guard.take() {
+            handle.stop().await;
+        }
+        Ok(())
+    }
 }
 
 /// Tier-A agent-efficiency: fetch direct + 2-hop neighbours of an
@@ -1538,26 +3066,47 @@ fn nv_get_related(
 /// already running.
 #[tauri::command]
 fn nv_start_vault_watcher(brain_id: Option<String>) -> std::result::Result<String, String> {
-    let id =
-        brain_id.unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
-    if id.is_empty() {
-        return Err("no active brain to watch".to_string());
+    #[cfg(feature = "app-store")]
+    {
+        let _ = brain_id;
+        return Err(
+            "The Mac App Store edition indexes app-owned libraries through native saves and explicit rescans; its direct-distribution vault watcher is not available."
+                .to_string(),
+        );
     }
-    memory::watcher::start_for_brain(&id, vault_dir())
-        .map(|_| format!("watching brain {}", id))
-        .map_err(|e| e.to_string())
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let id = brain_id
+            .unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
+        if id.is_empty() {
+            return Err("no active brain to watch".to_string());
+        }
+        memory::watcher::start_for_brain(&id, vault_dir())
+            .map(|_| format!("watching brain {}", id))
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Stop the per-brain vault watcher. Idempotent.
 #[tauri::command]
 fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), String> {
-    let id =
-        brain_id.unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
-    if id.is_empty() {
+    #[cfg(feature = "app-store")]
+    {
+        let _ = brain_id;
         return Ok(());
     }
-    memory::watcher::stop_for_brain(&id);
-    Ok(())
+
+    #[cfg(feature = "direct-distribution")]
+    {
+        let id = brain_id
+            .unwrap_or_else(|| memory::read_ops::resolve_brain_id(None).unwrap_or_default());
+        if id.is_empty() {
+            return Ok(());
+        }
+        memory::watcher::stop_for_brain(&id);
+        Ok(())
+    }
 }
 
 // The Python-as-subprocess bridge (`run_python_job` + `python -m
@@ -1577,6 +3126,7 @@ fn nv_stop_vault_watcher(brain_id: Option<String>) -> std::result::Result<(), St
 pub fn run() {
     use tauri::Emitter;
     use tauri::Manager;
+    #[cfg(feature = "direct-distribution")]
     use tauri_plugin_global_shortcut::{
         Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
     };
@@ -1584,14 +3134,21 @@ pub fn run() {
     // Cmd+Shift+Space on macOS, Ctrl+Shift+Space elsewhere — opens Quick
     // Capture even when the window isn't focused. Keep native registration
     // aligned with the shortcut the UI advertises.
+    #[cfg(feature = "direct-distribution")]
     let primary_modifier = if cfg!(target_os = "macos") {
         Modifiers::SUPER
     } else {
         Modifiers::CONTROL
     };
+    #[cfg(feature = "direct-distribution")]
     let quick_capture = Shortcut::new(Some(primary_modifier | Modifiers::SHIFT), Code::Space);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(feature = "direct-distribution")]
+    let builder = builder
         // Single-instance guard with deep-link forwarding: when a
         // `neurovault://engram/<id>` URL is opened while the app is
         // already running, Windows would normally spawn a second
@@ -1614,12 +3171,16 @@ pub fn run() {
             // Log once so a user staring at stderr knows the URL
             // round-tripped; the frontend will emit a second log
             // when it acts on it.
-            eprintln!("[neurovault] deep link forwarded to running instance: {:?}", argv);
+            eprintln!(
+                "[neurovault] deep link forwarded to running instance: {:?}",
+                argv
+            );
         }))
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_deep_link::init());
+
+    #[cfg(feature = "direct-distribution")]
+    let builder = builder
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
         // In-app updater + process (relaunch after install). The plugin
         // deserializes `plugins.updater` from tauri.conf.json *at startup*
         // and the whole app aborts (panic = "abort") if that block is
@@ -1662,15 +3223,18 @@ pub fn run() {
                     let _ = app.emit("quick-capture-shortcut", ());
                 })
                 .build(),
-        )
+        );
+
+    let builder = builder
         .menu(|app| {
-            use tauri::menu::{
-                CheckMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
-            };
+            #[cfg(feature = "direct-distribution")]
+            use tauri::menu::CheckMenuItem;
+            use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
             let settings = MenuItemBuilder::with_id("open-settings", "Settings…")
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
+            #[cfg(feature = "direct-distribution")]
             let automatic_context = CheckMenuItem::with_id(
                 app,
                 "automatic-context",
@@ -1682,8 +3246,10 @@ pub fn run() {
             let application_menu = SubmenuBuilder::with_id(app, "neurovault-menu", "NeuroVault")
                 .about(None)
                 .separator()
-                .item(&settings)
-                .item(&automatic_context)
+                .item(&settings);
+            #[cfg(feature = "direct-distribution")]
+            let application_menu = application_menu.item(&automatic_context);
+            let application_menu = application_menu
                 .separator()
                 .services()
                 .separator()
@@ -1716,47 +3282,82 @@ pub fn run() {
                 let _ = open_settings_in_main(app.clone());
                 return;
             }
-            if event.id() != "automatic-context" {
-                return;
-            }
-
-            use tauri::menu::MenuItemKind;
-            use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-
-            let check_item = app.menu().and_then(|menu| {
-                let MenuItemKind::Submenu(application_menu) = menu.get("neurovault-menu")? else {
-                    return None;
-                };
-                let MenuItemKind::Check(item) = application_menu.get("automatic-context")? else {
-                    return None;
-                };
-                Some(item)
-            });
-            let enabled = check_item
-                .as_ref()
-                .and_then(|item| item.is_checked().ok())
-                .unwrap_or_else(|| !nv_auto_recall_status());
-
-            if let Err(error) = nv_auto_recall_set(app.clone(), enabled) {
-                if let Some(item) = check_item {
-                    let _ = item.set_checked(!enabled);
+            #[cfg(feature = "direct-distribution")]
+            {
+                if event.id() != "automatic-context" {
+                    return;
                 }
-                app.dialog()
-                    .message(format!("NeuroVault could not change Automatic Context.\n\n{error}"))
-                    .title("Automatic Context")
-                    .kind(MessageDialogKind::Error)
-                    .show(|_| {});
+
+                use tauri::menu::MenuItemKind;
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+                let check_item = app.menu().and_then(|menu| {
+                    let MenuItemKind::Submenu(application_menu) = menu.get("neurovault-menu")?
+                    else {
+                        return None;
+                    };
+                    let MenuItemKind::Check(item) = application_menu.get("automatic-context")?
+                    else {
+                        return None;
+                    };
+                    Some(item)
+                });
+                let enabled = check_item
+                    .as_ref()
+                    .and_then(|item| item.is_checked().ok())
+                    .unwrap_or_else(|| !nv_auto_recall_status());
+
+                if let Err(error) = nv_auto_recall_set(app.clone(), enabled) {
+                    if let Some(item) = check_item {
+                        let _ = item.set_checked(!enabled);
+                    }
+                    app.dialog()
+                        .message(format!(
+                            "NeuroVault could not change Automatic Context.\n\n{error}"
+                        ))
+                        .title("Automatic Context")
+                        .kind(MessageDialogKind::Error)
+                        .show(|_| {});
+                }
             }
         })
         .setup(move |app| {
+            #[cfg(feature = "app-store")]
+            {
+                let prepared = prepare_store_environment(app.handle());
+                match prepared {
+                    Ok((data_root, _)) => eprintln!(
+                        "[neurovault] App Store data root: {}",
+                        data_root.display()
+                    ),
+                    Err(error) => {
+                        eprintln!("[neurovault] App Store startup needs recovery: {error}");
+                        if let Some(state) = app.try_state::<StoreStartupState>() {
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(error);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Register the shortcut at startup. If another app already owns
             // the combo we log and move on — the in-app Cmd/Ctrl+Shift+Space
             // handler still works when the window is focused.
-            match app.global_shortcut().register(quick_capture) {
-                Ok(_) => eprintln!("[neurovault] global shortcut registered: Ctrl/Cmd+Shift+Space"),
-                Err(e) => eprintln!(
-                    "[neurovault] could not register global shortcut (another app likely owns it): {e}"
-                ),
+            #[cfg(feature = "direct-distribution")]
+            {
+                // Native deletion uses the same registry tombstones in both
+                // distributions. Retry only those validated, unregistered
+                // archive paths before background writers/watchers start.
+                retry_deleted_cleanup(&nv_home());
+                match app.global_shortcut().register(quick_capture) {
+                    Ok(_) => {
+                        eprintln!("[neurovault] global shortcut registered: Ctrl/Cmd+Shift+Space")
+                    }
+                    Err(e) => eprintln!(
+                        "[neurovault] could not register global shortcut (another app likely owns it): {e}"
+                    ),
+                }
             }
 
             // Register the `neurovault://` URL scheme with the OS. In
@@ -1764,6 +3365,7 @@ pub fn run() {
             // wrote the registry entry; in dev mode it lets you click
             // a deep link and have it route back to the running
             // `tauri dev` instance. Failure here is non-fatal.
+            #[cfg(feature = "direct-distribution")]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 if let Err(e) = app.deep_link().register_all() {
@@ -1797,7 +3399,9 @@ pub fn run() {
             // Both are spawned on `tauri::async_runtime` — failure is
             // non-fatal (port already taken, vault missing, etc.) so
             // the app still opens even if one of them can't bind.
+            #[cfg(not(feature = "app-store"))]
             let app_handle = app.handle().clone();
+            #[cfg(not(feature = "app-store"))]
             tauri::async_runtime::spawn(async move {
                 // 1) HTTP server on 127.0.0.1:8765. If the user has an
                 // older Python sidecar still running on the port, our
@@ -1894,44 +3498,129 @@ pub fn run() {
                 }
             }
         })
-        .manage(ServerState(Mutex::new(None)))
-        .manage(RustServerState(tokio::sync::Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![
-            get_vault_path, list_notes, read_note, save_note, create_note, delete_note,
-            start_server, stop_server, server_status, import_folder_as_vault,
-            hide_to_background, quit_after_save, brain_storage_stats,
-            open_main_window, show_minitab, hide_minitab, set_minitab_collapsed,
-            minimize_main, shrink_to_widget,
-            mcp_sidecar_path, mcp_config_path, reveal_in_file_manager,
-            nv_auto_recall_status, nv_auto_recall_set,
-            claude_code_config_path, register_claude_code_mcp,
-            export_brain_as_zip,
-            list_brains_offline, set_active_brain_offline,
-            // Phase-4 Rust memory commands. Each one replaces an HTTP
-            // endpoint — frontend feature-detects and prefers these.
-            nv_list_notes, nv_get_note, nv_list_brains, nv_brain_stats, nv_get_graph,
-            // Phase-5 write-path commands. Run the full ingest pipeline
-            // (chunk → embed → entities → links → BM25) in-process.
-            nv_save_note, nv_create_note, nv_delete_note, nv_list_trash, nv_restore_note,
-            // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
-            // is the in-process Tauri path; the HTTP server serves
-            // MCP proxy + external HTTP clients.
-            nv_recall, nv_set_pagerank, nv_set_clusters, nv_get_cluster_names,
-            nv_start_rust_server, nv_stop_rust_server,
-            // Tier-A agent-efficiency: cheap 1-2 hop neighbour lookup.
-            nv_get_related,
-            // Phase-7 vault file watcher. Started automatically on
-            // brain activation; the Tauri commands are here for
-            // debug/manual control from Settings.
-            nv_start_vault_watcher, nv_stop_vault_watcher,
-            // Drop-folder inbox: UI file-drop copies raw files into the
-            // brain inbox for the connected agent to turn into notes.
-            nv_inbox_add, nv_inbox_list, nv_meetings_add, open_employee_manager,
-            // Brain health scorecard (also on HTTP + MCP).
-            nv_diagnose,
-            // Engram-level supersession (new note retires a stale one).
-            nv_supersede_note,
-        ])
+        .manage(server_state())
+        .manage(rust_server_state())
+        .manage(StoreStartupState(Mutex::new(None)));
+
+    // The Store binary exposes only commands used by its single-window,
+    // app-container library experience. Sidecars, loopback serving, hooks,
+    // shell/reveal actions, external inboxes, watchers, minitabs, and agent
+    // mutation commands are absent from the IPC allow-list, not merely hidden
+    // in React.
+    #[cfg(feature = "app-store")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_vault_path,
+        list_notes,
+        read_note,
+        import_folder_as_vault,
+        hide_to_background,
+        quit_after_save,
+        open_main_window,
+        minimize_main,
+        export_brain_as_zip,
+        list_brains_offline,
+        set_active_brain_offline,
+        create_brain_offline,
+        update_brain_offline,
+        delete_brain_offline,
+        store_startup_status,
+        nv_list_notes,
+        nv_get_note,
+        nv_list_brains,
+        nv_brain_stats,
+        nv_get_graph,
+        nv_save_note,
+        nv_create_note,
+        nv_rename_note,
+        nv_index_brain,
+        nv_delete_note,
+        nv_list_trash,
+        nv_restore_note,
+        nv_recall,
+        nv_set_pagerank,
+        nv_set_clusters,
+        nv_get_cluster_names,
+        nv_diagnose,
+    ]);
+
+    #[cfg(feature = "direct-distribution")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_vault_path,
+        list_notes,
+        read_note,
+        save_note,
+        create_note,
+        delete_note,
+        start_server,
+        stop_server,
+        server_status,
+        import_folder_as_vault,
+        hide_to_background,
+        quit_after_save,
+        brain_storage_stats,
+        open_main_window,
+        show_minitab,
+        hide_minitab,
+        set_minitab_collapsed,
+        minimize_main,
+        shrink_to_widget,
+        mcp_sidecar_path,
+        mcp_config_path,
+        reveal_in_file_manager,
+        nv_auto_recall_status,
+        nv_auto_recall_set,
+        claude_code_config_path,
+        register_claude_code_mcp,
+        export_brain_as_zip,
+        list_brains_offline,
+        set_active_brain_offline,
+        create_brain_offline,
+        update_brain_offline,
+        delete_brain_offline,
+        store_startup_status,
+        // Phase-4 Rust memory commands. Each one replaces an HTTP
+        // endpoint — frontend feature-detects and prefers these.
+        nv_list_notes,
+        nv_get_note,
+        nv_list_brains,
+        nv_brain_stats,
+        nv_get_graph,
+        // Phase-5 write-path commands. Run the full ingest pipeline
+        // (chunk → embed → entities → links → BM25) in-process.
+        nv_save_note,
+        nv_create_note,
+        nv_rename_note,
+        nv_index_brain,
+        nv_delete_note,
+        nv_list_trash,
+        nv_restore_note,
+        // Phase-6 recall + Rust HTTP server on 8765. `nv_recall`
+        // is the in-process Tauri path; the HTTP server serves
+        // MCP proxy + external HTTP clients.
+        nv_recall,
+        nv_set_pagerank,
+        nv_set_clusters,
+        nv_get_cluster_names,
+        nv_start_rust_server,
+        nv_stop_rust_server,
+        // Tier-A agent-efficiency: cheap 1-2 hop neighbour lookup.
+        nv_get_related,
+        // Phase-7 vault file watcher. Started automatically on
+        // brain activation; the Tauri commands are here for
+        // debug/manual control from Settings.
+        nv_start_vault_watcher,
+        nv_stop_vault_watcher,
+        // Drop-folder inbox: UI file-drop copies raw files into the
+        // brain inbox for the connected agent to turn into notes.
+        nv_inbox_add,
+        nv_inbox_list,
+        // Brain health scorecard (also on HTTP + MCP).
+        nv_diagnose,
+        // Engram-level supersession (new note retires a stale one).
+        nv_supersede_note,
+    ]);
+
+    builder
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
@@ -1945,11 +3634,14 @@ pub fn run() {
                         let _ = app.emit("neurovault-save-requested", "quit");
                         return;
                     }
-                    if let Some(state) = app.try_state::<ServerState>() {
-                        if let Ok(mut guard) = state.0.lock() {
-                            if let Some(child) = guard.take() {
-                                let _ = child.kill();
-                                eprintln!("[neurovault] killed sidecar on app exit");
+                    #[cfg(feature = "direct-distribution")]
+                    {
+                        if let Some(state) = app.try_state::<ServerState>() {
+                            if let Ok(mut guard) = state.0.lock() {
+                                if let Some(child) = guard.take() {
+                                    let _ = child.kill();
+                                    eprintln!("[neurovault] killed sidecar on app exit");
+                                }
                             }
                         }
                     }

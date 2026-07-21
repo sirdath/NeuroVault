@@ -16,6 +16,7 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { useGraphSettingsStore, folderColor } from "../stores/graphSettingsStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { NoteMeta } from "../lib/tauri";
+import { IS_APP_STORE } from "../lib/distribution";
 
 /** Top-level folder of a note (first path segment before "/"), or ""
  *  for a root-level note. Mirrors the graph's folder derivation so a
@@ -328,7 +329,7 @@ function BrainSidebar({
           hint: "F2",
           onSelect: () => setRenamingFilename(ctxMenu.note.filename),
         },
-        {
+        ...(!IS_APP_STORE ? [{
           label: "Reveal in vault",
           onSelect: async () => {
             try {
@@ -341,7 +342,7 @@ function BrainSidebar({
               /* feature not available — silently no-op (web build, etc.) */
             }
           },
-        },
+        }] : []),
         {
           label: "Copy filename",
           onSelect: async () => {

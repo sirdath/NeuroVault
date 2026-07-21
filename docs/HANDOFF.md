@@ -1,10 +1,13 @@
 # NeuroVault — Session Handoff
 
-Context transfer for a fresh Claude session. Read this top-to-bottom, then
-do **§7 Immediate next task**.
+> **Archived engineering snapshot.** This handoff records work and benchmark
+> decisions from 2026-07-16. It is not the current task list, distribution
+> status, or product architecture contract. The npm packages described below
+> were scaffolding and were not published at the 0.6.0 cut; the private
+> Desktop and public Core have since been split.
 
-> Living document — kept current as the code changes (last updated 2026-07-16);
-> it is not a snapshot of any one session. §7 is the only time-sensitive part.
+> Historical cut last updated 2026-07-16. Do not execute §7 without first
+> checking the current branch, roadmap, and benchmark configuration.
 
 ---
 
@@ -12,7 +15,10 @@ do **§7 Immediate next task**.
 Local-first, markdown-canonical **AI memory** for Claude/other LLMs. "Claude
 forgets you after every conversation; NeuroVault doesn't."
 - **Desktop app**: Tauri 2.0 (React/TS) with an **in-process Rust backend** (axum HTTP on `127.0.0.1:8765`).
-- **Storage**: markdown vault is canonical (`~/.neurovault/brains/<id>/vault/*.md`); SQLite + **sqlite-vec** (`vec0`, `embedding float[384]`) is a **rebuildable** index. Engine table for a memory = `engrams`.
+- **Storage**: Markdown is canonical for note/engram content. SQLite +
+  **sqlite-vec** holds the rebuildable retrieval index and structured state
+  without Markdown mirrors (including core-memory blocks, drafts, and version
+  history). A complete brain backup includes both. Engine table = `engrams`.
 - **Embeddings**: BGE-small-en-v1.5 (384-d) via **fastembed-rs** (ONNX), **on-device, zero-LLM ingest**. Cross-encoder reranker is a separate model (`BGERerankerBase`).
 - **Retrieval**: hybrid (vector KNN + BM25 + entity-graph) → **RRF** → optional rerank → recency/boosts → final score.
 - **MCP**: native Rust `neurovault-server --mcp-only` (rmcp), 55 tools, tiers `minimal` (3), `lite` (8, default), `standard` (21), and `full` (55). Thin stdio→loopback-HTTP bridge; loads no model/DB.
@@ -21,10 +27,12 @@ forgets you after every conversation; NeuroVault doesn't."
 ## 2. Conventions / preferences (IMPORTANT)
 - **Commits: NO `Co-Authored-By: Claude` trailer.** Small conventional commits (`feat(scope): …`).
 - **No Python** in the app/MCP path (it's a product promise). Code import goes through graphify (Rust), never a Python importer.
-- **Markdown canonical; DB rebuildable.** Don't add features that make the DB authoritative.
+- **Markdown-note ownership is explicit.** Keep note/engram content portable;
+  do not describe the entire DB as disposable while structured-only state
+  remains there.
 - **Verify before claiming done**: build + tests + a real smoke. The user values honesty over hype; be critical.
 - Website must stay **receipt-honest** (don't publish numbers/features we haven't verified).
-- Build: `cd src-tauri && cargo build --no-default-features …`. Tests: `cargo test --no-default-features --lib`.
+- Build: `cd src-tauri && cargo build --no-default-features --features model-download …`. Tests: `cargo test --no-default-features --features model-download --lib`.
 - macOS local build needs `vec0.dylib` in `src-tauri/resources/` (already there).
 
 ## 3. Branches & where things live
@@ -37,18 +45,29 @@ forgets you after every conversation; NeuroVault doesn't."
 - **Source Folders** (flagship): per-brain folder mirroring — `source_mirror.rs` engine (incremental by content hash, skips node_modules/.git/dist, dedup, shared `_source_files/` layout, owns deletions), 4 HTTP endpoints, `BrainSourcesPanel.tsx` modal + a per-brain entry button, code-import via graphify. Live-smoke-verified end to end.
 - **Static graph mode** (frozen layout, ~0 idle CPU), **sortable brain list**, **fixes** (`:root` theme mirror, `checkpoint_all()` WAL flush on quit).
 
-**B. Abstention scoring** (`nv-bench.rs`): `Abstention@k` retrieval-confidence gate — keeps `_abs` questions, sweeps τ over the top-score distribution, reports balanced-accuracy / F1. 5 unit tests. We're the only system measuring retrieval-level abstention.
+**B. Abstention scoring** (`nv-bench.rs`): `Abstention@k` retrieval-confidence gate — keeps `_abs` questions, sweeps τ over the top-score distribution, reports balanced-accuracy / F1. 5 unit tests. No market-uniqueness claim was verified.
 
-**C. Headless distribution — `npx @neurovault/mcp`** (the big one; council-driven, see §5):
-- **`gui` cargo feature gate** (default on): moved all 47 Tauri commands + `run()` into a gated `src-tauri/src/app.rs`; `lib.rs` root is now just `pub mod memory` + the gated app. `--no-default-features` build links **zero** GUI frameworks (verified via `otool`/`ldd`). This unblocked headless Linux/Docker (the binary used to statically drag webkit2gtk).
+**C. Headless npm distribution scaffold** (historical work; see §5):
+- **`gui` cargo feature gate** (default on): moved all 47 Tauri commands + `run()` into a gated `src-tauri/src/app.rs`; `lib.rs` root is now just `pub mod memory` + the gated app. `--no-default-features --features model-download` links **zero** GUI frameworks (verified via `otool`/`ldd`) while retaining Core's explicit model fetch path. This unblocked headless Linux/Docker (the binary used to statically drag webkit2gtk).
 - **rustls TLS**: `fastembed = { default-features=false, features=["ort-download-binaries","hf-hub-rustls-tls"] }` — `native-tls`/`openssl-sys` are GONE; model download is pure-Rust rustls. No libssl on Linux.
-- **npm wrapper** (`dist-npm/`): root `@neurovault/mcp` (bin shim resolves the platform binary via optionalDependencies, defaults empty argv → `--mcp-only`, keeps stdout a clean JSON-RPC channel) + per-platform subpackages (macOS arm64/x64, Linux x64 glibc, Windows x64; musl guarded out). Binaries built by `scripts/build-headless.mjs`, never committed.
+- **npm wrapper scaffold** (`dist-npm/`): root `@neurovault/mcp` plus
+  platform package work was implemented but not published at the 0.6.0 cut.
+  The verified macOS target was Apple Silicon; Intel remained blocked on a
+  matching x86_64/universal sqlite-vec extension. Linux x64 and Windows x64
+  were build targets, not shipped-package facts.
 - **CI** `.github/workflows/npm-release.yml`: builds + per-platform smoke (start server → `/api/version` → create brain → **load vec0**) on PRs into main and on `npm-v*` tags; publishes with `--provenance`. `dist-npm/WINDOWS-TEST.md` is a no-Rust runbook for the user's Windows laptop.
 - Also added `GET /api/version` and fixed the reranker model-cache dir (`reranker.rs` now pins `~/.neurovault/.fastembed_cache`).
-- **Why it matters**: npm CLI binaries sidestep the macOS Gatekeeper "damaged" wall, so this unblocks the dev audience WITHOUT the Apple Developer account (signing is being handled separately by the user later).
+- **Historical intent**: npm packaging was meant to reduce installation
+  friction. Because it was not published, it did not yet unblock users.
 
 ## 5. The competitive picture (vs agentmemory et al.)
-A heavy Opus council analyzed NeuroVault vs the field. **Moats**: zero-LLM on-device ingest (privacy is structural), markdown-canonical ownership, single-file embedded stack, **graphify** (only code-aware memory), cross-agent via one MCP bridge. **Weaknesses (ranked)**: (1) unsigned macOS Gatekeeper friction [user fixing later], (2) no zero-friction install [**now addressed by the npx work above**], (3) no auto-capture (empty-state), (4) brute-force flat vector scan (no ANN) — fine to ~10s of k chunks, (5) temporal/bitemporal write-dead on the Rust path, (6) weak regex entity graph (gbrain shows typed edges = +31pp P@5).
+A heavy Opus council analyzed NeuroVault vs the field. **Candidate strengths**:
+zero-LLM on-device ingest, Markdown note ownership, an embedded stack,
+**graphify**, and cross-agent access through one MCP bridge. These were product
+hypotheses, not verified first/only claims. **Weaknesses (ranked)**: (1)
+distribution friction, (2) no published zero-friction install, (3) no
+auto-capture, (4) brute-force flat vector scan, (5) temporal/bitemporal gaps,
+and (6) a weak regex entity graph.
 
 ## 6. The benchmark situation (READ — this drives the next task)
 - **Engine-only** config (no rerank, recency ablated, title boosts ablated) = our published & best: **hit@5 0.938**, recall@5 0.861, hit@10 0.981 (470 answerable). agentmemory self-reports ~**0.951**.
@@ -81,7 +100,8 @@ Ranked by expected value:
 2. **Multi-query expansion** — generate 2–3 query variants (LLM-free via existing entity/keyword extraction), RRF-fuse. Proven RAG win.
 3. **Typed entity edges** — promote graphify call/import + wikilink-section + heading co-occurrence into typed graph edges (zero-LLM). gbrain shows +31pp P@5 upside.
 4. **Chunk-score max-pooling** (ColBERT-style late interaction; we already chunk 3 levels).
-- Don't redo the full 470-q eval until a config beats 0.938 on a dev slice. Honest framing if we can't pass them: engine-only 0.938 is within ~1pt AND we're the only one publishing all 5 dimensions (incl. abstention) + the real moats.
+- Don't redo the full 470-q eval until a config beats 0.938 on a dev slice.
+  Report the exact configuration and dimensions without claiming uniqueness.
 
 ## 9. Other open threads
 - **Feature idea saved**: user-selectable embedding model (Settings → pick model + reindex). Today hardcoded BGE-small@384 in `embedder.rs:128`/`:34`, `db.rs:44` (`vec0 float[384]`). Swap needs `EMBEDDING_DIM` + vec0 schema change + full re-embed (cheap because markdown-canonical). Use only fastembed-supported ONNX models (no Python).

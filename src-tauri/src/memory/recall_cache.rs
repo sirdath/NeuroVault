@@ -231,6 +231,7 @@ mod tests {
     fn hit(id: &str) -> RecallHit {
         RecallHit {
             engram_id: id.to_string(),
+            filename: format!("{id}.md"),
             title: id.to_string(),
             content: "x".to_string(),
             score: 0.0,

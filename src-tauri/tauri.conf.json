@@ -1,9 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklascodes/tauri-docs/refs/heads/main/src/content/docs/_schema/config.schema.json",
   "productName": "NeuroVault",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "identifier": "com.neurovault.app",
   "build": {
+    "features": [
+      "direct-distribution"
+    ],
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
@@ -67,7 +70,15 @@
       "binaries/neurovault-server"
     ],
     "resources": [
-      "resources/vec0.*"
+      "resources/vec0.*",
+      "../LICENSE",
+      "../THIRD-PARTY-NOTICES.md",
+      "../LICENSES/NeuroVault-v0.6.0-MIT.txt",
+      "../LICENSES/THIRD-PARTY-LICENSES.txt",
+      "../LICENSES/MPL-2.0-COVERED-SOURCE.md",
+      "../LICENSES/NATIVE-NOTICE-SOURCES.json",
+      "../LICENSES/native/*",
+      "../LICENSES/models/*"
     ],
     "icon": [
       "icons/32x32.png",

@@ -12,9 +12,13 @@ useful and is not a trial of Desktop.
 
 ## NeuroVault Desktop
 
-This private repository contains the commercial consumer application: the
-signed Mac shell, Memories, Graph, Review, themes, guided setup, lifecycle
-management, Store distribution, and support. Original additions and
+This private repository contains the commercial consumer application. Its
+product target is the signed Mac shell, Memories, Graph, Review, themes,
+guided setup, lifecycle management, Store distribution, and support. The
+current sandboxed Store flavor is still a release scaffold and exposes only
+the standalone Libraries, Memories, Search, Graph, editing, import/export,
+themes, and local-embedding subset; Review and automatic cross-AI memory are
+launch blockers, not shipped Store capabilities. Original additions and
 modifications made after the v0.6.0 boundary are proprietary unless a file
 says otherwise.
 
@@ -25,12 +29,13 @@ use the application; it does not transfer NeuroVault intellectual property.
 
 ## Historical public Desktop source
 
-All source and assets as they existed at tag `v0.6.0`, commit
-`90b7883070bd76c243282e58558c9ee5f050d3f0`, were publicly released under MIT.
-That license is preserved verbatim in
+First-party material covered by this repository's MIT license at tag `v0.6.0`,
+commit `90b7883070bd76c243282e58558c9ee5f050d3f0`, was publicly released under
+MIT. Third-party material and trademarks retain their separate terms. The
+repository's MIT license is preserved verbatim in
 `LICENSES/NeuroVault-v0.6.0-MIT.txt`. Repository visibility does not revoke it.
 
-The annotated tag `desktop-mit-final-v0.6.0` records the same boundary without
+The boundary tag `desktop-mit-final-v0.6.0` records the same commit without
 moving or rewriting the historical `v0.6.0` tag.
 
 ## Contributions

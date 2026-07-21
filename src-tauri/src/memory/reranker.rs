@@ -29,20 +29,26 @@
 //!
 //! Users opt out in Settings, which writes `off` to the pref file.
 
+#[cfg(not(feature = "app-store"))]
 use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
+#[cfg(not(feature = "app-store"))]
 use once_cell::sync::OnceCell;
+#[cfg(not(feature = "app-store"))]
 use parking_lot::Mutex;
 
+#[cfg(not(feature = "app-store"))]
 use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
 /// Global lazy-init reranker singleton. Guards concurrent use; the
 /// underlying ONNX session isn't documented as thread-safe so we
 /// serialise access via `Mutex`, same pattern as `embedder::instance`.
+#[cfg(not(feature = "app-store"))]
 struct Reranker {
     model: Mutex<TextRerank>,
 }
 
+#[cfg(not(feature = "app-store"))]
 fn instance() -> Result<&'static Reranker> {
     static INSTANCE: OnceCell<Reranker> = OnceCell::new();
     INSTANCE.get_or_try_init(|| {
@@ -82,6 +88,7 @@ fn instance() -> Result<&'static Reranker> {
 /// The reranker runs as a single batch of `(query, doc)` pairs. CPU-
 /// bound (~50-100 ms for 20 pairs on a modern laptop). Keep the
 /// candidate count ≤20 to stay inside the interactive latency budget.
+#[cfg(not(feature = "app-store"))]
 pub fn rerank(query: &str, documents: &[String]) -> Result<Vec<f32>> {
     if documents.is_empty() {
         return Ok(Vec::new());
@@ -103,4 +110,18 @@ pub fn rerank(query: &str, documents: &[String]) -> Result<Vec<f32>> {
         }
     }
     Ok(by_idx)
+}
+
+/// Store v1 deliberately ships without the approximately 1 GB cross-encoder.
+/// Callers already treat reranker failure as a conservative fallback to the
+/// local hybrid score, so this prevents an accidental first-query download
+/// without weakening basic search.
+#[cfg(feature = "app-store")]
+pub fn rerank(_query: &str, documents: &[String]) -> Result<Vec<f32>> {
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+    Err(MemoryError::Other(
+        "cross-encoder reranking is not included in the Mac App Store edition".to_string(),
+    ))
 }

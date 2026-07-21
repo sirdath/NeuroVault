@@ -85,7 +85,8 @@ pub fn spread_neighbors(
     let sql = format!(
         "SELECT l.from_engram, l.to_engram, l.similarity, l.link_type,
                 e.id, e.title, e.content, e.strength, e.state,
-                e.updated_at, e.created_at, COALESCE(e.kind, 'note')
+                e.updated_at, e.created_at, COALESCE(e.kind, 'note'),
+                COALESCE(e.filename, '')
          FROM engram_links l
          JOIN engrams e ON e.id = l.to_engram
          WHERE l.from_engram IN ({})
@@ -126,6 +127,7 @@ pub fn spread_neighbors(
         let updated_at: String = row.get(9).unwrap_or_default();
         let created_at: String = row.get(10).unwrap_or_default();
         let kind: String = row.get(11)?;
+        let filename: String = row.get(12)?;
 
         if already_seen.contains(&to_id) {
             continue;
@@ -147,6 +149,7 @@ pub fn spread_neighbors(
 
         candidates.push(Candidate {
             engram_id: id,
+            filename,
             title,
             content: trimmed,
             strength,

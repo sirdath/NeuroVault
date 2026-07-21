@@ -6,9 +6,9 @@
 //   node scripts/build-headless.mjs                      # host triple
 //   node scripts/build-headless.mjs aarch64-apple-darwin # explicit triple (CI)
 //
-// The binary is built with `--no-default-features`, so it links NO Tauri (no
-// WebKit/GTK) — see the `gui` cargo feature. That is what lets it run on a
-// headless server/Docker box; the GUI build links those frameworks.
+// The binary is built without default features, so it links NO Tauri (no
+// WebKit/GTK), while the explicit model-download feature retains Core's
+// self-hosted first-use model acquisition. The Store build never enables it.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +54,15 @@ if (!t) {
 }
 
 const isHost = triple === hostTriple();
-const cargoArgs = ['build', '--release', '--no-default-features', '--bin', 'neurovault-server'];
+const cargoArgs = [
+  'build',
+  '--release',
+  '--no-default-features',
+  '--features',
+  'model-download',
+  '--bin',
+  'neurovault-server',
+];
 if (!isHost) cargoArgs.push('--target', triple);
 
 console.error(`[build-headless] cargo ${cargoArgs.join(' ')}`);

@@ -10,34 +10,35 @@ import { ContextMenu, type ContextMenuEntry } from "./components/ContextMenu";
 import { QuickCapture } from "./components/QuickCapture";
 import { HoverPreview } from "./components/HoverPreview";
 import { Toasts } from "./components/Toasts";
-import Home from "./components/Home";
-import { UpdateButton } from "./components/UpdateButton";
 import { ConsumerNavigation, type ConsumerDestination } from "./components/ConsumerNavigation";
 import type { SettingsSection } from "./components/SettingsView";
 import { TrashPanel } from "./components/TrashPanel";
-import { useUpdateStore } from "./stores/updateStore";
 import { applyThemeToDocument, themeCssVars, useSettingsStore } from "./stores/settingsStore";
 import { useBrainStore } from "./stores/brainStore";
 import { useGraphStore } from "./stores/graphStore";
 import { toast } from "./stores/toastStore";
 import { useConsumerHealthStore } from "./stores/consumerHealthStore";
 import { healthToneColor } from "./lib/consumerHealth";
-import { meetingsDropClaim } from "./lib/meetingsDropClaim";
 import { canLeaveView } from "./lib/navigationGuard";
 import { persistRestorableConsumerView, readRestorableConsumerView } from "./lib/consumerViewState";
 import { initializeConsumerVault } from "./lib/consumerBootstrap";
+import { IS_APP_STORE } from "./lib/distribution";
+import { useStoreRuntimeStore, type StoreIndexSummary } from "./stores/storeRuntimeStore";
+import vaultMark from "./assets/vault-mark-transparent.png";
 
 const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
 const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
 const SearchView = lazy(() => import("./components/SearchView").then((module) => ({ default: module.SearchView })));
-const AttentionCenter = lazy(() => import("./components/AttentionCenter").then((module) => ({ default: module.AttentionCenter })));
-const TrustCenter = lazy(() => import("./components/TrustCenter").then((module) => ({ default: module.TrustCenter })));
-const SettingsView = lazy(() => import("./components/SettingsView").then((module) => ({ default: module.SettingsView })));
+const DirectHome = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./components/Home"));
+const DirectAttentionCenter = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./components/AttentionCenter").then((module) => ({ default: module.AttentionCenter })));
+const DirectTrustCenter = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./components/TrustCenter").then((module) => ({ default: module.TrustCenter })));
+const DirectUpdateButton = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./components/UpdateButton").then((module) => ({ default: module.UpdateButton })));
+const SettingsView = import.meta.env.VITE_DISTRIBUTION === "app-store"
+  ? lazy(() => import("./components/StoreSettingsView").then((module) => ({ default: module.StoreSettingsView })))
+  : lazy(() => import("./components/SettingsView").then((module) => ({ default: module.SettingsView })));
 const Onboarding = lazy(() => import("./components/Onboarding").then((module) => ({ default: module.Onboarding })));
 const ShortcutHelp = lazy(() => import("./components/ShortcutHelp").then((module) => ({ default: module.ShortcutHelp })));
-const EmployeePanel = lazy(() => import("./components/EmployeePanel").then((module) => ({ default: module.EmployeePanel })));
-
-type View = ConsumerDestination | "employee";
+type View = ConsumerDestination;
 
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" &&
@@ -62,12 +63,6 @@ export const NUMBER_KEY_DESTINATIONS = {
   "2": "memories",
   "3": "graph",
 } as const satisfies Record<string, ConsumerDestination>;
-
-// The AI Employees feature is excluded from the public base build. Flip this
-// to true (and re-declare the employee-manager window in tauri.conf.json +
-// start the scheduler in http_server.rs) to enable it for a future build.
-// The employee code stays in the repo, just inert in the base build.
-const EMPLOYEES_ENABLED = false;
 
 /** Shown in place of the graph when Performance mode is "off". Keeps the
  *  graph nav button discoverable (the user can still click into the graph
@@ -107,6 +102,131 @@ function GraphOffPlaceholder({ onEnable }: { onEnable: () => void }) {
   );
 }
 
+function StoreStartupGate({
+  checking,
+  error,
+  onRetry,
+}: {
+  checking: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <main className="flex h-full w-full items-center justify-center px-6" aria-live="polite">
+      <section
+        className="w-full max-w-[520px] rounded-2xl px-7 py-7 text-center"
+        style={{
+          background: "var(--nv-surface-elevated)",
+          border: "1px solid var(--nv-border)",
+          boxShadow: "var(--nv-shadow)",
+        }}
+      >
+        <img src={vaultMark} alt="" aria-hidden="true" className="mx-auto h-14 w-14 object-contain" />
+        <h1 className="mt-4 text-[20px] font-semibold tracking-[-0.02em]" style={{ color: "var(--nv-text)" }}>
+          {checking ? "Opening your local library…" : "NeuroVault couldn’t open its local library"}
+        </h1>
+        <p className="mx-auto mt-2 max-w-[420px] text-[13px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
+          {checking
+            ? "Checking the private on-device storage before any files can be changed."
+            : "Nothing was deleted or overwritten. Retry the check; if it still fails, quit and reopen NeuroVault."}
+        </p>
+
+        {checking ? (
+          <div className="mx-auto mt-6 h-5 w-5 animate-spin rounded-full border-2 border-current border-r-transparent" style={{ color: "var(--nv-accent)" }} />
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-6 rounded-lg px-4 py-2 text-[13px] font-semibold"
+              style={{ background: "var(--nv-accent)", color: "var(--nv-on-accent)" }}
+            >
+              Retry opening library
+            </button>
+            {error && (
+              <details className="mt-5 rounded-xl text-left" style={{ border: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}>
+                <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium" style={{ color: "var(--nv-text-muted)" }}>
+                  Technical details
+                </summary>
+                <p className="border-t px-3 py-3 text-[10.5px] leading-relaxed" style={{ borderColor: "var(--nv-border)", color: "var(--nv-text-dim)" }}>
+                  {error}
+                </p>
+              </details>
+            )}
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function StoreIndexBanner({
+  phase,
+  summary,
+  error,
+  onRetry,
+  onDismiss,
+}: {
+  phase: "running" | "complete" | "error";
+  summary: StoreIndexSummary | null;
+  error: string | null;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  const hasFailures = phase === "error";
+  return (
+    <div
+      role="status"
+      className="flex shrink-0 items-center justify-between gap-4 px-5 py-2.5"
+      style={{
+        background: hasFailures
+          ? "color-mix(in srgb, var(--nv-warning) 9%, var(--nv-bg))"
+          : "color-mix(in srgb, var(--nv-accent) 8%, var(--nv-bg))",
+        borderBottom: `1px solid ${hasFailures ? "color-mix(in srgb, var(--nv-warning) 28%, var(--nv-border))" : "var(--nv-border)"}`,
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        {phase === "running" ? (
+          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-current border-r-transparent" style={{ color: "var(--nv-accent)" }} />
+        ) : (
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: hasFailures ? "var(--nv-warning)" : "var(--nv-positive)" }} />
+        )}
+        <div className="min-w-0">
+          <p className="text-[12px] font-medium" style={{ color: "var(--nv-text)" }}>
+            {phase === "running"
+              ? "Updating local search and graph"
+              : hasFailures
+                ? "Some notes could not be indexed"
+                : "Search and graph are up to date"}
+          </p>
+          <p className="truncate text-[10.5px]" style={{ color: "var(--nv-text-dim)" }} title={error ?? undefined}>
+            {phase === "running"
+              ? "Your Markdown is ready to read and edit while this finishes in the background."
+              : summary
+                ? `${summary.scanned} scanned, ${summary.indexed} indexed, ${summary.unchanged} unchanged${summary.failed ? `, ${summary.failed} failed` : ""}.${error ? ` First issue: ${error}` : ""}`
+                : error || "The index did not finish. Your Markdown files are unchanged."}
+          </p>
+        </div>
+      </div>
+      {phase !== "running" && (
+        <div className="flex shrink-0 items-center gap-2">
+          {hasFailures && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-lg px-3 py-1.5 text-[11px] font-semibold"
+              style={{ color: "var(--nv-text)", border: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}
+            >
+              Retry indexing
+            </button>
+          )}
+          <button type="button" onClick={onDismiss} className="h-7 w-7 rounded-lg text-[15px]" style={{ color: "var(--nv-text-dim)" }} aria-label="Dismiss indexing status">×</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const initVault = useNoteStore((s) => s.initVault);
   const saveNote = useNoteStore((s) => s.saveNote);
@@ -120,15 +240,22 @@ export default function App() {
   // destination; transient screens such as Settings and Review never become
   // the next launch's front door. The durable editor buffer is still flushed
   // before every navigation away from Memories.
-  const [view, setViewState] = useState<View>(() =>
-    readRestorableConsumerView(typeof window === "undefined" ? null : window.localStorage),
-  );
+  const [view, setViewState] = useState<View>(() => {
+    const restored = readRestorableConsumerView(typeof window === "undefined" ? null : window.localStorage);
+    // Today is backed by the automatic-context journal, which the sandboxed
+    // Store app deliberately does not run. A Store install always opens on a
+    // useful native surface instead of restoring a direct-only dashboard.
+    return IS_APP_STORE && restored === "today" ? "memories" : restored;
+  });
   const viewRef = useRef<View>(view);
   // Graph performance mode. "off" keeps the nav button but renders a
   // re-enable placeholder instead of mounting NeuralGraph (zero graph cost).
   const graphMode = useGraphSettingsStore((s) => s.graphMode);
   const setGraphMode = useGraphSettingsStore((s) => s.setGraphMode);
   const setView = useCallback(async (next: View): Promise<boolean> => {
+    if (IS_APP_STORE && ["today", "activity", "attention", "trust"].includes(next)) {
+      next = "memories";
+    }
     const canLeave = await canLeaveView(viewRef.current, next, flushPendingSave);
     if (!canLeave) {
       toast.error("Your note is still open because it could not be saved. Retry or copy the text before leaving.");
@@ -186,10 +313,24 @@ export default function App() {
   const refreshHealth = useConsumerHealthStore((state) => state.refresh);
   const serverUp = healthSignals.service === "online";
   const serverDown = healthSignals.service === "offline";
+  const storeRuntimePhase = useStoreRuntimeStore((state) => state.phase);
+  const storeRuntimeError = useStoreRuntimeStore((state) => state.error);
+  const refreshStoreRuntime = useStoreRuntimeStore((state) => state.refresh);
+  const storeIndexPhase = useStoreRuntimeStore((state) => state.indexPhase);
+  const storeIndexBrainId = useStoreRuntimeStore((state) => state.indexBrainId);
+  const storeIndexSummary = useStoreRuntimeStore((state) => state.indexSummary);
+  const storeIndexError = useStoreRuntimeStore((state) => state.indexError);
+  const indexStoreBrain = useStoreRuntimeStore((state) => state.indexBrain);
+  const dismissStoreIndexStatus = useStoreRuntimeStore((state) => state.dismissIndexStatus);
 
   useEffect(() => {
+    if (IS_APP_STORE) void refreshStoreRuntime();
+  }, [refreshStoreRuntime]);
+
+  useEffect(() => {
+    if (IS_APP_STORE && storeRuntimePhase !== "ready") return;
     void initializeConsumerVault(loadBrains, initVault);
-  }, [initVault, loadBrains]);
+  }, [initVault, loadBrains, storeRuntimePhase]);
 
   // Rust owns native window/quit lifecycle, but the active text buffer lives
   // here. Closing the main window asks for a best-effort hidden flush; explicit
@@ -298,6 +439,7 @@ export default function App() {
   // ignore the in-app note→folder drags (those carry no OS file paths;
   // the webview drag-drop event only fires for real external files).
   useEffect(() => {
+    if (IS_APP_STORE) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     // `getCurrentWebview()` reads injected Tauri metadata synchronously; in a
@@ -313,13 +455,6 @@ export default function App() {
     webview
       .onDragDropEvent((event) => {
         const p = event.payload;
-        // The Curator's meetings drop zone (EmployeePanel) claims drags
-        // hovering it, so a dropped transcript goes only to the meetings
-        // inbox, not also to raw/. Yield while it's claimed.
-        if (meetingsDropClaim.over) {
-          setDropActive(false);
-          return;
-        }
         if (p.type === "enter" || p.type === "over") {
           setDropActive(true);
         } else if (p.type === "leave") {
@@ -358,9 +493,11 @@ export default function App() {
   // contains no vault data is outbound network activity. Settings names the
   // destination before the user opts in.
   useEffect(() => {
-    if (!checkForUpdatesAutomatically) return;
+    if (IS_APP_STORE || !checkForUpdatesAutomatically) return;
     const t = window.setTimeout(() => {
-      useUpdateStore.getState().check(true);
+      void import("./stores/updateStore").then(({ useUpdateStore }) => {
+        useUpdateStore.getState().check(true);
+      });
     }, 4000);
     return () => window.clearTimeout(t);
   }, [checkForUpdatesAutomatically]);
@@ -368,6 +505,7 @@ export default function App() {
   // One product-level health state feeds Today, navigation, Trust, and the
   // top bar. No screen is allowed to invent its own green dot.
   useEffect(() => {
+    if (IS_APP_STORE) return;
     void refreshHealth();
     const id = window.setInterval(() => void refreshHealth(), starting ? 1500 : 5000);
     return () => window.clearInterval(id);
@@ -476,8 +614,8 @@ export default function App() {
   const winMenuItems: ContextMenuEntry[] = useMemo(
     () => [
       {
-        label: "Hide in background",
-        hint: restoreHint,
+        label: IS_APP_STORE ? "Hide window" : "Hide in background",
+        hint: IS_APP_STORE ? undefined : restoreHint,
         onSelect: () => winInvoke("hide_to_background"),
         icon: (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
@@ -488,7 +626,7 @@ export default function App() {
           </svg>
         ),
       },
-      {
+      ...(!IS_APP_STORE ? [{
         label: "Shrink to widget",
         onSelect: () => winInvoke("shrink_to_widget"),
         icon: (
@@ -499,7 +637,7 @@ export default function App() {
             <line x1="3" y1="21" x2="10" y2="14" />
           </svg>
         ),
-      },
+      }] : []),
     ],
     [winInvoke, restoreHint]
   );
@@ -509,7 +647,23 @@ export default function App() {
   const activeBrainId = useBrainStore((s) => s.activeBrainId);
   const switchBrain = useBrainStore((s) => s.switchBrain);
 
-  const commands: Command[] = useMemo(
+  // Index the active Store library after native startup. This deliberately
+  // runs beside the editor instead of blocking access to durable Markdown.
+  useEffect(() => {
+    if (!IS_APP_STORE || storeRuntimePhase !== "ready" || !activeBrainId) return;
+    void indexStoreBrain(activeBrainId);
+  }, [activeBrainId, indexStoreBrain, storeRuntimePhase]);
+
+  // If an index pass changed the active library, refresh the derived views.
+  // The files themselves were available throughout; this only publishes the
+  // newly built search and graph representation without requiring a relaunch.
+  useEffect(() => {
+    if (!IS_APP_STORE || !storeIndexSummary || storeIndexBrainId !== activeBrainId) return;
+    void useNoteStore.getState().loadNotes();
+    void useGraphStore.getState().loadGraph();
+  }, [activeBrainId, storeIndexBrainId, storeIndexSummary]);
+
+  const commands = useMemo<Command[]>(
     () => [
       {
         id: "quick-capture",
@@ -532,12 +686,12 @@ export default function App() {
         shortcut: "⌘S",
         action: () => saveNote(),
       },
-      {
+      ...(!IS_APP_STORE ? [{
         id: "view-today",
         title: "Open Today",
         category: "View",
         action: () => { void setView("today"); },
-      },
+      }] : []),
       {
         id: "view-memories",
         title: "Open Memories",
@@ -564,7 +718,7 @@ export default function App() {
         shortcut: "⌘/",
         action: () => { void setView("search"); },
       },
-      {
+      ...(!IS_APP_STORE ? [{
         id: "view-activity",
         title: "Open Context history",
         category: "View",
@@ -581,26 +735,26 @@ export default function App() {
         title: "Open Privacy & Trust",
         category: "View",
         action: () => { void setView("trust"); },
-      },
+      }] : []),
       {
         id: "open-settings",
         title: "Open settings",
         category: "Action",
         action: () => { void openSettings(); },
       },
-      {
+      ...(!IS_APP_STORE ? [{
         id: "mcp-setup",
         title: "Manage AI connections",
         category: "Action",
         action: () => { void openSettings("connections"); },
-      },
+      }] : []),
       {
         id: "window-minimize",
         title: "Minimize window",
         category: "Window",
         action: () => winInvoke("minimize_main"),
       },
-      {
+      ...(!IS_APP_STORE ? [{
         id: "hide-window",
         title: "Hide window (keep server running)",
         category: "Window",
@@ -611,7 +765,7 @@ export default function App() {
         title: "Shrink to widget (floating minitab)",
         category: "Window",
         action: () => winInvoke("shrink_to_widget"),
-      },
+      }] : []),
       {
         id: "help",
         title: "Keyboard shortcuts",
@@ -680,7 +834,6 @@ export default function App() {
       if (ctrl && !e.shiftKey && !e.altKey) {
         const destination = NUMBER_KEY_DESTINATIONS[e.key as keyof typeof NUMBER_KEY_DESTINATIONS];
         if (destination) { e.preventDefault(); void setView(destination); return; }
-        if (EMPLOYEES_ENABLED && e.key === "4") { e.preventDefault(); void setView("employee"); return; }
       }
       if (ctrl && e.key === "/") {
         e.preventDefault();
@@ -721,15 +874,43 @@ export default function App() {
       .catch(() => undefined);
   }, [theme]);
 
+  if (IS_APP_STORE && storeRuntimePhase !== "ready") {
+    return (
+      <div
+        className={`nv-app-shell h-screen overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
+        style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
+      >
+        <StoreStartupGate
+          checking={storeRuntimePhase === "checking"}
+          error={storeRuntimeError}
+          onRetry={() => { void refreshStoreRuntime(); }}
+        />
+        <Toasts />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`nv-app-shell flex h-screen flex-col overflow-hidden font-[Geist,sans-serif]${reduceMotion ? " nv-reduce-motion" : ""}`}
       style={{ ...themeVars, backgroundColor: theme.bg, color: theme.text }}
     >
       <IngestBanner />
+      {IS_APP_STORE && storeIndexPhase !== "idle" && (
+        <StoreIndexBanner
+          phase={storeIndexPhase}
+          summary={storeIndexSummary}
+          error={storeIndexError}
+          onRetry={() => {
+            const brainId = storeIndexBrainId ?? activeBrainId;
+            if (brainId) void indexStoreBrain(brainId, true);
+          }}
+          onDismiss={dismissStoreIndexStatus}
+        />
+      )}
 
       {/* Server status banner — different content for starting vs offline */}
-      {(serverDown || starting) && (
+      {!IS_APP_STORE && (serverDown || starting) && (
         <div
           className="px-5 py-2.5 flex items-center justify-between flex-shrink-0 backdrop-blur-[10px]"
           style={starting ? {
@@ -807,7 +988,7 @@ export default function App() {
 
       <div className="nv-app-frame flex flex-1 overflow-hidden">
         <ConsumerNavigation
-          active={view === "employee" ? "today" : view === "activity" ? "trust" : view}
+          active={view === "activity" ? "trust" : view}
           collapsed={navigationCollapsed}
           onNavigate={setView}
           onVaultActivated={() => setSidebarCollapsed(false)}
@@ -841,9 +1022,9 @@ export default function App() {
             </button>
           )}
           {navigationCollapsed && (
-            <div className="flex min-w-0 items-center" aria-label={`Current view: ${view === "employee" ? "Today" : VIEW_LABELS[view]}`}>
+            <div className="flex min-w-0 items-center" aria-label={`Current view: ${VIEW_LABELS[view]}`}>
               <span className="text-[12px] font-medium" style={{ color: theme.text }}>
-                {view === "employee" ? "Today" : VIEW_LABELS[view]}
+                {VIEW_LABELS[view]}
               </span>
             </div>
           )}
@@ -851,8 +1032,8 @@ export default function App() {
             type="button"
             onClick={() => setPaletteOpen(true)}
             className="nv-global-search-trigger"
-            aria-label="Search notes and AI memories"
-            title="Search notes and AI memories (⌘K)"
+            aria-label={IS_APP_STORE ? "Search local memories" : "Search notes and AI memories"}
+            title={`${IS_APP_STORE ? "Search local memories" : "Search notes and AI memories"} (⌘K)`}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="11" cy="11" r="6.5" />
@@ -864,8 +1045,17 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4">
-          <UpdateButton theme={theme} />
-          <button
+          {DirectUpdateButton && <DirectUpdateButton theme={theme} />}
+          {IS_APP_STORE ? (
+            <div
+              className="nv-health-trigger flex items-center gap-1.5 rounded-lg px-2 py-1.5"
+              aria-label="Local library. Stored on this Mac"
+              title="This App Store edition keeps its library inside the app sandbox"
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: theme.positive, boxShadow: `0 0 6px ${theme.positive}66` }} />
+              <span className="text-[11px]" style={{ color: theme.textDim }}>On-device</span>
+            </div>
+          ) : <button
             type="button"
             className="nv-health-trigger flex items-center gap-1.5 rounded-lg px-2 py-1.5"
             onClick={() => { void setView("trust"); }}
@@ -882,7 +1072,7 @@ export default function App() {
             <span className="text-[11px]" style={{ color: theme.textDim }}>
               {health.headline}
             </span>
-          </button>
+          </button>}
           <div className="flex items-center gap-0.5" aria-label="Window controls">
             <button
               type="button"
@@ -929,8 +1119,8 @@ export default function App() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 flex overflow-hidden">
           <Suspense fallback={<ViewLoading />}>
-          {view === "today" && (
-            <Home
+          {view === "today" && DirectHome && (
+            <DirectHome
               onOpenGraph={() => { void setView("graph"); }}
               onOpenReview={() => { setAttentionInitial("pending"); void setView("attention"); }}
               onEnter={(filename) => {
@@ -972,9 +1162,9 @@ export default function App() {
             ) : (
               <NeuralGraph onOpenNote={() => { void setView("memories"); }} />
             ))}
-          {view === "attention" && <AttentionCenter key={attentionInitial} initialTab={attentionInitial} />}
-          {(view === "trust" || view === "activity") && (
-            <TrustCenter
+          {view === "attention" && DirectAttentionCenter && <DirectAttentionCenter key={attentionInitial} initialTab={attentionInitial} />}
+          {(view === "trust" || view === "activity") && DirectTrustCenter && (
+            <DirectTrustCenter
               key={view === "activity" ? "history" : "overview"}
               initialTab={view === "activity" ? "history" : "overview"}
               onOpenReview={() => { setAttentionInitial("history"); void setView("attention"); }}
@@ -983,7 +1173,6 @@ export default function App() {
             />
           )}
           {view === "settings" && <SettingsView initialSection={settingsSection} />}
-          {EMPLOYEES_ENABLED && view === "employee" && <EmployeePanel />}
           </Suspense>
         </div>
       </div>
@@ -1021,7 +1210,7 @@ export default function App() {
       {/* Drop-to-inbox overlay — shown while external files are dragged
           over the window. The actual copy happens in the webview
           onDragDropEvent handler above. */}
-      {dropActive && (
+      {!IS_APP_STORE && dropActive && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center pointer-events-none"
           style={{ background: theme.overlay, backdropFilter: "blur(2px)" }}

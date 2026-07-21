@@ -11,6 +11,7 @@
  *  which path served the request. */
 
 import { API_HOST } from "./config";
+import { IS_APP_STORE } from "./distribution";
 import {
   nvGetGraph,
   nvGetNote,
@@ -137,6 +138,10 @@ export const recall = (query: string, limit = 8) =>
  *  succeeds and users see their data, or fails and its own error
  *  message is surfaced by the caller. */
 async function preferNv<T>(nv: () => Promise<T>, http: () => Promise<T>): Promise<T> {
+  // The sandboxed App Store edition intentionally has no loopback server.
+  // A native failure must remain a native, recoverable error instead of
+  // quietly making a request to a service that cannot exist in this build.
+  if (IS_APP_STORE) return nv();
   try {
     return await nv();
   } catch {
@@ -202,6 +207,7 @@ export async function fetchNotesList(): Promise<NoteSummary[]> {
     const rows = (await nvListNotes()) as NvNoteListRow[];
     return rows;
   } catch {
+    if (IS_APP_STORE) return [];
     try {
       const res = await fetch(`${BASE}/api/notes`);
       if (!res.ok) return [];

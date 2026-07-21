@@ -317,13 +317,13 @@
       </div>
       <div class="tb-title">
         <h1>NEURO<span class="accent">VAULT</span> <span style="font-weight:400;letter-spacing:.1em;font-size:15px;color:var(--ink-3)">technical reference</span></h1>
-        <div class="sub">local-first &middot; open-source &middot; AI-native memory for Claude and other LLMs</div>
+        <div class="sub">historical Direct architecture &middot; public Core + private Desktop &middot; local-first AI memory</div>
         <div class="tag"><b>Claude forgets you after every conversation. NeuroVault doesn't.</b></div>
       </div>
       <div class="tb-meta">
-        <div class="repo">github.com/<b>sirdath</b>/NeuroVault</div>
+        <div class="repo">github.com/<b>sirdath</b>/neurovault-core</div>
         <div class="local-note-wrap"><span class="meta-line">rev. architecture map &middot; v1</span></div>
-        <div class="meta-line" style="color:var(--local-ink)">LOCAL = on-device (everything)</div>
+        <div class="meta-line" style="color:var(--local-ink)">LOCAL INFERENCE &middot; exact network contract in PRIVACY.md</div>
       </div>
     </div>
   </div>
@@ -338,12 +338,12 @@
     <span class="lg"><span class="arrow">&#8594;</span>data flow</span>
     <span class="lg" style="color:var(--blue-ink)"><span class="arrow" style="color:var(--blue-d)">&#8594;</span>watch / re-index</span>
     <span class="spacer"></span>
-    <span class="local-note">NO external model calls &middot; NO paid path &middot; 100% on-device</span>
+    <span class="local-note">INFERENCE is on-device &middot; Direct downloads models once &middot; Store embedding is bundled</span>
   </div>
 
   <!-- ===================== 01 SYSTEM TOPOLOGY ===================== -->
   <div class="panel full">
-    <div class="shead"><span class="snum">01</span><h2>System Topology</h2><span class="srule"></span><span class="stag">3 processes &middot; markdown canonical &middot; loopback only</span></div>
+    <div class="shead"><span class="snum">01</span><h2>Historical Direct Topology</h2><span class="srule"></span><span class="stag">app + per-client bridge &middot; note content in markdown &middot; loopback only</span></div>
     <div class="stage">
       <svg class="wires" width="1760" height="468" viewBox="0 0 1760 468" fill="none" aria-hidden="true">
         <defs>
@@ -422,12 +422,12 @@
         <div class="nhdr"><span class="nt">~/.neurovault/brains/&lt;id&gt;/</span><span class="pill d">STORE</span></div>
         <div class="subbox" style="margin-top:10px;border-color:#ddd6fe;background:#fbfaff">
           <div class="subhdr"><span class="st">vault/*.md</span><span class="tag-canon" style="margin-left:auto">canonical</span></div>
-          <div class="nsub" style="margin-top:4px">human-readable markdown &middot; the source of truth</div>
+          <div class="nsub" style="margin-top:4px">human-readable markdown &middot; canonical note/engram content</div>
         </div>
         <div class="subbox" style="border-color:#bcd7fd;background:#f7fbff">
-          <div class="subhdr"><span class="st">brain.db</span><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
-          <div class="nsub" style="margin-top:4px">SQLite + sqlite-vec &middot; vectors + knowledge graph</div>
-          <div class="nsub" style="margin-top:3px">a rebuildable index over the vault &middot; delete it &#8594; reconstructs</div>
+          <div class="subhdr"><span class="st">brain.db</span><span class="tag-rebuild" style="margin-left:auto">index + state</span></div>
+          <div class="nsub" style="margin-top:4px">SQLite + sqlite-vec &middot; derived retrieval data + structured state</div>
+          <div class="nsub" style="margin-top:3px">do not delete: some core memory, drafts, and history have no markdown mirror</div>
         </div>
       </div>
 
@@ -516,7 +516,7 @@
       <div class="vconn"></div>
       <div class="fbox strong"><div class="ft">engram row written</div><div class="fd">one memory unit, linked into the graph</div></div>
       <div class="localnote" style="margin-top:14px;color:var(--ink-2);background:var(--panel-soft);border-color:var(--line)">
-        <b style="color:var(--violet-d)">write-back</b> keeps markdown and brain.db in sync in both directions. The DB is <b style="color:var(--blue-ink)">rebuildable</b>: delete brain.db and it reconstructs entirely from the vault.
+        <b style="color:var(--violet-d)">write-back</b> keeps note content and its derived index aligned. <b style="color:var(--blue-ink)">Re-indexing</b> reconstructs retrieval data, not structured-only state such as core memory, drafts, or version history.
       </div>
     </div>
 
@@ -525,12 +525,12 @@
       <div class="shead"><span class="snum">04</span><h2>Storage &amp; State</h2><span class="srule"></span><span class="stag">md canonical</span></div>
       <div class="fbox" style="border-color:#ddd6fe;background:#fbfaff">
         <div class="frow"><div class="ft">vault/*.md</div><span class="tag-canon" style="margin-left:auto">canonical</span></div>
-        <div class="fd">source of truth &middot; human-readable markdown</div>
+        <div class="fd">canonical note/engram content &middot; human-readable markdown</div>
       </div>
       <div class="vconn"><span class="cap">index / rebuild</span></div>
       <div class="fbox" style="border-color:#bcd7fd;background:#f7fbff">
-        <div class="frow"><div class="ft">brain.db</div><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
-        <div class="fd">SQLite + sqlite-vec &middot; a derived index over the vault</div>
+        <div class="frow"><div class="ft">brain.db</div><span class="tag-rebuild" style="margin-left:auto">index + state</span></div>
+        <div class="fd">SQLite + sqlite-vec &middot; derived index plus structured-only records</div>
       </div>
       <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 4px">Inside brain.db</div>
       <table class="kv">
@@ -579,7 +579,7 @@
         <div class="braincard"><span class="adot off"></span><span class="bn">personal</span><span class="bparts">vault/ + brain.db</span></div>
       </div>
       <div class="noteline" style="margin-top:12px">
-        Many <span class="k">fully independent</span> brains live side by side. Each is its own vault + rebuildable index.
+        Many <span class="k">fully independent</span> brains live side by side. Each is its own vault plus database; back up both for complete recovery.
       </div>
       <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:12px 0 8px">Tools</div>
       <div class="chips">
@@ -592,12 +592,12 @@
 
     <!-- 07 ALL LOCAL -->
     <div class="panel s07">
-      <div class="shead"><span class="snum">07</span><h2>All Local &middot; No Paid Path</h2><span class="srule"></span><span class="stag">the differentiator</span></div>
+      <div class="shead"><span class="snum">07</span><h2>On-device Inference</h2><span class="srule"></span><span class="stag">no per-call model API</span></div>
       <div class="localhero">
         <div class="lh-left">
           <div class="pct">100%<small>LOCAL</small></div>
-          <p><b>No external model calls. No paid path at all.</b> Most memory systems split a free/local path from a metered path that reaches out to external embedding, rerank, or LLM APIs.</p>
-          <p>NeuroVault has only one path. <b>Embeddings and reranking both run on-device</b> through fastembed ONNX.</p>
+          <p><b>Embedding and reranking inference run locally.</b> The Direct flavor downloads model files from Hugging Face on first use; the Store bundles its embedding model and excludes the reranker.</p>
+          <p>Connected AI clients can still send selected context to their configured provider. See PRIVACY.md for the exact boundary.</p>
         </div>
         <div class="cmp">
           <div class="cmpcol">
@@ -612,7 +612,7 @@
           </div>
           <div class="cmpcol nv">
             <h4>NeuroVault</h4>
-            <div class="lane" style="border-color:var(--local-line);background:var(--local-bg)"><div class="lane-h">on-device path (the only path)</div>
+            <div class="lane" style="border-color:var(--local-line);background:var(--local-bg)"><div class="lane-h">on-device inference path</div>
               <div class="chips">
                 <span class="chip local">embeddings &middot; fastembed ONNX</span>
                 <span class="chip local">reranking &middot; BGE cross-encoder</span>
@@ -625,12 +625,12 @@
             <div class="lane paid empty"><div class="lane-h" style="color:var(--local-ink)">paid / external path</div>
               <div class="chips"><span class="chip none">external embeddings</span><span class="chip none">external rerank</span><span class="chip none">LLM API</span></div>
             </div>
-            <div class="foot">one path &middot; everything on-device</div>
+            <div class="foot">local inference &middot; disclosed acquisition and provider boundaries</div>
           </div>
         </div>
       </div>
       <div class="localnote">
-        <b>LOCAL = on-device (everything).</b> No API keys. No network model calls. No metered path. Embeddings AND reranking run on-device via fastembed ONNX; the vault and index never leave the machine.
+        <b>LOCAL INFERENCE.</b> NeuroVault itself uses no metered embedding or reranking API. Direct model acquisition and update checks are disclosed network flows; connected AI providers have their own data flow.
       </div>
     </div>
 
@@ -645,10 +645,10 @@
           <div class="sdesc">in-process HTTP server, loopback only</div></div></div>
         <div class="step"><span class="sline"></span><span class="sidx">3</span><div class="sbody">
           <div class="stitle">loads the fastembed embedding + reranker models <span class="tag-local" style="vertical-align:middle">on-device</span></div>
-          <div class="sdesc">BGE-small ONNX + BGE cross-encoder, no download of remote inference</div></div></div>
+          <div class="sdesc">Direct downloads model files on first use; Store bundles BGE-small and excludes the reranker</div></div></div>
         <div class="step"><span class="sline"></span><span class="sidx">4</span><div class="sbody">
           <div class="stitle">opens or creates the active <code>brain.db</code></div>
-          <div class="sdesc">rebuilds from the vault if the index is missing</div></div></div>
+          <div class="sdesc">re-indexes note content if needed; structured-only state requires the original DB/backup</div></div></div>
         <div class="step"><span class="sline"></span><span class="sidx">5</span><div class="sbody">
           <div class="stitle">starts the <code>notify</code> vault watcher</div>
           <div class="sdesc">live re-index on markdown changes</div></div></div>
@@ -667,11 +667,11 @@
   <!-- ===================== FOOTER ===================== -->
   <div class="foot-strip">
     <b>NEUROVAULT technical reference</b>
-    <span class="dot">&middot;</span> markdown is canonical, brain.db is a rebuildable index
-    <span class="dot">&middot;</span> 3 processes, one loopback port (127.0.0.1:8765)
+    <span class="dot">&middot;</span> markdown owns note content; brain.db also holds structured state
+    <span class="dot">&middot;</span> historical Direct: app + per-client bridge over loopback
     <span class="dot">&middot;</span> 55 MCP tools, 4 tiers
     <span class="dot">&middot;</span> 97.45% hit@5 on LongMemEval-S
-    <span class="dot">&middot;</span> 100% on-device, no paid path
-    <span style="margin-left:auto">github.com/sirdath/NeuroVault</span>
+    <span class="dot">&middot;</span> on-device inference; exact network flows in PRIVACY.md
+    <span style="margin-left:auto">github.com/sirdath/neurovault-core</span>
   </div>
 </div>

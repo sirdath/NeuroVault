@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useRef, useEffect, useMemo } from "react";
 import { useBrainStore } from "../stores/brainStore";
-import { BrainSourcesPanel } from "./BrainSourcesPanel";
 import { API_HOST } from "../lib/config";
 import { toast } from "../stores/toastStore";
+import { IS_APP_STORE } from "../lib/distribution";
+
+const DirectBrainSourcesPanel = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./BrainSourcesPanel").then((module) => ({ default: module.BrainSourcesPanel })));
 
 const API = API_HOST;
 
@@ -96,9 +98,9 @@ export function BrainSelector({
       const next: Record<string, BrainStats> = {};
       await Promise.all(brains.map(async (b) => {
         try {
-          const r = await fetch(`${API}/api/brains/${b.id}/stats`);
-          if (!r.ok) return;
-          const s = await r.json();
+          const s = IS_APP_STORE
+            ? await import("@tauri-apps/api/core").then(({ invoke }) => invoke<BrainStats>("nv_brain_stats", { brainId: b.id }))
+            : await fetch(`${API}/api/brains/${b.id}/stats`).then(async (response) => response.ok ? response.json() : null);
           if (s && typeof s.note_count === "number") {
             next[b.id] = {
               note_count: s.note_count,
@@ -143,25 +145,36 @@ export function BrainSelector({
         setOpen(false);
         await switchBrain(result.brain_id);
       }
+    } else {
+      toast.error(
+        useBrainStore.getState().lastMutationError
+          || `Couldn't create the ${IS_APP_STORE ? "library" : "vault"}.`,
+      );
     }
   };
 
   const handleOpenFolder = async () => {
     try {
       const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
-      const selected = await openDialog({ directory: true, title: "Open folder as vault" });
+      const selected = await openDialog({ directory: true, title: IS_APP_STORE ? "Copy Markdown into NeuroVault" : "Open folder as vault" });
       if (!selected) return;
 
       const folderPath = String(selected);
-      const folderName = folderPath.split(/[\\/]/).pop() || "Vault";
+      const folderName = folderPath.split(/[\\/]/).pop() || (IS_APP_STORE ? "Library" : "Vault");
 
-      // Obsidian-style: the folder stays in place and IS the vault. We only
-      // register a brain that points at it (vault_path) — no copying. The
-      // server's file watcher ingests the folder's .md files into the brain's
-      // internal DB. Deleting this brain later leaves the folder untouched.
-      const result = await createBrain(folderName, `External folder vault`, folderPath);
+      // The Store flavor receives only a temporary user-selected sandbox
+      // grant, so createBrain copies Markdown into an app-owned library. The
+      // direct build keeps its established external-folder vault behaviour.
+      const result = await createBrain(
+        folderName,
+        IS_APP_STORE ? "Imported Markdown library" : "External folder vault",
+        folderPath,
+      );
       if (!result) {
-        toast.error("Couldn't open that folder as a vault. Check the local memory service and try again.");
+        const detail = useBrainStore.getState().lastMutationError;
+        toast.error(IS_APP_STORE
+          ? detail || "Couldn't copy that folder. The originals were not changed."
+          : "Couldn't open that folder as a vault. Check the local memory service and try again.");
         return;
       }
 
@@ -176,17 +189,26 @@ export function BrainSelector({
 
   const handleExport = async (brainId: string, brainName: string) => {
     try {
-      const [{ save }, { invoke }] = await Promise.all([
+      const [{ open: openDialog, save }, { invoke }] = await Promise.all([
         import("@tauri-apps/plugin-dialog"),
         import("@tauri-apps/api/core"),
       ]);
       const slug = brainName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      const stamp = new Date().toISOString().slice(0, 10);
-      const destPath = await save({
-        title: "Export vault as .zip",
-        defaultPath: `neurovault-${slug}-${stamp}.zip`,
-        filters: [{ name: "Zip archive", extensions: ["zip"] }],
-      });
+      // Include time and milliseconds so repeated Store exports never suggest
+      // the same destination name. Rust still enforces atomic no-overwrite.
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `neurovault-${slug || "library"}-${stamp}.zip`;
+      const destPath = IS_APP_STORE
+        ? await openDialog({
+            directory: true,
+            multiple: false,
+            title: "Choose a folder for the library archive",
+          }).then((folder) => folder ? `${String(folder).replace(/\/$/, "")}/${filename}` : null)
+        : await save({
+            title: "Export vault as ZIP",
+            defaultPath: filename,
+            filters: [{ name: "Zip archive", extensions: ["zip"] }],
+          });
       if (!destPath) return;
       const count = await invoke<number>("export_brain_as_zip", {
         brainId,
@@ -206,11 +228,11 @@ export function BrainSelector({
         className="flex items-center gap-1.5 px-2 py-1.5 text-[12px] font-[Geist,sans-serif] rounded-md transition-all w-full text-left"
         style={{ color: "var(--nv-text-muted)" }}
         disabled={loading}
-        aria-label={triggerLabel ?? "Switch active vault"}
+        aria-label={triggerLabel ?? (IS_APP_STORE ? "Switch active library" : "Switch active vault")}
       >
         <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: "var(--nv-accent)" }} />
         <span className="truncate flex-1 font-medium">
-          {loading ? "Loading vaults…" : triggerLabel ?? activeBrainName}
+          {loading ? (IS_APP_STORE ? "Loading libraries…" : "Loading vaults…") : triggerLabel ?? activeBrainName}
         </span>
         <svg
           className={`w-3 h-3 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
@@ -240,7 +262,7 @@ export function BrainSelector({
               className="text-[10px] font-[Geist,sans-serif] uppercase tracking-wider"
               style={{ color: "var(--nv-text-dim)" }}
             >
-              {brains.length} {brains.length === 1 ? "vault" : "vaults"}
+              {brains.length} {IS_APP_STORE ? (brains.length === 1 ? "library" : "libraries") : (brains.length === 1 ? "vault" : "vaults")}
             </span>
             <div className="relative">
               <button
@@ -250,8 +272,8 @@ export function BrainSelector({
                   color: "var(--nv-text-dim)",
                   background: sortMenuOpen ? "var(--nv-surface)" : "transparent",
                 }}
-                title="Sort vaults"
-                aria-label="Sort vaults"
+                title={IS_APP_STORE ? "Sort libraries" : "Sort vaults"}
+                aria-label={IS_APP_STORE ? "Sort libraries" : "Sort vaults"}
                 aria-haspopup="menu"
                 aria-expanded={sortMenuOpen}
               >
@@ -304,8 +326,15 @@ export function BrainSelector({
                 const commit = async () => {
                   const trimmedName = editName.trim();
                   if (!trimmedName) { setEditingId(null); return; }
-                  await updateBrain(brain.id, { name: trimmedName, description: editDesc });
-                  setEditingId(null);
+                  const updated = await updateBrain(brain.id, { name: trimmedName, description: editDesc });
+                  if (updated) {
+                    setEditingId(null);
+                  } else {
+                    toast.error(
+                      useBrainStore.getState().lastMutationError
+                        || `Couldn't rename ${brain.name}.`,
+                    );
+                  }
                 };
                 return (
                   <div
@@ -370,7 +399,9 @@ export function BrainSelector({
                       Remove <span className="font-medium">{brain.name}</span>?
                     </p>
                     <p className="text-[10px] font-[Geist,sans-serif] leading-relaxed mb-2" style={{ color: "var(--nv-text-dim)" }}>
-                      {brain.vault_path
+                      {IS_APP_STORE
+                        ? "Permanently deletes all notes in this library. This cannot be undone."
+                        : brain.vault_path
                         ? "Your folder stays on disk — only the NeuroVault index for it is removed."
                         : "Permanently deletes all notes in this vault. Cannot be undone."}
                     </p>
@@ -378,7 +409,14 @@ export function BrainSelector({
                       <button
                         onClick={async () => {
                           const ok = await deleteBrain(brain.id);
-                          if (ok) setConfirmDelete(null);
+                          if (ok) {
+                            setConfirmDelete(null);
+                            const notice = useBrainStore.getState().lastMutationNotice;
+                            if (notice) toast.warning(notice);
+                          } else {
+                            const detail = useBrainStore.getState().lastMutationError;
+                            toast.error(detail || `Couldn't delete ${brain.name}.`);
+                          }
                         }}
                         className="text-[11px] font-[Geist,sans-serif] px-2.5 py-1 rounded-md"
                         style={{ background: "var(--nv-negative)", color: "var(--nv-bg)" }}
@@ -460,7 +498,7 @@ export function BrainSelector({
                   ) : (
                     <div
                       role="group"
-                      aria-label={brain.is_active ? `${brain.name}, active vault` : brain.name}
+                      aria-label={brain.is_active ? `${brain.name}, active ${IS_APP_STORE ? "library" : "vault"}` : brain.name}
                       className="flex items-start gap-2.5 min-w-0 flex-1 text-left"
                     >
                       {brainSummary}
@@ -476,7 +514,7 @@ export function BrainSelector({
                       {/* Source folders — open the per-brain mirror panel.
                           Lets this brain lock onto one or more folders on
                           disk and keep their markdown in sync. */}
-                      <button
+                      {!IS_APP_STORE && <button
                         onClick={(e) => {
                           e.stopPropagation();
                           setSourcesPanelBrainId(brain.id);
@@ -490,7 +528,7 @@ export function BrainSelector({
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
                         </svg>
-                      </button>
+                      </button>}
                       {/* Rename — available for every brain. brain_id
                           stays stable, so no on-disk moves happen. */}
                       <button
@@ -514,7 +552,7 @@ export function BrainSelector({
                         onClick={(e) => { e.stopPropagation(); handleExport(brain.id, brain.name); }}
                         className="w-5 h-5 flex items-center justify-center rounded transition-colors"
                         style={{ color: "var(--nv-text-dim)" }}
-                        title="Export vault as .zip"
+                        title={IS_APP_STORE ? "Export library archive" : "Export vault as ZIP"}
                         onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-text)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
                       >
@@ -529,7 +567,7 @@ export function BrainSelector({
                           onClick={(e) => { e.stopPropagation(); setConfirmDelete(brain.id); }}
                           className="w-5 h-5 flex items-center justify-center rounded transition-colors"
                           style={{ color: "var(--nv-text-dim)" }}
-                          title={brain.vault_path ? "Remove vault (folder preserved)" : "Delete vault"}
+                          title={IS_APP_STORE ? "Delete library" : brain.vault_path ? "Remove vault (folder preserved)" : "Delete vault"}
                           onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-negative)"; }}
                           onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
                         >
@@ -559,7 +597,7 @@ export function BrainSelector({
                   if (e.key === "Enter") handleCreate();
                   if (e.key === "Escape") setCreating(false);
                 }}
-                placeholder="Vault name..."
+                placeholder={IS_APP_STORE ? "Library name..." : "Vault name..."}
                 className="w-full text-[12px] px-2.5 py-1.5 rounded-md focus:outline-none font-[Geist,sans-serif]"
                 style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
               />
@@ -601,7 +639,7 @@ export function BrainSelector({
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                 </svg>
-                Create new vault
+                {IS_APP_STORE ? "Create new library" : "Create new vault"}
               </button>
               <button
                 onClick={handleOpenFolder}
@@ -611,7 +649,7 @@ export function BrainSelector({
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
                 </svg>
-                Open folder as vault
+                {IS_APP_STORE ? "Copy Markdown folder…" : "Open folder as vault"}
               </button>
             </div>
           )}
@@ -620,15 +658,13 @@ export function BrainSelector({
 
       {/* Per-brain source folders panel — portals to document.body, so it
           survives the dropdown closing and uses its own z-layer. */}
-      {sourcesPanelBrainId !== null && (() => {
+      {DirectBrainSourcesPanel && sourcesPanelBrainId !== null && (() => {
         const brain = brains.find((b) => b.id === sourcesPanelBrainId);
         if (!brain) return null;
         return (
-          <BrainSourcesPanel
-            brainId={brain.id}
-            brainName={brain.name}
-            onClose={() => setSourcesPanelBrainId(null)}
-          />
+          <Suspense fallback={null}>
+            <DirectBrainSourcesPanel brainId={brain.id} brainName={brain.name} onClose={() => setSourcesPanelBrainId(null)} />
+          </Suspense>
         );
       })()}
     </div>

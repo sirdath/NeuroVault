@@ -1,9 +1,12 @@
 # Security Policy
 
-NeuroVault is local-first — the server binds to `127.0.0.1:8765` and the
-app runs with the user's own OS permissions. The realistic threat model
-is narrow, but real. This file describes what we consider a vulnerability,
-how to report one, and what response to expect.
+NeuroVault is local-first. In the Direct flavor, the server binds to
+`127.0.0.1:8765`; the current Store flavor does not start or expose that
+server and runs inside the macOS App Sandbox. Shared transport/server modules
+and dependencies may still be statically compiled into the Store executable,
+so this is a reachability claim rather than a claim that all dormant code is
+absent. This file describes what we consider a vulnerability, how to report
+one, and what response to expect.
 
 ## Supported versions
 
@@ -13,10 +16,13 @@ the bug is critical.
 
 | Version | Supported |
 |---|---|
-| 0.5.x (current) | ✅ |
-| < 0.5 (pre-release) | ❌ — upgrade to 0.5.x |
+| Private Desktop development builds | Maintainer-supported; not publicly distributed |
+| 0.6.0 (last public MIT source release) | Best effort while the public Core transition settles |
+| < 0.6 | Unsupported |
 
-Once 0.6 ships, 0.5.x gets a 30-day security-fix window before EOL.
+The supported public engine now lives in
+[NeuroVault Core](https://github.com/sirdath/neurovault-core). Store submission
+and a paid Desktop release have not happened yet.
 
 ## What counts as a vulnerability
 
@@ -52,9 +58,12 @@ We treat these as security bugs and will prioritize them:
 
 ## How to report
 
-**Preferred: GitHub Security Advisories.**
-Open a private advisory at
-[github.com/sirdath/NeuroVault/security/advisories/new](https://github.com/sirdath/NeuroVault/security/advisories/new).
+**Preferred: private vulnerability report in the public Core repository.**
+Open
+[github.com/sirdath/neurovault-core/security/advisories/new](https://github.com/sirdath/neurovault-core/security/advisories/new)
+and state whether the affected surface is Core, Direct Desktop, or the Store
+candidate. This keeps the reporting route public without exposing details in a
+normal issue even though the Desktop repository is private.
 Include:
 
 - Version you tested (from the About dialog or `neurovault --version`)
@@ -69,7 +78,7 @@ a public issue for anything that might expose real users.
 
 ## Response SLA
 
-At the current project maturity (v0.5.x, single-maintainer):
+At the current project maturity (single maintainer):
 
 - **Acknowledgement**: within 72 hours of a report. Usually much faster.
 - **Severity triage**: within 7 days.
@@ -96,12 +105,13 @@ we'll prioritize the fix regardless and appreciate your patience.
 
 ## Things we do that mitigate common classes of bug
 
-- The HTTP server binds `127.0.0.1` explicitly — not `0.0.0.0` — so
+- In Direct builds, the HTTP server binds `127.0.0.1` explicitly — not `0.0.0.0` — so
   misconfigured routers / accidentally-shared wifi don't expose it.
-- Tauri capability scoping: the main webview can open user-selected files,
+- Direct Tauri capability scoping: the main webview can open user-selected files,
   save exports, open normal web links, check signed updates, and restart after
   an update. It has no generic filesystem, shell execute/spawn, shell kill,
-  deep-link registration, or global-shortcut plugin permission.
+  deep-link registration, or global-shortcut plugin permission. The Store
+  candidate uses a separate, narrower capability file.
 - The legacy Rust sidecar command (not a webview shell permission) can only
   resolve the bundled `neurovault-server` binary; arbitrary executable paths
   and arbitrary argument vectors are not accepted.
@@ -120,16 +130,18 @@ we'll prioritize the fix regardless and appreciate your patience.
   describe (`run_python_job`) was removed in 2026-05 with the Python
   server package; there is no PDF/Zotero helper process and no
   `python` invocation anywhere in the product.
-- The cross-encoder reranker is a bundled on-device ONNX model
-  (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
-  the app and no network call. Recall falls back to the fusion ranker if
-  the model can't load.
+- In Direct builds, the cross-encoder reranker is an on-device ONNX model
+  acquired on first use and cached locally; downloading it is a disclosed
+  network call. There is no `torch`, `sentence-transformers`, or Python in the
+  runtime, and recall falls back to the fusion ranker if it cannot load. The
+  Store flavor excludes the reranker and bundles its smaller embedding model.
 
 ## Things we know we don't do yet
 
-- **No Windows/macOS code signing** on 0.5.x builds — users see
-  SmartScreen / Gatekeeper warnings. Signing and notarization are next
-  on the release plan (an Apple Developer account is in progress).
+- **The current Store candidate is not submission-signed.** An Apple Developer
+  membership exists, but the final bundle identifier, distribution
+  certificates, provisioning profile, App Store Connect record, and TestFlight
+  acceptance remain release gates.
 - **No vault encryption at rest** — documented in
   [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
   on the research roadmap.
@@ -140,4 +152,4 @@ we'll prioritize the fix regardless and appreciate your patience.
 
 ---
 
-*Last updated: 2026-07-13.*
+*Last updated: 2026-07-21.*

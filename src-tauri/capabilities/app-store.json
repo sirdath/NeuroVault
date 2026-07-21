@@ -1,0 +1,10 @@
+{
+  "identifier": "app-store",
+  "description": "Least-privilege capability set for the sandboxed Mac App Store main window.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:app:allow-set-app-theme",
+    "dialog:allow-open"
+  ]
+}
