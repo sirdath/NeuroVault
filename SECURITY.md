@@ -145,10 +145,12 @@ we'll prioritize the fix regardless and appreciate your patience.
 - **No vault encryption at rest** — documented in
   [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
   on the research roadmap.
-- **Dependency scanning is automated**: pull requests receive GitHub
-  dependency review, weekly npm production and RustSec audits run in Actions,
-  Dependabot covers npm/Cargo/Actions, and release bundles publish SPDX SBOMs
-  plus Sigstore-backed GitHub build-provenance attestations.
+- **Dependency scanning is automated**: weekly npm production and RustSec
+  audits run in Actions, Dependabot covers npm/Cargo/Actions, and release
+  bundles publish SPDX SBOMs plus Sigstore-backed GitHub build-provenance
+  attestations. Public Core pull requests also receive GitHub dependency
+  review; GitHub does not provide that check to this private Desktop repository
+  without the separate Advanced Security product.
 
 ---
 
