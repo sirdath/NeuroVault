@@ -5,18 +5,15 @@
   <img alt="NeuroVault" src="assets/brand/neurovault-logo.png" width="440">
 </picture>
 
-### Local-first AI memory for Claude and any MCP agent
+### The private commercial desktop application
 
 Claude forgets you after every conversation. **NeuroVault doesn't.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-2f7bf6.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/sirdath/NeuroVault?color=2f7bf6)](https://github.com/sirdath/NeuroVault/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/sirdath/NeuroVault/total?color=2f7bf6)](https://github.com/sirdath/NeuroVault/releases)
-[![Stars](https://img.shields.io/github/stars/sirdath/NeuroVault?style=flat&color=2f7bf6)](https://github.com/sirdath/NeuroVault/stargazers)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
+[![License](https://img.shields.io/badge/Desktop-commercial-2f7bf6.svg)](LICENSE)
+![Target](https://img.shields.io/badge/target-Mac%20App%20Store-lightgrey)
 ![Built with Tauri + Rust](https://img.shields.io/badge/built%20with-Tauri%202%20%2B%20Rust-24C8DB)
 
-**[Download](#download--install) · [Documentation](https://neurovault.dathproject.com/docs) · [Website](https://neurovault.dathproject.com) · [Connect your agent](#connect-your-agent-mcp)**
+**[Open-source Core](https://github.com/sirdath/neurovault-core) · [Website](https://neurovault.dathproject.com) · [App Store preparation](docs/APP-STORE-READINESS.md)**
 
 </div>
 
@@ -28,45 +25,49 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 
 <br>
 
-NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Your notes stay as plain `.md` files and the local database is rebuildable; selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
+NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Note/engram content stays in plain `.md` files and can be re-indexed; SQLite also holds structured state such as core-memory blocks, drafts, and version history, so a complete brain backup includes both the vault and database. Selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
 
-The open local core follows the [Core Covenant](CORE-COVENANT.md): no required account, no remote kill switch, durable Markdown ownership, and no sale or model training on vault data.
+The open engine follows the [Core Covenant](CORE-COVENANT.md) and now lives in
+[NeuroVault Core](https://github.com/sirdath/neurovault-core). This repository
+contains the paid consumer shell and is private.
 
 > Not RAG-in-a-trenchcoat. A structured, updatable, inspectable knowledge base an AI can read, write, and challenge. [Why this is not RAG ↓](#why-this-is-not-rag)
 
 ---
 
-## Download & install
+## Distribution status
 
-Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github.com/sirdath/NeuroVault/releases/latest)**
+NeuroVault Desktop is being prepared as a paid-upfront Mac App Store app. It is
+not currently offered for public download from this private repository. The
+Store build must pass sandboxing, offline first-use, security-scoped vault
+access, receipt-independent local operation, and TestFlight verification before
+it is submitted.
 
-| Platform | Asset | Signed? |
-|---|---|---|
-| **macOS Apple Silicon (M1–M4), macOS 14+** | `NeuroVault_*_aarch64.dmg` | ✅ Developer ID + notarized |
-| **Windows x64** | `NeuroVault_*_x64-setup.exe` (NSIS installer) | ⚠️ Not code-signed — see below |
-| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` / `*.rpm` | n/a (updater signatures provided) |
-| **macOS Intel** | Not supported — see below | — |
+The last public source release, v0.6.0, remains MIT-licensed for anyone who
+received it under those terms. Its license is preserved at
+`LICENSES/NeuroVault-v0.6.0-MIT.txt`. New commercial Desktop work begins after
+the `desktop-mit-final-v0.6.0` provenance tag.
 
-1. Download the installer for your platform and run it.
-2. Notes are saved as plain markdown in `~/.neurovault/`.
+There are currently two build flavors, and their capabilities must not be
+confused:
 
-**macOS 14 (Sonoma) is a hard floor.** The bundled `sqlite-vec` extension is built for macOS 14+, and it loads on every brain open — on macOS 11–13 the app launches and then cannot open any database. **Intel Macs are not supported at all**, including building from source: the only `vec0` build we ship is arm64, so an Intel build gets a library it cannot load.
+| Flavor | Current purpose | Current capability |
+| --- | --- | --- |
+| Direct distribution | Internal development and the historical Direct app | Full automatic-context hooks, MCP/HTTP integration, Review/Trust, Today, updater, minitab, and external-vault workflows described below. |
+| Mac App Store | Sandboxed release candidate | Standalone local Libraries, Memories, Search, Graph, editing, import/export, themes, and a bundled on-device embedding model. It includes no sidecar, hook installer, updater, reranker, or external-AI connection. Some shared transport/server modules and dependencies remain statically compiled today, but the Store IPC surface is narrowed and it does not start or expose the loopback HTTP server. |
 
-### Verify the download before first launch
+The Store flavor is an architecture scaffold, **not the paid product promised
+by the rest of this README yet**. It is not credible at the planned price until
+it regains the automatic, source-backed memory loop through an App
+Store-compliant connection design. See
+[App Store readiness](docs/APP-STORE-READINESS.md) and
+[commercial strategy](docs/COMMERCIAL-STRATEGY.md). Do not copy the direct-only
+claims below into App Store metadata.
 
-Every release publishes SHA-256 checksums and Sigstore build provenance. Compare the downloaded file with the checksum in its release before opening it.
+## Full direct-distribution capability set
 
-**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple, so they open without warnings. If macOS says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning** — delete the file and report the release URL and checksum through the project security process.
-
-**Windows artifacts are not code-signed yet.** SmartScreen will say *"Windows protected your PC"* and show the publisher as unknown. That is expected for now, not a sign of tampering — an Authenticode certificate is on the roadmap. Verify the SHA-256 checksum against the release, then choose **More info → Run anyway**. If you would rather not, use the macOS build, a Linux build, or [build from source](#quick-start-developers).
-
-#### 🐧 Linux
-
-The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` first if your file manager doesn't mark it executable.
-
-> **Updates** — NeuroVault installs signed updates in place from the top-bar **Update** button. Checks are manual by default; you can explicitly enable a launch check in **Settings → General**. Update requests never include vault content or a stable install identifier, and updates never touch data under `~/.neurovault/`.
-
-## What you get
+The following is the implemented direct/internal flavor, not the current
+sandboxed Store feature set.
 
 - **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your active vault: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your connected AI can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. NeuroVault does not upload source while building the graph.
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
@@ -83,6 +84,9 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 - **Local-first, with an exact network contract.** No NeuroVault account or telemetry. The server is loopback-only on `127.0.0.1:8765`; selected context leaves the Mac only through AI providers you deliberately connect, and model/update downloads are disclosed in [PRIVACY.md](PRIVACY.md).
 
 ## Connect your agent (MCP)
+
+> **Direct-distribution flavor only.** The current Mac App Store flavor does
+> not bundle this server or write another application's configuration.
 
 **Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
 
@@ -106,6 +110,9 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765`. You don't need to open the app first — the MCP server **auto-starts the backend** if it isn't already running (disable with `NEUROVAULT_AUTOSTART=0`). Now say *"remember that I prefer Tauri over Electron"*; weeks later, ask *"what desktop framework do I like?"* and it recalls instantly.
 
 ## Automatic memory (zero effort)
+
+> **Direct-distribution flavor only.** A Store-compliant automatic-context
+> transport is still a launch blocker.
 
 MCP memory has a known weakness: the agent only remembers if it *decides* to call `recall` — and models routinely don't. NeuroVault fixes this with **automatic recall** for Claude Code: relevant memories are injected into every prompt automatically, no tool call needed.
 
@@ -215,6 +222,10 @@ Top fixes:
 
 ## Quick start (developers)
 
+This section is for maintainers with access to the private Desktop repository.
+Public engine development belongs in
+[NeuroVault Core](https://github.com/sirdath/neurovault-core).
+
 **Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. No Python is needed to build or run anything. (The only Python in the repo is offline tooling the app never invokes: the `eval/` retrieval harness, the `docs/benchmarks/` report mergers, and two icon generators in `scripts/`.)
 
 ```bash
@@ -230,11 +241,16 @@ npx tauri dev
 npx tauri build
 ```
 
-**First run downloads** (once, then cached — instant after that):
+**Direct-flavor model downloads** (once, then cached):
 
-- the embedding model **BGE-small-en-v1.5** (~130 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
+- **BGE-small-en-v1.5** (~130 MB) on first ingest/recall, and the separate
+  **BGE reranker** (~1 GB) on first reranked recall. The Store flavor bundles
+  BGE-small for offline first use and excludes the reranker.
 
-The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. The macOS build we ship is **arm64 and macOS 14+ only**: that is the deployment target of the bundled extension, and it is loaded on every brain open. Building on an Intel Mac does **not** produce a working app — the repo carries only the arm64 `vec0.dylib`, so an x86_64 build gets a library it cannot load. Intel support needs an x86_64 (or universal) `vec0` build first.
+The `sqlite-vec` (`vec0`) native extension is bundled with Direct builds. The
+currently verified Direct macOS target is **Apple Silicon on macOS 14+**. The
+repo carries only the arm64 loadable extension, so an Intel build is not a
+working distribution until an x86_64 or universal `vec0` is supplied.
 
 ## MCP tools
 
@@ -261,7 +277,10 @@ Exposed to any MCP-speaking agent via the native Rust MCP server — **55 tools*
 
 ## Architecture
 
-**[Full technical reference map](docs/reference.html)** — the whole system on one page: topology, the hybrid retrieval core, ingest, storage, the 55-tool MCP surface, and why every path is on-device (no external model calls, no paid path).
+**[Full technical reference map](docs/reference.html)** — the historical Direct
+topology, hybrid retrieval core, ingest, storage, and 55-tool MCP surface.
+Inference runs on-device; disclosed model acquisition, updates, and connected
+AI-provider flows are covered in [PRIVACY.md](PRIVACY.md).
 
 [![NeuroVault technical reference](docs/reference.png)](docs/reference.html)
 
@@ -291,7 +310,11 @@ External:
     (`neurovault-server hook …`). No Python anywhere in the product.
 ```
 
-Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your memories. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
+Markdown in `vault/` is canonical for note/engram content, and `raw/` retains
+imported inputs. Retrieval indexes can be rebuilt from those files, but
+`brain.db` also contains structured state without Markdown mirrors (including
+core-memory blocks, drafts, and version history). Export or back up the whole
+brain for complete recovery. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
 
 ## Tech stack
 
@@ -317,7 +340,12 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 | Recall (with reranker) | ~133 ms median |
 | Full vault ingest (25 notes) | ~4 s cold start |
 
-**Retrieval quality** — measured on the full **470-question [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark** (long multi-session histories, facts that get updated and contradicted, temporal reasoning), using NeuroVault's real `recall()` path (cross-encoder reranker on, the default) with **100% on-device** embeddings:
+**Retrieval quality** — measured on the **470 answerable questions** in the
+cleaned LongMemEval-S set (the 30 abstention questions are excluded), using
+NeuroVault's real `recall()` implementation with the reranker on while
+ablating production recency and synthetic-title boosts for reproducibility.
+This is a retrieval benchmark configuration, not the full shipped runtime
+configuration or an end-to-end answer-quality score:
 
 | hit@5 | hit@10 | recall@5 | MRR | hit@1 |
 |-------|--------|----------|-----|-------|
@@ -325,7 +353,10 @@ Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cach
 
 > The right memory lands in the **top 5 results 97% of the time**, in the top 10 **99%** — running entirely on your machine, no cloud, no API keys. This is retrieval recall (was the right memory retrieved), not end-to-end QA accuracy. Reproducible: full harness + a per-question receipt in [`docs/benchmarks/`](docs/benchmarks/), plus the isolated reranker A/B in [`docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md`](docs/benchmarks/ANALYSIS-2026-07-02-miss5-forensics.md).
 
-**Cost** — on-device embeddings and retrieval cost effectively nothing (your own machine, no per-call API). The retrieval engine and application are open source; the exact optional network flows are documented in [PRIVACY.md](PRIVACY.md).
+**Cost** — on-device embeddings and retrieval have no per-call API fee. The
+retrieval engine is open source in NeuroVault Core; Desktop is the paid
+consumer application. Optional network flows are documented in
+[PRIVACY.md](PRIVACY.md).
 
 ## Keyboard shortcuts
 
@@ -353,12 +384,18 @@ In the repo:
 - **[How NeuroVault works](docs/HOW-NEUROVAULT-WORKS.md)** — the architecture and retrieval pipeline in depth.
 - **[HTTP API](docs/api.md)** · **[Contributing](CONTRIBUTING.md)** · **[Privacy](PRIVACY.md)** · **[Security](SECURITY.md)**.
 
-## Contributing
+## Development
 
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security reports: [SECURITY.md](SECURITY.md).
+This repository is private. Public engine contributions belong in
+[NeuroVault Core](https://github.com/sirdath/neurovault-core). Internal Desktop
+changes must preserve the Core compatibility boundary and pass the full gate.
+Security reports follow [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE) © NeuroVault contributors.
+NeuroVault Desktop is commercial software. See [LICENSE](LICENSE) for the
+cutover boundary and [the preserved v0.6.0 MIT license](LICENSES/NeuroVault-v0.6.0-MIT.txt)
+for public-era code. Third-party and NeuroVault Core components retain their
+own licenses.
 
 <div align="center"><sub>Automatic enough to disappear. Transparent enough to trust.</sub></div>

@@ -15,7 +15,7 @@ echo "── cargo fmt --check"
 cargo fmt --check || fail "rustfmt"
 
 echo "── cargo test"
-TEST_OUT=$(cargo test --no-default-features 2>&1) || { echo "$TEST_OUT" | tail -30; fail "tests did not run clean"; }
+TEST_OUT=$(cargo test --no-default-features --features model-download 2>&1) || { echo "$TEST_OUT" | tail -30; fail "tests did not run clean"; }
 SUMMARY=$(echo "$TEST_OUT" | grep -E "^test result:" || true)
 [ -n "$SUMMARY" ] || fail "test summary is EMPTY — the build broke before tests ran"
 PASSED=$(echo "$SUMMARY" | awk '{p+=$4} END{print p+0}')
@@ -25,7 +25,7 @@ FAILED=$(echo "$SUMMARY" | awk '{f+=$6} END{print f+0}')
 echo "   $PASSED passed, 0 failed"
 
 echo "── cargo clippy -D warnings (headless targets)"
-cargo clippy --all-targets --no-default-features -- -D warnings 2>&1 | tail -1 | grep -q "Finished" || fail "clippy"
+cargo clippy --all-targets --no-default-features --features model-download -- -D warnings 2>&1 | tail -1 | grep -q "Finished" || fail "clippy"
 
 # The headless engine intentionally excludes src/app.rs. Compile the actual
 # desktop feature as a separate gate so native window/menu code cannot ship
@@ -34,14 +34,20 @@ cargo clippy --all-targets --no-default-features -- -D warnings 2>&1 | tail -1 |
 # TAURI_CONFIG empties `externalBin` for this check, mirroring CI exactly.
 # Without it this gate silently depends on a sidecar left in src-tauri/binaries/
 # by an earlier `tauri build`: a dev who has one passes, a clean checkout (and
-# CI) dies in build.rs before clippy runs. Linting bundles nothing, so we reuse
-# the escape hatch scripts/stage-sidecar.mjs documents. Keep this identical to
-# the CI step or this gate stops predicting CI.
+# CI) dies in build.rs before clippy runs. Raw Cargo also cannot reconcile a
+# config-managed `macOSPrivateApi=true` with the package-level feature that
+# keeps it out of Store builds, so the lint-only config disables that flag.
+# Cargo still resolves the full default `direct-distribution` feature graph,
+# including `tauri/macos-private-api`; only Tauri's static config/manifest
+# allowlist check is neutralised. Keep this identical to the CI step.
 echo "── cargo clippy -D warnings (desktop GUI)"
-TAURI_CONFIG='{"bundle":{"externalBin":[]}}' \
+TAURI_CONFIG='{"app":{"macOSPrivateApi":false},"bundle":{"externalBin":[]}}' \
   cargo clippy --all-targets -- -D warnings 2>&1 | tail -1 | grep -q "Finished" || fail "desktop GUI clippy"
 
 if [ "${GATES_FRONTEND:-1}" = "1" ]; then
+  echo "── third-party notice inventory"
+  (cd .. && node scripts/generate-third-party-notices.mjs --check) || fail "third-party notices"
+
   echo "── tsc --noEmit"
   (cd .. && npx tsc --noEmit) || fail "tsc"
 

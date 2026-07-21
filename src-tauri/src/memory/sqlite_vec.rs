@@ -21,35 +21,76 @@
 //! bit of defense against a user-authored SQL query later trying to
 //! load something nasty off disk.
 
+#[cfg(not(feature = "app-store"))]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "app-store")]
+use std::sync::OnceLock;
 
-use rusqlite::{Connection, LoadExtensionGuard};
+use rusqlite::Connection;
+#[cfg(not(feature = "app-store"))]
+use rusqlite::LoadExtensionGuard;
 
+#[cfg(not(feature = "app-store"))]
 use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
 /// Filename the sqlite-vec project ships, minus the platform-specific
 /// dynamic-library extension. Matches what `sqlite_vec.load()` on the
 /// Python side resolves to.
+#[cfg(not(feature = "app-store"))]
 const EXTENSION_STEM: &str = "vec0";
 
 /// Platform-specific suffix for dynamic libraries. Kept as a const so
 /// we only branch on `cfg!` once, at module scope, instead of per call.
 #[cfg(target_os = "windows")]
+#[cfg(not(feature = "app-store"))]
 const EXTENSION_SUFFIX: &str = "dll";
 #[cfg(target_os = "macos")]
+#[cfg(not(feature = "app-store"))]
 const EXTENSION_SUFFIX: &str = "dylib";
 #[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(not(feature = "app-store"))]
 const EXTENSION_SUFFIX: &str = "so";
 
+#[cfg(not(feature = "app-store"))]
 fn with_suffix(stem: &str) -> String {
     format!("{}.{}", stem, EXTENSION_SUFFIX)
+}
+
+/// Prepare sqlite-vec before a database connection is opened.
+///
+/// Mac App Store builds cannot load executable code from a writable path, so
+/// they compile sqlite-vec into the main executable and register its SQLite
+/// entrypoint once for every subsequently opened connection. Direct and
+/// headless builds preserve the released loadable-extension behavior.
+#[cfg(feature = "app-store")]
+pub fn prepare() -> Result<()> {
+    use rusqlite::ffi::{sqlite3_auto_extension, SQLITE_OK};
+
+    static REGISTRATION_RESULT: OnceLock<i32> = OnceLock::new();
+    let result = *REGISTRATION_RESULT.get_or_init(|| unsafe {
+        sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )))
+    });
+    if result != SQLITE_OK {
+        return Err(MemoryError::Other(format!(
+            "could not register the statically linked sqlite-vec extension (SQLite code {result})"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "app-store"))]
+pub fn prepare() -> Result<()> {
+    Ok(())
 }
 
 /// Build the ordered list of paths we'll try, expanding env vars and
 /// derived directories. Returns `PathBuf` candidates even if they
 /// don't exist on disk — the caller is the one that checks existence
 /// so we can log the full candidate list on failure.
+#[cfg(not(feature = "app-store"))]
 fn candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let filename = with_suffix(EXTENSION_STEM);
@@ -107,6 +148,7 @@ fn candidate_paths() -> Vec<PathBuf> {
 /// Load the extension into `conn`. On success the `vec0`, `vec_version`
 /// and virtual-table constructors become available for the lifetime of
 /// the connection. Called once per `Connection::open` in `db::open`.
+#[cfg(not(feature = "app-store"))]
 pub fn load(conn: &Connection) -> Result<()> {
     let candidates = candidate_paths();
     let chosen = candidates.iter().find(|p| Path::new(p).exists()).cloned();
@@ -143,9 +185,33 @@ pub fn load(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The Store connection receives sqlite-vec through `sqlite3_auto_extension`
+/// in `prepare()`. Probe it here so a linker or registration regression fails
+/// during database open instead of on the user's first semantic search.
+#[cfg(feature = "app-store")]
+pub fn load(conn: &Connection) -> Result<()> {
+    version(conn).map(|_| ())
+}
+
 /// Report the loaded extension's version string. Useful for logging on
 /// startup and as a smoke test that the extension actually took.
 pub fn version(conn: &Connection) -> Result<String> {
     let v: String = conn.query_row("SELECT vec_version()", [], |r| r.get(0))?;
     Ok(v)
+}
+
+#[cfg(all(test, feature = "app-store"))]
+mod app_store_tests {
+    use super::*;
+
+    #[test]
+    fn statically_linked_extension_is_available_on_new_connections() {
+        prepare().expect("register static sqlite-vec");
+        let conn = Connection::open_in_memory().expect("open sqlite");
+        let loaded = version(&conn).expect("query statically linked sqlite-vec");
+        assert!(
+            loaded.starts_with('v'),
+            "unexpected sqlite-vec version: {loaded}"
+        );
+    }
 }

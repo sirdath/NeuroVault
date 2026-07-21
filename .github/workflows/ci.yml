@@ -53,18 +53,6 @@ jobs:
       - name: Consumer shell smoke test
         run: npm run test:e2e
 
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
-        with:
-          fail-on-severity: high
-
   rust:
     name: Rust fmt + clippy + tests
     runs-on: ubuntu-latest
@@ -90,7 +78,7 @@ jobs:
 
       - name: Clippy — headless engine (deny warnings)
         working-directory: src-tauri
-        run: cargo clippy --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --all-targets --no-default-features --features model-download -- -D warnings
 
       # The headless check deliberately excludes src/app.rs. Keep a second
       # gate for the real Tauri target so native menu/window code is compiled.
@@ -99,13 +87,14 @@ jobs:
       # (tauri_build) validates that the sidecar staged by scripts/stage-sidecar.mjs
       # exists on EVERY compile of the crate, so on a clean checkout this step
       # died in build.rs ("resource path binaries/neurovault-server-<triple>
-      # doesn't exist") before clippy ever ran. Linting doesn't bundle anything,
-      # so we reuse the same escape hatch stage-sidecar.mjs itself documents
-      # rather than spend minutes building a 38 MB binary just to lint.
+      # doesn't exist") before clippy ever ran. Raw Cargo also cannot reconcile
+      # config-managed macOSPrivateApi=true with the package-level feature that
+      # keeps it out of Store builds, so the lint-only config disables that flag.
+      # The full default direct-distribution feature graph is still resolved.
       - name: Clippy — desktop GUI (deny warnings)
         working-directory: src-tauri
         env:
-          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+          TAURI_CONFIG: '{"app":{"macOSPrivateApi":false},"bundle":{"externalBin":[]}}'
         run: cargo clippy --all-targets -- -D warnings
 
       # Integration tests that open a real brain.db load the sqlite-vec
@@ -128,4 +117,4 @@ jobs:
 
       - name: Tests
         working-directory: src-tauri
-        run: cargo test --no-default-features
+        run: cargo test --no-default-features --features model-download

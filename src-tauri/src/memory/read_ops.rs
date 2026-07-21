@@ -149,26 +149,40 @@ pub fn is_safe_brain_id(id: &str) -> bool {
 /// brains" situation (fresh installs always have a default brain
 /// created by the first-run flow).
 pub fn resolve_brain_id(explicit: Option<&str>) -> Result<String> {
-    if let Some(id) = explicit {
-        if !id.is_empty() {
-            if !is_safe_brain_id(id) {
-                return Err(MemoryError::Other(format!(
-                    "invalid brain id {id:?}: must be a single path segment \
-                     with no separators or `..`"
-                )));
-            }
-            return Ok(id.to_string());
+    if let Some(requested) = explicit.filter(|id| !id.is_empty()) {
+        if !is_safe_brain_id(requested) {
+            return Err(MemoryError::Other(format!(
+                "invalid brain id {requested:?}: must be a single safe path segment"
+            )));
         }
     }
     let data = fs::read_to_string(registry_path())
         .map_err(|e| MemoryError::Other(format!("brains.json unreadable: {}", e)))?;
     let parsed: serde_json::Value = serde_json::from_str(&data)?;
-    let active = parsed
-        .get("active")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
+    let requested = explicit
+        .filter(|id| !id.is_empty())
+        .or_else(|| parsed.get("active").and_then(|value| value.as_str()))
+        .filter(|id| !id.is_empty())
         .ok_or_else(|| MemoryError::Other("brains.json has no active brain".to_string()))?;
-    Ok(active.to_string())
+    if !is_safe_brain_id(requested) {
+        return Err(MemoryError::Other(format!(
+            "invalid brain id {requested:?}: must be a single safe path segment"
+        )));
+    }
+    let registered = parsed
+        .get("brains")
+        .and_then(|value| value.as_array())
+        .is_some_and(|brains| {
+            brains
+                .iter()
+                .any(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(requested))
+        });
+    if !registered {
+        return Err(MemoryError::Other(format!(
+            "brain id {requested:?} is not registered"
+        )));
+    }
+    Ok(requested.to_string())
 }
 
 /// One brains-registry row: `(id, name, description?, vault_path?, is_active)`.
@@ -205,10 +219,13 @@ fn registry_entries() -> Result<Vec<RegistryEntry>> {
             .get("description")
             .and_then(|v| v.as_str())
             .map(String::from);
+        #[cfg(not(feature = "app-store"))]
         let vault_path = b
             .get("vault_path")
             .and_then(|v| v.as_str())
             .map(String::from);
+        #[cfg(feature = "app-store")]
+        let vault_path = None;
         let is_active = id == active;
         out.push((id, name, description, vault_path, is_active));
     }
@@ -591,17 +608,24 @@ pub fn brain_from_id(explicit: Option<&str>) -> Result<(String, std::sync::Arc<B
 /// brain); here we specifically want the vault for whichever brain
 /// the caller targeted.
 pub fn resolve_vault_path(brain_id: &str) -> Result<std::path::PathBuf> {
-    let entry = registry_entries()?
-        .into_iter()
-        .find(|(id, _, _, _, _)| id == brain_id);
-    let external = entry.and_then(|(_, _, _, vp, _)| vp);
-    if let Some(ext) = external {
-        let p = std::path::PathBuf::from(ext);
-        if p.is_dir() {
-            return Ok(p);
+    // Resolve through the registry first. Besides rejecting unknown ids, this
+    // is the path-traversal boundary for every caller that later joins the id
+    // below `brains/`.
+    let brain_id = resolve_brain_id(Some(brain_id))?;
+    #[cfg(not(feature = "app-store"))]
+    {
+        let entry = registry_entries()?
+            .into_iter()
+            .find(|(id, _, _, _, _)| id == &brain_id);
+        let external = entry.and_then(|(_, _, _, vp, _)| vp);
+        if let Some(ext) = external {
+            let p = std::path::PathBuf::from(ext);
+            if p.is_dir() {
+                return Ok(p);
+            }
         }
     }
-    Ok(super::paths::vault_dir(brain_id))
+    Ok(super::paths::vault_dir(&brain_id))
 }
 
 #[cfg(test)]

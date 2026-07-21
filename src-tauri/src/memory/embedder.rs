@@ -17,10 +17,15 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::TextEmbedding;
+#[cfg(not(feature = "app-store"))]
+use fastembed::{EmbeddingModel, InitOptions};
+#[cfg(feature = "app-store")]
+use fastembed::{InitOptionsUserDefined, Pooling, TokenizerFiles, UserDefinedEmbeddingModel};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
+#[cfg(not(feature = "app-store"))]
 use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
@@ -114,23 +119,56 @@ struct Embedder {
 fn instance() -> Result<&'static Embedder> {
     static INSTANCE: OnceCell<Embedder> = OnceCell::new();
     INSTANCE.get_or_try_init(|| {
-        // `InitOptions::new` + explicit model id matches what the
-        // Python side passes: "BAAI/bge-small-en-v1.5".
-        //
-        // Cache dir: fastembed-rs defaults to a CWD-RELATIVE
-        // `.fastembed_cache`. That silently breaks a GUI app launched
-        // from Finder/`open`, whose working directory is `/` — it can't
-        // create/write there, so the first embed fails with "Failed to
-        // retrieve onnx/model.onnx". Pin an absolute, app-owned, writable
-        // dir under the data root so the model resolves no matter where
-        // the app was launched from. An explicit FASTEMBED_CACHE_DIR env
-        // still wins (fastembed reads it when we don't override).
-        let mut opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
-        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
-            opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
-        }
-        let model = TextEmbedding::try_new(opts)
-            .map_err(|e| MemoryError::Other(format!("fastembed init failed: {}", e)))?;
+        #[cfg(feature = "app-store")]
+        let model = {
+            let root = std::env::var_os("NEUROVAULT_BUNDLED_MODEL_DIR")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| {
+                    MemoryError::Other(
+                        "the bundled embedding model directory was not configured".to_string(),
+                    )
+                })?;
+            let read = |name: &str| {
+                std::fs::read(root.join(name)).map_err(|error| {
+                    MemoryError::Other(format!(
+                        "bundled embedding model is incomplete ({name}): {error}"
+                    ))
+                })
+            };
+            let files = TokenizerFiles {
+                tokenizer_file: read("tokenizer.json")?,
+                config_file: read("config.json")?,
+                special_tokens_map_file: read("special_tokens_map.json")?,
+                tokenizer_config_file: read("tokenizer_config.json")?,
+            };
+            let supplied = UserDefinedEmbeddingModel::new(read("model.onnx")?, files)
+                .with_pooling(Pooling::Cls);
+            TextEmbedding::try_new_from_user_defined(supplied, InitOptionsUserDefined::new())
+                .map_err(|error| {
+                    MemoryError::Other(format!("bundled embedding model failed to load: {error}"))
+                })?
+        };
+
+        #[cfg(not(feature = "app-store"))]
+        let model = {
+            // `InitOptions::new` + explicit model id matches what the
+            // Python side passes: "BAAI/bge-small-en-v1.5".
+            //
+            // Cache dir: fastembed-rs defaults to a CWD-RELATIVE
+            // `.fastembed_cache`. That silently breaks a GUI app launched
+            // from Finder/`open`, whose working directory is `/` — it can't
+            // create/write there, so the first embed fails with "Failed to
+            // retrieve onnx/model.onnx". Pin an absolute, app-owned, writable
+            // dir under the data root so the model resolves no matter where
+            // the app was launched from. An explicit FASTEMBED_CACHE_DIR env
+            // still wins (fastembed reads it when we don't override).
+            let mut opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
+            if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+                opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
+            }
+            TextEmbedding::try_new(opts)
+                .map_err(|e| MemoryError::Other(format!("fastembed init failed: {}", e)))?
+        };
         Ok::<Embedder, MemoryError>(Embedder {
             model: Mutex::new(model),
             cache: Mutex::new(QueryCache::new()),

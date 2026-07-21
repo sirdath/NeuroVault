@@ -62,6 +62,7 @@ use super::types::Result;
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub engram_id: String,
+    pub filename: String,
     pub title: String,
     pub content: String,
     pub strength: f64,
@@ -83,6 +84,10 @@ pub struct Candidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallHit {
     pub engram_id: String,
+    /// Stable vault-relative identity for UI navigation. Titles are not
+    /// unique, so consumers must never resolve a hit back to a file by title.
+    #[serde(default)]
+    pub filename: String,
     pub title: String,
     pub content: String,
     pub score: f64,
@@ -1666,6 +1671,7 @@ fn hybrid_retrieve_inner(
         };
         candidates.push(Candidate {
             engram_id: id,
+            filename,
             title,
             content: trimmed,
             strength,
@@ -1974,6 +1980,7 @@ fn hybrid_retrieve_inner(
         }
         results.push(RecallHit {
             engram_id: c.engram_id,
+            filename: c.filename,
             title: c.title,
             content: c.content,
             score: c.final_score,
@@ -2312,6 +2319,7 @@ pub fn hybrid_retrieve_throttled(
                     0,
                     RecallHit {
                         engram_id: THROTTLE_HINT_ID.to_string(),
+                        filename: String::new(),
                         title: "⚠️ Recall rate-limit hint".to_string(),
                         content: hint,
                         score: 0.0,
@@ -2345,6 +2353,7 @@ pub fn hybrid_retrieve_throttled(
             0,
             RecallHit {
                 engram_id: THROTTLE_HINT_ID.to_string(),
+                filename: String::new(),
                 title: "⚠️ Recall rate-limit hint".to_string(),
                 content: hint,
                 score: 0.0,

@@ -13,7 +13,16 @@ import {
   NoteDraftPersistence,
 } from "../lib/noteDraftPersistence";
 import { LatestRequestGate } from "../lib/latestRequest";
+import { IS_APP_STORE } from "../lib/distribution";
 import { toast } from "./toastStore";
+
+export function stableRecallFilenames(
+  hits: ReadonlyArray<{ filename: string }>,
+  notes: ReadonlyArray<{ filename: string }>,
+): string[] {
+  const available = new Set(notes.map((note) => note.filename));
+  return [...new Set(hits.map((hit) => hit.filename).filter((filename) => available.has(filename)))];
+}
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";
 export type NotesStatus = "idle" | "loading" | "ready" | "error";
@@ -449,39 +458,27 @@ export const useNoteStore = create<NoteStore>((set, get) => {
         const saved = await flush();
         if (!saved.ok) return false;
 
-        // Rename goes through the backend so the DB row, file, and vault
-        // fingerprint move atomically.
+        // Prefer the in-process backend so the durable Markdown and its
+        // searchable identity move together. The transport helper retains an
+        // HTTP fallback for older direct builds and browser development.
         const match = get().notes.find((note) => note.filename === filename);
         if (!match) {
           toast.error("Note not found");
           return false;
         }
         try {
-          const listRes = await fetch(`${API_HOST}/api/notes`);
-          if (!listRes.ok) throw new Error(`list failed: ${listRes.status}`);
-          const all = (await listRes.json()) as Array<{ id: string; filename: string }>;
-          const hit = all.find((note) => note.filename === filename);
-          if (!hit) {
-            toast.error("Note not found in server index");
-            return false;
-          }
-          const patch: Record<string, string> = { filename: newFilename };
-          if (newTitle) patch.title = newTitle;
-          const response = await fetch(`${API_HOST}/api/notes/${hit.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(patch),
-          });
-          const data = await response.json();
-          if (!response.ok || data.error) {
-            toast.error(data.error || `Rename failed (${response.status})`);
-            return false;
-          }
+          const data = await tauri.renameNote(
+            filename,
+            newFilename,
+            newTitle,
+            get().brainId,
+          );
+          const renamedFilename = data.filename || newFilename;
           if (get().activeFilename === filename) {
-            set({ activeFilename: data.filename });
+            set({ activeFilename: renamedFilename });
           }
           await loadNotes(false);
-          toast.success(`Renamed to ${data.filename}`);
+          toast.success(`Renamed to ${renamedFilename}`);
           return true;
         } catch (error) {
           toast.error(`Rename failed: ${messageFrom(error)}`);
@@ -500,6 +497,16 @@ export const useNoteStore = create<NoteStore>((set, get) => {
       const q = query.trim();
       void (async () => {
         try {
+          if (IS_APP_STORE) {
+            const hits = await tauri.nvRecall(q, {
+              brainId: get().brainId ?? undefined,
+              limit: 50,
+            });
+            if (!searchGate.isCurrent(generation)) return;
+            set({ searchResults: stableRecallFilenames(hits, get().notes) });
+            return;
+          }
+
           const response = await fetch(
             `${API_HOST}/api/recall?q=${encodeURIComponent(q)}&mode=titles&limit=50`,
           );

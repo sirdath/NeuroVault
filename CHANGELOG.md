@@ -12,7 +12,26 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- The public, MIT-licensed memory engine now lives in
+  [NeuroVault Core](https://github.com/sirdath/neurovault-core). NeuroVault
+  Desktop is being prepared as a separate commercial Mac application.
+- Added an explicit, immutable licensing boundary at tag
+  `desktop-mit-final-v0.6.0`. The MIT permissions granted for v0.6.0 and
+  earlier remain unchanged.
+- Began a separate Mac App Store build flavor. It is not submission-ready
+  until every sandbox, model, bridge, signing, privacy, and accessibility gate
+  in `docs/APP-STORE-READINESS.md` passes.
+- Clarified the ownership boundary: Markdown is canonical for note/engram
+  content, while SQLite also stores structured state (including core-memory
+  blocks, drafts, and version history) that is not reconstructed by reindexing
+  Markdown alone.
+- The Store candidate bundles its embedding model and excludes the reranker,
+  sidecar, updater, hooks, and external-AI connection surface. Shared
+  transport/server modules and dependencies may still be compiled, but the
+  Store IPC handler is narrowed and no loopback HTTP server is started or
+  reachable.
 
 ---
 
@@ -91,11 +110,12 @@ crash audit.
   (0-1): how much to trust the fact, distinct from the relevance `score`. It
   is structural and zero-LLM (derived from provenance and kind), so agents
   can weigh facts, especially ones written by other agents.
-- **Headless install via npm.** `claude mcp add neurovault -- npx -y
-  @neurovault/mcp` gives you NeuroVault with no GUI and no installer — useful
-  on a server, in Docker, or to sidestep the macOS Gatekeeper warning on the
-  unsigned app. Ships for macOS (Apple Silicon + Intel), Linux x64, and
-  Windows x64; the binary links no GUI frameworks and no OpenSSL.
+- **Headless npm packaging (implemented but not published in 0.6.0).** The
+  `@neurovault/mcp` wrapper and CI/package scaffolding were added for a future
+  no-GUI install. At the 0.6.0 cut it was not available from npm. The verified
+  macOS package target is Apple Silicon; Intel packaging remains blocked on a
+  matching x86_64 or universal sqlite-vec extension. Linux x64 and Windows x64
+  are build targets, not a claim that public packages shipped.
 - **Sources.** Settings → Sources is now the single place to bring knowledge
   in: use a Markdown/Obsidian folder as a vault, mirror additional folders
   without touching the originals (enable, disable, preview and apply sync),
@@ -175,7 +195,7 @@ crash audit.
   the old file away.
 - **Faster ingest and a leaner index.** Chunk writes for a note are committed
   in one transaction, and a redundant chunk index was dropped.
-- **Release-readiness housekeeping for the open-source launch.** The Rust tree
+- **Release-readiness housekeeping for the public 0.6.0 source release.** The Rust tree
   is `rustfmt`-clean with zero clippy warnings, CI enforces fmt + clippy +
   the full test suite, and the public docs, metadata and licensing were
   reconciled (`THIRD-PARTY-NOTICES.md` added).

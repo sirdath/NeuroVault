@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "features": [
+      "gui",
+      "app-store"
+    ],
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "macOSPrivateApi": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "NeuroVault",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "app-store"
+      ],
+      "csp": "default-src 'self' customprotocol: asset:; connect-src ipc: http://ipc.localhost; font-src 'self' data:; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
+  },
+  "bundle": {
+    "targets": [
+      "app"
+    ],
+    "category": "Productivity",
+    "externalBin": [],
+    "resources": [
+      "PrivacyInfo.xcprivacy",
+      "appstore-model/bge-small-en-v1.5/**/*",
+      "../LICENSE",
+      "../THIRD-PARTY-NOTICES.md",
+      "../LICENSES/NeuroVault-v0.6.0-MIT.txt",
+      "../LICENSES/THIRD-PARTY-LICENSES.txt",
+      "../LICENSES/MPL-2.0-COVERED-SOURCE.md",
+      "../LICENSES/NATIVE-NOTICE-SOURCES.json",
+      "../LICENSES/native/*",
+      "../LICENSES/models/*"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "entitlements": "Entitlements.appstore.plist",
+      "infoPlist": "Info.appstore.plist"
+    }
+  }
+}

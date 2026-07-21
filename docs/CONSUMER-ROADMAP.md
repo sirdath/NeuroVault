@@ -1,13 +1,15 @@
 # NeuroVault consumer roadmap
 
-This roadmap is for the free, open-source consumer app. It is not a pricing,
-subscription, premium-tier, or sale plan. Product work should optimize for
-trust, reliability, usefulness, and delight.
+This roadmap is for the paid NeuroVault Desktop application. The open-source
+engine and integration bridge live in NeuroVault Core. Desktop is planned as a
+paid-upfront Mac App Store product, without a required subscription or cloud
+account. Product work should optimize for trust, reliability, usefulness, and
+delight.
 
 ## Public-release boundary
 
-- Finish Developer ID signing, notarization, stapling, and clean-account
-  install/update/uninstall verification once Apple credentials exist.
+- Build and verify a separate Mac App Store sandbox flavor while preserving the
+  existing Developer ID distribution path for internal migration testing.
 - Keep the destructive-path, cross-vault isolation, privacy-contract,
   accessibility, headless-engine, and desktop-GUI gates green.
 - Run first-use trust testing with people who did not build NeuroVault.

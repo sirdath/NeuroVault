@@ -1,16 +1,19 @@
-import { useState, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import { useSettingsStore, THEMES } from "../stores/settingsStore";
 import { useDensityStore, type Density } from "../stores/densityStore";
 import { API_HOST, API_DISPLAY } from "../lib/config";
-import { useUpdateStore } from "../stores/updateStore";
-import { BrainSelector } from "./BrainSelector";
 import { toast } from "../stores/toastStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import vaultMark from "../assets/vault-mark-transparent.png";
-import { ConnectionsCenter } from "./ConnectionsCenter";
+import { BrainSelector } from "./BrainSelector";
+import { ConnectionsCenter as DirectConnectionsCenter } from "./ConnectionsCenter";
 import { BrainSourcesPanel } from "./BrainSourcesPanel";
 import { useBrainStore } from "../stores/brainStore";
+import thirdPartyNotices from "../../THIRD-PARTY-NOTICES.md?raw";
+import { IS_APP_STORE } from "../lib/distribution";
+
+const DirectUpdatesSection = import.meta.env.VITE_DISTRIBUTION === "app-store" ? null : lazy(() => import("./DirectUpdatesSection").then((module) => ({ default: module.DirectUpdatesSection })));
 
 
 const FONT_SIZES = [
@@ -40,6 +43,7 @@ export type SettingsSection = "general" | "sources" | "connections" | "vaults" |
 
 export function SettingsView({ initialSection = "general" }: { initialSection?: SettingsSection }) {
   const [developerOptions, setDeveloperOptions] = useState(() => {
+    if (IS_APP_STORE) return false;
     try {
       return window.localStorage.getItem(DEVELOPER_OPTIONS_KEY) === "on";
     } catch {
@@ -47,7 +51,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
     }
   });
   const [settingsTab, setSettingsTab] = useState<SettingsSection>(
-    initialSection === "advanced" && !developerOptions ? "general" : initialSection,
+    IS_APP_STORE || (initialSection === "advanced" && !developerOptions) ? "general" : initialSection,
   );
   const { themeId, fontSize, checkForUpdatesAutomatically, update } = useSettingsStore();
   const density = useDensityStore((s) => s.density);
@@ -60,7 +64,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
   const [stopping, setStopping] = useState(false);
 
   useEffect(() => {
-    setSettingsTab(initialSection === "advanced" && !developerOptions ? "general" : initialSection);
+    setSettingsTab(IS_APP_STORE || (initialSection === "advanced" && !developerOptions) ? "general" : initialSection);
   }, [developerOptions, initialSection]);
 
   const toggleDeveloperOptions = () => {
@@ -171,10 +175,12 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         <nav className="mt-4 flex gap-1 overflow-x-auto pb-3" aria-label="Settings sections">
           {([
             ["general", "General"],
-            ["sources", "Sources"],
-            ["connections", "Connections"],
-            ["vaults", "Vaults"],
-            ...(developerOptions ? [["advanced", "Developer"]] as const : []),
+            ...(!IS_APP_STORE ? [
+              ["sources", "Sources"],
+              ["connections", "Connections"],
+            ] as const : []),
+            ["vaults", IS_APP_STORE ? "Libraries" : "Vaults"],
+            ...(!IS_APP_STORE && developerOptions ? [["advanced", "Developer"]] as const : []),
           ] as readonly (readonly [SettingsSection, string])[]).map(([id, label]) => (
             <button
               key={id}
@@ -196,7 +202,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[880px] px-7 py-7">
         <h2 className="mb-6 text-[24px] font-semibold tracking-[-0.03em]" style={{ color: "var(--nv-text)" }}>
-          {settingsTab === "general" ? "General" : settingsTab === "sources" ? "Sources" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? "Vaults" : "Developer"}
+          {settingsTab === "general" ? "General" : settingsTab === "sources" ? "Sources" : settingsTab === "connections" ? "Connections" : settingsTab === "vaults" ? (IS_APP_STORE ? "Libraries" : "Vaults") : "Developer"}
         </h2>
 
         {/* Theme */}
@@ -326,7 +332,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
             </div>
           </SettingRow>
 
-          <SettingRow
+          {!IS_APP_STORE && <SettingRow
             label="Automatic update checks"
             description="Off by default. When enabled, NeuroVault asks GitHub Releases for the latest version after launch; no vault content or install identifier is sent."
           >
@@ -348,9 +354,9 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
               />
               <span className="sr-only">Automatically check GitHub for new releases</span>
             </button>
-          </SettingRow>
+          </SettingRow>}
 
-          <SettingRow
+          {!IS_APP_STORE && <SettingRow
             label="Developer options"
             description="Show local server, API, model, and protocol diagnostics. Most people never need these controls."
           >
@@ -372,7 +378,16 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
                 }}
               />
             </button>
-          </SettingRow>
+          </SettingRow>}
+
+          {IS_APP_STORE && (
+            <div className="rounded-xl px-4 py-3" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
+              <p className="text-[13px] font-medium" style={{ color: "var(--nv-text)" }}>Private local library</p>
+              <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+                This edition stores notes and its search index inside NeuroVault&apos;s macOS app container. It does not run a local web server, install AI hooks, or modify another app&apos;s configuration.
+              </p>
+            </div>
+          )}
 
         </Section>
         </>}
@@ -432,10 +447,10 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         </Section>
         </>}
 
-        {settingsTab === "sources" && <SourcesSettings />}
-        {settingsTab === "connections" && <ConnectionsCenter onOpenSources={() => setSettingsTab("sources")} />}
+        {!IS_APP_STORE && settingsTab === "sources" && <SourcesSettings />}
+        {!IS_APP_STORE && settingsTab === "connections" && <DirectConnectionsCenter onOpenSources={() => setSettingsTab("sources")} />}
         {settingsTab === "vaults" && <VaultSettings />}
-        {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
+        {!IS_APP_STORE && settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
 
         {/* Shortcuts */}
         {settingsTab === "general" && <>
@@ -452,22 +467,58 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
           </div>
         </Section>
 
-        <UpdatesSection />
+        {DirectUpdatesSection ? (
+          <Suspense fallback={null}><DirectUpdatesSection /></Suspense>
+        ) : (
+          <Section title="Updates">
+            <p className="text-[13px]" style={{ color: "var(--nv-text)" }}>Current version <AppVersion /></p>
+            <p className="mt-1 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+              Updates are delivered by the Mac App Store. NeuroVault does not contact GitHub to update this edition.
+            </p>
+          </Section>
+        )}
 
         <Section title="About">
-          <div className="flex items-center gap-3">
-            <img
-              src={vaultMark}
-              alt=""
-              aria-hidden="true"
-              className="h-10 w-10 flex-shrink-0 object-contain"
-            />
-            <div>
-              <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
-              <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
-                Your vault and index stay on this Mac. Selected context is shared only with AI providers you connect.
-              </p>
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <img
+                src={vaultMark}
+                alt=""
+                aria-hidden="true"
+                className="h-10 w-10 flex-shrink-0 object-contain"
+              />
+              <div>
+                <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
+                <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
+                  {IS_APP_STORE
+                    ? "Your library and index stay in NeuroVault's macOS app container. This edition does not connect them to external AI tools."
+                    : "Your vault and index stay on this Mac. Selected context is shared only with AI providers you connect."}
+                </p>
+              </div>
             </div>
+
+            <details
+              className="rounded-xl"
+              style={{ border: "1px solid var(--nv-border)", background: "var(--nv-surface)" }}
+            >
+              <summary
+                className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium font-[Geist,sans-serif]"
+                style={{ color: "var(--nv-text-muted)" }}
+              >
+                Open-source licenses and notices
+              </summary>
+              <div className="border-t px-3 py-3" style={{ borderColor: "var(--nv-border)" }}>
+                <p className="mb-3 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+                  The dependency inventory, available package and native-component license texts, the preserved NeuroVault v0.6.0 MIT license, and MPL covered-source links are included in this app&apos;s Resources folder.
+                </p>
+                <pre
+                  className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg p-3 text-[10px] leading-relaxed"
+                  style={{ background: "var(--nv-bg)", color: "var(--nv-text-muted)" }}
+                >
+                  {thirdPartyNotices}
+                </pre>
+              </div>
+            </details>
           </div>
         </Section>
         </>}
@@ -480,18 +531,20 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
 function VaultSettings() {
   return (
     <>
-      <Section title="Manage vaults">
+      <Section title={IS_APP_STORE ? "Manage libraries" : "Manage vaults"}>
         <p className="mb-4 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-          Use the Active vault control in the main navigation to switch context. Manage, create, rename, export, or remove vaults here.
+          {IS_APP_STORE
+            ? "Create separate local libraries, copy Markdown into them, rename them, or export a complete ZIP backup. Imported folders are copied; NeuroVault never silently takes ownership of the originals."
+            : "Use the Active vault control in the main navigation to switch context. Manage, create, rename, export, or remove vaults here."}
         </p>
         <div className="rounded-xl p-4" style={{ background: "var(--nv-surface)", border: "1px solid var(--nv-border)" }}>
-          <BrainSelector triggerLabel="Open vault manager" placement="down" mode="manage" />
+          <BrainSelector triggerLabel={IS_APP_STORE ? "Open library manager" : "Open vault manager"} placement="down" mode="manage" />
         </div>
       </Section>
       <Section title="Ownership & backup">
         <div className="space-y-3 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-          <p>Your notes are ordinary Markdown. Internal vaults, their index, and supporting memory data live under <span className="font-mono">~/.neurovault/</span>.</p>
-          <p>Use the vault manager above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
+          <p>{IS_APP_STORE ? "Your notes are ordinary Markdown stored inside NeuroVault's private macOS app container." : <>Your notes are ordinary Markdown. Internal vaults, their index, and supporting memory data live under <span className="font-mono">~/.neurovault/</span>.</>}</p>
+          <p>Use the {IS_APP_STORE ? "library" : "vault"} manager above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
           <p>Deleting a note moves its Markdown to NeuroVault Trash. Restore it from Memories or Privacy & Trust; restoring rebuilds its search index.</p>
         </div>
       </Section>
@@ -569,73 +622,6 @@ function AppVersion() {
     return () => { alive = false; };
   }, []);
   return <>v{v || "—"}</>;
-}
-
-/** Updates section. Shares the global update store with the top-bar
- *  Update pill, so a check here lights up the pill (and vice-versa).
- *  "Update" downloads + installs via the native updater when configured,
- *  else opens the GitHub release page (current unsigned-installer state). */
-function UpdatesSection() {
-  const info = useUpdateStore((s) => s.info);
-  const checking = useUpdateStore((s) => s.checking);
-  const installing = useUpdateStore((s) => s.installing);
-  const progress = useUpdateStore((s) => s.progress);
-  const restartPending = useUpdateStore((s) => s.restartPending);
-  const check = useUpdateStore((s) => s.check);
-  const install = useUpdateStore((s) => s.install);
-  const restart = useUpdateStore((s) => s.restart);
-
-  const subtitle = restartPending
-    ? "Update installed — restart to apply."
-    : info
-    ? info.updateAvailable
-      ? `Update available: v${info.latest}`
-      : "You're on the latest version."
-    : "Check GitHub for a newer release.";
-
-  const pct = progress != null ? Math.round(progress * 100) : null;
-
-  return (
-    <Section title="Updates">
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text)" }}>
-            Current version <AppVersion />
-          </p>
-          <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
-            {subtitle}
-          </p>
-        </div>
-        {restartPending ? (
-          <button
-            onClick={() => restart()}
-            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors"
-            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
-          >
-            Restart now
-          </button>
-        ) : info?.updateAvailable ? (
-          <button
-            onClick={() => install()}
-            disabled={installing}
-            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors disabled:opacity-70"
-            style={{ background: "var(--nv-accent)", color: "var(--nv-bg)" }}
-          >
-            {installing ? (pct != null ? `Updating… ${pct}%` : "Updating…") : `Update to v${info.latest}`}
-          </button>
-        ) : (
-          <button
-            onClick={() => check(false)}
-            disabled={checking}
-            className="flex-shrink-0 px-3 py-1.5 text-[12px] font-medium font-[Geist,sans-serif] rounded-lg transition-colors disabled:opacity-50"
-            style={{ background: "var(--nv-surface)", color: "var(--nv-text)", border: "1px solid var(--nv-border)" }}
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
-        )}
-      </div>
-    </Section>
-  );
 }
 
 /**

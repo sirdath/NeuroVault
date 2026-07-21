@@ -1,12 +1,13 @@
 # NeuroVault benchmarks
 
-Reproducible, fully-local benchmarks. No API keys, no cloud calls, no LLM
-judges — every number on this page can be regenerated on your own machine
-with one command from a clean checkout.
+Reproducible, fully-local retrieval benchmarks. No API keys, cloud inference,
+or LLM judges are used during the measured run. Model and dataset acquisition
+still require a network connection unless already cached. Results apply to the
+documented benchmark configuration, not every shipped runtime setting.
 
 ```bash
 # build the harness (release — debug numbers are not comparable)
-cd src-tauri && cargo build --release --no-default-features --bin nv-bench
+cd src-tauri && cargo build --release --no-default-features --features model-download --bin nv-bench
 ```
 
 ---
@@ -110,10 +111,12 @@ title boosts ablated for byte-reproducibility (see the note below).
 | Stratified preliminary, engine-only (2 per type) | 1.000 | 1.000 | 1.000 | 1.000 | 0.861 | 0.819 | 12 |
 | Stratified preliminary, engine-only | 0.910 | 0.970 | 0.858 | 0.960 | 0.767 | 0.778 | 100 |
 | **Full run — engine-only (no reranker)** | 0.9362 | 0.9724 | 0.8860 | 0.9531 | 0.8282 | 0.8522 | **470** |
-| **Full run — reranker ON (shipped default)** | **0.9745** | **0.9851** | **0.9383** | **0.9787** | **0.8855** | **0.9021** | **470** |
+| **Full run — reranker ON (historical Direct default; benchmark ablations retained)** | **0.9745** | **0.9851** | **0.9383** | **0.9787** | **0.8855** | **0.9021** | **470** |
 
-The **shipped default reranks** — a cross-encoder second stage; Settings has a
-toggle to disable it for a lighter, faster app. Its contribution is isolated in
+The historical 0.6 Direct default reranks; the Store candidate does not bundle
+the reranker. This run also ablates production recency and synthetic title
+boosts, so it is not the complete default runtime configuration. The
+reranker's contribution is isolated in
 a paired A/B on the *same* ingested brains: **hit@5 0.9362 → 0.9745 (+3.8pp)**,
 every metric up. The reranker-ON aggregate is committed as
 [`longmemeval-470q-rerank.json`](longmemeval-470q-rerank.json) (the engine-only
@@ -123,8 +126,9 @@ the aggregate is reproduced by `python3 docs/benchmarks/merge_chunked_ab.py`;
 the failure-mode forensics and the smaller-slice A/B are in
 [`ANALYSIS-2026-07-02-miss5-forensics.md`](ANALYSIS-2026-07-02-miss5-forensics.md).
 The n=5/12/100 rows are earlier engine-only preliminaries, superseded by the
-full 470. **The site / main-README headline of 97.45% is the reranker-ON hit@5
-above.** This is retrieval recall, not end-to-end QA accuracy.
+full 470. **The 97.45% figure is the reranker-ON hit@5 above under this exact
+benchmark configuration.** This is retrieval recall, not end-to-end QA
+accuracy or a claim about Store behavior.
 
 Where the residual misses concentrate: single-session-user *asides* and
 knowledge-update chains (see the forensics doc for the per-question receipts).

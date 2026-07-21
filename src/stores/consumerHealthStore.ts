@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { fetchBrains, fetchHealth, fetchStatus } from "../lib/api";
+import { IS_APP_STORE } from "../lib/distribution";
 import {
   deriveConsumerHealth,
   INITIAL_CONSUMER_HEALTH_SIGNALS,
@@ -28,6 +29,7 @@ function isTauriRuntime(): boolean {
 }
 
 async function automaticRecallStatus(): Promise<ConsumerHealthSignals["automaticRecall"]> {
+  if (IS_APP_STORE) return "unavailable";
   if (!isTauriRuntime()) return "unavailable";
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -44,6 +46,7 @@ export const useConsumerHealthStore = create<ConsumerHealthStore>((set, get) => 
   lastError: null,
 
   refresh: async () => {
+    if (IS_APP_STORE) return;
     if (inFlight) return inFlight;
     inFlight = (async () => {
       set({ refreshing: true });
@@ -93,6 +96,9 @@ export const useConsumerHealthStore = create<ConsumerHealthStore>((set, get) => 
   },
 
   setAutomaticRecall: async (enabled: boolean) => {
+    if (IS_APP_STORE) {
+      throw new Error("Automatic AI connections are not part of this App Store edition.");
+    }
     if (!isTauriRuntime()) throw new Error("Automatic memory can only be changed in the desktop app.");
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke<string>("nv_auto_recall_set", { enabled });

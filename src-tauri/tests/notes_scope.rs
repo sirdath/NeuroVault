@@ -18,6 +18,12 @@ fn list_notes_is_brain_scoped() {
     std::fs::create_dir_all(&home).unwrap();
     std::env::set_var("NEUROVAULT_HOME", &home);
 
+    std::fs::write(
+        home.join("brains.json"),
+        r#"{"active":"alpha","brains":[{"id":"alpha","name":"Alpha"},{"id":"beta","name":"Beta"}]}"#,
+    )
+    .unwrap();
+
     // Resolving a brain opens its db, which load_extension()s sqlite-vec; the
     // server's default candidate paths don't resolve from target/<profile>/deps/,
     // so point at the shipped extension — as the other integration suites do.
@@ -41,7 +47,9 @@ fn list_notes_is_brain_scoped() {
 
     // Two brains, a distinct note in each.
     for (brain, title) in [("alpha", "Alpha-only note"), ("beta", "Beta-only note")] {
-        let ctx = BrainContext::resolve(Some(brain), paths::vault_dir(brain)).unwrap();
+        let vault = paths::vault_dir(brain);
+        std::fs::create_dir_all(&vault).unwrap();
+        let ctx = BrainContext::resolve(Some(brain), vault).unwrap();
         save_note(&ctx, "n.md", &format!("# {title}\n\nbody")).unwrap();
     }
 

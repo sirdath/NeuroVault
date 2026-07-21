@@ -5,6 +5,7 @@
   "version": "0.1.3",
   "publisher": "sirdath",
   "license": "MIT",
+  "private": true,
   "homepage": "https://github.com/sirdath/NeuroVault",
   "repository": {
     "type": "git",

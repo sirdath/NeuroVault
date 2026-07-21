@@ -9,6 +9,20 @@
 //! GUI build links those as system frameworks on macOS, but as dynamic .so on
 //! Linux, where they would fail to load on a headless host).
 
+#[cfg(all(feature = "app-store", feature = "direct-distribution"))]
+compile_error!(
+    "the app-store and direct-distribution features are mutually exclusive; \
+     Store builds must not compile private macOS APIs"
+);
+
+#[cfg(all(
+    feature = "gui",
+    not(any(feature = "app-store", feature = "direct-distribution"))
+))]
+compile_error!(
+    "GUI builds require exactly one distribution flavor: app-store or direct-distribution"
+);
+
 pub mod memory;
 
 #[cfg(feature = "gui")]

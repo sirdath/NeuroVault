@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { assertStoreRuntimeReady } from "../stores/storeRuntimeStore";
+import { IS_APP_STORE } from "./distribution";
 
 export interface NoteMeta {
   filename: string;
@@ -77,6 +79,49 @@ async function httpReadNote(filename: string, brainId?: string | null): Promise<
   return detail.content ?? "";
 }
 
+async function httpRenameNote(
+  filename: string,
+  newFilename: string,
+  newTitle?: string,
+  brainId?: string | null,
+): Promise<NvWriteResult> {
+  const query = brainId ? `?brain=${encodeURIComponent(brainId)}` : "";
+  const listRes = await fetch(`${HTTP_BASE}/api/notes${query}`);
+  if (!listRes.ok) throw new Error(`list_notes HTTP ${listRes.status}`);
+  const all = (await listRes.json()) as ApiNote[];
+  const hit = all.find((note) => note.filename === filename);
+  if (!hit) throw new Error(`note not found in server index: ${filename}`);
+
+  const patch: Record<string, string> = { filename: newFilename };
+  if (newTitle) patch.title = newTitle;
+  const response = await fetch(
+    `${HTTP_BASE}/api/notes/${encodeURIComponent(hit.id)}${query}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  const raw = await response.text();
+  let data: Partial<NvWriteResult> & { error?: string } = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw) as Partial<NvWriteResult> & { error?: string };
+    } catch {
+      if (!response.ok) throw new Error(`rename_note HTTP ${response.status}: ${raw}`);
+    }
+  }
+  if (!response.ok || data.error) {
+    throw new Error(data.error || `rename_note HTTP ${response.status}`);
+  }
+  return {
+    engram_id: data.engram_id ?? hit.id,
+    filename: data.filename ?? newFilename,
+    brain_id: data.brain_id ?? brainId ?? "",
+    status: data.status ?? "renamed",
+  };
+}
+
 // --- Generic HTTP helpers used by every nv_* fallback below -----------
 
 async function httpJsonGet<T>(path: string, query?: Record<string, unknown>): Promise<T> {
@@ -145,6 +190,7 @@ function isMissingTauriCommand(error: unknown): boolean {
 }
 
 export const saveNote = async (filename: string, content: string, brainId?: string | null) => {
+  assertStoreRuntimeReady();
   if (IS_TAURI) {
     try {
       await invoke<NvWriteResult>("nv_save_note", { filename, content, brainId: brainId ?? null });
@@ -158,6 +204,7 @@ export const saveNote = async (filename: string, content: string, brainId?: stri
 };
 
 export const createNote = async (title: string, brainId?: string | null): Promise<string> => {
+  assertStoreRuntimeReady();
   if (IS_TAURI) {
     try {
       const res = await invoke<NvWriteResult>("nv_create_note", { title, brainId: brainId ?? null });
@@ -181,6 +228,7 @@ export const createNote = async (title: string, brainId?: string | null): Promis
 };
 
 export const deleteNote = async (filename: string, brainId?: string | null) => {
+  assertStoreRuntimeReady();
   if (IS_TAURI) {
     try {
       await invoke<NvWriteResult>("nv_delete_note", { filename, brainId: brainId ?? null });
@@ -193,12 +241,44 @@ export const deleteNote = async (filename: string, brainId?: string | null) => {
   await httpJsonSend<NvWriteResult>("/api/notes", "DELETE", { filename, brain: brainId });
 };
 
+/** Prefer the native, index-aware rename in every current desktop build.
+ *  Older direct-distribution builds and browser development use the HTTP
+ *  service as a compatibility fallback. The Store build never falls back to
+ *  loopback HTTP because that service is intentionally absent there. */
+export const renameNote = async (
+  filename: string,
+  newFilename: string,
+  newTitle?: string,
+  brainId?: string | null,
+): Promise<NvWriteResult> => {
+  assertStoreRuntimeReady();
+  if (IS_TAURI) {
+    try {
+      return await invoke<NvWriteResult>("nv_rename_note", {
+        filename,
+        newFilename,
+        newTitle: newTitle ?? null,
+        brainId: brainId ?? null,
+      });
+    } catch (error) {
+      if (!isMissingTauriCommand(error)) throw error;
+      if (IS_APP_STORE) {
+        throw new Error(
+          "This NeuroVault build is missing its native rename command. Install the current App Store build before renaming notes.",
+        );
+      }
+    }
+  }
+  return httpRenameNote(filename, newFilename, newTitle, brainId);
+};
+
 export const listTrash = async (brainId?: string | null): Promise<TrashEntry[]> => {
   if (!IS_TAURI) return [];
   return invoke<TrashEntry[]>("nv_list_trash", { brainId: brainId ?? null });
 };
 
 export const restoreNote = async (trashedFilename: string, brainId?: string | null): Promise<NvWriteResult> => {
+  assertStoreRuntimeReady();
   if (!IS_TAURI) throw new Error("Restore is available in the NeuroVault desktop app.");
   return invoke<NvWriteResult>("nv_restore_note", { trashedFilename, brainId: brainId ?? null });
 };
@@ -447,6 +527,7 @@ export const nvDiagnose = (brainId?: string): Promise<NvDiagnosticReport> =>
 
 export interface NvRecallHit {
   engram_id: string;
+  filename: string;
   title: string;
   content: string;
   score: number;

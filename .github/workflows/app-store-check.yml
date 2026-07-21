@@ -1,0 +1,40 @@
+name: App Store boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Build and inspect sandboxed macOS flavor
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri -> target
+          key: app-store-boundary
+
+      - run: npm ci
+      - name: Fetch and verify pinned offline model
+        run: node scripts/fetch-app-store-model.mjs "$RUNNER_TEMP/neurovault-appstore-model"
+      - name: Re-verify canonical model package
+        run: node scripts/verify-app-store-model.mjs "$RUNNER_TEMP/neurovault-appstore-model"
+      - name: Verify notices, Store boundary, final bundle, and binary contents
+        run: npm run appstore:build
+        env:
+          NEUROVAULT_APPSTORE_MODEL_DIR: ${{ runner.temp }}/neurovault-appstore-model

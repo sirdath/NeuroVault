@@ -48,7 +48,7 @@ typecheck:
 # lib suites, Playwright e2e), all of which CI runs. Use `make gate`
 # before pushing, or you are testing a fraction of what CI will.
 test test-rust:
-	cd src-tauri && cargo test --no-default-features
+	cd src-tauri && cargo test --no-default-features --features model-download
 
 # The full verification gate — identical to what CI runs.
 gate:

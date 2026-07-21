@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { API_HOST } from "../lib/config";
 import { useBrainStore } from "../stores/brainStore";
 import vaultMark from "../assets/vault-mark-transparent.png";
+import { IS_APP_STORE } from "../lib/distribution";
 
 export type ConsumerDestination =
   | "today"
@@ -73,7 +74,7 @@ export function ConsumerNavigation({
   useEffect(() => {
     let cancelled = false;
     setAttentionCount(0);
-    if (!activeBrainId) return;
+    if (IS_APP_STORE || !activeBrainId) return;
 
     const load = async () => {
       try {
@@ -123,7 +124,7 @@ export function ConsumerNavigation({
     try {
       const switched = await switchBrain(brainId);
       if (!switched) {
-        setSwitchError("Couldn't switch vault because the current note could not be saved.");
+        setSwitchError(`Couldn't switch ${IS_APP_STORE ? "library" : "vault"} because the current note could not be saved.`);
         return;
       }
       // Brain activation reloads the note store asynchronously. Expand the
@@ -132,7 +133,7 @@ export function ConsumerNavigation({
       onVaultActivated?.();
       await onNavigate("memories");
     } catch {
-      setSwitchError("Couldn't switch vault. Your current vault is still active; try again.");
+      setSwitchError(`Couldn't switch ${IS_APP_STORE ? "library" : "vault"}. Your current ${IS_APP_STORE ? "library" : "vault"} is still active; try again.`);
     } finally {
       setSwitchingBrainId(null);
     }
@@ -176,7 +177,7 @@ export function ConsumerNavigation({
 
       <nav className="flex-1 px-2.5 py-3.5" aria-label="NeuroVault">
         <div className="space-y-0.5">
-          {PRIMARY_NAV_ITEMS.map((item) => (
+          {PRIMARY_NAV_ITEMS.filter((item) => !IS_APP_STORE || item.id !== "today").map((item) => (
             <DestinationButton
               key={item.id}
               active={active === item.id}
@@ -187,7 +188,7 @@ export function ConsumerNavigation({
             />
           ))}
         </div>
-        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }}>
+        {!IS_APP_STORE && <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--nv-nav-border)" }}>
           <DestinationButton
             active={active === "attention"}
             collapsed={collapsed}
@@ -196,17 +197,17 @@ export function ConsumerNavigation({
             badge={attentionCount > 0 ? attentionCount : undefined}
             onClick={() => onNavigate("attention")}
           />
-        </div>
+        </div>}
       </nav>
 
       <div className="px-3 pb-3">
         {!collapsed && brains.length > 1 && (
           <div className="mb-2 px-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--nv-nav-dim)" }}>
-              Active vault
+              Active {IS_APP_STORE ? "library" : "vault"}
             </p>
             <select
-              aria-label="Active vault"
+              aria-label={`Active ${IS_APP_STORE ? "library" : "vault"}`}
               aria-busy={vaultSwitchBusy}
               className="mt-1.5 w-full rounded-lg px-2.5 py-2 text-[12px] outline-none"
               style={{
@@ -220,16 +221,16 @@ export function ConsumerNavigation({
                 void handleActiveVaultChange(event.target.value);
               }}
             >
-              {brains.length === 0 && <option value="">No vault configured</option>}
+              {brains.length === 0 && <option value="">No {IS_APP_STORE ? "library" : "vault"} configured</option>}
               {brains.map((brain) => <option key={brain.id} value={brain.id}>{brain.name || brain.id}</option>)}
             </select>
             {switchingBrainId !== null ? (
               <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-accent)" }} role="status" aria-live="polite">
-                Switching to {switchingBrain?.name || "vault"}…
+                Switching to {switchingBrain?.name || (IS_APP_STORE ? "library" : "vault")}…
               </p>
             ) : brainLoading ? (
               <p className="mt-1.5 truncate text-[10px]" style={{ color: "var(--nv-accent)" }} role="status" aria-live="polite">
-                Updating vaults…
+                Updating {IS_APP_STORE ? "libraries" : "vaults"}…
               </p>
             ) : switchError ? (
               <p className="mt-1.5 text-[10px] leading-snug" style={{ color: "var(--nv-negative)" }} role="alert">

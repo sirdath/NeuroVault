@@ -11,6 +11,9 @@ playwright-report/
 # Environment
 .env
 .env.local
+.env.appstore
+src-tauri/*.provisionprofile
+src-tauri/*.p12
 
 # IDE
 .vscode/
@@ -56,6 +59,11 @@ eval/*.log
 
 # ONNX model cache — auto-downloaded by fastembed-rs on first run
 .fastembed_cache/
+
+# Store release staging for the pinned offline embedding model. The verified
+# model is copied from a developer/CI cache by build-app-store.mjs and bundled
+# into the signed app; the 133 MB generated staging directory is not source.
+src-tauri/appstore-model/
 
 # LongMemEval datasets — large (~280 MB), re-downloadable, not committed
 bench/longmemeval/data/*.json

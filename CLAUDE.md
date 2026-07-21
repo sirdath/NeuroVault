@@ -57,7 +57,7 @@ npm install
 npm run tauri dev          # or: cargo tauri dev
 
 # Test — Rust unit + integration tests
-cd src-tauri && cargo test --no-default-features
+cd src-tauri && cargo test --no-default-features --features model-download
 
 # Build — installers under src-tauri/target/release/bundle/
 npm run tauri build        # or: make build

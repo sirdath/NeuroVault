@@ -1,7 +1,7 @@
 {
   "name": "neurovault",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,11 @@
     "test:ui": "vitest run",
     "test:ui:watch": "vitest",
     "test:e2e": "playwright test",
+    "appstore:model:fetch": "node scripts/fetch-app-store-model.mjs",
+    "appstore:model:verify": "node scripts/verify-app-store-model.mjs",
+    "appstore:check": "node scripts/generate-third-party-notices.mjs --check && node scripts/verify-appstore-source.mjs",
+    "appstore:compile": "npm run appstore:check && node scripts/build-app-store.mjs --compile",
+    "appstore:build": "npm run appstore:check && node scripts/build-app-store.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -70,5 +75,5 @@
     "vite": "^6.0.0",
     "vitest": "^4.1.10"
   },
-  "license": "MIT"
+  "license": "UNLICENSED"
 }

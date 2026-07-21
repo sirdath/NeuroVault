@@ -1,21 +1,41 @@
-MIT License
+NeuroVault Desktop Licensing Notice
 
-Copyright (c) 2026 NeuroVault Contributors
+Copyright (c) 2026 Dimitrios Athinaios. All rights reserved in original
+material first added after the v0.6.0 boundary, unless a file states
+otherwise.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository contains differently licensed material.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Pre-boundary NeuroVault. First-party material covered by this repository's
+   MIT License at Git tag v0.6.0 (commit
+   90b7883070bd76c243282e58558c9ee5f050d3f0) remains available under that
+   license. Third-party material and trademarks retain their separate terms.
+   Changing the repository's visibility does not withdraw or alter the MIT
+   permissions. See
+   LICENSES/NeuroVault-v0.6.0-MIT.txt.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. NeuroVault Core. The separately published NeuroVault Core project is
+   licensed under MIT under its own license:
+   https://github.com/sirdath/neurovault-core
+
+3. Third-party material. Third-party components remain governed by their
+   respective licenses. See THIRD-PARTY-NOTICES.md and any accompanying
+   license files.
+
+4. Post-boundary Desktop work. Original additions and modifications first
+   made after tag v0.6.0 are proprietary unless expressly marked otherwise.
+   No permission is granted to copy, modify, redistribute, sublicense, or
+   create derivative works from that proprietary material except under a
+   written agreement or applicable end-user license.
+
+Downloading or purchasing NeuroVault Desktop grants a license to use the
+application under the applicable end-user license. It does not transfer
+copyright, trademark rights, source-code ownership, or other intellectual
+property.
+
+To the extent a component is governed by an open-source license, that license
+controls that component and supersedes conflicting terms.
+
+This notice is an engineering provenance boundary, not the end-user license
+agreement or legal advice. Commercial terms should be reviewed by qualified
+counsel before launch.

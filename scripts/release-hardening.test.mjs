@@ -123,7 +123,7 @@ test("release navigation has one owner for vaults, settings, review, trust, and 
   assert.doesNotMatch(frontend, /<ActivityBar|from "\.\/components\/ActivityBar"/);
   assert.doesNotMatch(settings, /\["memory", "Memory"\]|\["privacy", "Privacy & Trust"\]/);
   assert.doesNotMatch(settings, /<MemoryInspector|<InspectorSection|<PrivacySettings/);
-  assert.match(settings, /<ConnectionsCenter\b/);
+  assert.match(settings, /<DirectConnectionsCenter\b/);
   assert.doesNotMatch(settings, /<AutoRecallSection|<McpSection|<ClaudeCodeMcpSection|nv_auto_recall/);
   assert.match(trust, /setAutomaticRecall/);
   assert.match(trust, /<ActivityPanel[\s\S]*?presentation="embedded"/);
@@ -151,12 +151,114 @@ test("automatic context has an always-reachable native app-menu control", async 
 
 test("CI compiles both the headless engine and the desktop GUI", async () => {
   const workflow = await read(".github/workflows/ci.yml");
-  assert.match(workflow, /cargo clippy --all-targets --no-default-features -- -D warnings/);
+  assert.match(workflow, /cargo clippy --all-targets --no-default-features --features model-download -- -D warnings/);
   assert.match(workflow, /cargo clippy --all-targets -- -D warnings/);
 
   const gate = await read("scripts/gates.sh");
-  assert.match(gate, /cargo clippy --all-targets --no-default-features -- -D warnings/);
+  assert.match(gate, /cargo clippy --all-targets --no-default-features --features model-download -- -D warnings/);
   assert.match(gate, /cargo clippy --all-targets -- -D warnings/);
+});
+
+test("the App Store flavor cannot inherit direct-distribution capabilities", async () => {
+  const cargo = await read("src-tauri/Cargo.toml");
+  const appStoreBuilder = await read("scripts/build-app-store.mjs");
+  const appStoreModel = await read("scripts/app-store-model.mjs");
+  const appStoreFetcher = await read("scripts/fetch-app-store-model.mjs");
+  const appStoreWorkflow = await read(".github/workflows/app-store-check.yml");
+  const lib = await read("src-tauri/src/lib.rs");
+  const app = await read("src-tauri/src/app.rs");
+  const frontend = await read("src/App.tsx");
+  const frontendEntry = await read("src/main.tsx");
+  const brainSelector = await read("src/components/BrainSelector.tsx");
+  const memoryModules = await read("src-tauri/src/memory/mod.rs");
+  const httpServer = await read("src-tauri/src/memory/http_server.rs");
+  const direct = JSON.parse(await read("src-tauri/tauri.conf.json"));
+  const store = JSON.parse(await read("src-tauri/tauri.appstore.conf.json"));
+  const storeCapability = JSON.parse(await read("src-tauri/capabilities/app-store.json"));
+
+  assert.match(cargo, /default\s*=\s*\["gui",\s*"direct-distribution"\]/);
+  assert.match(cargo, /direct-distribution\s*=\s*\[[\s\S]*?dep:tauri-plugin-shell[\s\S]*?dep:tauri-plugin-global-shortcut[\s\S]*?dep:tauri-plugin-updater[\s\S]*?dep:tauri-plugin-process[\s\S]*?\]/);
+  assert.match(cargo, /direct-distribution\s*=\s*\[[\s\S]*?"model-download"[\s\S]*?\]/);
+  assert.match(cargo, /model-download\s*=\s*\["fastembed\/hf-hub-rustls-tls"\]/);
+  assert.match(cargo, /app-store\s*=\s*\[\s*"dep:sqlite-vec"\s*\]/);
+  assert.match(appStoreBuilder, /--no-default-features/);
+  assert.match(appStoreBuilder, /"--bin",\s*\n\s*"neurovault"/);
+  assert.match(appStoreBuilder, /neurovault-app-store-/);
+  assert.match(appStoreBuilder, /Store Rust unit suite against the isolated feature graph/);
+  assert.match(appStoreBuilder, /Tauri did not remove macos-private-api/);
+  assert.match(appStoreBuilder, /default\.json[\s\S]*minitab\.json[\s\S]*employee-manager\.json/);
+  assert.match(appStoreBuilder, /stagedBaseConfig\.bundle\.externalBin = \[\]/);
+  assert.match(appStoreBuilder, /src-tauri", "binaries/);
+  assert.match(appStoreBuilder, /src-tauri", "src", "bin/);
+  assert.match(appStoreBuilder, /await rm\(appBundle, \{ recursive: true, force: true \}\)/);
+  assert.match(appStoreBuilder, /unexpected executable in Store app/);
+  assert.match(appStoreBuilder, /forbidden native library or sidecar/);
+  assert.match(appStoreBuilder, /executable resource/);
+  assert.match(appStoreBuilder, /verifyRequiredResources/);
+  assert.match(appStoreBuilder, /--verify-bundle/);
+  assert.match(appStoreBuilder, /Contents\/Resources\/_up_\/LICENSES\/THIRD-PARTY-LICENSES\.txt/);
+  assert.match(appStoreBuilder, /bundled PrivacyInfo\.xcprivacy differs from the audited source/);
+  assert.match(appStoreBuilder, /plistJsonFromFile/);
+  assert.match(appStoreBuilder, /effective Info\.plist and PrivacyInfo\.xcprivacy with plutil/);
+  assert.match(appStoreBuilder, /verifySystemLinkedLibraries/);
+  assert.match(appStoreBuilder, /Store executable links a non-system library/);
+  assert.match(appStoreBuilder, /build-path or relocatable library leak/);
+  assert.match(appStoreBuilder, /"--verify", "--deep", "--strict"/);
+  assert.match(appStoreBuilder, /"--display", "--entitlements", ":-"/);
+  assert.match(appStoreBuilder, /verifySignedEntitlements/);
+  assert.match(appStoreBuilder, /Store bundle is unsigned: accepted as a technical build only/);
+  assert.match(appStoreBuilder, /repairIncompleteAdHocResourceSeal/);
+  assert.match(
+    appStoreBuilder,
+    /code has no resources but signature indicates they must be present/,
+  );
+  assert.match(
+    appStoreBuilder,
+    /repairIncompleteAdHocResourceSeal\([\s\S]*?await verifyStoreBundle/,
+  );
+  assert.match(
+    appStoreBuilder,
+    /async function verifyStoreBundle[\s\S]*?await verifyRequiredResources[\s\S]*?await verifyEffectivePlists[\s\S]*?verifySystemLinkedLibraries[\s\S]*?await verifyBundleSignature/,
+  );
+  assert.match(appStoreBuilder, /model-download dependency leaked/);
+  assert.match(appStoreBuilder, /!verified \|\| canonicalChanged/);
+  assert.match(appStoreBuilder, /copyCanonicalModelDirectory/);
+  assert.match(appStoreModel, /ea104dacec62c0de699686887e3f920caeb4f3e3/);
+  assert.match(appStoreModel, /neurovault-model\.json/);
+  assert.match(appStoreModel, /unexpected contents/);
+  assert.match(appStoreFetcher, /mkdtemp/);
+  assert.match(appStoreFetcher, /backupMoved/);
+  assert.match(appStoreWorkflow, /fetch-app-store-model\.mjs/);
+  assert.match(appStoreWorkflow, /verify-app-store-model\.mjs/);
+  assert.match(appStoreWorkflow, /npm run appstore:build/);
+  assert.match(appStoreWorkflow, /NEUROVAULT_APPSTORE_MODEL_DIR/);
+  assert.match(lib, /all\(feature = "app-store", feature = "direct-distribution"\)/);
+  assert.match(lib, /compile_error!/);
+
+  assert.deepEqual(direct.build?.features, ["direct-distribution"]);
+  assert.deepEqual(store.build?.features, ["gui", "app-store"]);
+  assert.equal(store.app?.macOSPrivateApi, false);
+  assert.deepEqual(store.app?.security?.capabilities, ["app-store"]);
+  assert.deepEqual(store.app?.windows?.map((window) => window.label), ["main"]);
+  assert.equal(store.app?.windows?.some((window) => window.transparent === true), false);
+  assert.deepEqual(store.bundle?.externalBin, []);
+  assert.deepEqual(store.plugins?.updater?.endpoints, []);
+  assert.doesNotMatch(store.build?.beforeBuildCommand ?? "", /stage-sidecar/);
+  assert.doesNotMatch(store.app?.security?.csp ?? "", /github\.com|api\.github\.com/);
+  assert.equal(
+    storeCapability.permissions.some((permission) => /^(shell|updater|process):/.test(permission)),
+    false,
+  );
+  assert.match(app, /app_data_dir\(\)/);
+  assert.match(app, /set_var\("NEUROVAULT_HOME"/);
+  assert.doesNotMatch(app, /memory::employee|nv_meetings_add|open_employee_manager/);
+  assert.doesNotMatch(frontend, /EmployeePanel|meetingsDropClaim|EMPLOYEES_ENABLED|setView\("employee"\)/);
+  assert.doesNotMatch(frontendEntry, /EmployeeManager|window=employees|isEmployeeWindow/);
+  assert.match(brainSelector, /IS_APP_STORE[\s\S]*?openDialog\(\{[\s\S]*?directory:\s*true/);
+  assert.match(app, /Build beside the destination and publish only after ZIP finalisation/);
+  assert.doesNotMatch(memoryModules, /pub mod employee;/);
+  assert.doesNotMatch(memoryModules, /pub mod roles;/);
+  assert.doesNotMatch(httpServer, /\/api\/employees?\b/);
 });
 
 test("privacy copy agrees that launch update checks are opt-in", async () => {
@@ -167,4 +269,43 @@ test("privacy copy agrees that launch update checks are opt-in", async () => {
 
   const readme = await read("README.md");
   assert.doesNotMatch(readme, /100% local and open source/i);
+});
+
+test("release bundles preserve mixed-license and third-party notices", async () => {
+  const direct = JSON.parse(await read("src-tauri/tauri.conf.json"));
+  const store = JSON.parse(await read("src-tauri/tauri.appstore.conf.json"));
+  const settings = await read("src/components/SettingsView.tsx");
+  const notices = await read("THIRD-PARTY-NOTICES.md");
+  const licenseTexts = await read("LICENSES/THIRD-PARTY-LICENSES.txt");
+  const coveredSource = await read("LICENSES/MPL-2.0-COVERED-SOURCE.md");
+  const gate = await read("scripts/gates.sh");
+  const release = await read(".github/workflows/release.yml");
+
+  const required = [
+    "../LICENSE",
+    "../THIRD-PARTY-NOTICES.md",
+    "../LICENSES/NeuroVault-v0.6.0-MIT.txt",
+    "../LICENSES/THIRD-PARTY-LICENSES.txt",
+    "../LICENSES/MPL-2.0-COVERED-SOURCE.md",
+    "../LICENSES/NATIVE-NOTICE-SOURCES.json",
+    "../LICENSES/native/*",
+    "../LICENSES/models/*",
+  ];
+  for (const resource of required) {
+    assert.equal(direct.bundle?.resources?.includes(resource), true, `direct bundle omits ${resource}`);
+    assert.equal(store.bundle?.resources?.includes(resource), true, `Store bundle omits ${resource}`);
+  }
+
+  assert.match(settings, /THIRD-PARTY-NOTICES\.md\?raw/);
+  assert.match(settings, /Open-source licenses and notices/);
+  for (const crate of ["option-ext", "cssparser", "cssparser-macros", "dtoa-short", "selectors"]) {
+    const row = new RegExp(`\\| ${crate.replaceAll("-", "\\-")} \\|`);
+    assert.match(notices, row, `${crate} missing from notice inventory`);
+    assert.match(coveredSource, row, `${crate} missing from MPL source access map`);
+  }
+  assert.match(licenseTexts, /Mozilla Public License Version 2\.0/);
+  assert.match(notices, /ONNX Runtime 1\.20\.0/);
+  assert.match(notices, /sqlite-vec v0\.1\.9/);
+  assert.match(gate, /generate-third-party-notices\.mjs --check/);
+  assert.match(release, /name: Verify third-party notices[\s\S]*generate-third-party-notices\.mjs --check/);
 });
