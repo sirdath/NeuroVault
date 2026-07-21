@@ -320,7 +320,7 @@ jobs:
       # .AppImage), creates / updates a single draft Release for the tag,
       # and attaches every matrix job's artifacts to it.
       - name: Build + upload to draft release
-        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing. With these present `tauri build` emits a `.sig`
