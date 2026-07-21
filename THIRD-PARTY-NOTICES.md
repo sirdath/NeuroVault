@@ -1,8 +1,9 @@
 # Third-Party Notices
 
-NeuroVault is free and open-source software released under the **MIT License**
-(see `LICENSE`). This document inventories the third-party components NeuroVault
-builds on, and the license under which each is distributed.
+NeuroVault Desktop is commercial software that incorporates permissively
+licensed open-source components and legacy NeuroVault code released through
+v0.6.0 under MIT. See `LICENSE` and `LICENSES/NeuroVault-v0.6.0-MIT.txt`.
+This document inventories third-party components and their licenses.
 
 Scope and method:
 

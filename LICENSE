@@ -1,21 +1,43 @@
-MIT License
+NeuroVault Desktop Source Notice
 
-Copyright (c) 2026 NeuroVault Contributors
+Copyright (c) 2026 Dimitrios "Sir Dath" Dath
+All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This private repository contains the commercial NeuroVault Desktop product.
+Except where a file, directory, dependency, or accompanying notice states a
+different license, no permission is granted to copy, modify, publish,
+distribute, sublicense, sell, or create derivative works from post-cutover
+NeuroVault Desktop source code.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Legacy open-source notice
+-------------------------
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+NeuroVault source published through tag v0.6.0 was released under the MIT
+License. Those grants remain valid for copies obtained under that release and
+cannot be revoked. The preserved license text is available at:
+
+  LICENSES/NeuroVault-v0.6.0-MIT.txt
+
+The commercial application incorporates code that was previously released by
+the same copyright holder under MIT. The preserved MIT notice accompanies the
+application and does not license later proprietary additions.
+
+Open-source components
+----------------------
+
+Third-party software and the separately published NeuroVault Core engine keep
+their own licenses. See THIRD-PARTY-NOTICES.md and the public Core repository:
+
+  https://github.com/sirdath/neurovault-core
+
+End-user licensing
+------------------
+
+Distribution through the Mac App Store is governed by the applicable Apple
+standard end-user license agreement unless an approved custom EULA is supplied
+in App Store Connect. Purchasing the application grants a license to use the
+software. It does not transfer ownership of NeuroVault intellectual property.
+
+This notice is an engineering provenance boundary, not legal advice. Final
+commercial terms and trademark registration strategy should be reviewed by
+qualified counsel before public launch.
