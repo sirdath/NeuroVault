@@ -1,7 +1,7 @@
 name: npm-release
 
 # Publish the headless NeuroVault MCP server to npm as `@neurovault/mcp` plus
-# its per-platform binary subpackages: macOS (arm64 + x64), Linux x64 (glibc),
+# its per-platform binary subpackages: macOS Apple Silicon, Linux x64 (glibc),
 # and Windows x64. The headless binary is built with --no-default-features so it
 # links no Tauri (no WebKit/GTK/WebView2), and fastembed uses rustls so it needs
 # no OpenSSL — verified per-runner below.
