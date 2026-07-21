@@ -1,0 +1,44 @@
+# NeuroVault licensing map
+
+NeuroVault has two current distribution boundaries and one historical one.
+
+## NeuroVault Core
+
+[NeuroVault Core](https://github.com/sirdath/neurovault-core) is the public,
+MIT-licensed local memory engine. It includes Markdown-canonical storage,
+indexing and retrieval, the HTTP and MCP surfaces, compatible automatic-context
+hooks, journaling, and evidence-backed consolidation. Core is independently
+useful and is not a trial of Desktop.
+
+## NeuroVault Desktop
+
+This private repository contains the commercial consumer application: the
+signed Mac shell, Memories, Graph, Review, themes, guided setup, lifecycle
+management, Store distribution, and support. Original additions and
+modifications made after the v0.6.0 boundary are proprietary unless a file
+says otherwise.
+
+Desktop remains a mixed-license work. It incorporates MIT-licensed NeuroVault
+code and third-party components under their own licenses. Those notices and
+permissions remain in force. Purchasing Desktop grants an end-user license to
+use the application; it does not transfer NeuroVault intellectual property.
+
+## Historical public Desktop source
+
+All source and assets as they existed at tag `v0.6.0`, commit
+`90b7883070bd76c243282e58558c9ee5f050d3f0`, were publicly released under MIT.
+That license is preserved verbatim in
+`LICENSES/NeuroVault-v0.6.0-MIT.txt`. Repository visibility does not revoke it.
+
+The annotated tag `desktop-mit-final-v0.6.0` records the same boundary without
+moving or rewriting the historical `v0.6.0` tag.
+
+## Contributions
+
+Public engine contributions belong in NeuroVault Core. Do not accept outside
+contributions to proprietary Desktop code without an explicit inbound-license
+or assignment policy. Security reports follow `SECURITY.md`.
+
+This map documents the engineering boundary. It is not legal advice or a
+substitute for review of the final EULA, trademarks, and bundled dependency
+notices before release.

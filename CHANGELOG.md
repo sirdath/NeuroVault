@@ -12,7 +12,17 @@ Categories used: **Added**, **Changed**, **Fixed**, **Performance**, **Security*
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- The public, MIT-licensed memory engine now lives in
+  [NeuroVault Core](https://github.com/sirdath/neurovault-core). NeuroVault
+  Desktop is being prepared as a separate commercial Mac application.
+- Added an explicit, immutable licensing boundary at tag
+  `desktop-mit-final-v0.6.0`. The MIT permissions granted for v0.6.0 and
+  earlier remain unchanged.
+- Began a separate Mac App Store build flavor. It is not submission-ready
+  until every sandbox, model, bridge, signing, privacy, and accessibility gate
+  in `docs/APP-STORE-READINESS.md` passes.
 
 ---
 
