@@ -77,7 +77,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "14.0",
       "dmg": {
         "background": "dmg/background.png",
         "windowSize": {

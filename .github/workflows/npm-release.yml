@@ -120,7 +120,13 @@ jobs:
           kill "$SRV" 2>/dev/null || true
           echo "✓ ${{ matrix.triple }}: server + vec0 load OK"
       - name: Pack subpackage
-        run: npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
+        # `npm pack --pack-destination` does NOT create the directory; it exits
+        # with ENOENT. Every matrix build reached this step after a passing
+        # smoke test and then died before uploading its tarball, so the publish
+        # job could never receive a complete set. Reproduced in a temp dir.
+        run: |
+          mkdir -p ./artifacts
+          npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.subpkg }}

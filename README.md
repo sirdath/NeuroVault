@@ -40,21 +40,25 @@ The open local core follows the [Core Covenant](CORE-COVENANT.md): no required a
 
 Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github.com/sirdath/NeuroVault/releases/latest)**
 
-| Platform | Asset |
-|---|---|
-| **Windows x64** | `NeuroVault_*_x64-setup.exe` (NSIS installer) |
-| **macOS Apple Silicon (M1–M4)** | `NeuroVault_*_aarch64.dmg` |
-| **macOS Intel** | No prebuilt binary — [build from source](#quick-start-developers) (GitHub's Intel-mac runners are unavailable) |
-| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` / `*.rpm` |
+| Platform | Asset | Signed? |
+|---|---|---|
+| **macOS Apple Silicon (M1–M4), macOS 14+** | `NeuroVault_*_aarch64.dmg` | ✅ Developer ID + notarized |
+| **Windows x64** | `NeuroVault_*_x64-setup.exe` (NSIS installer) | ⚠️ Not code-signed — see below |
+| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` / `*.rpm` | n/a (updater signatures provided) |
+| **macOS Intel** | Not supported — see below | — |
 
 1. Download the installer for your platform and run it.
 2. Notes are saved as plain markdown in `~/.neurovault/`.
 
+**macOS 14 (Sonoma) is a hard floor.** The bundled `sqlite-vec` extension is built for macOS 14+, and it loads on every brain open — on macOS 11–13 the app launches and then cannot open any database. **Intel Macs are not supported at all**, including building from source: the only `vec0` build we ship is arm64, so an Intel build gets a library it cannot load.
+
 ### Verify the download before first launch
 
-Official public installers are published only after the release checklist records their signature status, checksums, build provenance, and clean-install result. Compare the downloaded file with the SHA-256 checksum in its release before opening it.
+Every release publishes SHA-256 checksums and Sigstore build provenance. Compare the downloaded file with the checksum in its release before opening it.
 
-If macOS or Windows reports that an official artifact is damaged, has an unknown publisher, or cannot be verified, **do not disable quarantine or bypass the warning**. Delete the file and report the release URL and checksum through the project security process. Unverified development artifacts remain draft-only; contributors should run them from the documented source-build workflow instead.
+**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple, so they open without warnings. If macOS says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning** — delete the file and report the release URL and checksum through the project security process.
+
+**Windows artifacts are not code-signed yet.** SmartScreen will say *"Windows protected your PC"* and show the publisher as unknown. That is expected for now, not a sign of tampering — an Authenticode certificate is on the roadmap. Verify the SHA-256 checksum against the release, then choose **More info → Run anyway**. If you would rather not, use the macOS build, a Linux build, or [build from source](#quick-start-developers).
 
 #### 🐧 Linux
 
@@ -230,7 +234,7 @@ npx tauri build
 
 - the embedding model **BGE-small-en-v1.5** (~130 MB) to `~/.neurovault/.fastembed_cache/`, on first ingest/recall.
 
-The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. On Intel macOS, run `npx tauri build` on an Intel Mac to get a native `.dmg`.
+The `sqlite-vec` (`vec0`) native extension ships **bundled** with the app — no separate install. The macOS build we ship is **arm64 and macOS 14+ only**: that is the deployment target of the bundled extension, and it is loaded on every brain open. Building on an Intel Mac does **not** produce a working app — the repo carries only the arm64 `vec0.dylib`, so an x86_64 build gets a library it cannot load. Intel support needs an x86_64 (or universal) `vec0` build first.
 
 ## MCP tools
 

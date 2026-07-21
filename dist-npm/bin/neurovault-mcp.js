@@ -24,13 +24,23 @@ function die(msg, code) {
   process.exit(code == null ? 1 : code);
 }
 
-// macOS floor: the binary bakes a minos of 11.0 (Big Sur). Fail with a clear
-// message instead of a cryptic dyld abort on older systems. Darwin kernel 20 =
-// macOS 11.
+// macOS floor: 14.0 (Sonoma). The server binary itself bakes a minos of 11.0,
+// but that is NOT the binding constraint — the bundled `vec0` sqlite extension
+// is built with `minos 14.0` (verify: `xcrun vtool -show-build vec0.dylib`) and
+// is dlopen'd on EVERY brain open. So on macOS 11-13 the process starts happily
+// and then fails to open any database at all.
+//
+// Check the REAL floor here, or the user gets a cryptic extension-load error at
+// their first recall instead of a sentence telling them what is wrong.
+// Darwin kernel 23 = macOS 14.
 if (process.platform === 'darwin') {
   const major = parseInt(String(os.release()).split('.')[0] || '0', 10);
-  if (major && major < 20) {
-    die('NeuroVault requires macOS 11 (Big Sur) or newer.');
+  if (major && major < 23) {
+    die(
+      'NeuroVault requires macOS 14 (Sonoma) or newer.\n' +
+        'The bundled sqlite-vec extension is built for macOS 14+; on older ' +
+        'systems the server starts but cannot open any brain database.',
+    );
   }
 }
 
@@ -44,7 +54,9 @@ try {
       `\nThe optional platform package did not install (a known npm lockfile bug can drop it).` +
       `\nFix: remove package-lock.json + node_modules and reinstall, or: npm install ${err.pkg}`;
   } else if (err.code === 'UNSUPPORTED_PLATFORM') {
-    msg += '\nNeuroVault ships prebuilt binaries for macOS (arm64/x64), Linux x64 (glibc), and Windows x64.';
+    msg +=
+        '\nNeuroVault ships prebuilt binaries for macOS 14+ (Apple Silicon), ' +
+        'Linux x64 (glibc), and Windows x64.';
   }
   die(msg);
 }

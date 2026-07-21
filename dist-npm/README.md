@@ -49,7 +49,12 @@ That's it. `recall`, `remember`, `related`, `session_start`, and the rest appear
 
 ## Good to know
 
-- **Platforms:** macOS 11+ (Apple Silicon or Intel), **Linux x64 (glibc 2.35+)**, and **Windows x64**. Alpine/musl Linux is not shipped (musl needs its own build; the installer detects it and tells you rather than handing over a binary that won't run).
+- **Platforms:** macOS 14+ (**Apple Silicon only**), **Linux x64 (glibc 2.35+)**, and **Windows x64**.
+  The macOS floor is 14 because the bundled `vec0` sqlite extension is built for it; on
+  older systems the server starts but cannot open a brain. Intel Macs are not shipped
+  (there is no x86_64 build of that extension). Alpine/musl Linux is not shipped either
+  (musl needs its own build; the installer detects it and tells you rather than handing
+  over a binary that won't run).
 - **One backend owns `:8765`.** If you also run the NeuroVault desktop app, it and this server share the same backend — quit one if you switch between them.
 - **First recall downloads the embedding model** (~130 MB, once) to `~/.neurovault/.fastembed_cache`. Pre-seed that folder for offline/air-gapped setups.
 - **Behind a corporate TLS-intercepting proxy?** The model download uses rustls with the bundled CA set, so a private/MITM root CA in your OS store isn't trusted and the download can fail with a certificate error. Pre-seed `~/.neurovault/.fastembed_cache` from an unproxied machine (copy the `models--Xenova--*` folders), or point `HF_ENDPOINT` at an internal mirror.

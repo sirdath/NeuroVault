@@ -986,5 +986,6 @@ sqlite-vec) knowledge graph. Its changes shipped with the 0.1.2 tag.
 
 ---
 
-[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/sirdath/NeuroVault/compare/v0.5.2...v0.6.0
 [0.1.0]: https://github.com/sirdath/NeuroVault/releases/tag/v0.1.0
