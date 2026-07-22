@@ -1,8 +1,8 @@
 //! Graphify — parse a codebase into the local knowledge graph (Phase 1: Map).
 //!
 //! tree-sitter parses each source file **in-process** into a normalized
-//! [`ParsedFile`] of symbols + imports + calls (no network, no model — the
-//! user's source never leaves the machine), and [`graphify_into_brain`] writes
+//! [`ParsedFile`] of symbols + imports + calls (NeuroVault makes no network or
+//! model call while parsing), and [`graphify_into_brain`] writes
 //! that into the brain DB via the (previously dormant) `variables` /
 //! `variable_references` / `function_calls` tables plus a `kind='code'` engram
 //! node per file. The query helpers ([`where_defined`], [`whats_in_file`],
@@ -194,7 +194,7 @@ pub fn parse_source(path: &str, source: &str) -> Option<ParsedFile> {
 /// Walk a repo, respecting `.gitignore` (ripgrep's `ignore` engine), and parse
 /// every supported source file. Also skips common vendor/build dirs even when
 /// they aren't git-ignored, and oversized/generated files. Reading happens
-/// locally; nothing leaves.
+/// locally; NeuroVault makes no network or model call for this operation.
 pub fn graphify_repo(root: &Path) -> Vec<ParsedFile> {
     // Vendored / build output not always in .gitignore. Hidden dirs (.git,
     // .venv, .next, …) are already skipped by the walker's default.

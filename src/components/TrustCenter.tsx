@@ -5,6 +5,7 @@ import { useBrainStore } from "../stores/brainStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { useNoteStore } from "../stores/noteStore";
 import { ActivityPanel } from "./ActivityPanel";
+import { diskEncryptionCopy, localDeviceName } from "../lib/platform";
 
 export type TrustTab = "overview" | "history";
 
@@ -49,6 +50,8 @@ export function TrustCenter({
   const shared = useMemo(() => receipts.filter((receipt) => receipt.decision === "inject"), [receipts]);
   const hosts = useMemo(() => Array.from(new Set(shared.map((receipt) => receipt.host).filter(Boolean))), [shared]);
   const automaticOn = signals.automaticRecall === "on";
+  const deviceName = localDeviceName();
+  const encryption = diskEncryptionCopy();
 
   const toggleAutomatic = async () => {
     setBusy(true);
@@ -68,7 +71,7 @@ export function TrustCenter({
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--nv-accent)" }}>Privacy & Trust</p>
         <h1 id="trust-heading" className="mt-1 text-2xl font-semibold" style={{ color: "var(--nv-text)" }}>See and control the whole data flow</h1>
         <p className="mt-2 max-w-3xl text-[13px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
-          Your vault and index stay on this Mac. NeuroVault shares selected context only with AI providers you connect. Every automatic context decision leaves a local receipt.
+          Your vault and index stay on this {deviceName}. NeuroVault shares selected context only with AI providers you connect. Every automatic context decision leaves a local receipt.
         </p>
 
         <div className="mt-6 flex items-center gap-1 border-b" style={{ borderColor: "var(--nv-border)" }} aria-label="Privacy and trust views">
@@ -118,15 +121,16 @@ export function TrustCenter({
             <Fact label="Prompt content" value="Hashed in ordinary receipts; not logged by default" />
             <Fact label="Boundaries" value={`Scoped to ${activeBrain?.name || "the active vault"}`} />
           </TrustCard>
-          <TrustCard title="Stored" eyebrow="On this Mac">
+          <TrustCard title="Stored" eyebrow={`On this ${deviceName}`}>
             <Fact label="Markdown" value={vaultPath || activeBrain?.vault_path || "Select a vault to see its location"} breakAll />
             <Fact label="Index & journal" value="Local NeuroVault application data" />
-            <Fact label="At rest" value="Plaintext unless your Mac volume is encrypted" />
-            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--nv-warning)" }}>Turn on FileVault in macOS Settings to protect local data at rest.</p>
+            <Fact label="At rest" value={encryption.state} />
+            <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--nv-warning)" }}>{encryption.guidance}</p>
           </TrustCard>
           <TrustCard title="Shared" eyebrow="Outbound">
             <Fact label="Recent AI hosts" value={receiptsError ? "Could not load recent receipts" : hosts.length ? hosts.join(", ") : "No provider shown in recent receipts"} />
             <Fact label="Recent context deliveries" value={receiptsError ? "Unavailable until the local service reconnects" : `${shared.length} in the latest ${receipts.length} decisions`} />
+            <Fact label="Local model downloads" value="First indexing/recall may fetch about 130 MB from Hugging Face; reranked recall may fetch about 1 GB. Models then run locally." />
             <Fact label="Optional model features" value="Only when you deliberately enable a provider-backed compile feature; its confirmation shows the content that may be sent" />
             <Fact label="Updates" value="GitHub is contacted only by the update checker" />
             <Fact label="Fonts & interface" value="Never sent; NeuroVault uses local system fonts and does not fetch fonts from a CDN" />

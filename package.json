@@ -1,7 +1,7 @@
 {
   "name": "neurovault",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,10 @@
     "test:durability": "tsx src/lib/noteDurability.test.ts",
     "test:lib": "node scripts/run-lib-tests.mjs",
     "test:hardening": "node --test scripts/release-hardening.test.mjs",
+    "legal:check": "node scripts/generate-third-party-notices.mjs --check",
+    "legal:write": "node scripts/generate-third-party-notices.mjs --write",
+    "release:verify-config": "node scripts/verify-release-config.mjs",
+    "release:verify-assets": "node scripts/verify-release-assets.mjs",
     "test:ui": "vitest run",
     "test:ui:watch": "vitest",
     "test:e2e": "playwright test",

@@ -26,6 +26,7 @@ import { meetingsDropClaim } from "./lib/meetingsDropClaim";
 import { canLeaveView } from "./lib/navigationGuard";
 import { persistRestorableConsumerView, readRestorableConsumerView } from "./lib/consumerViewState";
 import { initializeConsumerVault } from "./lib/consumerBootstrap";
+import { shortcut } from "./lib/platform";
 
 const Editor = lazy(() => import("./components/Editor").then((module) => ({ default: module.Editor })));
 const NeuralGraph = lazy(() => import("./components/NeuralGraph").then((module) => ({ default: module.NeuralGraph })));
@@ -459,13 +460,7 @@ export default function App() {
     }
   }, []);
   // Show the platform-correct restore-shortcut hint on the Hide item.
-  const restoreHint = useMemo(
-    () =>
-      typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
-        ? "⌘⇧Space"
-        : "Ctrl+Shift+Space",
-    []
-  );
+  const restoreHint = useMemo(() => shortcut("Space", { shift: true }), []);
   const openWinMenu = useCallback(() => {
     const r = winTriggerRef.current?.getBoundingClientRect();
     if (!r) return;
@@ -515,21 +510,21 @@ export default function App() {
         id: "quick-capture",
         title: "Quick capture",
         category: "Action",
-        shortcut: "⌘⇧Space",
+        shortcut: shortcut("Space", { shift: true }),
         action: () => setQuickCaptureOpen(true),
       },
       {
         id: "new-note",
         title: "Create new note",
         category: "Action",
-        shortcut: "⌘N",
+        shortcut: shortcut("N"),
         action: () => { void setView("memories").then((moved) => { if (moved) setTriggerNewNote((n) => n + 1); }); },
       },
       {
         id: "save",
         title: "Save current note",
         category: "Action",
-        shortcut: "⌘S",
+        shortcut: shortcut("S"),
         action: () => saveNote(),
       },
       {
@@ -554,14 +549,14 @@ export default function App() {
         id: "toggle-view",
         title: "Cycle views",
         category: "View",
-        shortcut: "⌘P",
+        shortcut: shortcut("P"),
         action: toggleView,
       },
       {
         id: "search",
         title: "Search memory",
         category: "Action",
-        shortcut: "⌘/",
+        shortcut: shortcut("/"),
         action: () => { void setView("search"); },
       },
       {
@@ -824,7 +819,7 @@ export default function App() {
           {view === "memories" && (
             <button
               onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-              title={sidebarCollapsed ? "Show note browser (⌘B)" : "Hide note browser (⌘B)"}
+              title={sidebarCollapsed ? `Show note browser (${shortcut("B")})` : `Hide note browser (${shortcut("B")})`}
               aria-label={sidebarCollapsed ? "Show note browser" : "Hide note browser"}
               aria-pressed={sidebarCollapsed}
               className="nv-topbar-button flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
@@ -852,14 +847,14 @@ export default function App() {
             onClick={() => setPaletteOpen(true)}
             className="nv-global-search-trigger"
             aria-label="Search notes and AI memories"
-            title="Search notes and AI memories (⌘K)"
+            title={`Search notes and AI memories (${shortcut("K")})`}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="11" cy="11" r="6.5" />
               <path d="m16 16 4 4" />
             </svg>
             <span className="nv-global-search-label">Search</span>
-            <kbd>⌘K</kbd>
+            <kbd>{shortcut("K")}</kbd>
           </button>
         </div>
 

@@ -11,10 +11,15 @@ backup cases.
 ## First launch: signature or SmartScreen warnings
 
 Do not bypass a platform security warning for a file presented as an official
-release. Verify its SHA-256 checksum against the GitHub release, delete the
-download if the values differ, and report the release URL through
-`SECURITY.md`. Unsigned development builds stay draft-only and should be run
-through the documented source-development workflow.
+release. For releases after v0.6.0, verify its SHA-256 checksum against
+`SHA256SUMS.txt` in the GitHub release, delete the download if the values
+differ, and report the release URL through `SECURITY.md`. v0.6.0 predates the
+checksum manifest; its Apple Silicon app is Developer ID signed and notarized.
+
+Windows installers are currently unsigned previews and SmartScreen identifies
+their publisher as unknown. NeuroVault does not recommend bypassing that
+warning for a consumer install. Build from reviewed source, or use the signed
+and notarized Apple Silicon build, until Authenticode signing is added.
 
 On Linux, an AppImage may need its normal executable bit set with
 `chmod +x NeuroVault_*.AppImage`; this changes file permissions and does not
@@ -35,8 +40,8 @@ The backend binds `127.0.0.1:8765`. If the status reads **offline**:
 
 1. **Registration went to the right file.** Claude Code reads user-scope MCP
    servers from `~/.claude.json` (the file at your home-directory root) — *not*
-   `~/.claude/.mcp.json`. The in-app **Settings → Connect Claude Code → Register
-   automatically** button writes the correct file. Verify it contains an
+   `~/.claude/.mcp.json`. The in-app **Settings → Connections → Claude Code →
+   Connect** action writes the correct file. Verify it contains an
    `mcpServers.neurovault` entry.
 2. **Restart the Claude Code session** after registering — it reads MCP servers
    at startup.
@@ -93,22 +98,30 @@ manually one last time from the [releases page](https://github.com/sirdath/Neuro
 │   └── <brain-id>/
 │       ├── vault/        # your notes — plain markdown (the source of truth)
 │       ├── raw/          # drop-folder inbox (+ raw/_done/ for processed files)
-│       ├── brain.db      # SQLite index (vectors + graph) — REBUILDABLE
+│       ├── brain.db      # search indexes + structured state/history
 │       └── assets/       # images referenced by notes
 ├── mcp_tier.txt          # the active MCP tier
 └── ...
 ```
 
-- **`vault/*.md` is canonical.** `brain.db` is a cache built from it.
+- **Note and engram content in `vault/*.md` is canonical.** Search indexes in
+  `brain.db` are rebuildable, but its structured state and history are not.
 
 ## Back up / move / export a brain
 
-- **Back up:** copy the whole `~/.neurovault/brains/<id>/` folder. It's
-  self-contained.
-- **Move to another machine:** copy that folder to the same path on the new
-  machine. Your notes (`vault/`) are the important part; `brain.db` rebuilds.
-- **Export as a zip:** Settings → (brain) → Export, or just zip the `vault/`
-  folder — it's plain markdown, readable anywhere (Obsidian-compatible).
+- **Complete backup:** choose **Quit NeuroVault** rather than merely closing or
+  hiding the window. If you use headless npm, run `npx -y
+  @neurovault/mcp@latest stop`. Confirm `http://127.0.0.1:8765/api/health` no
+  longer responds, then copy the whole `~/.neurovault/` directory. Including
+  `brains.json` preserves the registry and external-vault locations.
+- **Move to another machine:** with NeuroVault stopped on both machines, copy
+  the complete data directory. External vault paths may differ and must be
+  reselected on the destination. Never live-copy SQLite/WAL files through a
+  sync tool.
+- **Export portable files:** Settings → Vaults → Export creates a ZIP of
+  Markdown and other file-owned content. It excludes `brain.db`, its WAL/SHM,
+  and therefore database-only drafts, core memory, proposals, and history. It
+  is useful for inspection and Markdown portability, not full restoration.
 - **Version-control your notes:** `git init` inside `vault/` is safe. Add
   `brain.db*` and `assets/` to `.gitignore` if you only want to track the
   markdown.
@@ -143,9 +156,20 @@ is rebuilt from them.
 
 ## Uninstall
 
-Removing the app does **not** delete your data. To remove everything, also
-delete `~/.neurovault/` (your notes!) and the model cache `~/.neurovault/.fastembed_cache/`.
-Back up `~/.neurovault/brains/` first if you might want your notes later.
+1. In Settings, uninstall Automatic Memory hooks if they are enabled. You can
+   also run `neurovault-server hook uninstall` from the same binary you used
+   to install them.
+2. Remove NeuroVault from each MCP client's settings. For the documented
+   Claude Code user install: `claude mcp remove --scope user neurovault`.
+3. Stop an npm-managed headless backend with `npx -y
+   @neurovault/mcp@latest stop`, then explicitly quit the desktop app.
+4. Remove the desktop application and, if used, run `npm uninstall -g
+   @neurovault/mcp` for a global npm install.
+
+Those steps preserve local data. To erase everything as a separate, deliberate
+action, first make and verify a stopped full backup if wanted, confirm no
+NeuroVault process is running, then delete `~/.neurovault/`. That directory
+contains your notes, database-owned state, settings, logs, and model cache.
 
 ---
 

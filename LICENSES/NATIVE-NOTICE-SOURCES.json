@@ -1,0 +1,32 @@
+[
+  {
+    "component": "ONNX Runtime 1.20.0",
+    "file": "native/onnxruntime-1.20.0-LICENSE",
+    "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.20.0/LICENSE",
+    "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+  },
+  {
+    "component": "ONNX Runtime 1.20.0 third-party notices",
+    "file": "native/onnxruntime-1.20.0-ThirdPartyNotices.txt",
+    "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.20.0/ThirdPartyNotices.txt",
+    "sha256": "cf7342f7ba482ef715ae58f5f497a8d3564fa255164175aea324cd293c5701a0"
+  },
+  {
+    "component": "sqlite-vec v0.1.9 MIT license",
+    "file": "native/sqlite-vec-v0.1.9-LICENSE-MIT",
+    "url": "https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/LICENSE-MIT",
+    "sha256": "6ce72bbe12d975bd5286e5ab0a064c069693300c47bccbc57bec18485f1621ea"
+  },
+  {
+    "component": "sqlite-vec v0.1.9 Apache-2.0 license",
+    "file": "native/sqlite-vec-v0.1.9-LICENSE-APACHE",
+    "url": "https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/LICENSE-APACHE",
+    "sha256": "a38070a94d4afd9cd710e3ce67bd1de78097cfe1784c1f0109ac95d3c196bfdc"
+  },
+  {
+    "component": "BAAI bge-small-en-v1.5 MIT license",
+    "file": "native/bge-small-en-v1.5-LICENSE-MIT",
+    "url": "https://raw.githubusercontent.com/FlagOpen/FlagEmbedding/7ed43d67ec03fbe5c31c0992dbfa941fb1860549/LICENSE",
+    "sha256": "587a673933425dbc36ec61268d3b954051b2d3ef3c9b322ede357976055ffdd5"
+  }
+]

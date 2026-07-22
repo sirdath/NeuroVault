@@ -6,6 +6,7 @@ import { useNoteStore } from "../stores/noteStore";
 import { useConsumerHealthStore } from "../stores/consumerHealthStore";
 import { healthToneColor } from "../lib/consumerHealth";
 import { API_HOST } from "../lib/config";
+import { localDeviceName } from "../lib/platform";
 
 const STORAGE_KEY = "nv.onboarding.done";
 
@@ -243,13 +244,16 @@ export function Onboarding({ onOpenSettings }: OnboardingProps) {
                     Let your AI remember the work, not just the chat
                   </h2>
                   <p className="text-[13.5px] leading-relaxed mt-3" style={{ color: "var(--nv-text-muted)" }}>
-                    NeuroVault keeps a plain-Markdown memory on this Mac, finds relevant context before each Claude Code prompt, and shows you a receipt afterward.
+                    NeuroVault keeps a plain-Markdown memory on this {localDeviceName()}, finds relevant context before each Claude Code prompt, and shows you a receipt afterward.
                   </p>
                   <div className="grid grid-cols-3 gap-2 mt-6">
                     <Promise label="Local files" detail="You choose the folder" />
                     <Promise label="No telemetry" detail="No NeuroVault analytics" />
                     <Promise label="Reviewable" detail="See what context was used" />
                   </div>
+                  <p className="mt-4 text-[11px] leading-relaxed" style={{ color: "var(--nv-text-dim)" }}>
+                    First indexing or recall downloads a local embedding model (about 130 MB) from Hugging Face. The first reranked recall can download a second local model (about 1 GB); reranking can be disabled in Settings. Models are cached on this {localDeviceName()} and your vault content is not sent with those downloads.
+                  </p>
                   <div className="mt-7 grid grid-cols-2 gap-2">
                     <button
                       onClick={() => setStep(hasBrain ? 2 : 1)}

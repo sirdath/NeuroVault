@@ -69,6 +69,7 @@ export async function deactivate(): Promise<void> {
 
 interface BinaryLocation {
   path: string;
+  vecPath: string;
   platformLabel: string;
 }
 
@@ -76,11 +77,10 @@ function locateServerBinary(context: vscode.ExtensionContext): BinaryLocation {
   // Sidecar binaries are bundled per platform under server-bin/<os>-<arch>/.
   // The build pipeline (see scripts/copy-binaries.* in the parent repo)
   // is responsible for populating this directory before vsce package runs.
-  const map: Record<string, { dir: string; bin: string }> = {
-    "win32-x64":  { dir: "win32-x64",  bin: "neurovault-server.exe" },
-    "darwin-arm64": { dir: "darwin-arm64", bin: "neurovault-server" },
-    "darwin-x64":   { dir: "darwin-x64",   bin: "neurovault-server" },
-    "linux-x64":  { dir: "linux-x64",  bin: "neurovault-server" },
+  const map: Record<string, { dir: string; bin: string; vec: string }> = {
+    "win32-x64":    { dir: "win32-x64",    bin: "neurovault-server.exe", vec: "vec0.dll" },
+    "darwin-arm64": { dir: "darwin-arm64", bin: "neurovault-server",     vec: "vec0.dylib" },
+    "linux-x64":    { dir: "linux-x64",    bin: "neurovault-server",     vec: "vec0.so" },
   };
   const key = `${process.platform}-${process.arch}`;
   const entry = map[key];
@@ -92,6 +92,7 @@ function locateServerBinary(context: vscode.ExtensionContext): BinaryLocation {
   }
   return {
     path: path.join(context.extensionPath, "server-bin", entry.dir, entry.bin),
+    vecPath: path.join(context.extensionPath, "server-bin", entry.dir, entry.vec),
     platformLabel: key,
   };
 }
@@ -135,6 +136,13 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     );
     return;
   }
+  if (!fs.existsSync(bin.vecPath)) {
+    output.appendLine(
+      `[boot] missing sqlite-vec library at ${bin.vecPath}. ` +
+      `The server cannot open a vault without its matching native library.`,
+    );
+    return;
+  }
 
   const cfg = vscode.workspace.getConfiguration("neurovault");
   const requestedPort = cfg.get<number>("serverPort", 8765);
@@ -147,6 +155,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 
   const env = { ...process.env };
   if (vaultPath) env.NEUROVAULT_HOME = vaultPath;
+  env.NEUROVAULT_VEC_EXTENSION = bin.vecPath;
 
   const proc = spawn(bin.path, ["--http-only", "--port", String(serverPort)], {
     env,

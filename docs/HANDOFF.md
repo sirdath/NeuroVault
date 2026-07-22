@@ -1,10 +1,10 @@
-# NeuroVault — Session Handoff
+# NeuroVault — archived session handoff
 
-Context transfer for a fresh Claude session. Read this top-to-bottom, then
-do **§7 Immediate next task**.
+> Historical snapshot from 2026-07-16. Do not execute its branch or benchmark
+> instructions. Current contributors should start with the root `README.md`,
+> `CLAUDE.md`, `CONTRIBUTING.md`, and `docs/DISTRIBUTION-READINESS.md` on `main`.
 
-> Living document — kept current as the code changes (last updated 2026-07-16);
-> it is not a snapshot of any one session. §7 is the only time-sensitive part.
+This file is retained only to explain earlier design decisions.
 
 ---
 
@@ -12,7 +12,10 @@ do **§7 Immediate next task**.
 Local-first, markdown-canonical **AI memory** for Claude/other LLMs. "Claude
 forgets you after every conversation; NeuroVault doesn't."
 - **Desktop app**: Tauri 2.0 (React/TS) with an **in-process Rust backend** (axum HTTP on `127.0.0.1:8765`).
-- **Storage**: markdown vault is canonical (`~/.neurovault/brains/<id>/vault/*.md`); SQLite + **sqlite-vec** (`vec0`, `embedding float[384]`) is a **rebuildable** index. Engine table for a memory = `engrams`.
+- **Storage**: Markdown is canonical for note and engram content
+  (`~/.neurovault/brains/<id>/vault/*.md`). SQLite + **sqlite-vec** stores
+  rebuildable search indexes plus database-owned structured state and history.
+  Engine table for a memory = `engrams`.
 - **Embeddings**: BGE-small-en-v1.5 (384-d) via **fastembed-rs** (ONNX), **on-device, zero-LLM ingest**. Cross-encoder reranker is a separate model (`BGERerankerBase`).
 - **Retrieval**: hybrid (vector KNN + BM25 + entity-graph) → **RRF** → optional rerank → recency/boosts → final score.
 - **MCP**: native Rust `neurovault-server --mcp-only` (rmcp), 55 tools, tiers `minimal` (3), `lite` (8, default), `standard` (21), and `full` (55). Thin stdio→loopback-HTTP bridge; loads no model/DB.
@@ -21,16 +24,19 @@ forgets you after every conversation; NeuroVault doesn't."
 ## 2. Conventions / preferences (IMPORTANT)
 - **Commits: NO `Co-Authored-By: Claude` trailer.** Small conventional commits (`feat(scope): …`).
 - **No Python** in the app/MCP path (it's a product promise). Code import goes through graphify (Rust), never a Python importer.
-- **Markdown canonical; DB rebuildable.** Don't add features that make the DB authoritative.
+- **Preserve both ownership contracts.** Do not make note/engram content
+  database-only, and do not describe database-owned drafts, core memory,
+  proposals, or history as rebuildable from Markdown.
 - **Verify before claiming done**: build + tests + a real smoke. The user values honesty over hype; be critical.
 - Website must stay **receipt-honest** (don't publish numbers/features we haven't verified).
 - Build: `cd src-tauri && cargo build --no-default-features …`. Tests: `cargo test --no-default-features --lib`.
 - macOS local build needs `vec0.dylib` in `src-tauri/resources/` (already there).
 
-## 3. Branches & where things live
+## 3. Branches at the time of this snapshot
 - `main`: graphify merged + published 470-q benchmark (hit@5 0.938).
 - `feat/source-folders`: the add-ons + abstention + bench infra (ancestor of below).
-- **`feat/headless-mcp` (the live working branch)**: everything below, **pushed to origin**. ~14 commits ahead of main. **Open a PR `feat/headless-mcp` → main** to trigger the cross-platform CI (it builds + smokes mac/linux/windows; publish stays tag-gated).
+- `feat/headless-mcp` was the working branch at the time. Its relevant work is
+  now represented on `main`; do not open the historical PR described here.
 
 ## 4. What we built over the past days (all committed)
 **A. Friend's add-ons, adapted to mainline** (from github.com/Stel777/NeuroVault-AddOns-by-Stel):
@@ -42,7 +48,7 @@ forgets you after every conversation; NeuroVault doesn't."
 **C. Headless distribution — `npx @neurovault/mcp`** (the big one; council-driven, see §5):
 - **`gui` cargo feature gate** (default on): moved all 47 Tauri commands + `run()` into a gated `src-tauri/src/app.rs`; `lib.rs` root is now just `pub mod memory` + the gated app. `--no-default-features` build links **zero** GUI frameworks (verified via `otool`/`ldd`). This unblocked headless Linux/Docker (the binary used to statically drag webkit2gtk).
 - **rustls TLS**: `fastembed = { default-features=false, features=["ort-download-binaries","hf-hub-rustls-tls"] }` — `native-tls`/`openssl-sys` are GONE; model download is pure-Rust rustls. No libssl on Linux.
-- **npm wrapper** (`dist-npm/`): root `@neurovault/mcp` (bin shim resolves the platform binary via optionalDependencies, defaults empty argv → `--mcp-only`, keeps stdout a clean JSON-RPC channel) + per-platform subpackages (macOS arm64/x64, Linux x64 glibc, Windows x64; musl guarded out). Binaries built by `scripts/build-headless.mjs`, never committed.
+- **npm wrapper** (`dist-npm/`): root `@neurovault/mcp` (bin shim resolves the platform binary via optionalDependencies, defaults empty argv → `--mcp-only`, keeps stdout a clean JSON-RPC channel) + per-platform subpackages (macOS arm64, Linux x64 glibc, Windows x64; Intel macOS and musl are unsupported). Binaries are built by `scripts/build-headless.mjs`, never committed.
 - **CI** `.github/workflows/npm-release.yml`: builds + per-platform smoke (start server → `/api/version` → create brain → **load vec0**) on PRs into main and on `npm-v*` tags; publishes with `--provenance`. `dist-npm/WINDOWS-TEST.md` is a no-Rust runbook for the user's Windows laptop.
 - Also added `GET /api/version` and fixed the reranker model-cache dir (`reranker.rs` now pins `~/.neurovault/.fastembed_cache`).
 - **Why it matters**: npm CLI binaries sidestep the macOS Gatekeeper "damaged" wall, so this unblocks the dev audience WITHOUT the Apple Developer account (signing is being handled separately by the user later).
@@ -57,7 +63,7 @@ A heavy Opus council analyzed NeuroVault vs the field. **Moats**: zero-LLM on-de
 - **We STOPPED that run** (not worth riding to confirm a regression). Saved the finding to the NeuroVault brain.
 - **Open question the next task answers**: was the regression *entirely* recency, or does the cross-encoder reranker *also* hurt? We've never measured rerank in isolation. The reranker is currently unproven — if it actually helps (with recency off), wiring it well is our most direct shot at passing 0.951.
 
-## 7. Immediate next task — run the rerank-isolation A/B (medium mode)
+## 7. Historical next task — completed; do not rerun as an onboarding step
 A new nv-bench mode `--compare-rerank` is **built & committed** (release binary at `src-tauri/target/release/nv-bench`). It ingests each question ONCE, then recalls twice (rerank OFF baseline vs rerank ON) on the same brain and prints both columns + the per-metric delta. Run it in **medium mode** (`taskpolicy -c utility`, the user is CPU-conscious):
 
 ```bash

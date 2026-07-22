@@ -1,22 +1,26 @@
 {
   "name": "@neurovault/mcp",
-  "version": "0.6.0",
-  "description": "NeuroVault \u2014 local-first AI memory as a headless MCP server. Install once; every agent (Claude Code, Cursor, Codex) remembers you. Markdown-canonical, on-device embeddings, zero-LLM ingest, no cloud.",
+  "version": "0.6.1",
+  "description": "NeuroVault \u2014 local-first AI memory as a headless MCP server. Install once; supported agents share Markdown-first memory with on-device embeddings, zero-LLM ingest, and no NeuroVault cloud.",
   "bin": {
     "neurovault-mcp": "bin/neurovault-mcp.js"
   },
   "files": [
     "bin/",
     "lib/",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "PRIVACY.md",
+    "THIRD-PARTY-NOTICES.md",
+    "LICENSES/"
   ],
   "optionalDependencies": {
-    "@neurovault/mcp-darwin-arm64": "0.6.0",
-    "@neurovault/mcp-linux-x64": "0.6.0",
-    "@neurovault/mcp-win32-x64": "0.6.0"
+    "@neurovault/mcp-darwin-arm64": "0.6.1",
+    "@neurovault/mcp-linux-x64": "0.6.1",
+    "@neurovault/mcp-win32-x64": "0.6.1"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "license": "MIT",
   "keywords": [

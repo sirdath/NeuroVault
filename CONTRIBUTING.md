@@ -44,16 +44,21 @@ NeuroVault/
 ```
 
 Markdown vaults (`~/.neurovault/brains/<id>/vault/*.md`) are the **source of
-truth** for user data; `brain.db` is a rebuildable index. That's the core
-invariant — features that break it (data that only exists in the DB, never
-in a markdown file) probably don't fit.
+truth for note and engram content**. Search indexes in `brain.db` are
+rebuildable, but the database also owns intentionally structured state such as
+drafts, core-memory blocks, and version history. New database-only state needs
+an explicit backup/export contract and must never be described as rebuildable
+from Markdown.
 
 ## Setup
 
-Prerequisites — **just two**:
+Prerequisites:
 
-- **Node.js 20+**
+- **Node.js 22+**
 - **Rust** (`rustup default stable`)
+- Your platform's native [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/):
+  Xcode Command Line Tools on macOS, Microsoft C++ Build Tools and WebView2 on
+  Windows, or WebKitGTK/GTK development packages on Linux
 
 (Python is *not* required to build or run anything. It's only used by the
 offline `eval/` harness and a couple of build scripts.)

@@ -1,13 +1,13 @@
 {
-  "$schema": "https://raw.githubusercontent.com/nicklascodes/tauri-docs/refs/heads/main/src/content/docs/_schema/config.schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "NeuroVault",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "com.neurovault.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build && node scripts/stage-sidecar.mjs",
+    "beforeBuildCommand": "npm run legal:check && npm run build && node scripts/stage-sidecar.mjs",
     "removeUnusedCommands": true
   },
   "app": {
@@ -63,12 +63,31 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "NeuroVault contributors",
+    "homepage": "https://github.com/sirdath/NeuroVault",
+    "copyright": "Copyright © 2026 Dimitrios Athinaios and NeuroVault contributors",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "category": "Productivity",
+    "shortDescription": "Private, local-first memory for AI assistants.",
+    "longDescription": "NeuroVault stores memory as local Markdown, builds an on-device search index, and connects it to compatible AI assistants through MCP.",
     "externalBin": [
       "binaries/neurovault-server"
     ],
-    "resources": [
-      "resources/vec0.*"
-    ],
+    "resources": {
+      "../LICENSE": "legal/LICENSE",
+      "../PRIVACY.md": "legal/PRIVACY.md",
+      "../THIRD-PARTY-NOTICES.md": "legal/THIRD-PARTY-NOTICES.md",
+      "../LICENSES/MPL-2.0-COVERED-SOURCE.md": "legal/LICENSES/MPL-2.0-COVERED-SOURCE.md",
+      "../LICENSES/NATIVE-NOTICE-SOURCES.json": "legal/LICENSES/NATIVE-NOTICE-SOURCES.json",
+      "../LICENSES/THIRD-PARTY-LICENSES.txt": "legal/LICENSES/THIRD-PARTY-LICENSES.txt",
+      "../LICENSES/models/DOWNLOADED-MODELS.md": "legal/LICENSES/models/DOWNLOADED-MODELS.md",
+      "../LICENSES/native/bge-small-en-v1.5-LICENSE-MIT": "legal/LICENSES/native/bge-small-en-v1.5-LICENSE-MIT",
+      "../LICENSES/native/onnxruntime-1.20.0-LICENSE": "legal/LICENSES/native/onnxruntime-1.20.0-LICENSE",
+      "../LICENSES/native/onnxruntime-1.20.0-ThirdPartyNotices.txt": "legal/LICENSES/native/onnxruntime-1.20.0-ThirdPartyNotices.txt",
+      "../LICENSES/native/sqlite-vec-v0.1.9-LICENSE-APACHE": "legal/LICENSES/native/sqlite-vec-v0.1.9-LICENSE-APACHE",
+      "../LICENSES/native/sqlite-vec-v0.1.9-LICENSE-MIT": "legal/LICENSES/native/sqlite-vec-v0.1.9-LICENSE-MIT"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

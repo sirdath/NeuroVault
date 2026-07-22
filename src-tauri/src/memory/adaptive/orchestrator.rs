@@ -243,7 +243,9 @@ pub fn run_recipe(
             pool.push((si, ci));
         }
     }
-    let ce_by_pos: Option<Vec<f64>> = if pool.is_empty() {
+    let ce_by_pos: Option<Vec<f64>> = if !reranker::enabled() {
+        None
+    } else if pool.is_empty() {
         Some(Vec::new())
     } else {
         let docs: Vec<String> = pool

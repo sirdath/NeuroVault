@@ -8,8 +8,9 @@
 [cleanup candidate](#cleanup-candidates) (X = tier). Large binary/generated bulk (icon sets,
 lockfiles, benchmark data) is folded into one `glob (N files)` row — every such file is still
 counted in the coverage check. This doc is **regenerable**: re-run the indexing workflow rather
-than hand-editing rows. Markdown in the vault is canonical; `brain.db` is a rebuildable index —
-same spirit here, this file describes the tree, it isn't the tree.
+than hand-editing rows. Markdown is canonical for note content; the search
+indexes in `brain.db` are rebuildable, while structured state and history are
+not. In the same spirit, this file describes the tree, it isn't the tree.
 
 ## Map
 
@@ -289,7 +290,7 @@ Governance/onboarding docs live at the repo root; everything else is under `docs
 | `docs/consumer-feature-map.md` | Product/IA inventory of consumer app surfaces (audited 2026-07-15) |
 | `docs/CONSUMER-ROADMAP.md` | Roadmap for the free open-source consumer desktop app |
 | `docs/designs/graphify.md` | Original design spec for the shipped graphify code-graph feature |
-| `docs/HANDOFF.md` | Stale 2026-06-23 session handoff; split from docs/handoffs/ dir ⚠ _[C]_ |
+| `docs/HANDOFF.md` | Explicitly archived 2026-07-16 session handoff; historical only ⚠ _[C]_ |
 | `docs/handoffs/graph-view.md` | Handoff brief for graph snapshots and Graph Engine V2 |
 | `docs/HOW-NEUROVAULT-WORKS.md` | Comprehensive engineering reference for the whole system (591 lines) |
 | `docs/MACOS-RELEASE.md` | Signed/notarized macOS Developer-ID DMG release checklist |
@@ -339,7 +340,6 @@ Independent build trees with their own manifests, shipped from this repo.
 | `dist-npm/lib/resolve.js` | Maps platform to per-platform npm subpackage with prebuilt binary |
 | `dist-npm/package.json` | Root @neurovault/mcp manifest with per-platform optionalDependencies |
 | `dist-npm/packages/mcp-darwin-arm64/package.json` | Per-platform stub shipping prebuilt binary for macOS arm64 |
-| `dist-npm/packages/mcp-darwin-x64/package.json` | Per-platform stub shipping prebuilt binary for macOS Intel x64 |
 | `dist-npm/packages/mcp-linux-x64/package.json` | Per-platform stub shipping prebuilt binary for Linux x64 glibc |
 | `dist-npm/packages/mcp-win32-x64/package.json` | Per-platform stub shipping prebuilt binary for Windows x64 |
 | `dist-npm/README.md` | npm package README: install @neurovault/mcp into MCP clients |
@@ -458,7 +458,7 @@ documented the dead ActivityBar as a live feature, and `CLAUDE.md` advertised
 | `src/assets/vault-logo.png` (704K) | md5 `807e5492…` — **byte-identical** to `assets/brand/neurovault-logo-dark.png`, and zero references by exact path. The README uses the brand copy. | **Deleted** (`5344f9b`) |
 | `src/assets/vault-mark.png` (32K) | Zero references; superseded by `vault-mark-transparent.png`, which is live in four components and asserted by the hardening test. | **Deleted** (`5344f9b`) |
 | `assets/brand/*` (4 files) | All live: the README's light/dark logos, plus the mark that `make-app-icon.py` and `make-dmg-background.py` read. | **Kept** |
-| `docs/HANDOFF.md` | **Not stale — the original flag was wrong.** Updated 2026-07-15 (`c68fa71`) and its content matches the current architecture (55 MCP tools, the real tier counts, in-process Rust backend). A living context-transfer doc. | **Kept**; misleading date header removed |
+| `docs/HANDOFF.md` | Historical 2026-07-16 session context contains completed branch and benchmark work. | **Kept as an explicitly archived design snapshot**; current contributors are routed to distribution and contributor docs |
 | `src-tauri/src/bin/neurovault-api.rs` | Genuinely overlaps `neurovault-server`'s gateway startup — but consolidating two binaries is a **refactor, not cleanup**. Left for a deliberate change. | **Deferred** → see Tier D |
 
 ### Tier D · structural / oversized (flag only)
@@ -487,4 +487,3 @@ documented the dead ActivityBar as a live feature, and `CLAUDE.md` advertised
 | `src-tauri/icons/android/values/ic_launcher_background.xml` | Defines ic_launcher_background color (#fff) for adaptive icon |
 | `src-tauri/icons/ios/AppIcon-*.png (18 files)` | iOS AppIcon set at all required sizes and @1x/2x/3x scales |
 | `src/components/MemoryInspector.tsx` | Context Trace inspector UI; mounted only by preview harness |
-

@@ -18,10 +18,59 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { resolveBinary } = require('../lib/resolve');
+const lifecycle = require('../lib/lifecycle');
 
 function die(msg, code) {
   process.stderr.write(msg.endsWith('\n') ? msg : msg + '\n');
   process.exit(code == null ? 1 : code);
+}
+
+async function runLifecycleCommand(command) {
+  try {
+    if (command === 'status') {
+      const result = await lifecycle.status();
+      if (!result.running) {
+        process.stdout.write(`NeuroVault backend: stopped (${result.endpoint})\n`);
+        return;
+      }
+      process.stdout.write(
+        `NeuroVault backend: running v${result.version} (pid ${result.pid})\n` +
+          `Endpoint: ${result.endpoint}\n` +
+          `Managed by @neurovault/mcp: ${result.managed ? 'yes' : 'no'}\n`,
+      );
+      return;
+    }
+    const result = await lifecycle.stop();
+    process.stdout.write(
+      result.alreadyStopped
+        ? `NeuroVault backend: already stopped (${result.endpoint})\n`
+        : `NeuroVault backend: stopped pid ${result.pid}\n`,
+    );
+  } catch (error) {
+    die(`NeuroVault: ${command} failed: ${error.message}`);
+  }
+}
+
+function printStableClientConfig() {
+  const config = {
+    mcpServers: {
+      neurovault: {
+        command: process.execPath,
+        args: [path.resolve(__filename)],
+      },
+    },
+  };
+  process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
+}
+
+const argv = process.argv.slice(2);
+if (argv.length === 1 && argv[0] === 'config') {
+  printStableClientConfig();
+  return;
+}
+if (argv.length === 1 && ['status', 'stop'].includes(argv[0])) {
+  runLifecycleCommand(argv[0]);
+  return;
 }
 
 // macOS floor: 14.0 (Sonoma). The server binary itself bakes a minos of 11.0,
@@ -73,20 +122,41 @@ if (process.platform !== 'win32') {
   }
 }
 
-// The embedder + reranker cache the on-device ONNX models under
-// ~/.neurovault/.fastembed_cache. Export it as a belt (the binary also resolves
-// this from its home dir) and tell the user about the one-time first-run
-// download — on STDERR, so the MCP channel stays clean.
-const cacheDir = path.join(os.homedir(), '.neurovault', '.fastembed_cache');
+// Respect the same data-root and cache overrides as the native server. Notices
+// go to STDERR so the MCP JSON-RPC channel on stdout stays clean.
+const nvHome =
+  process.env.NEUROVAULT_HOME ||
+  process.env.ENGRAM_HOME ||
+  path.join(os.homedir(), '.neurovault');
+const cacheDir =
+  process.env.FASTEMBED_CACHE_DIR || path.join(nvHome, '.fastembed_cache');
 const modelDir = path.join(cacheDir, 'models--Xenova--bge-small-en-v1.5');
 if (!fs.existsSync(modelDir)) {
   process.stderr.write(
     'NeuroVault: first recall downloads the on-device embedding model (~130 MB) ' +
-      'to ~/.neurovault/.fastembed_cache. This happens once.\n',
+      `to ${cacheDir}. This happens once.\n`,
   );
 }
 
-const argv = process.argv.slice(2);
+const rerankPreference = path.join(nvHome, 'rerank.txt');
+let rerankingEnabled = true;
+try {
+  rerankingEnabled = !['off', 'false', '0'].includes(
+    fs.readFileSync(rerankPreference, 'utf8').trim().toLowerCase(),
+  );
+} catch (_e) {
+  // Missing preference is the shipped ON default.
+}
+const rerankerDir = path.join(cacheDir, 'models--BAAI--bge-reranker-base');
+if (rerankingEnabled && !fs.existsSync(rerankerDir)) {
+  process.stderr.write(
+    'NeuroVault: reranking is enabled by default. The first qualifying ' +
+      'reranked recall may download an additional model (~1 GB) and retain ' +
+      'about 1 GB of memory while the server runs. To opt out, write "off" ' +
+      `to ${rerankPreference} before recall.\n`,
+  );
+}
+
 const args = argv.length ? argv : ['--mcp-only'];
 
 // Async spawn (not spawnSync): keep the event loop free, get crash detection,

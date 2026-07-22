@@ -40,6 +40,7 @@ use super::read_ops::{
     BrainStats, BrainSummary, FullNote, NoteListRow,
 };
 use super::related::{get_related_checked, RelatedHit, RelatedOpts};
+use super::reranker;
 use super::retriever::{hybrid_retrieve_throttled, RecallHit, RecallOpts};
 use super::todos::{self, AddTodoArgs, Todo};
 use super::types::{GraphData, MemoryError};
@@ -88,6 +89,13 @@ pub async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status": "ok", "service": "neurovault-rust"}))
 }
 
+fn server_instance_id() -> &'static str {
+    static INSTANCE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    INSTANCE_ID
+        .get_or_init(|| uuid::Uuid::new_v4().to_string())
+        .as_str()
+}
+
 #[derive(Serialize)]
 pub struct FreshnessBreakdown {
     fresh: i64,
@@ -122,16 +130,16 @@ pub struct StatusBody {
     links: LinkBreakdown,
 }
 
-/// GET /api/version — the running backend's version + pid. No auth, no DB
-/// access (answers before any brain exists). Lets a launcher / MCP shim detect
-/// version skew against a backend already listening on :8765 — the shared
-/// singleton port that the desktop app, a prior `npx` session, or a curl-
-/// installed binary all bind (first wins) — and gives a "kill PID N" target
-/// when the live backend is older than the caller.
+/// GET /api/version — the running backend's version, pid, and per-process
+/// instance id. No auth and no DB access (it answers before any brain exists).
+/// The random instance id lets the headless launcher prove that a process is
+/// the same managed backend it started before offering to stop it; a recycled
+/// PID or the desktop app must never be mistaken for that daemon.
 pub async fn version(_s: State<ServerState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
+        "instance_id": server_instance_id(),
     })))
 }
 
@@ -1258,9 +1266,10 @@ pub struct RecallQuery {
     /// the full pipeline.
     #[serde(default)]
     ablate: Option<String>,
-    /// Cross-encoder reranker override for this call. Adds ~50-100 ms;
-    /// improves top-rank precision. When absent, the app preference
-    /// applies (`rerank_enabled()`: ON unless toggled off in Settings,
+    /// Cross-encoder reranker request for this call. Adds ~50-100 ms and can
+    /// improve top-rank precision. `false` disables it for this request;
+    /// `true` cannot override the global Settings opt-out. When absent, the
+    /// app preference applies (`reranker::enabled()`: ON unless toggled off,
     /// persisted at ~/.neurovault/rerank.txt).
     #[serde(default)]
     rerank: Option<bool>,
@@ -2235,7 +2244,7 @@ pub async fn recall(
     // a long retrieval doesn't stall the HTTP server for other
     // inflight requests.
     let brain_id = q.brain_id.clone();
-    let ablate_list: Vec<String> = q
+    let mut ablate_list: Vec<String> = q
         .ablate
         .as_deref()
         .unwrap_or("")
@@ -2243,6 +2252,14 @@ pub async fn recall(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    let rerank = reranker::enabled() && q.rerank.unwrap_or(true);
+    if !rerank
+        && !ablate_list
+            .iter()
+            .any(|feature| feature.eq_ignore_ascii_case("reranker"))
+    {
+        ablate_list.push("reranker".to_string());
+    }
     let opts = RecallOpts {
         top_k: q.limit.unwrap_or(10),
         spread_hops: q.spread_hops.unwrap_or(0),
@@ -2252,7 +2269,7 @@ pub async fn recall(
             vec!["observation".to_string()]
         },
         as_of: q.as_of.clone(),
-        use_reranker: q.rerank.unwrap_or(rerank_enabled()),
+        use_reranker: rerank,
         ablate: ablate_list,
     };
     let query_str = q.q.clone();
@@ -2378,7 +2395,9 @@ pub async fn recall_multi(
     }
 
     let top_k = body.limit.unwrap_or(10).clamp(1, 50);
-    let ablate_list: Vec<String> = body
+    let single_query = queries.len() == 1;
+    let rerank = single_query && reranker::enabled() && body.rerank.unwrap_or(true);
+    let mut ablate_list: Vec<String> = body
         .ablate
         .as_deref()
         .unwrap_or("")
@@ -2386,11 +2405,22 @@ pub async fn recall_multi(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    if (!single_query || !rerank)
+        && !ablate_list
+            .iter()
+            .any(|feature| feature.eq_ignore_ascii_case("reranker"))
+    {
+        ablate_list.push("reranker".to_string());
+    }
 
     // Each per-query call oversamples 2× so RRF merge has signal
     // beyond the final top_k. Cap per-query top_k at 50 to bound
     // memory regardless of caller-supplied limit.
-    let per_query_top_k = (top_k * 2).clamp(top_k, 50);
+    let per_query_top_k = if single_query {
+        top_k
+    } else {
+        (top_k * 2).clamp(top_k, 50)
+    };
     // Force reranker off on per-query passes regardless of what the
     // caller asked for. Reasoning: the per-query pipeline runs the
     // cross-encoder over top-20 candidates, which is ~50-100 ms. With
@@ -2403,8 +2433,9 @@ pub async fn recall_multi(
     // pass cross-encoder precision for consensus-across-phrasings,
     // which empirically maps better to "the right answer" on
     // paraphrase-heavy queries (the use case for multi-query in the
-    // first place). Caller's `rerank` flag is preserved for the
-    // single-query fast path below.
+    // first place). A call with no usable additional query takes the
+    // true single-query path, including its requested limit and the
+    // global-plus-per-call reranker preference.
     let opts = RecallOpts {
         top_k: per_query_top_k,
         spread_hops: body.spread_hops.unwrap_or(0),
@@ -2414,7 +2445,7 @@ pub async fn recall_multi(
             vec!["observation".to_string()]
         },
         as_of: body.as_of.clone(),
-        use_reranker: false,
+        use_reranker: rerank,
         ablate: ablate_list,
     };
     let brain_id = body.brain_id.clone();
@@ -2583,6 +2614,7 @@ pub async fn recall_across_brains(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    let rerank = reranker::enabled() && q.rerank.unwrap_or(true);
     let opts = RecallOpts {
         top_k: per_brain,
         spread_hops: 0,
@@ -2592,8 +2624,12 @@ pub async fn recall_across_brains(
             vec!["observation".to_string()]
         },
         as_of: None,
-        use_reranker: q.rerank.unwrap_or(rerank_enabled()),
-        ablate: Vec::new(),
+        use_reranker: rerank,
+        ablate: if rerank {
+            Vec::new()
+        } else {
+            vec!["reranker".to_string()]
+        },
     };
     let query_str = q.q.clone();
 
@@ -5267,20 +5303,13 @@ pub async fn mcp_tier_set(
 // lifts LongMemEval hit@5 from ~94% (retrieval only) to ~97%, but it loads a
 // ~1 GB model and adds ~50-100 ms per recall. ON by default; the Settings
 // toggle writes "off" for a lighter, faster app at a small recall cost. Read
-// as the default for the recall path's `rerank` param (an explicit per-call
-// `rerank` still wins).
+// as the upper bound for every recall path's `rerank` param. A per-call false
+// can disable it; a per-call true never overrides a global opt-out.
 // ---------------------------------------------------------------------------
-
-pub fn rerank_pref_path() -> std::path::PathBuf {
-    super::paths::nv_home().join("rerank.txt")
-}
 
 /// Default reranker state for recall. ON unless the user wrote "off".
 pub fn rerank_enabled() -> bool {
-    match std::fs::read_to_string(rerank_pref_path()) {
-        Ok(s) => !matches!(s.trim().to_lowercase().as_str(), "off" | "false" | "0"),
-        Err(_) => true,
-    }
+    reranker::enabled()
 }
 
 #[derive(serde::Serialize)]
@@ -5303,7 +5332,7 @@ pub async fn rerank_set(
     _s: State<ServerState>,
     Json(body): Json<RerankBody>,
 ) -> Result<Json<RerankResponse>, ApiError> {
-    let path = rerank_pref_path();
+    let path = reranker::preference_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -7031,9 +7060,9 @@ pub async fn inbox_done(
 //        (works whether or not the brain is active).
 //   GET  /api/brains/:brain_id/sources/preview — read-only dry run.
 //
-// Source-folder CONFIG lives in brains.json (canonical config, never only
-// in the rebuildable brain.db). file_count + last_synced are NOT stored in
-// the brain record — they're computed from the per-brain
+// Source-folder CONFIG lives in brains.json (canonical registry config, never
+// only in the database's derived source index). file_count + last_synced are
+// NOT stored in the brain record; they're computed from the per-brain
 // `sources_manifest.json` at response time.
 // ---------------------------------------------------------------------------
 

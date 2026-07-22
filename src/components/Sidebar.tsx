@@ -16,6 +16,7 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { useGraphSettingsStore, folderColor } from "../stores/graphSettingsStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { NoteMeta } from "../lib/tauri";
+import { shortcut } from "../lib/platform";
 
 /** Top-level folder of a note (first path segment before "/"), or ""
  *  for a root-level note. Mirrors the graph's folder derivation so a
@@ -579,7 +580,7 @@ function BrainSidebar({
             No notes yet
           </p>
           <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-            Press <kbd className="px-1 py-0.5 rounded text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-accent)" }}>⌘N</kbd> to start
+            Press <kbd className="px-1 py-0.5 rounded text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-accent)" }}>{shortcut("N")}</kbd> to start
           </p>
         </div>
       )}

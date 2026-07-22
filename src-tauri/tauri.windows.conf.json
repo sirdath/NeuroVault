@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/vec0.dll": "resources/vec0.dll"
+    }
+  }
+}

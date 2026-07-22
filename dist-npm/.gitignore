@@ -3,3 +3,12 @@ packages/*/bin/
 # Local smoke-test artifacts
 node_modules/
 *.tgz
+# Release packaging stages byte-identical copies from the repository root.
+LICENSE
+PRIVACY.md
+THIRD-PARTY-NOTICES.md
+LICENSES/
+packages/*/LICENSE
+packages/*/PRIVACY.md
+packages/*/THIRD-PARTY-NOTICES.md
+packages/*/LICENSES/

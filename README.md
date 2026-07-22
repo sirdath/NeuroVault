@@ -16,7 +16,7 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
 ![Built with Tauri + Rust](https://img.shields.io/badge/built%20with-Tauri%202%20%2B%20Rust-24C8DB)
 
-**[Download](#download--install) · [Documentation](https://neurovault.dathproject.com/docs) · [Website](https://neurovault.dathproject.com) · [Connect your agent](#connect-your-agent-mcp)**
+**[Install](#install-neurovault) · [Documentation](#documentation) · [Connect your agent](#connect-your-agent-mcp)**
 
 </div>
 
@@ -28,7 +28,7 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 
 <br>
 
-NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Your notes stay as plain `.md` files and the local database is rebuildable; selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
+NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Note and engram content stays as plain `.md` files; SQLite holds rebuildable search indexes plus small structured records such as drafts, core-memory blocks, and version history. Selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
 
 The open local core follows the [Core Covenant](CORE-COVENANT.md): no required account, no remote kill switch, durable Markdown ownership, and no sale or model training on vault data.
 
@@ -36,7 +36,20 @@ The open local core follows the [Core Covenant](CORE-COVENANT.md): no required a
 
 ---
 
-## Download & install
+## Install NeuroVault
+
+There is one NeuroVault repository and one local memory engine. Choose the
+interface you want:
+
+| I want… | Install | Includes |
+|---|---|---|
+| A visual app for notes, memories, graphs, review, and settings | **[Desktop app](#desktop-app)** | The app and its built-in MCP server |
+| Memory for agents without a desktop interface | **[Headless MCP](#headless-mcp-no-app)** | The same Rust engine as a local MCP/HTTP service |
+
+Both modes use the same data under `~/.neurovault/`. You do not need both, and
+you can switch later without migrating your vaults.
+
+### Desktop app
 
 Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github.com/sirdath/NeuroVault/releases/latest)**
 
@@ -44,27 +57,63 @@ Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github
 |---|---|---|
 | **macOS Apple Silicon (M1–M4), macOS 14+** | `NeuroVault_*_aarch64.dmg` | ✅ Developer ID + notarized |
 | **Windows x64** | `NeuroVault_*_x64-setup.exe` (NSIS installer) | ⚠️ Not code-signed — see below |
-| **Linux x64** | `neurovault_*_amd64.AppImage` / `*.deb` / `*.rpm` | n/a (updater signatures provided) |
+| **Linux x64 (glibc 2.35+)** | `NeuroVault_*_amd64.AppImage` / `NeuroVault_*_amd64.deb` / `NeuroVault-*.x86_64.rpm` | n/a (updater signatures provided) |
 | **macOS Intel** | Not supported — see below | — |
 
-1. Download the installer for your platform and run it.
-2. Notes are saved as plain markdown in `~/.neurovault/`.
+1. Download the installer for your platform and verify it against
+   `SHA256SUMS.txt` from the same release.
+2. Install it:
+   - **macOS:** open the DMG, drag NeuroVault to Applications, then launch it
+     from Applications.
+   - **Windows:** run the NSIS `setup.exe`. Current preview builds are unsigned,
+     so read the Windows warning below before continuing.
+   - **Linux:** use one format only. Run the AppImage after `chmod +x`, install
+     the DEB with `sudo apt install ./NeuroVault_*.deb`, or install the RPM with
+     `sudo dnf install ./NeuroVault-*.rpm`.
+3. Notes are saved as plain Markdown under `~/.neurovault/` by default.
 
 **macOS 14 (Sonoma) is a hard floor.** The bundled `sqlite-vec` extension is built for macOS 14+, and it loads on every brain open — on macOS 11–13 the app launches and then cannot open any database. **Intel Macs are not supported at all**, including building from source: the only `vec0` build we ship is arm64, so an Intel build gets a library it cannot load.
 
 ### Verify the download before first launch
 
-Every release publishes SHA-256 checksums and Sigstore build provenance. Compare the downloaded file with the checksum in its release before opening it.
+Releases produced by the current pipeline publish `SHA256SUMS.txt`, updater signatures, SPDX SBOMs, and Sigstore build provenance. Compare the downloaded file with the checksum in its release before opening it. **v0.6.0 predates the checksum manifest**; its macOS app is Developer ID signed and notarized and its release includes provenance, but a checksum file was not published for that already-frozen release.
 
-**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple, so they open without warnings. If macOS says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning** — delete the file and report the release URL and checksum through the project security process.
+**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple. If macOS says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning**. Delete the file and report the release URL and checksum through the project security process.
 
-**Windows artifacts are not code-signed yet.** SmartScreen will say *"Windows protected your PC"* and show the publisher as unknown. That is expected for now, not a sign of tampering — an Authenticode certificate is on the roadmap. Verify the SHA-256 checksum against the release, then choose **More info → Run anyway**. If you would rather not, use the macOS build, a Linux build, or [build from source](#quick-start-developers).
+**Windows artifacts are an unsigned preview, not a fully verified consumer release.** SmartScreen will show an unknown publisher until NeuroVault has an Authenticode certificate. Do not bypass a platform warning merely because a README says to. For now, build from source after reviewing the code, or use the signed and notarized Apple Silicon build. A future release will only call Windows consumer-ready after installer signing is verified in CI.
 
 #### 🐧 Linux
 
-The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` first if your file manager doesn't mark it executable.
+Run `chmod +x NeuroVault_*.AppImage` first if your file manager does not mark
+the AppImage executable. A platform or security warning should be investigated,
+not bypassed merely because this README says the artifact is expected to run.
+Release CI builds and tests Linux artifacts on Ubuntu 22.04, the current tested
+baseline. Debian 12 is expected to be compatible but is not yet part of the
+clean-machine release gate. Alpine/musl and older glibc distributions are not
+release targets. The desktop package also requires WebKitGTK 4.1 and GTK 3
+(declared by the DEB/RPM installer).
 
 > **Updates** — NeuroVault installs signed updates in place from the top-bar **Update** button. Checks are manual by default; you can explicitly enable a launch check in **Settings → General**. Update requests never include vault content or a stable install identifier, and updates never touch data under `~/.neurovault/`.
+
+### Headless MCP (no app)
+
+The `@neurovault/mcp` package is prepared for macOS Apple Silicon, Windows x64,
+and Linux x64. **It has not had its first npm publication yet**, so an `npx`
+install would fail today. Until that first release is published, use the MCP
+server bundled with the desktop app or [build the headless server from
+source](dist-npm/README.md#build-from-source).
+
+After the first npm release, the install is one command:
+
+```bash
+claude mcp add --transport stdio --scope user neurovault -- npx -y @neurovault/mcp
+```
+
+Other MCP clients use the same `npx -y @neurovault/mcp` command in their MCP
+configuration. Windows clients that do not invoke a shell use `cmd /c`; the
+exact JSON for each platform is in the [headless package guide](dist-npm/README.md).
+That guide also covers status, safe shutdown, upgrades, and uninstalling while
+preserving or deliberately deleting local data.
 
 ## What you get
 
@@ -72,7 +121,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 - **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
-- **Import inbox** — drag a file onto the window to copy it into a private staging area without changing the original. Connected workflows can turn staged material into indexed notes. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
+- **Import inbox** — drag a file onto the window to copy it into a private staging area without changing the original. Connected workflows can turn staged material into indexed notes. [How it works →](#features)
 - **Silent fact capture** — casually-dropped facts ("I prefer Rust over Go") get promoted to first-class memories with provenance back to where you said them. (Optional Claude Code hook, run by the same native `neurovault-server` binary — no Python.)
 - **Multiple vaults** — separate files and databases per project; switch from the vault picker or command palette.
 - **Per-folder boundaries** — drop a `.neurovault` file in a project directory to scope that folder's connected memory to its own vault (opt-in).
@@ -80,11 +129,16 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 - **Floating minitab + window modes** — shrink the whole app to a tiny always-on-top widget (status · start/pause · open), or **Minimize / Hide / Shrink to widget** from the top bar; bring it back with `Ctrl/Cmd+Shift+Space`.
 - **Open a folder as a vault** — point NeuroVault at an existing Obsidian vault; the folder stays in place.
 - **Notes-tree + graph share colours**, themes, resizable panels, and **signed one-click auto-update**.
-- **Local-first, with an exact network contract.** No NeuroVault account or telemetry. The server is loopback-only on `127.0.0.1:8765`; selected context leaves the Mac only through AI providers you deliberately connect, and model/update downloads are disclosed in [PRIVACY.md](PRIVACY.md).
+- **Local-first, with an exact network contract.** No NeuroVault account or telemetry. The normal app server is loopback-only on `127.0.0.1:8765`; selected context leaves your device only through AI providers you deliberately connect. An optional, off-by-default external gateway can be bound beyond loopback, and model/update downloads plus its plain-HTTP warning are disclosed in [PRIVACY.md](PRIVACY.md).
 
 ## Connect your agent (MCP)
 
-**Installed app (one click):** open **Settings → Connect Claude Code** and hit **Register automatically** — it merges NeuroVault into `~/.claude.json` (your existing login + config are preserved), then restart your Claude Code session. For **Claude Desktop**, the same panel generates the exact JSON snippet to paste. Full walkthrough in the [Quickstart](https://neurovault.dathproject.com/docs#quickstart).
+**Installed app (one click):** open **Settings → Connections → Claude Code**
+and choose **Connect**. NeuroVault merges its own entry into `~/.claude.json`
+without replacing your other settings. Restart Claude Code afterward. For
+**Claude Desktop**, the same panel generates the exact JSON snippet to paste.
+The [troubleshooting guide](docs/TROUBLESHOOTING.md#mcp-agent-shows-disconnected)
+covers connection checks.
 
 > **Tiers** — by default the agent loads the **`lite`** tier (8 tools). Switch to `standard` (21) or `full` (55, includes the graphify code tools) in **Settings → MCP** or via `~/.neurovault/mcp_tier.txt`. Fewer tools = less context the agent pays for up front.
 
@@ -109,13 +163,19 @@ It forwards to the Rust HTTP server in the running app on `127.0.0.1:8765`. You 
 
 MCP memory has a known weakness: the agent only remembers if it *decides* to call `recall` — and models routinely don't. NeuroVault fixes this with **automatic recall** for Claude Code: relevant memories are injected into every prompt automatically, no tool call needed.
 
-Turn it on in **Settings → Automatic Memory (Claude Code)**, or from the terminal:
+Turn it on in **Privacy & Trust → Automatic context**. The desktop interface is
+the recommended setup path because it resolves the bundled binary for you.
+After the first headless npm release, the equivalent terminal commands are:
 
 ```bash
-neurovault-server hook install     # wires ~/.claude/settings.json
-neurovault-server hook status
-neurovault-server hook uninstall
+npx -y @neurovault/mcp@latest hook install     # wires ~/.claude/settings.json
+npx -y @neurovault/mcp@latest hook status
+npx -y @neurovault/mcp@latest hook uninstall
 ```
+
+Until the first npm release, source builds can substitute
+`src-tauri/target/release/neurovault-server`. Do not assume the desktop
+sidecar is on your shell `PATH`.
 
 How it works: Claude Code [hooks](https://code.claude.com/docs/en/hooks) run NeuroVault on every prompt (`UserPromptSubmit`) and at session open (`SessionStart`). Each prompt goes through **Ambient Recall**: the full hybrid retriever (semantic + BM25 + graph, fused, then a cross-encoder reranker) followed by a precision gate that decides whether anything is trustworthy enough to inject. Injected memories arrive as compact, sanitized background context with IDs, source paths, and a one-line "why". At session start you get a one-shot vault brief: core memory, top memories, open tasks.
 
@@ -215,7 +275,13 @@ Top fixes:
 
 ## Quick start (developers)
 
-**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/). That's it — the MCP server is a native Rust binary (`neurovault-server`), built alongside the app. No Python is needed to build or run anything. (The only Python in the repo is offline tooling the app never invokes: the `eval/` retrieval harness, the `docs/benchmarks/` report mergers, and two icon generators in `scripts/`.)
+**Prerequisites:** [Node.js](https://nodejs.org/) 22+, the stable
+[Rust toolchain](https://rustup.rs/), and the native prerequisites for your
+platform from the [Tauri v2 guide](https://v2.tauri.app/start/prerequisites/).
+That includes Xcode Command Line Tools on macOS, Microsoft C++ Build Tools and
+WebView2 on Windows, or WebKitGTK/GTK development packages on Linux. Python is
+not required to build or run NeuroVault. The Python files in this repository
+are offline evaluation and asset-generation tools.
 
 ```bash
 git clone https://github.com/sirdath/NeuroVault.git
@@ -291,7 +357,11 @@ External:
     (`neurovault-server hook …`). No Python anywhere in the product.
 ```
 
-Markdown in `vault/` and inputs in `raw/` are **canonical**; everything in `cache/` and `brain.db` is **rebuildable**. If the index breaks, rebuild from the files. You own your memories. Full layout + privacy details: [PRIVACY.md](PRIVACY.md).
+Note and engram content in `vault/` and inputs in `raw/` are **canonical**.
+Search indexes can be rebuilt from those files, but `brain.db` also contains
+small structured state and history that is not represented in Markdown. Back
+up or export the whole brain when you need a complete restore. You own your
+memories. Full layout and privacy details: [PRIVACY.md](PRIVACY.md).
 
 ## Tech stack
 
@@ -346,11 +416,13 @@ On Windows and Linux, use `Ctrl` in place of `⌘`.
 
 ## Documentation
 
-Full docs — quickstart, the graph view, drop-folder ingest, architecture, and the HTTP API — live at **[neurovault.dathproject.com/docs](https://neurovault.dathproject.com/docs)**.
+The in-repository documentation below is the canonical guide for the current
+release.
 
 In the repo:
 - **[Troubleshooting & data](docs/TROUBLESHOOTING.md)** — install warnings, MCP setup, backup/move/export, recovering a corrupt index.
 - **[How NeuroVault works](docs/HOW-NEUROVAULT-WORKS.md)** — the architecture and retrieval pipeline in depth.
+- **[Distribution readiness](docs/DISTRIBUTION-READINESS.md)** — release gates, platform status, artifact verification, and clean-machine smoke tests.
 - **[HTTP API](docs/api.md)** · **[Contributing](CONTRIBUTING.md)** · **[Privacy](PRIVACY.md)** · **[Security](SECURITY.md)**.
 
 ## Contributing

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useNoteStore } from "../stores/noteStore";
 import { useGraphStore } from "../stores/graphStore";
 import { recall as apiRecall, type RecallResult } from "../lib/api";
+import { shortcut } from "../lib/platform";
 
 export interface Command {
   id: string;
@@ -328,7 +329,7 @@ export function CommandPalette({ open, onClose, commands, currentView, onOpenNot
         >
           <div className="flex items-center gap-3">
             <span style={{ color: "var(--color-tertiary)" }} className="text-base select-none">
-              ⌘K
+              {shortcut("K")}
             </span>
             <input
               ref={inputRef}

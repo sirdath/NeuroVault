@@ -26,9 +26,50 @@ use std::time::Duration;
 
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
+use serde::Serialize;
 
 use super::paths::nv_home;
 use server::NeuroVaultMcp;
+
+#[derive(Serialize)]
+struct ManagedBackendMarker<'a> {
+    schema_version: u8,
+    managed_by: &'static str,
+    version: &'a str,
+    pid: u32,
+    port: u16,
+    instance_id: &'a str,
+}
+
+fn managed_backend_marker_path() -> std::path::PathBuf {
+    nv_home().join("managed-backend.json")
+}
+
+fn record_managed_backend(identity: &forward::BackendIdentity, port: u16) -> std::io::Result<()> {
+    let home = nv_home();
+    std::fs::create_dir_all(&home)?;
+    let destination = managed_backend_marker_path();
+    let temporary = home.join(format!("managed-backend.{}.tmp", std::process::id()));
+    let marker = ManagedBackendMarker {
+        schema_version: 1,
+        managed_by: "@neurovault/mcp",
+        version: &identity.version,
+        pid: identity.pid,
+        port,
+        instance_id: &identity.instance_id,
+    };
+    let bytes = serde_json::to_vec_pretty(&marker).map_err(std::io::Error::other)?;
+    std::fs::write(&temporary, bytes)?;
+    // Unix rename replaces atomically. Windows rename does not replace an
+    // existing file, so remove only the stale marker immediately before the
+    // rename. Ownership is still established by the live pid + instance_id,
+    // never by the marker alone.
+    #[cfg(windows)]
+    if destination.exists() {
+        std::fs::remove_file(&destination)?;
+    }
+    std::fs::rename(temporary, destination)
+}
 
 /// Run the MCP server over stdio until the client disconnects.
 /// Returns the process exit code.
@@ -109,7 +150,7 @@ async fn ensure_backend(base: &str) {
     }
     // Only auto-start a LOCAL backend. A custom remote NEUROVAULT_API_URL means
     // someone else owns the server — we just forward (and surface "down" if so).
-    if !(base.contains("127.0.0.1") || base.contains("localhost")) {
+    if !is_loopback_backend(base) {
         eprintln!("[neurovault-mcp] {base} unreachable and not local — not auto-starting");
         return;
     }
@@ -124,15 +165,26 @@ async fn ensure_backend(base: &str) {
         "[neurovault-mcp] no backend on {base} — auto-starting a headless one \
          (set NEUROVAULT_AUTOSTART=0 to disable)"
     );
-    if let Err(e) = spawn_backend_detached(&exe, port_from_base(base)) {
-        eprintln!("[neurovault-mcp] autostart spawn failed: {e}");
-        return;
-    }
+    let requested_port = port_from_base(base).unwrap_or(8765);
+    let spawned_pid = match spawn_backend_detached(&exe, Some(requested_port)) {
+        Ok(pid) => pid,
+        Err(e) => {
+            eprintln!("[neurovault-mcp] autostart spawn failed: {e}");
+            return;
+        }
+    };
     // Health comes up quickly (the embedder loads lazily on first recall, not
     // at bind). Give it ~30s. Concurrent sessions that lose the spawn race just
     // wait here for the winner — the loser's backend exits on bind-conflict.
     for _ in 0..60 {
-        if forward::backend_healthy(base).await {
+        if let Some(identity) = forward::backend_identity(base).await {
+            if identity.pid == spawned_pid {
+                if let Err(error) = record_managed_backend(&identity, requested_port) {
+                    eprintln!(
+                        "[neurovault-mcp] could not record managed backend ownership: {error}"
+                    );
+                }
+            }
             eprintln!("[neurovault-mcp] backend is up");
             return;
         }
@@ -146,7 +198,7 @@ async fn ensure_backend(base: &str) {
 /// Spawn `neurovault-server` (HTTP backend) fully detached so it outlives this
 /// stdio session and isn't killed when the agent closes the MCP connection.
 /// stdout/stderr go to `~/.neurovault/autostart.log` for debugging.
-fn spawn_backend_detached(exe: &std::path::Path, port: Option<u16>) -> std::io::Result<()> {
+fn spawn_backend_detached(exe: &std::path::Path, port: Option<u16>) -> std::io::Result<u32> {
     let mut cmd = Command::new(exe);
     if let Some(p) = port {
         cmd.arg("--port").arg(p.to_string());
@@ -192,17 +244,31 @@ fn spawn_backend_detached(exe: &std::path::Path, port: Option<u16>) -> std::io::
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    cmd.spawn()?; // don't wait — it's a daemon
-    Ok(())
+    let child = cmd.spawn()?; // don't wait — it's a daemon
+    Ok(child.id())
 }
 
-/// Parse the port from a base URL like `http://127.0.0.1:8765` → `8765`.
+/// True only for the exact plain-HTTP loopback hosts that a process spawned on
+/// this machine can own. Substring checks are unsafe here: a host such as
+/// `localhost.example.com` is remote despite containing `localhost`.
+fn is_loopback_backend(base: &str) -> bool {
+    reqwest::Url::parse(base).is_ok_and(|url| {
+        url.scheme() == "http"
+            && matches!(
+                url.host_str(),
+                Some(host)
+                    if host.eq_ignore_ascii_case("localhost")
+                        || host == "127.0.0.1"
+                        || host == "::1"
+                        || host == "[::1]"
+            )
+    })
+}
+
+/// Parse the port from a backend URL, using HTTP's default when omitted.
 fn port_from_base(base: &str) -> Option<u16> {
-    base.trim_end_matches('/')
-        .rsplit(':')
-        .next()?
-        .parse::<u16>()
-        .ok()
+    let url = reqwest::Url::parse(base).ok()?;
+    url.port_or_known_default()
 }
 
 /// Resolve the opt-in per-folder brain *name* (not yet the id). Order:
@@ -234,7 +300,18 @@ mod tests {
     fn port_parsing() {
         assert_eq!(port_from_base("http://127.0.0.1:8765"), Some(8765));
         assert_eq!(port_from_base("http://127.0.0.1:8801/"), Some(8801));
-        assert_eq!(port_from_base("http://localhost"), None);
+        assert_eq!(port_from_base("http://localhost"), Some(80));
+        assert_eq!(port_from_base("not a url"), None);
+    }
+
+    #[test]
+    fn autostart_accepts_exact_loopback_hosts_only() {
+        assert!(is_loopback_backend("http://127.0.0.1:8765"));
+        assert!(is_loopback_backend("http://localhost:8765"));
+        assert!(is_loopback_backend("http://[::1]:8765"));
+        assert!(!is_loopback_backend("https://127.0.0.1:8765"));
+        assert!(!is_loopback_backend("http://localhost.example.com:8765"));
+        assert!(!is_loopback_backend("http://127.0.0.1.example.com:8765"));
     }
 
     #[test]

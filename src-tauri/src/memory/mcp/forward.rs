@@ -17,6 +17,7 @@
 
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use super::registry::{CallSpec, ParamSpec, ToolDef};
@@ -58,6 +59,33 @@ pub async fn backend_healthy(base: &str) -> bool {
     )
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct BackendIdentity {
+    pub version: String,
+    pub pid: u32,
+    pub instance_id: String,
+}
+
+/// Fetch the identity of the exact process answering on the singleton port.
+/// Older servers without `instance_id` deliberately return None: lifecycle
+/// tooling may report them, but must not claim ownership or stop them.
+pub async fn backend_identity(base: &str) -> Option<BackendIdentity> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    client
+        .get(format!("{base}/api/version"))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json::<BackendIdentity>()
+        .await
+        .ok()
+}
+
 /// Fetch the live backend's reported version from `/api/version`, if reachable.
 /// Used to warn about version skew when an OLDER backend already owns :8765 (the
 /// desktop app, a prior npx session, or a curl install all bind it; first wins).
@@ -67,16 +95,20 @@ pub async fn backend_version(base: &str) -> Option<String> {
         .timeout(Duration::from_secs(2))
         .build()
         .ok()?;
-    let resp = client
+    let value: Value = client
         .get(format!("{base}/api/version"))
         .send()
         .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json()
+        .await
         .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let v: Value = resp.json().await.ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(String::from)
+    value
+        .get("version")
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 /// Idempotently ensure a brain named `name` exists, returning its id.

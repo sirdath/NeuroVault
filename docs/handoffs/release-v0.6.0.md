@@ -3,8 +3,8 @@
 > Written 2026-07-20 for a fresh agent (Codex or otherwise) joining mid-release.
 > Self-contained: you should not need to read the chat history.
 >
-> **Repo path contains a space** — `/Users/dath/Documents/Dath Serious Projects /NeuroVault`
-> (note the space before `/NeuroVault`). Quote it in every shell command.
+> Work from a clean clone of `https://github.com/sirdath/NeuroVault.git` and
+> quote the checkout path in shell commands if it contains spaces.
 
 ## What NeuroVault is
 
@@ -18,11 +18,11 @@ Local-first, open-source AI memory for Claude and other LLM agents. Three parts:
    behind tiers (`minimal` 3 / `lite` 8 default / `standard` 21 / `full` 55). It loads no
    model and opens no DB; it forwards tool calls over loopback HTTP to the app.
 
-**Core invariant:** markdown in `~/.neurovault/brains/<id>/vault/*.md` is CANONICAL.
-`brain.db` is a REBUILDABLE index. Anything that can destroy user markdown is top severity.
-(Caveat found this week: `core_memory_blocks`, `engram_versions` and `drafts` live ONLY in
-the DB with no markdown mirror — so that invariant is not fully true today. Documented, not
-yet fixed.)
+**Core invariant:** Markdown in `~/.neurovault/brains/<id>/vault/*.md` is
+canonical for note and engram content. Search indexes in `brain.db` are
+rebuildable, but `core_memory_blocks`, `engram_versions`, `drafts`, proposals,
+and other structured history are database-owned. Anything that can destroy
+either canonical Markdown or database-owned state is top severity.
 
 ## What this work was
 
