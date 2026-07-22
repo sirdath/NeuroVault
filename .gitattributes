@@ -1,0 +1,4 @@
+# Third-party license and notice text is preserved byte-for-byte from upstream.
+# Some upstream notices contain meaningful or historical trailing whitespace;
+# do not normalize it or report it as first-party style damage.
+LICENSES/** -whitespace

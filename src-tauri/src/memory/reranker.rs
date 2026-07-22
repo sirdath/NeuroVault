@@ -13,7 +13,7 @@
 //! matters because the model is ~1 GB.
 //!
 //! `RecallOpts::default()` does set `use_reranker: false`, but the
-//! HTTP/MCP layer overrides it: `handlers::rerank_enabled()` returns
+//! HTTP/MCP layer overrides it: `enabled()` returns
 //! `true` when the rerank pref file is absent — which is every fresh
 //! install. So on a new machine the first keyword-shaped recall
 //! triggers a ~1 GB download, then pins ~1 GB resident for the life of
@@ -36,6 +36,27 @@ use parking_lot::Mutex;
 use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
+/// Persisted user preference for the optional cross-encoder. This lives in
+/// the model layer because ambient recall and adaptive recipes can invoke the
+/// reranker without going through an HTTP handler.
+pub fn preference_path() -> std::path::PathBuf {
+    nv_home().join("rerank.txt")
+}
+
+fn enabled_from_path(path: &std::path::Path) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(s) => !matches!(s.trim().to_lowercase().as_str(), "off" | "false" | "0"),
+        Err(_) => true,
+    }
+}
+
+/// Whether the optional ~1 GB reranker is permitted to initialize.
+/// Missing preference files preserve the historical default (on), while an
+/// explicit opt-out applies to every recall path.
+pub fn enabled() -> bool {
+    enabled_from_path(&preference_path())
+}
+
 /// Global lazy-init reranker singleton. Guards concurrent use; the
 /// underlying ONNX session isn't documented as thread-safe so we
 /// serialise access via `Mutex`, same pattern as `embedder::instance`.
@@ -53,22 +74,19 @@ fn instance() -> Result<&'static Reranker> {
         // only BGERerankerBase / BGERerankerV2M3 / JINA*), so this cannot
         // be int8-swapped the way the embedder can (BGESmallENV15Q).
         // It is CPU/RAM-heavy and — measured on LongMemEval — NEUTRAL vs
-        // engine-only at scale, so it stays OFF by default (use_reranker
-        // false; fires only for keyword-shaped queries). Model cache is
-        // shared at `~/.neurovault/.fastembed_cache/`; first-use download
-        // is the full ~1 GB.
-        let model = TextRerank::try_new(
-            RerankInitOptions::new(RerankerModel::BGERerankerBase)
-                .with_show_download_progress(false)
-                // Pin the model cache to ~/.neurovault/.fastembed_cache (matches
-                // embedder.rs). Without this, fastembed defaults to the process
-                // CWD — fine for the GUI app (launched from a stable dir) but
-                // wrong for a headless `neurovault-server` started from an
-                // arbitrary cwd (npm bin shim, brew, curl), which would scatter
-                // a ~1.0 GB model under whatever folder the agent ran from.
-                .with_cache_dir(nv_home().join(".fastembed_cache")),
-        )
-        .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
+        // engine-only at scale. RecallOpts' low-level field is false, but the
+        // HTTP/MCP layer deliberately overrides that with the fresh-install ON
+        // preference documented above. Model cache is shared at
+        // `~/.neurovault/.fastembed_cache/`; first-use download is ~1 GB.
+        let mut opts = RerankInitOptions::new(RerankerModel::BGERerankerBase)
+            .with_show_download_progress(false);
+        // Match embedder.rs: an explicit cache override wins; otherwise keep
+        // the model under NeuroVault's data root instead of the process CWD.
+        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+            opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
+        }
+        let model = TextRerank::try_new(opts)
+            .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
         Ok::<Reranker, MemoryError>(Reranker {
             model: Mutex::new(model),
         })
@@ -85,6 +103,11 @@ fn instance() -> Result<&'static Reranker> {
 pub fn rerank(query: &str, documents: &[String]) -> Result<Vec<f32>> {
     if documents.is_empty() {
         return Ok(Vec::new());
+    }
+    if !enabled() {
+        return Err(MemoryError::Other(
+            "reranker disabled by user preference".to_string(),
+        ));
     }
     let inst = instance()?;
     let doc_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
@@ -103,4 +126,37 @@ pub fn rerank(query: &str, documents: &[String]) -> Result<Vec<f32>> {
         }
     }
     Ok(by_idx)
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::enabled_from_path;
+
+    #[test]
+    fn missing_preference_preserves_the_historical_default() {
+        let path = std::env::temp_dir().join(format!(
+            "neurovault-reranker-missing-{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        assert!(enabled_from_path(&path));
+    }
+
+    #[test]
+    fn every_documented_opt_out_spelling_disables_the_model() {
+        let path = std::env::temp_dir().join(format!(
+            "neurovault-reranker-values-{}.txt",
+            std::process::id()
+        ));
+        for value in ["off", "false", "0", " OFF \n"] {
+            std::fs::write(&path, value).expect("write preference");
+            assert!(
+                !enabled_from_path(&path),
+                "{value:?} must disable reranking"
+            );
+        }
+        std::fs::write(&path, "on").expect("write preference");
+        assert!(enabled_from_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
 }

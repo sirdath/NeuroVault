@@ -111,7 +111,11 @@ Everything NeuroVault persists lives under `~/.neurovault/`:
             └── <subdirs>/          ← user-organised folders
 ```
 
-**The markdown files are the source of truth.** If `brain.db` is ever deleted, it can be rebuilt deterministically by re-ingesting every `.md` file. This is a hard invariant — no memory exists only in the database.
+**Markdown is the source of truth for note and engram content.** Search indexes
+can be rebuilt by re-ingesting `.md` files. `brain.db` also owns structured
+state that has no Markdown mirror, including drafts, core-memory blocks,
+proposals, and version history, so deleting it is destructive. Make a
+stopped-process full-data backup before recovery work.
 
 **Key tables in `brain.db`** (full schema in `src-tauri/src/memory/schema.sql`, 24 tables):
 
@@ -287,7 +291,7 @@ Claude Code ──spawn──► neurovault-server ──HTTP──► axum on 1
 ```
 
 Claude Code's `~/.claude.json` registers the server via (Settings → Connect
-Claude Code → Register automatically writes this for you):
+Connections → Claude Code → Connect writes this for you):
 
 ```json
 {

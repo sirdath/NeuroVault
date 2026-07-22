@@ -48,6 +48,9 @@ if [ "${GATES_FRONTEND:-1}" = "1" ]; then
   echo "── release hardening invariants"
   (cd .. && npm run test:hardening) || fail "release hardening"
 
+  echo "── generated third-party notices"
+  (cd .. && npm run legal:check) || fail "third-party notices"
+
   # This gate ran neither test:graph nor test:durability, and vitest's include
   # ("src/**/*.test.tsx") skips every .ts suite — so graphExport, consumerHealth
   # and noteDrafts were run by nothing at all. The graph replay guarantee ("a

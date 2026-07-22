@@ -31,6 +31,7 @@ import { neurovaultEditorTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
 import { useSettingsStore } from "../stores/settingsStore";
+import { shortcut } from "../lib/platform";
 
 export function Editor() {
   const brainId = useBrainStore((state) => state.activeBrainId);
@@ -257,7 +258,7 @@ function BrainEditor({ scope }: { scope: string }) {
             </button>
           </div>
           <p className="text-[12px] mt-4 font-[Geist,sans-serif]" style={{ color: "var(--nv-text-dim)" }}>
-            or press <kbd className="px-1.5 py-0.5 rounded-md text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>⌘N</kbd>
+            or press <kbd className="px-1.5 py-0.5 rounded-md text-[11px] font-mono" style={{ background: "var(--nv-surface)", color: "var(--nv-text-muted)", border: "1px solid var(--nv-border)" }}>{shortcut("N")}</kbd>
           </p>
         </div>
       </div>

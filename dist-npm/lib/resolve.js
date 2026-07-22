@@ -18,11 +18,11 @@
 //      GitHub's Intel-runner queue for a full 24 hours and was cancelled by
 //      the job timeout on every run. release.yml and release-vscode.yml had
 //      already dropped their Intel jobs for exactly this reason.
-//   2. Had it built, it would have shipped broken. build-headless.mjs maps
-//      BOTH mac triples to the same src-tauri/resources/vec0.dylib, which is
-//      arm64-only (`lipo -archs` → arm64). There is no x64 or universal vec0
-//      anywhere in the pipeline, and sqlite_vec::load is fatal in
-//      db.rs::open_new — so every brain open would have failed.
+//   2. Had the old job built, it would have shipped broken. The previous
+//      packaging map reused the arm64-only vec0.dylib for both Mac triples.
+//      There is still no verified x64 or universal vec0 in the pipeline, and
+//      sqlite_vec::load is fatal in db.rs::open_new, so every brain open would
+//      have failed.
 //
 // Listing the key anyway would resolve to a package that is never published
 // and produce a confusing MISSING_PACKAGE error. Leaving it out routes Intel
@@ -57,7 +57,8 @@ function resolveBinary() {
   if (isMuslLinux()) {
     const e = new Error(
       'NeuroVault: musl libc (e.g. Alpine) is not supported yet — only glibc Linux x64. ' +
-        'Use a glibc-based image (debian/ubuntu) or the desktop app.',
+        'Use a glibc-based image (such as Debian or Ubuntu), or build from source ' +
+        'with a musl-compatible sqlite-vec extension.',
     );
     e.code = 'UNSUPPORTED_LIBC';
     e.key = key;
@@ -71,9 +72,10 @@ function resolveBinary() {
     const detail =
       key === 'darwin-x64'
         ? 'NeuroVault: Intel Macs have no prebuilt npm binary. ' +
-          'Use the desktop app, or build from source ' +
-          '(https://github.com/sirdath/NeuroVault#quick-start-developers). ' +
-          'Apple Silicon, Linux x64 and Windows x64 are prebuilt.'
+          'The desktop app is also Apple-Silicon-only, and a source build ' +
+          'requires a compatible x86_64 sqlite-vec library that NeuroVault ' +
+          'does not currently ship. Apple Silicon, Linux x64 and Windows x64 ' +
+          'are the supported prebuilt targets.'
         : `NeuroVault: no prebuilt binary for platform "${key}".`;
     const e = new Error(detail);
     e.code = 'UNSUPPORTED_PLATFORM';

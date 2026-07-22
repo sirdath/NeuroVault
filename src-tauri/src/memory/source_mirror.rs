@@ -13,7 +13,8 @@
 //! - **Config** (`source_folders`) lives in `brains.json` — see
 //!   `types::SourceFolder`, parsed in `read_ops`, persisted in
 //!   `write_ops`. It is canonical config and so NEVER lives only in
-//!   `brain.db` (which is a rebuildable index, wiped on reindex).
+//!   `brain.db` (whose source-mirror rows are derived index state and may be
+//!   rebuilt, even though the database also owns other durable records).
 //! - **Manifest** (`sources_manifest.json`, one per brain) tracks the
 //!   source→vault file mapping + content hashes so sync is incremental
 //!   and deletions are detectable. The manifest is derived state — it

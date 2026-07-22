@@ -1136,7 +1136,7 @@ mod tests {
             "then lets continue and make sure that it works well"
         ));
         assert!(worth_recalling("ok great lets keep going with this"));
-        // Non-continue glue still never leaves the client.
+        // Non-continue glue still receives no injected memory from the hook.
         assert!(!worth_recalling("please make sure everything looks good"));
         // ("sounds" is a contentful token by the stoplist rules, so
         // that variant legitimately passes; use pure-stopword glue.)

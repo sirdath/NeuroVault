@@ -425,9 +425,9 @@
           <div class="nsub" style="margin-top:4px">human-readable markdown &middot; the source of truth</div>
         </div>
         <div class="subbox" style="border-color:#bcd7fd;background:#f7fbff">
-          <div class="subhdr"><span class="st">brain.db</span><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
-          <div class="nsub" style="margin-top:4px">SQLite + sqlite-vec &middot; vectors + knowledge graph</div>
-          <div class="nsub" style="margin-top:3px">a rebuildable index over the vault &middot; delete it &#8594; reconstructs</div>
+          <div class="subhdr"><span class="st">brain.db</span><span class="tag-rebuild" style="margin-left:auto">local state</span></div>
+          <div class="nsub" style="margin-top:4px">SQLite + sqlite-vec &middot; search indexes + structured state/history</div>
+          <div class="nsub" style="margin-top:3px">indexes rebuild from Markdown &middot; back up the DB for complete restore</div>
         </div>
       </div>
 
@@ -516,7 +516,7 @@
       <div class="vconn"></div>
       <div class="fbox strong"><div class="ft">engram row written</div><div class="fd">one memory unit, linked into the graph</div></div>
       <div class="localnote" style="margin-top:14px;color:var(--ink-2);background:var(--panel-soft);border-color:var(--line)">
-        <b style="color:var(--violet-d)">write-back</b> keeps markdown and brain.db in sync in both directions. The DB is <b style="color:var(--blue-ink)">rebuildable</b>: delete brain.db and it reconstructs entirely from the vault.
+        <b style="color:var(--violet-d)">write-back</b> keeps note content and its search index in sync. The index is <b style="color:var(--blue-ink)">rebuildable</b>; database-owned drafts, core memory, and history require a complete backup.
       </div>
     </div>
 
@@ -529,8 +529,8 @@
       </div>
       <div class="vconn"><span class="cap">index / rebuild</span></div>
       <div class="fbox" style="border-color:#bcd7fd;background:#f7fbff">
-        <div class="frow"><div class="ft">brain.db</div><span class="tag-rebuild" style="margin-left:auto">rebuildable</span></div>
-        <div class="fd">SQLite + sqlite-vec &middot; a derived index over the vault</div>
+        <div class="frow"><div class="ft">brain.db</div><span class="tag-rebuild" style="margin-left:auto">local state</span></div>
+        <div class="fd">SQLite + sqlite-vec &middot; derived search indexes plus structured state/history</div>
       </div>
       <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:14px 0 4px">Inside brain.db</div>
       <table class="kv">
@@ -579,7 +579,7 @@
         <div class="braincard"><span class="adot off"></span><span class="bn">personal</span><span class="bparts">vault/ + brain.db</span></div>
       </div>
       <div class="noteline" style="margin-top:12px">
-        Many <span class="k">fully independent</span> brains live side by side. Each is its own vault + rebuildable index.
+        Many <span class="k">fully independent</span> brains live side by side. Each has its own Markdown vault + local database.
       </div>
       <div style="font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:12px 0 8px">Tools</div>
       <div class="chips">
@@ -667,7 +667,7 @@
   <!-- ===================== FOOTER ===================== -->
   <div class="foot-strip">
     <b>NEUROVAULT technical reference</b>
-    <span class="dot">&middot;</span> markdown is canonical, brain.db is a rebuildable index
+    <span class="dot">&middot;</span> Markdown note content is canonical; complete restores include brain.db
     <span class="dot">&middot;</span> 3 processes, one loopback port (127.0.0.1:8765)
     <span class="dot">&middot;</span> 55 MCP tools, 4 tiers
     <span class="dot">&middot;</span> 97.45% hit@5 on LongMemEval-S

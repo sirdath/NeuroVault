@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   npm-audit:
-    name: npm audit
+    name: npm audits
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -18,8 +18,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm audit --audit-level=high
+      - name: Audit desktop/frontend dependencies
+        run: |
+          npm ci
+          npm audit --audit-level=high
+      - name: Audit VS Code build dependencies
+        working-directory: vscode-extension
+        run: |
+          npm ci
+          npm audit --audit-level=high
 
   rust-audit:
     name: RustSec audit

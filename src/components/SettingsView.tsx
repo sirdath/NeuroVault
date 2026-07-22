@@ -11,6 +11,7 @@ import vaultMark from "../assets/vault-mark-transparent.png";
 import { ConnectionsCenter } from "./ConnectionsCenter";
 import { BrainSourcesPanel } from "./BrainSourcesPanel";
 import { useBrainStore } from "../stores/brainStore";
+import { localDeviceName, shortcut } from "../lib/platform";
 
 
 const FONT_SIZES = [
@@ -441,12 +442,12 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         {settingsTab === "general" && <>
         <Section title="Keyboard Shortcuts">
           <div className="space-y-2">
-            <ShortcutRow keys="⌘K" action="Command palette" />
-            <ShortcutRow keys="⌘N" action="New note" />
-            <ShortcutRow keys="⌘P" action="Cycle Memories and Graph" />
-            <ShortcutRow keys="⌘S" action="Save note" />
-            <ShortcutRow keys="⌘/" action="Search memory" />
-            <ShortcutRow keys="⌘⇧Space" action="Quick capture" />
+            <ShortcutRow keys={shortcut("K")} action="Command palette" />
+            <ShortcutRow keys={shortcut("N")} action="New note" />
+            <ShortcutRow keys={shortcut("P")} action="Cycle Memories and Graph" />
+            <ShortcutRow keys={shortcut("S")} action="Save note" />
+            <ShortcutRow keys={shortcut("/")} action="Search memory" />
+            <ShortcutRow keys={shortcut("Space", { shift: true })} action="Quick capture" />
             <ShortcutRow keys="Escape" action="Exit edit mode" />
             <ShortcutRow keys="?" action="Show all shortcuts" />
           </div>
@@ -465,7 +466,7 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
             <div>
               <p className="text-[13px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>NeuroVault <AppVersion /></p>
               <p className="text-[12px] font-[Geist,sans-serif] mt-1" style={{ color: "var(--nv-text-dim)" }}>
-                Your vault and index stay on this Mac. Selected context is shared only with AI providers you connect.
+                Your vault and index stay on this {localDeviceName()}. Selected context is shared only with AI providers you connect.
               </p>
             </div>
           </div>
@@ -491,7 +492,8 @@ function VaultSettings() {
       <Section title="Ownership & backup">
         <div className="space-y-3 text-[12px] leading-relaxed" style={{ color: "var(--nv-text-muted)" }}>
           <p>Your notes are ordinary Markdown. Internal vaults, their index, and supporting memory data live under <span className="font-mono">~/.neurovault/</span>.</p>
-          <p>Use the vault manager above to export a complete ZIP snapshot. Test important backups by opening the Markdown on another account before relying on them.</p>
+          <p>Use the vault manager above for a portable ZIP of Markdown and other file-owned content. It deliberately excludes the live database, so drafts, core-memory blocks, proposals, and version history are not included.</p>
+          <p>For a complete backup, explicitly quit NeuroVault and stop any headless npm backend, then copy the whole <span className="font-mono">~/.neurovault/</span> directory while no NeuroVault process is running.</p>
           <p>Deleting a note moves its Markdown to NeuroVault Trash. Restore it from Memories or Privacy & Trust; restoring rebuilds its search index.</p>
         </div>
       </Section>
@@ -573,8 +575,8 @@ function AppVersion() {
 
 /** Updates section. Shares the global update store with the top-bar
  *  Update pill, so a check here lights up the pill (and vice-versa).
- *  "Update" downloads + installs via the native updater when configured,
- *  else opens the GitHub release page (current unsigned-installer state). */
+ *  "Update" downloads + signature-verifies through the native updater,
+ *  with the GitHub release page as a graceful fallback. */
 function UpdatesSection() {
   const info = useUpdateStore((s) => s.info);
   const checking = useUpdateStore((s) => s.checking);
@@ -964,8 +966,8 @@ function APIGatewaySection() {
         <div className="mt-1 space-y-1">
           {([
             { v: "loopback" as const, label: "Loopback only (127.0.0.1)", hint: "Safe — only this machine can connect." },
-            { v: "lan"      as const, label: "LAN (0.0.0.0)",            hint: "Anyone on your local network can reach the gateway. Don't enable on untrusted WiFi." },
-            { v: "specific" as const, label: "Specific IP",              hint: "Bind to a single network interface (e.g. WireGuard, Tailscale)." },
+            { v: "lan"      as const, label: "LAN (0.0.0.0)",            hint: "Plain HTTP. Anyone on your network can reach it; never use on untrusted Wi-Fi." },
+            { v: "specific" as const, label: "Specific IP",              hint: "Plain HTTP. Prefer a protected interface such as WireGuard or Tailscale." },
           ]).map((opt) => (
             <label key={opt.v} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:[background:var(--nv-surface-2)]">
               <input
@@ -991,12 +993,12 @@ function APIGatewaySection() {
             </label>
           ))}
         </div>
-        {draft.bind_kind === "lan" && draft.enabled && (
+        {draft.bind_kind !== "loopback" && draft.enabled && (
           <p
             className="text-[11px] font-[Geist,sans-serif] mt-2 p-2 rounded"
             style={{ background: "rgba(239,68,68,0.1)", color: "var(--nv-negative, #ef4444)", border: "1px solid var(--nv-negative, #ef4444)" }}
           >
-            ⚠ LAN bind: anyone on your network with a valid API key can read or write your vault. Use API keys with tight scopes and vault allowlists.
+            ⚠ No transport encryption: this gateway uses plain HTTP. On a LAN, API keys and returned memory content can be exposed in transit. Never use it on public or untrusted Wi-Fi. Prefer loopback or a protected private interface, and use tightly scoped keys with vault allowlists.
           </p>
         )}
       </div>

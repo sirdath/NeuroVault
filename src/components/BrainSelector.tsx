@@ -183,7 +183,7 @@ export function BrainSelector({
       const slug = brainName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
       const stamp = new Date().toISOString().slice(0, 10);
       const destPath = await save({
-        title: "Export vault as .zip",
+        title: "Export portable vault files as .zip",
         defaultPath: `neurovault-${slug}-${stamp}.zip`,
         filters: [{ name: "Zip archive", extensions: ["zip"] }],
       });
@@ -192,7 +192,7 @@ export function BrainSelector({
         brainId,
         destPath: String(destPath),
       });
-      toast.success(`Exported ${count} file${count === 1 ? "" : "s"} to ${String(destPath)}`);
+      toast.success(`Exported ${count} portable file${count === 1 ? "" : "s"}. Database-only history is not included.`);
     } catch (e) {
       toast.error(`Export failed: ${String(e)}`);
     }
@@ -514,7 +514,7 @@ export function BrainSelector({
                         onClick={(e) => { e.stopPropagation(); handleExport(brain.id, brain.name); }}
                         className="w-5 h-5 flex items-center justify-center rounded transition-colors"
                         style={{ color: "var(--nv-text-dim)" }}
-                        title="Export vault as .zip"
+                        title="Export portable files as .zip (database-only history is not included)"
                         onMouseEnter={(e) => { e.currentTarget.style.color = "var(--nv-text)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.color = "var(--nv-text-dim)"; }}
                       >

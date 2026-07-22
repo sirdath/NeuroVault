@@ -42,12 +42,17 @@ updates to an already installed NeuroVault app.
 
 4. Launch from Finder on a standard non-developer account. Gatekeeper should
    open the app normally with no “damaged” workaround.
-5. Verify first-run model disclosure, create/edit/export/restore, quit/reopen,
-   updater check, and that all vault data stays intact.
-6. Confirm the SPDX SBOM for every platform is attached to the draft and verify
-   the downloaded DMG's provenance with
+5. Verify first-run model disclosure, create/edit, portable file export,
+   quit/reopen, updater check, and that all vault data stays intact. Separately
+   restore a stopped-process full-data backup into an isolated home directory.
+6. Confirm `SHA256SUMS.txt` and the SPDX SBOM for every platform are attached
+   to the draft. Verify the checksum from a freshly downloaded DMG, then verify
+   its provenance with
    `gh attestation verify --owner sirdath NeuroVault_*.dmg`.
-7. Only then edit the release notes and publish the draft.
+7. Mount the freshly downloaded DMG and confirm the app contains
+   `Contents/Resources/legal/LICENSE`, `PRIVACY.md`, and
+   `THIRD-PARTY-NOTICES.md`, plus only the native `vec0.dylib` for macOS.
+8. Only then edit the release notes and publish the draft.
 
 If any signature, Gatekeeper, stapling, updater, data-integrity, or smoke check
 fails, keep the release in draft and fix the build. Do not ask users to disable

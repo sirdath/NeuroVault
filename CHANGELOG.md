@@ -16,6 +16,19 @@ _Nothing yet._
 
 ---
 
+## [0.6.1] - 2026-07-22
+
+### Fixed
+
+- Hardened the desktop, headless npm, and VS Code release lanes with verified
+  native dependencies, complete legal notices, security audits, artifact
+  checksums, SBOMs, and fail-closed signing gates.
+- Corrected platform and data-ownership documentation: headless macOS support
+  is Apple Silicon only, and a complete backup must include database-owned
+  structured state and history as well as the canonical Markdown notes.
+
+---
+
 ## [0.6.0] — 2026-07-20
 
 The release where memory stops waiting to be asked. NeuroVault can now feed
@@ -91,11 +104,11 @@ crash audit.
   (0-1): how much to trust the fact, distinct from the relevance `score`. It
   is structural and zero-LLM (derived from provenance and kind), so agents
   can weigh facts, especially ones written by other agents.
-- **Headless install via npm.** `claude mcp add neurovault -- npx -y
-  @neurovault/mcp` gives you NeuroVault with no GUI and no installer — useful
-  on a server, in Docker, or to sidestep the macOS Gatekeeper warning on the
-  unsigned app. Ships for macOS (Apple Silicon + Intel), Linux x64, and
-  Windows x64; the binary links no GUI frameworks and no OpenSSL.
+- **Headless install via npm.** `claude mcp add --transport stdio --scope user
+  neurovault -- npx -y @neurovault/mcp` gives you NeuroVault with no GUI and no installer — useful
+  on a server or in Docker. Prepared for macOS Apple Silicon, Linux x64, and
+  Windows x64; the binary links no GUI frameworks and no OpenSSL. The first npm
+  publication had not shipped with v0.6.0.
 - **Sources.** Settings → Sources is now the single place to bring knowledge
   in: use a Markdown/Obsidian folder as a vault, mirror additional folders
   without touching the originals (enable, disable, preview and apply sync),

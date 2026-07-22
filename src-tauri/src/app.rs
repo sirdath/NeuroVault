@@ -16,7 +16,7 @@ use uuid::Uuid;
 // now prefers over the legacy HTTP sidecar.
 use crate::memory;
 
-/// Shared state holding the Python sidecar child process (if running).
+/// Shared state holding the bundled native server child process (if running).
 struct ServerState(Mutex<Option<CommandChild>>);
 
 // Explicit Quit is a two-phase handshake: ExitRequested asks the frontend to
@@ -223,7 +223,7 @@ struct BrainInfoOffline {
 
 /// List every brain from ``brains.json`` on disk, no HTTP server needed.
 ///
-/// This is the fallback the Tauri frontend uses when the Python sidecar
+/// This is the fallback the Tauri frontend uses when the local HTTP server
 /// is off. Without it, the BrainSelector dropdown shows an empty list and
 /// the user can only create a new vault — they can't switch to an
 /// existing one. Returns an empty vec when the registry is missing (fresh
@@ -562,11 +562,14 @@ fn server_status(state: tauri::State<'_, ServerState>) -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
-/// Zip up a brain's vault + DB into a single archive at `dest_path`.
-/// Internal brains get bundled complete (DB + vault/ + raw/ +
-/// consolidated/); external-folder brains get just vault/ + DB since
-/// the vault lives outside our tree anyway. The user picks the
-/// destination via a Tauri save dialog on the frontend.
+/// Export a portable ZIP of a brain's file-owned content.
+///
+/// Live SQLite/WAL files are intentionally excluded. Copying them while the
+/// app or headless server is writing can produce a ZIP that looks complete but
+/// cannot be restored. The archive is therefore a portable Markdown/raw/assets
+/// export, not a full-fidelity backup of database-owned drafts, core memory,
+/// proposal history, or note history. Complete backups are documented as an
+/// explicit quit/stop-then-copy operation.
 #[tauri::command]
 fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, String> {
     use std::io::{Read, Write};
@@ -576,53 +579,127 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
         return Err(format!("brain not found: {brain_id}"));
     }
 
-    // Resolve the external vault_path if this is an external-folder brain
-    // so we can include the user's markdown alongside the internal DB.
+    // Resolve the exact registry record. Failing closed matters for an
+    // external-folder brain: silently missing `vault_path` would create a
+    // plausible-looking export with none of the user's notes.
     let registry = nv_home.join("brains.json");
-    let external_vault: Option<PathBuf> = fs::read_to_string(&registry)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| {
-            v.get("brains")
-                .and_then(|a| a.as_array())
-                .and_then(|brains| {
-                    brains.iter().find_map(|b| {
-                        if b.get("id").and_then(|x| x.as_str()) == Some(&brain_id) {
-                            b.get("vault_path")
-                                .and_then(|x| x.as_str())
-                                .map(PathBuf::from)
-                        } else {
-                            None
-                        }
-                    })
-                })
-        });
+    let registry_value: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&registry).map_err(|e| format!("read brains.json: {e}"))?,
+    )
+    .map_err(|e| format!("parse brains.json: {e}"))?;
+    let brain_record = registry_value
+        .get("brains")
+        .and_then(|value| value.as_array())
+        .and_then(|brains| {
+            brains
+                .iter()
+                .find(|brain| brain.get("id").and_then(|value| value.as_str()) == Some(&brain_id))
+        })
+        .cloned()
+        .ok_or_else(|| format!("brain is missing from brains.json: {brain_id}"))?;
+    let external_vault = brain_record
+        .get("vault_path")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = external_vault.as_ref() {
+        if !path.is_dir() {
+            return Err(format!(
+                "external vault is unavailable; export stopped rather than omitting it: {}",
+                path.display()
+            ));
+        }
+    }
 
-    let file = fs::File::create(&dest_path).map_err(|e| format!("create zip: {e}"))?;
+    // Never let the archive be written inside a tree we are walking; doing so
+    // can recursively include the growing ZIP in itself.
+    let destination = PathBuf::from(&dest_path);
+    let destination_parent = destination
+        .parent()
+        .ok_or_else(|| "export destination has no parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("resolve export destination: {e}"))?;
+    let destination_name = destination
+        .file_name()
+        .ok_or_else(|| "export destination has no filename".to_string())?;
+    let resolved_destination = destination_parent.join(destination_name);
+    let brain_root_resolved = brain_root
+        .canonicalize()
+        .map_err(|e| format!("resolve brain folder: {e}"))?;
+    if resolved_destination.starts_with(&brain_root_resolved) {
+        return Err("choose an export destination outside the NeuroVault brain folder".into());
+    }
+    if let Some(path) = external_vault.as_ref() {
+        let resolved = path
+            .canonicalize()
+            .map_err(|e| format!("resolve external vault: {e}"))?;
+        if resolved_destination.starts_with(resolved) {
+            return Err("choose an export destination outside the external vault".into());
+        }
+    }
+
+    struct PartialExportGuard(PathBuf);
+    impl Drop for PartialExportGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let partial_path = destination_parent.join(format!(
+        ".neurovault-export-{}-{}.partial",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let partial_guard = PartialExportGuard(partial_path.clone());
+    let file = fs::File::create(&partial_path).map_err(|e| format!("create zip: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     let mut count: usize = 0;
 
-    // Recursive file walker: adds every file under `src_root` into the
-    // zip at `zip_prefix/<relative path>`. Skips symlinks to avoid
-    // escaping the tree and silently swallows unreadable files so one
-    // corrupt DB-wal shard doesn't abort the whole export.
+    fn safe_zip_relative(path: &std::path::Path) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for component in path.components() {
+            let std::path::Component::Normal(value) = component else {
+                return Err(format!(
+                    "unsafe export path component in {}",
+                    path.display()
+                ));
+            };
+            let value = value
+                .to_str()
+                .ok_or_else(|| format!("non-UTF-8 export filename: {}", path.display()))?;
+            if value == "." || value == ".." || value.contains('/') || value.contains('\\') {
+                return Err(format!("unsafe export filename: {}", path.display()));
+            }
+            parts.push(value);
+        }
+        if parts.is_empty() {
+            return Err("empty relative export path".into());
+        }
+        Ok(parts.join("/"))
+    }
+
+    // Recursive file walker: adds every readable regular file under
+    // `src_root` at `zip_prefix/<relative path>`. Symlinks are skipped to
+    // avoid escaping the selected tree. Any other read error aborts the
+    // export; a success notification must never hide omitted user files.
     fn add_tree<W: Write + std::io::Seek>(
         zip: &mut zip::ZipWriter<W>,
         src_root: &std::path::Path,
         zip_prefix: &str,
         options: zip::write::SimpleFileOptions,
         count: &mut usize,
+        exclude_live_database: bool,
     ) -> Result<(), String> {
         let mut stack: Vec<PathBuf> = vec![src_root.to_path_buf()];
         while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
+            let entries = fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("read entry in {}: {e}", dir.display()))?;
                 let path = entry.path();
-                let Ok(ft) = entry.file_type() else { continue };
+                let ft = entry
+                    .file_type()
+                    .map_err(|e| format!("inspect {}: {e}", path.display()))?;
                 if ft.is_symlink() {
                     continue;
                 }
@@ -631,24 +708,27 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
                     continue;
                 }
                 if ft.is_file() {
-                    let Ok(rel) = path.strip_prefix(src_root) else {
-                        continue;
-                    };
+                    let rel = path
+                        .strip_prefix(src_root)
+                        .map_err(|e| format!("resolve {}: {e}", path.display()))?;
+                    if exclude_live_database {
+                        let filename = rel.file_name().and_then(|value| value.to_str());
+                        if matches!(filename, Some("brain.db" | "brain.db-wal" | "brain.db-shm")) {
+                            continue;
+                        }
+                    }
                     let name = format!(
                         "{}/{}",
                         zip_prefix.trim_end_matches('/'),
-                        rel.to_string_lossy().replace('\\', "/"),
+                        safe_zip_relative(rel)?,
                     );
+                    let mut f = fs::File::open(&path)
+                        .map_err(|e| format!("open {}: {e}", path.display()))?;
+                    let mut buf = Vec::new();
+                    f.read_to_end(&mut buf)
+                        .map_err(|e| format!("read {}: {e}", path.display()))?;
                     zip.start_file(&name, options)
                         .map_err(|e| format!("zip entry {name}: {e}"))?;
-                    let mut f = match fs::File::open(&path) {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
-                    let mut buf = Vec::new();
-                    if f.read_to_end(&mut buf).is_err() {
-                        continue;
-                    }
                     zip.write_all(&buf).map_err(|e| format!("zip write: {e}"))?;
                     *count += 1;
                 }
@@ -657,20 +737,81 @@ fn export_brain_as_zip(brain_id: String, dest_path: String) -> Result<usize, Str
         Ok(())
     }
 
-    // Internal scratch (DB, fingerprint, trash, raw, consolidated, and
-    // — for non-external brains — vault/).
-    add_tree(&mut zip, &brain_root, &brain_id, options, &mut count)?;
+    // Keep the export self-describing without leaking an absolute external
+    // vault path from this machine into a portable archive.
+    let manifest_brain = serde_json::json!({
+        "id": brain_record.get("id").and_then(|value| value.as_str()),
+        "name": brain_record.get("name").and_then(|value| value.as_str()),
+        "uses_external_vault": external_vault.is_some(),
+    });
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "format": "neurovault-portable-file-export",
+        "brain": manifest_brain,
+        "includes_database": false,
+        "warning": "Portable file export only. Database-owned drafts, core memory, proposals, and version history require a stopped full-data backup.",
+    });
+    let export_root = "neurovault-export";
+    let manifest_name = format!("{export_root}/EXPORT-INFO.json");
+    zip.start_file(&manifest_name, options)
+        .map_err(|e| format!("zip entry {manifest_name}: {e}"))?;
+    zip.write_all(
+        serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("serialize export manifest: {e}"))?
+            .as_bytes(),
+    )
+    .map_err(|e| format!("zip manifest: {e}"))?;
+    count += 1;
 
-    // External vault markdown goes under `<brain_id>/external_vault/`
+    // Internal file-owned content. Exclude the live SQLite database and its
+    // transient WAL/SHM files; see the command-level contract above.
+    add_tree(
+        &mut zip,
+        &brain_root,
+        export_root,
+        options,
+        &mut count,
+        true,
+    )?;
+
+    // External vault markdown goes under `external-vault/`
     // so the archive is self-describing when the user unzips it.
     if let Some(ext) = external_vault {
-        if ext.is_dir() {
-            let prefix = format!("{brain_id}/external_vault");
-            add_tree(&mut zip, &ext, &prefix, options, &mut count)?;
-        }
+        let prefix = format!("{export_root}/external-vault");
+        add_tree(&mut zip, &ext, &prefix, options, &mut count, false)?;
     }
 
     zip.finish().map_err(|e| format!("finalize zip: {e}"))?;
+    // Preserve a previous export until the new archive is in place. A plain
+    // remove-then-rename can destroy the user's last good export if the final
+    // rename fails (for example because the destination volume disconnects).
+    let previous_path = if resolved_destination.exists() {
+        let backup = destination_parent.join(format!(
+            ".neurovault-export-{}-{}.previous",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::rename(&resolved_destination, &backup)
+            .map_err(|e| format!("preserve existing export before replacement: {e}"))?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&partial_path, &resolved_destination) {
+        if let Some(previous) = previous_path.as_ref() {
+            if let Err(restore_error) = fs::rename(previous, &resolved_destination) {
+                return Err(format!(
+                    "finish export: {error}; the previous export could not be restored and remains at {}: {restore_error}",
+                    previous.display()
+                ));
+            }
+        }
+        return Err(format!("finish export: {error}"));
+    }
+    if let Some(previous) = previous_path {
+        let _ = fs::remove_file(previous);
+    }
+    drop(partial_guard);
     Ok(count)
 }
 
@@ -1620,14 +1761,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        // In-app updater + process (relaunch after install). The plugin
-        // deserializes `plugins.updater` from tauri.conf.json *at startup*
-        // and the whole app aborts (panic = "abort") if that block is
-        // missing — so the block must exist even while updates are off. It
-        // ships inert today: `pubkey: ""` + `endpoints: []` makes the
-        // native `check()` return ReleaseNotFound, which the frontend
-        // catches and turns into "open the GitHub release page". Flip on
-        // real signed updates per docs/UPDATER-SETUP.md.
+        // In-app updater + process (relaunch after install). The updater block
+        // carries the public verification key and release endpoint; CI signs
+        // every updater artifact with the matching private key. A failed or
+        // unverifiable native check is handled by the frontend without ever
+        // installing unverified bytes.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
@@ -1786,9 +1924,8 @@ pub fn run() {
                 });
             }
 
-            // Python MCP sidecar is NOT auto-started (sidecar binary
-            // was retired in the Rust migration). Instead we auto-
-            // start the in-process Rust HTTP server on 8765 so the
+            // The retired Python server is not started. Instead we auto-start
+            // the in-process Rust HTTP server on 8765 so the
             // MCP proxy has something to talk to from first boot, and
             // start the vault watcher for the currently-active brain
             // so external-editor saves (Obsidian, VSCode) get picked
@@ -1800,7 +1937,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // 1) HTTP server on 127.0.0.1:8765. If the user has an
-                // older Python sidecar still running on the port, our
+                // older legacy server still running on the port, our
                 // bind fails and we just log; the user can stop the
                 // sidecar via Settings and restart the app.
                 let rust_state = app_handle.state::<RustServerState>();

@@ -6,7 +6,7 @@ loads `vec0.dll`, (b) survives the `cmd → npm .cmd shim → node → neurovaul
 
 You do **not** need Rust — we use the prebuilt `neurovault-server.exe` from CI.
 
-Prereqs: Node 18+, the GitHub CLI (`gh auth login`), Claude Code, and PowerShell.
+Prereqs: Node 22+, the GitHub CLI (`gh auth login`), Claude Code, and PowerShell.
 Repo: `sirdath/NeuroVault`. Run everything from a PowerShell prompt.
 
 ---
@@ -16,11 +16,12 @@ Repo: `sirdath/NeuroVault`. Run everything from a PowerShell prompt.
 ```powershell
 git clone https://github.com/sirdath/NeuroVault.git
 cd NeuroVault
-git checkout feat/headless-mcp
+git checkout main
 
-# Download the Windows binary subpackage tarball from the latest CI run on this branch.
-# (The PR/build job uploads it as the artifact `mcp-win32-x64`.)
-gh run download --repo sirdath/NeuroVault -n mcp-win32-x64 -D .\_ci
+# Download the Windows binary subpackage tarball from a successful npm-release
+# workflow run. Replace RUN_ID with the chosen run from `gh run list`.
+gh run list --repo sirdath/NeuroVault --workflow npm-release.yml --status success
+gh run download RUN_ID --repo sirdath/NeuroVault -n mcp-win32-x64 -D .\_ci
 
 # Extract neurovault-server.exe + vec0.dll into the subpackage's bin/.
 $tgz = Get-ChildItem .\_ci\*.tgz | Select-Object -First 1
@@ -37,7 +38,7 @@ $exe = ".\dist-npm\packages\mcp-win32-x64\bin\neurovault-server.exe"
 & $exe --help                              # prints help, exit 0
 Start-Process $exe -ArgumentList '--port','8799' -NoNewWindow
 Start-Sleep 3
-Invoke-RestMethod http://127.0.0.1:8799/api/version          # {version, pid}
+Invoke-RestMethod http://127.0.0.1:8799/api/version          # {version, pid, instance_id}
 Invoke-RestMethod -Method Post http://127.0.0.1:8799/api/brains -ContentType application/json -Body '{"name":"smoke"}' | Out-Null
 Invoke-RestMethod http://127.0.0.1:8799/api/brains/smoke/stats  # opening the DB loads vec0.dll
 Get-Process neurovault-server | Stop-Process                  # stop it
@@ -74,7 +75,7 @@ If `$out` contains the tool list, the Windows stdin/stdout MCP chain works end t
 ## 4. Register in Claude Code (the documented Windows config)
 
 ```powershell
-claude mcp add neurovault -- cmd /c neurovault-mcp
+claude mcp add --transport stdio --scope user neurovault -- cmd /c neurovault-mcp
 claude mcp list                  # neurovault should show "connected"
 ```
 Then in a Claude Code chat: `remember("windows smoke test works")` then `recall("windows")`.

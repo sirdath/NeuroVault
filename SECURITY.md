@@ -13,10 +13,9 @@ the bug is critical.
 
 | Version | Supported |
 |---|---|
-| 0.5.x (current) | ✅ |
-| < 0.5 (pre-release) | ❌ — upgrade to 0.5.x |
-
-Once 0.6 ships, 0.5.x gets a 30-day security-fix window before EOL.
+| 0.6.x (current) | ✅ |
+| 0.5.x | ⚠️ Critical fixes only through 2026-08-20 |
+| < 0.5 | ❌ — upgrade to 0.6.x |
 
 ## What counts as a vulnerability
 
@@ -52,7 +51,7 @@ We treat these as security bugs and will prioritize them:
 
 ## How to report
 
-**Preferred: GitHub Security Advisories.**
+**Preferred: GitHub private vulnerability reporting.**
 Open a private advisory at
 [github.com/sirdath/NeuroVault/security/advisories/new](https://github.com/sirdath/NeuroVault/security/advisories/new).
 Include:
@@ -63,13 +62,15 @@ Include:
 - Impact description — what can an attacker do?
 - Your suggested severity (CVSS is optional)
 
-**If you'd rather email**, use the GitHub profile contact for
-[@sirdath](https://github.com/sirdath). Please don't open
-a public issue for anything that might expose real users.
+If GitHub says private reporting is unavailable, open a public issue containing
+only the words "private security contact requested" and your preferred contact
+method. Do not include the vulnerability, affected paths, proof of concept, or
+user data in that issue. The project must enable private vulnerability
+reporting before its next general-public release.
 
 ## Response SLA
 
-At the current project maturity (v0.5.x, single-maintainer):
+At the current project maturity (v0.6.x, single-maintainer):
 
 - **Acknowledgement**: within 72 hours of a report. Usually much faster.
 - **Severity triage**: within 7 days.
@@ -120,16 +121,17 @@ we'll prioritize the fix regardless and appreciate your patience.
   describe (`run_python_job`) was removed in 2026-05 with the Python
   server package; there is no PDF/Zotero helper process and no
   `python` invocation anywhere in the product.
-- The cross-encoder reranker is a bundled on-device ONNX model
-  (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
-  the app and no network call. Recall falls back to the fusion ranker if
-  the model can't load.
+- The cross-encoder reranker runs on-device through fastembed-rs, with no
+  `torch`, `sentence-transformers`, or Python in the app. Its model may be
+  downloaded from Hugging Face on first qualifying use as documented in
+  `PRIVACY.md`; recall falls back to the fusion ranker if it cannot load.
 
 ## Things we know we don't do yet
 
-- **No Windows/macOS code signing** on 0.5.x builds — users see
-  SmartScreen / Gatekeeper warnings. Signing and notarization are next
-  on the release plan (an Apple Developer account is in progress).
+- **Windows installers are not Authenticode-signed yet.** SmartScreen reports
+  an unknown publisher. Published macOS Apple Silicon builds are Developer ID
+  signed and notarized, and the release gate verifies the signature, hardened
+  runtime, stapled app ticket, bundled native extension and Gatekeeper result.
 - **No vault encryption at rest** — documented in
   [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
   on the research roadmap.
@@ -140,4 +142,4 @@ we'll prioritize the fix regardless and appreciate your patience.
 
 ---
 
-*Last updated: 2026-07-13.*
+*Last updated: 2026-07-22.*

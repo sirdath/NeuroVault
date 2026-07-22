@@ -1,4 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
+import { shortcut } from "../lib/platform";
 
 interface ShortcutHelpProps {
   open: boolean;
@@ -12,8 +13,8 @@ const SHORTCUTS: Array<{
   {
     category: "General",
     items: [
-      { keys: "⌘K", description: "Open command palette" },
-      { keys: "⌘⇧Space", description: "Quick capture (works even when window isn't focused)" },
+      { keys: shortcut("K"), description: "Open command palette" },
+      { keys: shortcut("Space", { shift: true }), description: "Quick capture (works even when window isn't focused)" },
       { keys: "?", description: "Show this help" },
       { keys: "Esc", description: "Close modals / exit edit mode" },
     ],
@@ -21,18 +22,18 @@ const SHORTCUTS: Array<{
   {
     category: "Notes",
     items: [
-      { keys: "⌘N", description: "Create new note" },
-      { keys: "⌘S", description: "Save current note" },
-      { keys: "⌘/", description: "Search memory" },
+      { keys: shortcut("N"), description: "Create new note" },
+      { keys: shortcut("S"), description: "Save current note" },
+      { keys: shortcut("/"), description: "Search memory" },
     ],
   },
   {
     category: "Views",
     items: [
-      { keys: "⌘1", description: "Open Today" },
-      { keys: "⌘2", description: "Open Memories" },
-      { keys: "⌘3", description: "Open Graph" },
-      { keys: "⌘P", description: "Cycle Memories and Graph" },
+      { keys: shortcut("1"), description: "Open Today" },
+      { keys: shortcut("2"), description: "Open Memories" },
+      { keys: shortcut("3"), description: "Open Graph" },
+      { keys: shortcut("P"), description: "Cycle Memories and Graph" },
     ],
   },
   {
@@ -40,7 +41,7 @@ const SHORTCUTS: Array<{
     items: [
       { keys: "/", description: "Open slash command menu" },
       { keys: "[[", description: "Open wikilink autocomplete" },
-      { keys: "⌘B", description: "Show or hide the note browser" },
+      { keys: shortcut("B"), description: "Show or hide the note browser" },
     ],
   },
   {

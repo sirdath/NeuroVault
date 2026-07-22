@@ -1,13 +1,10 @@
-/* In-app update check (MVP).
+/* In-app update check.
  *
- * NeuroVault's installers are unsigned, so we don't ship Tauri's silent
- * auto-updater (which needs a minisign keypair + CI signing step). This
- * is the lightweight fallback the design doc calls for: ask GitHub for
- * the latest release, compare it to the bundled version, and — if newer
- * — point the user at the release page to download it themselves.
- *
- * No background polling, no install side-effects. The user clicks
- * "Check for updates" in Settings and gets a yes/no plus a button.
+ * The user initiates checks manually unless launch checks are explicitly
+ * enabled in Settings. GitHub supplies human-readable release information;
+ * Tauri's updater downloads and verifies the signed updater artifact before
+ * installation. The release page remains a graceful fallback when the native
+ * update path is unavailable.
  */
 
 import { getVersion } from "@tauri-apps/api/app";
@@ -100,10 +97,9 @@ export type UpdateRunResult =
  *  configured (endpoints + pubkey) and a signed update is published, this
  *  downloads and installs it in place, then asks the user to restart.
  *
- *  When the updater isn't configured yet (the current shipping state —
- *  unsigned installers, no keypair), the native `check()` throws; we fall
- *  back to opening the GitHub release page so the user can grab the
- *  installer manually. Same button, graceful degradation.
+ *  If the native check is unavailable, the network fails, or signature
+ *  verification refuses an artifact, we fall back to the public release page.
+ *  Same button, graceful degradation; no unverified artifact is installed.
  *
  *  `onProgress` (0..1) is called during the native download when total
  *  size is known. */

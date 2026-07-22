@@ -120,8 +120,10 @@ jobs:
           set -euo pipefail
           VERSION="v0.1.9"; STRIPPED="${VERSION#v}"
           ASSET="sqlite-vec-${STRIPPED}-loadable-linux-x86_64.tar.gz"
+          EXPECTED="b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7"
           curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/vec.tgz \
             "https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
+          echo "${EXPECTED}  /tmp/vec.tgz" | sha256sum --check --strict
           mkdir -p src-tauri/resources
           tar -xzf /tmp/vec.tgz -C src-tauri/resources/
           ls -lh src-tauri/resources/vec0.so

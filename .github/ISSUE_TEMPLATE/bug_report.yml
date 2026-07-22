@@ -29,7 +29,7 @@ body:
         - Windows 11
         - Windows 10
         - macOS Apple Silicon (.dmg)
-        - macOS Intel (build from source)
+        - macOS Intel (unsupported)
         - Linux (AppImage / deb / rpm)
         - Other
     validations:

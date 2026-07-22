@@ -1,7 +1,7 @@
 [package]
 name = "neurovault"
-version = "0.6.0"
-description = "Local-first, AI-native memory for Claude and other LLM agents: markdown-canonical vault, hybrid retrieval, native MCP server"
+version = "0.6.1"
+description = "Local-first, AI-native memory for Claude and other LLM agents: Markdown-first vault, hybrid retrieval, native MCP server"
 authors = ["NeuroVault contributors"]
 license = "MIT"
 repository = "https://github.com/sirdath/NeuroVault"
@@ -166,13 +166,11 @@ sha2 = "0.10"
 # keeps working unchanged while Python is retired.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "io-util"] }
 axum = "0.7"
-# CORS for the localhost HTTP server. The Tauri webview's origin is
-# `tauri://localhost` (or `https://tauri.localhost`); plain `fetch()`
-# from there to `http://127.0.0.1:8765` is cross-origin and fails the
-# preflight without these headers. The server binds to 127.0.0.1 only
-# (no LAN exposure) so permissive CORS doesn't widen any attack
-# surface — it just lets the same machine's webview talk to its own
-# backend.
+# CORS and origin enforcement for the localhost HTTP server. Loopback alone
+# does not stop a hostile website from attempting browser requests to
+# `127.0.0.1`; the router therefore permits only shipped local-app/dev origins
+# and rejects foreign-origin state changes before handlers run. Non-browser
+# clients such as MCP and curl normally send no Origin header.
 tower-http = { version = "0.5", features = ["cors", "catch-panic"] }
 
 # API gateway (the optional external HTTP API). blake3 hashes API

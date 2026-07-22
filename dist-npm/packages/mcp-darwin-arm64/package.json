@@ -1,6 +1,6 @@
 {
   "name": "@neurovault/mcp-darwin-arm64",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "NeuroVault headless MCP server \u2014 prebuilt binary for macOS Apple Silicon (arm64).",
   "os": [
     "darwin"
@@ -10,7 +10,11 @@
   ],
   "files": [
     "bin/neurovault-server",
-    "bin/vec0.dylib"
+    "bin/vec0.dylib",
+    "LICENSE",
+    "PRIVACY.md",
+    "THIRD-PARTY-NOTICES.md",
+    "LICENSES/"
   ],
   "license": "MIT",
   "repository": {

@@ -13,7 +13,7 @@ Components:
 1. **Tauri 2.0 desktop app** (React + TypeScript) — markdown note editor + neural graph view.
 2. **In-process Rust backend** — the memory engine runs *inside* the Tauri process (no Python sidecar): an `axum` HTTP server on `127.0.0.1:8765`, hybrid retrieval, the ingestion pipeline, write-back, `fastembed-rs` (BGE-small-en-v1.5 ONNX embeddings + cross-encoder reranker), `rusqlite` + `sqlite-vec`, and a `notify` file watcher.
 3. **Native Rust MCP server** — `neurovault-server --mcp-only` (built on the official [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) SDK). A tiny stdio MCP server agents spawn per session; it loads no model and opens no DB, forwarding every tool call over loopback HTTP to the running app on `:8765`. Built from the same Rust crate and bundled next to the app binary. (The legacy Python `server/mcp_proxy.py` it replaced is deprecated.)
-4. **SQLite + sqlite-vec** (`~/.neurovault/brains/<id>/brain.db`) — vectors + the knowledge graph; a rebuildable index over the markdown vault.
+4. **SQLite + sqlite-vec** (`~/.neurovault/brains/<id>/brain.db`) — rebuildable vectors/search graph plus database-owned structured state and history.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ Agent (Claude Code / Desktop / Cursor / Codex)
        └─ forwards tool calls over loopback HTTP to the app on :8765
 ```
 
-Markdown in `~/.neurovault/brains/<id>/vault/*.md` is **canonical**; `brain.db` is a **rebuildable** index. (The SQL table for a memory unit is named `engrams` — the biologically-correct noun — intentionally.)
+Markdown in `~/.neurovault/brains/<id>/vault/*.md` is **canonical for note and engram content**. Search indexes in `brain.db` are rebuildable, but structured state such as drafts, core-memory blocks, and version history is database-owned and requires a stopped-process full-data backup. (The SQL table for a memory unit is named `engrams` — the biologically-correct noun — intentionally.)
 
 ## MCP tools
 

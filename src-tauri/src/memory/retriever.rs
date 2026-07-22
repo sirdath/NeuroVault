@@ -1802,7 +1802,9 @@ fn hybrid_retrieve_inner(
     // machine; fails safe toward no-rerank per adaptive-retrieval
     // guidance (Adaptive-RAG 2403.14403, DAT 2503.23013).
     let rerank_by_shape = classify_query(effective_query) == "keyword";
-    let do_rerank = (opts.use_reranker || rerank_by_shape) && !is_ablated(opts, "reranker");
+    let do_rerank = (opts.use_reranker || rerank_by_shape)
+        && !is_ablated(opts, "reranker")
+        && reranker::enabled();
     if do_rerank && candidates.len() > 1 {
         let limit = candidates.len().min(20);
         let docs: Vec<String> = candidates

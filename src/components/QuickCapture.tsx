@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as tauri from "../lib/tauri";
 import { useNoteStore } from "../stores/noteStore";
 import { toast } from "../stores/toastStore";
+import { shortcut } from "../lib/platform";
 
 interface QuickCaptureProps {
   open: boolean;
@@ -153,7 +154,7 @@ export function QuickCapture({ open, onClose }: QuickCaptureProps) {
         >
           <div className="flex gap-3">
             <span>
-              <kbd>⌘↵</kbd> save
+              <kbd>{shortcut("Enter")}</kbd> save
             </span>
             <span>
               <kbd>esc</kbd> cancel

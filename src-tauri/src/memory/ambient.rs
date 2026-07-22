@@ -944,16 +944,22 @@ pub fn run_at(
         return Ok(resp);
     }
 
-    // Retrieval: reranker ALWAYS on for ambient — the CE probability is
-    // the gate's absolute signal; without it there is no gate.
+    // Ambient normally requests the reranker because CE probability is the
+    // gate's absolute signal. The user's global opt-out wins here too; without
+    // CE, the conservative gate can inject only a strong exact match.
     let query: String = packet.prompt.chars().take(MAX_QUERY_CHARS).collect();
+    let rerank = super::reranker::enabled();
     let opts = RecallOpts {
         top_k: AMBIENT_TOP_K,
         spread_hops: 0,
         exclude_kinds: vec!["observation".to_string()],
         as_of: None,
-        use_reranker: true,
-        ablate: Vec::new(),
+        use_reranker: rerank,
+        ablate: if rerank {
+            Vec::new()
+        } else {
+            vec!["reranker".to_string()]
+        },
     };
     let (hits, score_map) = hybrid_retrieve_with_scores_quiet(db, &query, &opts)?;
 

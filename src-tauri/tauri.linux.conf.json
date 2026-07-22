@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/vec0.so": "resources/vec0.so"
+    }
+  }
+}

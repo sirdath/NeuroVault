@@ -29,13 +29,17 @@ successful outcome**:
 
 ## Setup
 
-Settings → Automatic Memory (Claude Code), or:
+Use **Privacy & Trust → Automatic context** in the desktop app. After the first
+headless npm publication, terminal users can run:
 
 ```bash
-neurovault-server hook install     # wires ~/.claude/settings.json (backup written)
-neurovault-server hook status
-neurovault-server hook uninstall
+npx -y @neurovault/mcp@latest hook install     # backup written
+npx -y @neurovault/mcp@latest hook status
+npx -y @neurovault/mcp@latest hook uninstall
 ```
+
+Source-build users can substitute the absolute path to their built
+`neurovault-server` binary. The desktop sidecar is not installed on `PATH`.
 
 The hook is a thin, fail-open client: if the NeuroVault app isn't
 running, it prints nothing and exits 0. It can never block or slow a

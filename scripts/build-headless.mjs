@@ -18,9 +18,8 @@ import process from 'node:process';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'src-tauri');
 
-// triple -> { subpkg, vec, bin }. Only macOS is wired up for v0; the Linux /
-// Windows rows are blocked on a per-libc vec0.{so,dll} build and stay commented
-// until then so we never ship a dead-on-arrival package.
+// triple -> { subpkg, vec, bin }. Release CI builds and smokes each advertised
+// target with its exact sqlite-vec artifact before packaging it.
 const TARGETS = {
   'aarch64-apple-darwin': { subpkg: 'mcp-darwin-arm64', vec: 'vec0.dylib', bin: 'neurovault-server' },
   // NO x86_64-apple-darwin row. It used to point at the SAME vec0.dylib as the

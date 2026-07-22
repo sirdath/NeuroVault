@@ -108,15 +108,14 @@
     "watch": "node esbuild.js --watch",
     "compile": "tsc -p ./",
     "assets": "node scripts/package-assets.mjs",
-    "package": "npm run build && npm run assets && vsce package --out neurovault-vscode.vsix",
-    "publish": "npm run build && npm run assets && vsce publish"
+    "package": "npm run build && npm run assets -- --all-platforms && vsce package --out neurovault-vscode.vsix",
+    "publish": "npm run build && npm run assets -- --all-platforms && vsce publish"
   },
-  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^2.24.0",
-    "esbuild": "^0.20.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "typescript": "^5.3.0"
   }
 }

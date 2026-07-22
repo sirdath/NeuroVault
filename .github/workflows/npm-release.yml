@@ -1,7 +1,7 @@
 name: npm-release
 
 # Publish the headless NeuroVault MCP server to npm as `@neurovault/mcp` plus
-# its per-platform binary subpackages: macOS (arm64 + x64), Linux x64 (glibc),
+# its per-platform binary subpackages: macOS arm64, Linux x64 (glibc),
 # and Windows x64. The headless binary is built with --no-default-features so it
 # links no Tauri (no WebKit/GTK/WebView2), and fastembed uses rustls so it needs
 # no OpenSSL — verified per-runner below.
@@ -17,9 +17,21 @@ on:
     branches: [main]
     paths:
       - 'dist-npm/**'
+      - 'LICENSES/**'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/generate-third-party-notices.mjs'
       - 'scripts/build-headless.mjs'
       - 'src-tauri/**'
       - '.github/workflows/npm-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -63,12 +75,41 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: ${{ matrix.triple }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 22
+      - name: Verify package versions and release tag
+        run: node dist-npm/scripts/verify-release.mjs
+      - name: Require the matching desktop tag on this commit
+        if: startsWith(github.ref, 'refs/tags/npm-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESKTOP_TAG="${GITHUB_REF_NAME#npm-}"
+          NPM_SHA="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          DESKTOP_SHA="$(git rev-parse "${DESKTOP_TAG}^{commit}" 2>/dev/null)" || {
+            echo "::error::matching desktop tag ${DESKTOP_TAG} does not exist"
+            exit 1
+          }
+          test "$NPM_SHA" = "$DESKTOP_SHA" || {
+            echo "::error::${GITHUB_REF_NAME} (${NPM_SHA}) and ${DESKTOP_TAG} (${DESKTOP_SHA}) must point to the same commit"
+            exit 1
+          }
+      - name: Verify generated legal inventory
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run legal:check
+      - name: Test npm release tooling
+        if: runner.os == 'Linux'
+        run: node --test dist-npm/scripts/release.test.mjs
       # Linux ships no committed vec0 — fetch the matching loadable extension
       # (vec0.so) from the same sqlite-vec release the desktop app pins. macOS
       # uses the committed src-tauri/resources/vec0.dylib.
@@ -81,8 +122,11 @@ jobs:
           ASSET="sqlite-vec-${STRIPPED}-loadable-linux-x86_64.tar.gz"
           curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/vec.tgz \
             "https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}"
+          echo "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7  /tmp/vec.tgz" \
+            | sha256sum --check --strict
           mkdir -p src-tauri/resources
           tar -xzf /tmp/vec.tgz -C src-tauri/resources/
+          test -s src-tauri/resources/vec0.so
           ls -lh src-tauri/resources/vec0.so
       # Cache the ort static-onnxruntime download to de-flake the build.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -113,7 +157,8 @@ jobs:
           "$BIN" --port 8799 &
           SRV=$!
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8799/api/version >/dev/null 2>&1 && break || sleep 1; done
-          curl -fsS http://127.0.0.1:8799/api/version | grep -q '"version"'
+          curl -fsS http://127.0.0.1:8799/api/version > "$RUNNER_TEMP/neurovault-version.json"
+          node -e 'const fs=require("fs"); const got=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; const want=require("./dist-npm/package.json").version; if (got !== want) { console.error(`backend version ${got} does not match package ${want}`); process.exit(1); }' "$RUNNER_TEMP/neurovault-version.json"
           # Create a brain + read its stats → opens brain.db → load_extension(vec0).
           curl -fsS -X POST http://127.0.0.1:8799/api/brains -H 'content-type: application/json' -d '{"name":"smoke"}' >/dev/null
           curl -fsS http://127.0.0.1:8799/api/brains/smoke/stats | grep -q '"brain_id"'
@@ -124,13 +169,17 @@ jobs:
         # with ENOENT. Every matrix build reached this step after a passing
         # smoke test and then died before uploading its tarball, so the publish
         # job could never receive a complete set. Reproduced in a temp dir.
+        shell: bash
         run: |
+          set -euo pipefail
+          node dist-npm/scripts/stage-legal.mjs "dist-npm/packages/${{ matrix.subpkg }}"
           mkdir -p ./artifacts
           npm pack "./dist-npm/packages/${{ matrix.subpkg }}" --pack-destination ./artifacts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.subpkg }}
           path: artifacts/*.tgz
+          if-no-files-found: error
 
   publish:
     name: publish to npm
@@ -141,27 +190,61 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/npm-v')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write # npm --provenance
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
-      # Subpackages MUST publish before the root — the root's optionalDependencies
-      # pin them at the same exact version and npm resolves them at install time.
-      - name: Publish platform subpackages
+      - name: Verify package versions and release tag
+        run: node dist-npm/scripts/verify-release.mjs
+      - name: Require the matching desktop tag on this commit
+        shell: bash
         run: |
-          for tgz in artifacts/*/*.tgz; do
-            echo "publishing $tgz"
-            npm publish "$tgz" --access public --provenance
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish root @neurovault/mcp
-        run: npm publish ./dist-npm --access public --provenance
+          set -euo pipefail
+          DESKTOP_TAG="${GITHUB_REF_NAME#npm-}"
+          NPM_SHA="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          DESKTOP_SHA="$(git rev-parse "${DESKTOP_TAG}^{commit}" 2>/dev/null)" || {
+            echo "::error::matching desktop tag ${DESKTOP_TAG} does not exist"
+            exit 1
+          }
+          test "$NPM_SHA" = "$DESKTOP_SHA" || {
+            echo "::error::${GITHUB_REF_NAME} (${NPM_SHA}) and ${DESKTOP_TAG} (${DESKTOP_SHA}) must point to the same commit"
+            exit 1
+          }
+      - name: Pack root package
+        shell: bash
+        run: |
+          set -euo pipefail
+          node dist-npm/scripts/stage-legal.mjs dist-npm
+          mkdir -p artifacts/root
+          npm pack ./dist-npm --pack-destination artifacts/root
+      # Inspect the exact four immutable tarballs before contacting npm. This
+      # catches missing binaries/extensions, stale legal files, version drift,
+      # unexpected native payloads and duplicate/missing platform packages.
+      - name: Inspect complete release set
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#npm-v}"
+          node dist-npm/scripts/inspect-tarballs.mjs artifacts \
+            --version "$VERSION" \
+            --manifest artifacts/npm-release-manifest.json
+      # Publish all versions under a version-specific staging tag, verify registry
+      # integrity, then promote platform packages and the root package last.
+      # The script is idempotent after a partial run: an existing version is
+      # accepted only when its bytes match this run's inspected tarball.
+      - name: Stage, verify and promote npm release
+        run: >-
+          node dist-npm/scripts/publish-release.mjs
+          artifacts/npm-release-manifest.json
+          --confirm-publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

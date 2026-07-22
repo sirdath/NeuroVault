@@ -60,8 +60,8 @@ OPTIONS:
     --mint-key <LABEL> Generate a new API key with the given label,
                        print the plaintext (ONCE), and exit. Scope
                        defaults to admin so the dev can hit any
-                       endpoint while iterating; tighten via the
-                       Settings UI once Phase 7 lands.
+                       endpoint while iterating; manage narrower scopes
+                       and brain allowlists through the loopback key API.
     -h, --help         Print this help and exit 0.
 
 ENVIRONMENT:

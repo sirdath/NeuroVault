@@ -1,5 +1,5 @@
-/* Pre-package step. Copies the parent repo's React build into ./ui/ and
- * any locally built sidecar binaries into ./server-bin/<platform>/.
+/* Pre-package step. Copies the parent repo's React build and legal files into
+ * the extension, then validates bundled server + sqlite-vec pairs.
  *
  * The vscode-extension folder is otherwise self-contained, so once
  * this script has run, `vsce package` produces a working .vsix that
@@ -8,18 +8,24 @@
  * Usage:
  *   node scripts/package-assets.mjs
  *
- * In CI we will populate server-bin/<platform>/ from per-OS GitHub
- * Actions runners; for local dev only the host-platform binary needs
- * to exist for the extension to boot.
+ * CI passes --all-platforms after populating server-bin/<platform>/ from
+ * per-OS GitHub Actions runners. Local development may stage only the host.
  */
 
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const extRoot = resolve(here, "..");
 const repoRoot = resolve(extRoot, "..");
+
+execFileSync(
+  process.execPath,
+  [join(repoRoot, "scripts", "generate-third-party-notices.mjs"), "--check"],
+  { cwd: repoRoot, stdio: "inherit" },
+);
 
 const distSrc = join(repoRoot, "dist");
 const distDest = join(extRoot, "ui");
@@ -39,6 +45,38 @@ rmSync(distDest, { recursive: true, force: true });
 mkdirSync(distDest, { recursive: true });
 cpSync(distSrc, distDest, { recursive: true });
 
+for (const file of ["LICENSE", "PRIVACY.md", "THIRD-PARTY-NOTICES.md"]) {
+  const source = join(repoRoot, file);
+  if (!existsSync(source)) {
+    console.error(`[package-assets] missing required legal file ${source}`);
+    process.exit(1);
+  }
+  cpSync(source, join(extRoot, file));
+}
+
+const licenseBundle = join(repoRoot, "LICENSES");
+const stagedLicenseBundle = join(extRoot, "LICENSES");
+const requiredLicenseBundleFiles = [
+  "LICENSES/MPL-2.0-COVERED-SOURCE.md",
+  "LICENSES/NATIVE-NOTICE-SOURCES.json",
+  "LICENSES/THIRD-PARTY-LICENSES.txt",
+  "LICENSES/models/DOWNLOADED-MODELS.md",
+  "LICENSES/native/bge-small-en-v1.5-LICENSE-MIT",
+  "LICENSES/native/onnxruntime-1.20.0-LICENSE",
+  "LICENSES/native/onnxruntime-1.20.0-ThirdPartyNotices.txt",
+  "LICENSES/native/sqlite-vec-v0.1.9-LICENSE-APACHE",
+  "LICENSES/native/sqlite-vec-v0.1.9-LICENSE-MIT",
+];
+for (const file of requiredLicenseBundleFiles) {
+  const source = join(repoRoot, file);
+  if (!existsSync(source) || !statSync(source).isFile() || statSync(source).size === 0) {
+    console.error(`[package-assets] missing or empty required notice ${source}`);
+    process.exit(1);
+  }
+}
+rmSync(stagedLicenseBundle, { recursive: true, force: true });
+cpSync(licenseBundle, stagedLicenseBundle, { recursive: true });
+
 // Optional: pull a host-platform sidecar binary if the user has built
 // one locally. CI populates this directory per-platform from a fresh
 // build per matrix entry; here we just try the conventional Tauri
@@ -46,10 +84,13 @@ cpSync(distSrc, distDest, { recursive: true });
 const platformKey = `${process.platform}-${process.arch}`;
 const hostBin = pickHostSidecar(repoRoot, platformKey);
 if (hostBin) {
-  const dest = join(extRoot, "server-bin", hostBin.platformDir, hostBin.name);
-  mkdirSync(dirname(dest), { recursive: true });
-  cpSync(hostBin.path, dest);
-  console.log(`[package-assets] sidecar: ${hostBin.path} -> ${dest}`);
+  const destination = join(extRoot, "server-bin", hostBin.platformDir);
+  mkdirSync(destination, { recursive: true });
+  cpSync(hostBin.path, join(destination, hostBin.name));
+  if (existsSync(hostBin.vecPath)) {
+    cpSync(hostBin.vecPath, join(destination, hostBin.vecName));
+  }
+  console.log(`[package-assets] server: ${hostBin.path} -> ${destination}`);
 } else {
   console.warn(
     `[package-assets] no host sidecar found for ${platformKey}. ` +
@@ -58,39 +99,55 @@ if (hostBin) {
   );
 }
 
+if (process.argv.includes("--all-platforms")) {
+  const required = [
+    { dir: "win32-x64", files: ["neurovault-server.exe", "vec0.dll"] },
+    { dir: "darwin-arm64", files: ["neurovault-server", "vec0.dylib"] },
+    { dir: "linux-x64", files: ["neurovault-server", "vec0.so"] },
+  ];
+  for (const platform of required) {
+    for (const file of platform.files) {
+      const asset = join(extRoot, "server-bin", platform.dir, file);
+      if (!existsSync(asset) || !statSync(asset).isFile() || statSync(asset).size === 0) {
+        console.error(`[package-assets] missing or empty required asset ${asset}`);
+        process.exit(1);
+      }
+    }
+  }
+  if (existsSync(join(extRoot, "server-bin", "darwin-x64"))) {
+    console.error("[package-assets] unsupported darwin-x64 directory must not be packaged");
+    process.exit(1);
+  }
+  console.log("[package-assets] all supported server + sqlite-vec pairs verified");
+}
+
 console.log(`[package-assets] done`);
 
 function pickHostSidecar(repoRoot, platformKey) {
   // Tauri release builds end up at src-tauri/target/release/<bin>.
-  // The bin name is the Cargo package name; for NeuroVault that is
-  // currently the desktop app itself, not a separate server. The
-  // dedicated `neurovault-server` sidecar is built by a separate
-  // crate. Until that crate exists, this script just emits the
-  // warning above and continues; CI will need to wire the actual
-  // bundle. Stub kept so the directory layout is documented.
   const candidates = [
     {
       platformDir: "win32-x64",
       name: "neurovault-server.exe",
       path: join(repoRoot, "src-tauri", "target", "release", "neurovault-server.exe"),
+      vecName: "vec0.dll",
+      vecPath: join(repoRoot, "src-tauri", "resources", "vec0.dll"),
       key: "win32-x64",
     },
     {
       platformDir: "darwin-arm64",
       name: "neurovault-server",
       path: join(repoRoot, "src-tauri", "target", "release", "neurovault-server"),
+      vecName: "vec0.dylib",
+      vecPath: join(repoRoot, "src-tauri", "resources", "vec0.dylib"),
       key: "darwin-arm64",
-    },
-    {
-      platformDir: "darwin-x64",
-      name: "neurovault-server",
-      path: join(repoRoot, "src-tauri", "target", "release", "neurovault-server"),
-      key: "darwin-x64",
     },
     {
       platformDir: "linux-x64",
       name: "neurovault-server",
       path: join(repoRoot, "src-tauri", "target", "release", "neurovault-server"),
+      vecName: "vec0.so",
+      vecPath: join(repoRoot, "src-tauri", "resources", "vec0.so"),
       key: "linux-x64",
     },
   ];
