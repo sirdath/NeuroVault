@@ -297,7 +297,7 @@ Governance/onboarding docs live at the repo root; everything else is under `docs
 | `docs/reference.png` | Rendered image of the technical-reference page (README asset) |
 | `docs/research/programmatic-tool-calling-mcp.md` | Research on whether NeuroVault should adopt programmatic tool calling |
 | `docs/ROADMAP-vs-agentmemory.md` | Benchmark-guarded plan to out-position competitor agentmemory |
-| `docs/screenshots/*.png (6 files)` | Product UI screenshots used by README and docs |
+| `docs/screenshots/*.webp (3 files)` | Current Memories, Graph, and Today product views used by README |
 | `docs/skills/name-clusters.md` | Agent skill: name unnamed Louvain graph clusters |
 | `docs/specs/adaptive-memory.md` | Design spec for the Adaptive Memory build (734 lines) |
 | `docs/specs/agent-coordination.md` | Spec for handoff/inbox multi-agent coordination primitives |
@@ -487,4 +487,3 @@ documented the dead ActivityBar as a live feature, and `CLAUDE.md` advertised
 | `src-tauri/icons/android/values/ic_launcher_background.xml` | Defines ic_launcher_background color (#fff) for adaptive icon |
 | `src-tauri/icons/ios/AppIcon-*.png (18 files)` | iOS AppIcon set at all required sizes and @1x/2x/3x scales |
 | `src/components/MemoryInspector.tsx` | Context Trace inspector UI; mounted only by preview harness |
-

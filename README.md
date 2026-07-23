@@ -22,17 +22,31 @@ Claude forgets you after every conversation. **NeuroVault doesn't.**
 
 <br>
 
-<div align="center">
-  <img alt="NeuroVault graph view" src="docs/screenshots/neural-graph.png" width="820">
-</div>
-
-<br>
-
 NeuroVault is a **local-first memory layer for AI agents**. It sits between your Markdown notes and supported AI clients and gives them durable recall across sessions. Your notes stay as plain `.md` files and the local database is rebuildable; selected context reaches only the AI providers you deliberately connect, under the data flow described in [PRIVACY.md](PRIVACY.md).
 
 The open local core follows the [Core Covenant](CORE-COVENANT.md): no required account, no remote kill switch, durable Markdown ownership, and no sale or model training on vault data.
 
 > Not RAG-in-a-trenchcoat. A structured, updatable, inspectable knowledge base an AI can read, write, and challenge. [Why this is not RAG ↓](#why-this-is-not-rag)
+
+## The app
+
+<div align="center">
+  <a href="docs/screenshots/graph.webp">
+    <img alt="NeuroVault Graph view showing a fixed 3D snapshot of connected memories" src="docs/screenshots/graph.webp" width="900">
+  </a>
+  <p><strong>Graph.</strong> Explore the same memories as a connected local knowledge map. This capture uses the fixed 3D snapshot view.</p>
+</div>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/memories.webp"><img alt="NeuroVault Memories view with vault navigation and Markdown editor" src="docs/screenshots/memories.webp"></a></td>
+    <td width="50%" align="center"><a href="docs/screenshots/today.webp"><img alt="NeuroVault Today dashboard showing automatic memory activity" src="docs/screenshots/today.webp"></a></td>
+  </tr>
+  <tr>
+    <td valign="top"><strong>Memories.</strong> Read and edit the Markdown source of memory, with vault and note navigation kept visible.</td>
+    <td valign="top"><strong>Today.</strong> See the active vault, automatic-context activity, review state, and recent memory changes at a glance.</td>
+  </tr>
+</table>
 
 ---
 
@@ -56,7 +70,7 @@ Latest release: **[github.com/sirdath/NeuroVault/releases/latest](https://github
 
 Every release publishes SHA-256 checksums and Sigstore build provenance. Compare the downloaded file with the checksum in its release before opening it.
 
-**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple, so they open without warnings. If macOS says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning** — delete the file and report the release URL and checksum through the project security process.
+**macOS** artifacts are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper accepts them as software from an identified developer. macOS may still show its standard one-time confirmation that an app was downloaded from the internet. If macOS instead says an official `.dmg` is damaged or cannot be verified, **do not disable quarantine or bypass the warning** — delete the file and report the release URL and checksum through the project security process.
 
 **Windows artifacts are not code-signed yet.** SmartScreen will say *"Windows protected your PC"* and show the publisher as unknown. That is expected for now, not a sign of tampering — an Authenticode certificate is on the roadmap. Verify the SHA-256 checksum against the release, then choose **More info → Run anyway**. If you would rather not, use the macOS build, a Linux build, or [build from source](#quick-start-developers).
 
@@ -127,17 +141,6 @@ Design guarantees:
 - **Signal only.** Trivial prompts are skipped before any network call, gated memories need real relevance scores, and a memory is never injected twice in the same session.
 - **Reversible.** Install is idempotent and edits only NeuroVault's own entries in `settings.json` (a backup is written first); uninstall removes exactly those.
 - **Tunable.** Thresholds, budgets, strict mode, and per-vault overrides live in `~/.neurovault/ambient.json`; debug any prompt with `neurovault-server ambient test "your prompt"` — it prints the candidate table, every score, and the gate's reasoning. Details: [docs/ambient-recall.md](docs/ambient-recall.md).
-
-## Screenshots
-
-| | |
-|---|---|
-| ![Filters panel](docs/screenshots/02-filter-panel.png) | ![Command palette](docs/screenshots/07-palette.png) |
-| **Filters panel.** Every graph knob in one place — spread, edge-type filters, node size, layout, animations, grouping, time-lapse. Live, no re-render. | **Cmd+K palette.** One prompt, three sections — *Commands* (fuzzy), *Notes* (title search), *Memory* (semantic recall after 3+ chars). |
-| ![Semantic edges](docs/screenshots/04-graph-semantic-on.png) | ![Settings — About](docs/screenshots/09-settings-about.png) |
-| **Semantic edges.** Toggle the inferred-similarity layer; `manual`, `entity`, and `semantic` links each get their own colour. | **Settings.** Theme, density, server controls, MCP connection diagnostics, and the update checker. |
-
----
 
 ## How it works
 
