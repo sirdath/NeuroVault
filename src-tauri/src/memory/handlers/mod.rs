@@ -3348,7 +3348,10 @@ pub async fn import_folder(
                     continue;
                 }
             };
-            match super::ingest::ingest_content(&ingest_filename, &content, &db) {
+            // derive_personal = false: bulk-imported third-party docs are not
+            // the user's own preferences/facts. Deriving them here invented
+            // bogus `kind='preference'` engrams from quotes in imported books.
+            match super::ingest::ingest_content_opts(&ingest_filename, &content, &db, false) {
                 Ok(Some(_)) => ingested += 1,
                 Ok(None) => unchanged += 1,
                 Err(e) => errors.push(format!("{}: {}", path.display(), e)),

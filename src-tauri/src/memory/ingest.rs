@@ -196,6 +196,30 @@ pub fn ingest_file(
 /// version: if a row with the same filename + content_hash already
 /// exists, return `Ok(None)` without touching anything else.
 pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Result<Option<String>> {
+    // Full ingestion INCLUDING derivation of the user's personal
+    // preferences and fact revisions. Correct for notes the user authors:
+    // editor saves and the vault file-watcher.
+    ingest_content_opts(filename, content, db, true)
+}
+
+/// Ingest with control over PERSONAL derivation.
+///
+/// `derive_personal = false` skips preference extraction and fact
+/// supersession — use it for BULK IMPORT of third-party documents
+/// (`import_folder`), where "I always use ripgrep" or "we bumped the budget
+/// to £550" is the AUTHOR's sentence, not the user's.
+///
+/// This exists because running derivation over imported books invented ~22
+/// bogus `kind='preference'` engrams from quotes in the text (e.g. an Altman
+/// quote, "I love my current job"), which then surfaced in `session_start`
+/// as the *user's own* preferences. Imported docs are never the user's
+/// preferences, so bulk import turns derivation off.
+pub fn ingest_content_opts(
+    filename: &str,
+    content: &str,
+    db: &Arc<BrainDb>,
+    derive_personal: bool,
+) -> Result<Option<String>> {
     let title = extract_title(content, filename);
     let new_hash = content_hash(content);
     let kind = infer_kind(filename);
@@ -372,7 +396,7 @@ pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Resul
     let pref_disabled = std::env::var("NEUROVAULT_DISABLE_PREFERENCE_EXTRACTION")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    if !pref_disabled && !filename.starts_with("pref-") {
+    if derive_personal && !pref_disabled && !filename.starts_with("pref-") {
         if let Err(e) = write_preferences(db, content) {
             eprintln!(
                 "[ingest] preferences skipped for {}: {}",
@@ -399,7 +423,7 @@ pub fn ingest_content(filename: &str, content: &str, db: &Arc<BrainDb>) -> Resul
     let facts_disabled = std::env::var("NEUROVAULT_DISABLE_FACT_SUPERSESSION")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    if !facts_disabled && !filename.starts_with("pref-") {
+    if derive_personal && !facts_disabled && !filename.starts_with("pref-") {
         if let Err(e) = write_facts(db, &engram_id, content) {
             eprintln!("[ingest] facts skipped for {}: {}", &engram_id[..8], e);
         }

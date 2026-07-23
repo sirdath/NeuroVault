@@ -168,6 +168,30 @@ mod tests {
     }
 
     #[test]
+    fn third_party_prose_trips_the_extractor_which_is_why_bulk_import_skips_it() {
+        // The extractor is CONTENT-only: it cannot tell the user's own
+        // assertion from a sentence quoted inside an imported document. These
+        // are real sentences from books bulk-imported into an `ai-books`
+        // brain; each spawned a `kind='preference'` engram that then surfaced
+        // in session_start as one of the *user's* preferences (an Altman
+        // quote among them). Making the extractor "smarter" cannot fix this —
+        // an author's "I love X" is grammatically identical to the user's. The
+        // fix is upstream: `ingest_content_opts(.., derive_personal=false)` for
+        // bulk import (see ingest.rs). This test pins the mechanism so nobody
+        // "fixes" the symptom by neutering the extractor instead.
+        for quote in [
+            "\"I love my current job,\" Altman said to laughter.",
+            "In fact, one of my favorite TV shows as a young adult was the BBC series Connections.",
+            "I love the ability to weave together data from different sources.",
+        ] {
+            assert!(
+                !extract_preferences(quote).is_empty(),
+                "expected a (spurious) preference from imported prose: {quote:?}",
+            );
+        }
+    }
+
+    #[test]
     fn caps_pathological_notes() {
         let mut note = String::new();
         for i in 0..40 {
