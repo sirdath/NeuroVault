@@ -56,6 +56,7 @@ pub struct ServerState {}
 /// Wrap `MemoryError` so axum can render it as JSON with a status
 /// code the frontend + MCP proxy already understand (404 for
 /// not-found, 500 for everything else).
+#[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
 
 impl From<MemoryError> for ApiError {
@@ -1769,10 +1770,82 @@ pub struct JournalEventBody {
     after: Option<String>,
     #[serde(default)]
     source_refs: Vec<String>,
+    /// Untrusted host input. Malformed/unknown evidence becomes a safe
+    /// `InvalidInput` receipt, so it never suppresses the primary
+    /// outcome event or disappears invisibly.
+    #[serde(default, deserialize_with = "deserialize_optional_evidence_input")]
+    evidence_input: EvidenceInputField,
     #[serde(default)]
     idempotency_key: Option<String>,
     #[serde(default)]
     capture_method: Option<String>,
+}
+
+#[derive(Debug, Default)]
+enum EvidenceInputField {
+    #[default]
+    Absent,
+    Valid(super::adaptive::curator::evidence::OutcomeEvidenceInput),
+    Invalid,
+}
+
+fn deserialize_optional_evidence_input<'de, D>(
+    deserializer: D,
+) -> Result<EvidenceInputField, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(value) => serde_json::from_value(value)
+            .map(EvidenceInputField::Valid)
+            .unwrap_or(EvidenceInputField::Invalid),
+        // Missing fields use `Default::default` and never enter this
+        // function, so an explicit null is an attempted invalid input.
+        None => EvidenceInputField::Invalid,
+    })
+}
+
+fn is_outcome_event(event_type: &str) -> bool {
+    matches!(event_type, "assistant_response_completed" | "session_ended")
+}
+
+fn looks_like_absolute_path(value: &str) -> bool {
+    std::path::Path::new(value).is_absolute()
+        || value
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file://"))
+        || value.starts_with("\\\\")
+        || value.starts_with("//")
+        || value
+            .as_bytes()
+            .get(1)
+            .is_some_and(|separator| *separator == b':')
+}
+
+/// Remove the two raw-path fields emitted by older hooks. Preserve
+/// semantic and causal references, and retain only a bounded project
+/// basename as the human-readable title.
+fn sanitize_legacy_outcome_fields(event: &mut super::journal::Event) {
+    if !is_outcome_event(&event.event_type) {
+        return;
+    }
+    event
+        .source_refs
+        .retain(|reference| !looks_like_absolute_path(reference));
+    let legacy_cwd = event
+        .after
+        .as_deref()
+        .and_then(|value| value.strip_prefix("cwd: "));
+    if let Some(cwd) = legacy_cwd {
+        if event.title.is_none() {
+            event.title = cwd
+                .rsplit(['/', '\\'])
+                .find(|part| !part.is_empty())
+                .map(|part| super::hooks::sanitize(part, 80));
+        }
+        event.after = None;
+    }
 }
 
 /// POST /api/journal_event — the outcome-capture channel (adaptive
@@ -1813,6 +1886,7 @@ pub async fn journal_event(
             .capture_method
             .clone()
             .unwrap_or_else(|| "endpoint".into());
+        sanitize_legacy_outcome_fields(&mut ev);
         // Causal turn stamping: outcome events reference the
         // context_decision that opened their turn — resolved by
         // explicit session identity, never wall-clock adjacency
@@ -1823,22 +1897,403 @@ pub async fn journal_event(
                     super::journal::latest_for_session(&id, &sid, "context_decision")
                 {
                     ev.turn_id = opened.turn_id.clone();
+                    if is_outcome_event(&ev.event_type) {
+                        // The opening turn is server-recorded scope.
+                        // Request fields are transport hints and cannot
+                        // widen a private room or claim another host.
+                        ev.room = opened.room.clone();
+                        ev.privacy_label = opened.privacy_label.clone();
+                        ev.host = opened.host.clone();
+                    } else {
+                        if ev.room.is_none() {
+                            ev.room = opened.room.clone();
+                        }
+                        if ev.privacy_label.is_none() {
+                            ev.privacy_label = opened.privacy_label.clone();
+                        }
+                    }
                     ev.source_refs
                         .push(format!("caused_by:{}", opened.event_id));
                 }
             }
         }
+        // The privacy decision is authoritative and must happen before
+        // any transcript filesystem operation.
+        if super::journal::is_private_event(&ev) {
+            return Ok(serde_json::json!({
+                "brain": id,
+                "event_id": ev.event_id,
+                "written": false,
+                "evidence_capture": null,
+            }));
+        }
+        // Immutable redeliveries cannot be enriched. Avoid opening and
+        // hashing their evidence again; append_idempotent repeats the
+        // check under its lock to close the concurrent race.
+        if super::journal::already_recorded(&ev) {
+            return Ok(serde_json::json!({
+                "brain": id,
+                "event_id": ev.event_id,
+                "written": false,
+                "evidence_capture": null,
+            }));
+        }
+        let capture_receipt = match &body.evidence_input {
+            EvidenceInputField::Absent => None,
+            EvidenceInputField::Invalid => {
+                let receipt = super::journal::EvidenceCaptureReceipt {
+                    status: super::journal::EvidenceCaptureStatus::Ineligible,
+                    code: Some(super::journal::EvidenceCaptureCode::InvalidInput),
+                };
+                ev.evidence_capture = Some(receipt.clone());
+                Some(receipt)
+            }
+            EvidenceInputField::Valid(input) => {
+                let result = super::adaptive::curator::evidence::capture_outcome_evidence(
+                    input,
+                    super::adaptive::curator::evidence::CaptureContext {
+                        event_type: &ev.event_type,
+                        host: ev.host.as_deref(),
+                        session_id: ev.session_id.as_deref(),
+                        turn_id: ev.turn_id.as_deref(),
+                        room: ev.room.as_deref(),
+                        privacy_label: ev.privacy_label.as_deref(),
+                    },
+                );
+                if let Some(reference) = result.reference {
+                    ev.evidence_refs.push(reference);
+                }
+                ev.evidence_capture = Some(result.receipt.clone());
+                Some(result.receipt)
+            }
+        };
         let written = super::journal::append_idempotent(&ev)?;
         Ok(serde_json::json!({
             "brain": id,
             "event_id": ev.event_id,
             "written": written,
+            // Safe status only: never echo the submitted path, digest,
+            // or transcript bytes from this endpoint.
+            "evidence_capture": if written { capture_receipt } else { None },
         }))
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(ApiError::from)?;
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod journal_event_capture_tests {
+    use super::*;
+
+    fn open_turn(brain: &str, session: &str, room: &str) {
+        let mut turn = super::super::journal::Event::now(
+            brain,
+            "context_decision",
+            "prompt",
+            &format!("prompt-{session}"),
+        );
+        turn.session_id = Some(session.into());
+        turn.turn_id = Some(turn.event_id.clone());
+        turn.room = Some(room.into());
+        turn.host = Some("claude_code".into());
+        super::super::journal::append(&turn).unwrap();
+    }
+
+    fn journal_text(home: &std::path::Path, brain: &str) -> String {
+        let dir = home.join("brains").join(brain).join("journal");
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn evidence_input_is_typed_but_malformed_values_fail_open() {
+        let valid: JournalEventBody = serde_json::from_value(serde_json::json!({
+            "event_type": "assistant_response_completed",
+            "evidence_input": {
+                "kind": "transcript",
+                "absolute_path": "/tmp/s-1.jsonl",
+                "observed_prefix_len": 12,
+                "caller_supplied_digest_is_ignored": "untrusted"
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            valid.evidence_input,
+            EvidenceInputField::Valid(
+                super::super::adaptive::curator::evidence::OutcomeEvidenceInput::Transcript {
+                    observed_prefix_len: 12,
+                    ..
+                }
+            )
+        ));
+
+        let unknown: JournalEventBody = serde_json::from_value(serde_json::json!({
+            "event_type": "assistant_response_completed",
+            "evidence_input": { "kind": "future_untrusted_shape", "path": "/secret" }
+        }))
+        .unwrap();
+        assert!(matches!(
+            unknown.evidence_input,
+            EvidenceInputField::Invalid
+        ));
+
+        let malformed: JournalEventBody = serde_json::from_value(serde_json::json!({
+            "event_type": "assistant_response_completed",
+            "evidence_input": "not an object"
+        }))
+        .unwrap();
+        assert!(matches!(
+            malformed.evidence_input,
+            EvidenceInputField::Invalid
+        ));
+
+        let absent: JournalEventBody = serde_json::from_value(serde_json::json!({
+            "event_type": "assistant_response_completed"
+        }))
+        .unwrap();
+        assert!(matches!(absent.evidence_input, EvidenceInputField::Absent));
+
+        let explicit_null: JournalEventBody = serde_json::from_value(serde_json::json!({
+            "event_type": "assistant_response_completed",
+            "evidence_input": null
+        }))
+        .unwrap();
+        assert!(matches!(
+            explicit_null.evidence_input,
+            EvidenceInputField::Invalid
+        ));
+    }
+
+    #[test]
+    fn legacy_outcomes_drop_raw_paths_but_keep_causal_references() {
+        let mut event = super::super::journal::Event::now(
+            "brain",
+            "assistant_response_completed",
+            "session",
+            "s-1",
+        );
+        event.source_refs = vec![
+            "/Users/alex/.claude/projects/p/s-1.jsonl".into(),
+            r"C:\Users\alex\.claude\projects\p\s-1.jsonl".into(),
+            "file:///Users/alex/.claude/projects/p/s-1.jsonl".into(),
+            "caused_by:turn-1".into(),
+            "engram-1".into(),
+        ];
+        event.after = Some("cwd: /Users/alex/NeuroVault".into());
+        sanitize_legacy_outcome_fields(&mut event);
+
+        assert_eq!(event.title.as_deref(), Some("NeuroVault"));
+        assert_eq!(event.after, None);
+        assert_eq!(event.source_refs, vec!["caused_by:turn-1", "engram-1"]);
+    }
+
+    #[test]
+    fn non_outcome_events_are_not_reinterpreted() {
+        let mut event =
+            super::super::journal::Event::now("brain", "note_created", "engram", "note.md");
+        event.source_refs = vec!["/explicit/user/reference".into()];
+        event.after = Some("cwd: literal note content".into());
+        sanitize_legacy_outcome_fields(&mut event);
+        assert_eq!(event.source_refs, vec!["/explicit/user/reference"]);
+        assert_eq!(event.after.as_deref(), Some("cwd: literal note content"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outcome_capture_is_fail_open_private_safe_and_idempotent_end_to_end() {
+        let _guard = super::super::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let requested = std::env::temp_dir().join(format!(
+                "nv-handler-evidence-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&requested).unwrap();
+            let root = std::fs::canonicalize(requested).unwrap();
+            let home = root.join("nv-home");
+            let claude = root.join("claude");
+            let project = claude.join("projects").join("project-a");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":true,"transcript_access":true}"#,
+            )
+            .unwrap();
+            std::env::set_var("NEUROVAULT_HOME", &home);
+            std::env::set_var("CLAUDE_CONFIG_DIR", &claude);
+
+            let brain = "capture-e2e";
+            open_turn(brain, "s-1", "project-a");
+            let transcript = project.join("s-1.jsonl");
+            let transcript_bytes = b"private-transcript-sentinel";
+            std::fs::write(&transcript, transcript_bytes).unwrap();
+            let body_json = serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "object_type": "session",
+                "object_id": "s-1",
+                "session_id": "s-1",
+                "host": "spoofed-host",
+                "room": "spoofed-public-room",
+                "actor": "agent:claude-code",
+                "after": format!("cwd: {}", project.display()),
+                "source_refs": [transcript.to_string_lossy()],
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": transcript.to_string_lossy(),
+                    "observed_prefix_len": transcript_bytes.len(),
+                },
+                "idempotency_key": format!("stop-s-1-{}", transcript_bytes.len()),
+                "capture_method": "hook",
+            });
+            let first_body: JournalEventBody = serde_json::from_value(body_json.clone()).unwrap();
+            let Json(first) = journal_event(State(ServerState {}), Json(first_body))
+                .await
+                .unwrap();
+            assert_eq!(first["written"], true);
+            assert_eq!(first["evidence_capture"]["status"], "captured");
+
+            let now = time::OffsetDateTime::now_utc();
+            let events = super::super::journal::read_window(
+                brain,
+                now - time::Duration::hours(1),
+                now,
+                None,
+            );
+            let outcome = events
+                .iter()
+                .find(|event| event.event_type == "assistant_response_completed")
+                .unwrap();
+            assert_eq!(outcome.evidence_refs.len(), 1);
+            assert_eq!(outcome.host.as_deref(), Some("claude_code"));
+            assert_eq!(outcome.room.as_deref(), Some("project-a"));
+            assert!(outcome
+                .source_refs
+                .iter()
+                .all(|reference| { !reference.contains(transcript.to_string_lossy().as_ref()) }));
+            assert!(outcome.after.is_none());
+
+            let raw = journal_text(&home, brain);
+            assert!(!raw.contains(transcript.to_string_lossy().as_ref()));
+            assert!(!raw.contains(std::str::from_utf8(transcript_bytes).unwrap()));
+            assert!(!raw.contains(project.to_string_lossy().as_ref()));
+
+            // A duplicate is recognized before evidence access. Removing
+            // the source proves the second delivery does not reopen it.
+            std::fs::remove_file(&transcript).unwrap();
+            let second_body: JournalEventBody = serde_json::from_value(body_json).unwrap();
+            let Json(second) = journal_event(State(ServerState {}), Json(second_body))
+                .await
+                .unwrap();
+            assert_eq!(second["written"], false);
+            let events_after = super::super::journal::read_window(
+                brain,
+                now - time::Duration::hours(1),
+                time::OffsetDateTime::now_utc(),
+                None,
+            );
+            assert_eq!(
+                events_after
+                    .iter()
+                    .filter(|event| event.event_type == "assistant_response_completed")
+                    .count(),
+                1
+            );
+
+            // Invalid evidence is visible but never blocks the outcome.
+            open_turn(brain, "s-invalid", "project-a");
+            let invalid: JournalEventBody = serde_json::from_value(serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "session_id": "s-invalid",
+                "host": "claude_code",
+                "evidence_input": {"kind": "unknown", "absolute_path": "/secret"},
+                "idempotency_key": "stop-s-invalid-1"
+            }))
+            .unwrap();
+            let Json(invalid_response) = journal_event(State(ServerState {}), Json(invalid))
+                .await
+                .unwrap();
+            assert_eq!(invalid_response["written"], true);
+            assert_eq!(
+                invalid_response["evidence_capture"]["code"],
+                "invalid_input"
+            );
+            assert!(!invalid_response.to_string().contains("/secret"));
+            assert!(!journal_text(&home, brain).contains("/secret"));
+
+            // Consent off is also fail-open and performs no source read.
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":false,"transcript_access":true}"#,
+            )
+            .unwrap();
+            open_turn(brain, "s-disabled", "project-a");
+            let disabled_path = project.join("s-disabled.jsonl");
+            let disabled: JournalEventBody = serde_json::from_value(serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "session_id": "s-disabled",
+                "host": "claude_code",
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": disabled_path.to_string_lossy(),
+                    "observed_prefix_len": 10
+                },
+                "idempotency_key": "stop-s-disabled-10"
+            }))
+            .unwrap();
+            let Json(disabled_response) = journal_event(State(ServerState {}), Json(disabled))
+                .await
+                .unwrap();
+            assert_eq!(disabled_response["written"], true);
+            assert_eq!(
+                disabled_response["evidence_capture"]["code"],
+                "curator_disabled"
+            );
+            assert!(!journal_text(&home, brain).contains(disabled_path.to_string_lossy().as_ref()));
+
+            // A private declared or inherited room is rejected before any
+            // evidence attempt and never creates an outcome event.
+            open_turn(brain, "s-private", "clients/_PRIVATE");
+            let private: JournalEventBody = serde_json::from_value(serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "session_id": "s-private",
+                "host": "spoofed-host",
+                "room": "clients/_PRIVATE",
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": project.join("missing-private.jsonl").to_string_lossy(),
+                    "observed_prefix_len": 10
+                },
+                "idempotency_key": "stop-s-private-10"
+            }))
+            .unwrap();
+            let Json(private_response) = journal_event(State(ServerState {}), Json(private))
+                .await
+                .unwrap();
+            assert_eq!(private_response["written"], false);
+            assert!(private_response["evidence_capture"].is_null());
+
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+            std::env::remove_var("NEUROVAULT_HOME");
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
 }
 
 #[derive(Deserialize)]

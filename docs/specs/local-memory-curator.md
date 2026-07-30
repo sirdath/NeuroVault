@@ -1,7 +1,8 @@
 # Local Memory Curator: evidence and verification contract
 
-> **Status:** DRAFT FOR REVIEW, 2026-07-29. No implementation is
-> authorized by this document.
+> **Status:** IMPLEMENTATION IN PROGRESS, 2026-07-30. Phase A evidence
+> foundations are authorized; model access, proposal generation, and
+> every semantic write path remain unimplemented and unauthorized.
 >
 > **Scope:** an optional, local, background model that proposes durable
 > memories from complete NeuroVault experience units. The existing
@@ -359,6 +360,37 @@ consent, the outcome remains valid but carries no curator-eligible
 evidence reference. Legacy raw transcript
 references remain readable for old history but are ineligible for
 curator access until safely resolved.
+
+The initial developer-only switch is
+`~/.neurovault/local_curator.json`. Both `enabled` and
+`transcript_access` must be explicitly `true`; a missing, malformed, or
+partially enabled file performs no transcript open. Capture is limited
+to one Claude Code `.jsonl` transcript beneath the server-owned
+`ClaudeProjects` root, requires a correlated session/turn, and hashes at
+most 32 MiB through a fixed-size streaming buffer. Capture failures are
+stored as safe status codes without paths or transcript bytes, while the
+primary outcome event still appends. The server-recorded opening turn is
+authoritative for host and room; request fields cannot widen that scope.
+
+The first safe-open implementation is Unix-only (macOS and Linux). It
+walks the approved root and every transcript component by directory
+handle with `openat` plus `O_NOFOLLOW`; stable or raced symlinks cannot
+redirect the final read. The final descriptor is opened non-blocking and
+must be a regular file before any read, so a raced FIFO cannot stall the
+outcome channel. Approved-root symlinks and backslashes inside Unix
+filenames are rejected so the durable locator has one meaning.
+Windows returns `PlatformUnsupported` until equivalent handle-relative
+reparse-point rejection and file-ID verification are implemented and
+tested natively.
+
+Outcome-event idempotency means the first delivery wins. If that first
+delivery records a disabled or ineligible capture, redelivering the same
+event cannot mutate it into an eligible one. Phase A treats that as a
+visible permanent miss. Deduplication scans bounded tails of both the
+current and previous monthly segments so a retry at UTC month rollover
+does not duplicate the outcome. Any future recovery mechanism must
+append a separate typed `evidence_bound` child event rather than edit or
+replace the immutable outcome.
 
 For V1, bind an outcome event to the transcript prefix length already
 observed for that turn. Verification may read only that prefix and must

@@ -448,31 +448,57 @@ fn inject_line(block: &str) -> String {
 /// idempotency key ties redeliveries of the same occurrence together:
 /// Stop fires per assistant turn, so the transcript byte-length at
 /// fire time distinguishes turns within a session without reading the
-/// transcript (privacy: content travels by REFERENCE — consolidation
-/// reads it later, with consent semantics, not the hook).
+/// transcript. The hook sends that observation as untrusted typed
+/// input; the server owns consent, path validation, and prefix hashing.
 fn outcome_event(payload: &Value, event_type: &str) -> Option<Value> {
     let session = payload.get("session_id")?.as_str()?;
     let transcript = payload.get("transcript_path").and_then(|t| t.as_str());
-    let transcript_len = transcript
-        .and_then(|t| std::fs::metadata(t).ok())
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let transcript_len = transcript.and_then(|path| {
+        std::fs::metadata(path)
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+    });
     let key = match event_type {
-        "assistant_response_completed" => format!("stop-{session}-{transcript_len}"),
+        "assistant_response_completed" => {
+            format!("stop-{session}-{}", transcript_len.unwrap_or(0))
+        }
         _ => format!("{event_type}-{session}"),
     };
-    Some(json!({
+    let project = payload
+        .get("cwd")
+        .and_then(|cwd| cwd.as_str())
+        .and_then(|cwd| Path::new(cwd).file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| sanitize(name, 80));
+    let mut event = json!({
         "event_type": event_type,
         "object_type": "session",
         "object_id": session,
         "session_id": session,
         "host": "claude_code",
         "actor": "agent:claude-code",
-        "source_refs": transcript.map(|t| vec![t.to_string()]).unwrap_or_default(),
-        "after": payload.get("cwd").and_then(|c| c.as_str()).map(|c| format!("cwd: {c}")),
+        "title": project,
         "idempotency_key": key,
         "capture_method": "hook",
-    }))
+    });
+    if event_type == "assistant_response_completed" {
+        if let (Some(absolute_path), Some(observed_prefix_len)) = (transcript, transcript_len) {
+            if Path::new(absolute_path).is_absolute() {
+                event.as_object_mut()?.insert(
+                    "evidence_input".into(),
+                    serde_json::to_value(
+                        super::adaptive::curator::evidence::OutcomeEvidenceInput::Transcript {
+                            absolute_path: absolute_path.to_string(),
+                            observed_prefix_len,
+                        },
+                    )
+                    .ok()?,
+                );
+            }
+        }
+    }
+    Some(event)
 }
 
 /// Fire-and-forget outcome report. Shorter timeout than recall: a
@@ -727,15 +753,7 @@ fn append_seen(session_id: &str, new_ids: &[String]) {
 
 /// `$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude/settings.json`.
 pub fn claude_settings_path() -> PathBuf {
-    let dir = std::env::var("CLAUDE_CONFIG_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".claude")
-        });
-    dir.join("settings.json")
+    super::paths::claude_config_dir().join("settings.json")
 }
 
 /// Markers used to recognize our entries in settings.json. We match on
@@ -1270,12 +1288,51 @@ mod tests {
         assert_eq!(ev["event_type"], "assistant_response_completed");
         assert_eq!(ev["object_id"], "s-9");
         assert_eq!(ev["host"], "claude_code");
-        // transcript missing -> len 0, key still deterministic
+        // The degraded key preserves redelivery idempotency even when
+        // the transcript cannot supply a turn-distinguishing length.
         assert_eq!(ev["idempotency_key"], "stop-s-9-0");
-        assert_eq!(ev["source_refs"][0], "/nonexistent/t.jsonl");
-        assert_eq!(ev["after"], "cwd: /w");
+        assert!(ev.get("evidence_input").is_none());
+        assert!(ev.get("source_refs").is_none());
+        assert!(ev.get("after").is_none());
+        assert_eq!(ev["title"], "w");
         let end = outcome_event(&json!({"session_id": "s-9"}), "session_ended").unwrap();
         assert_eq!(end["idempotency_key"], "session_ended-s-9");
+        assert!(end.get("evidence_input").is_none());
+    }
+
+    #[test]
+    fn stop_sends_typed_length_without_reading_or_persisting_the_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "nv-hook-evidence-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("s-typed.jsonl");
+        std::fs::write(&transcript, b"1234567").unwrap();
+        let payload = json!({
+            "session_id": "s-typed",
+            "transcript_path": transcript,
+            "cwd": "/Users/example/NeuroVault"
+        });
+
+        let first = outcome_event(&payload, "assistant_response_completed").unwrap();
+        let second = outcome_event(&payload, "assistant_response_completed").unwrap();
+        assert_eq!(first, second, "same observation builds the same wire body");
+        assert_eq!(first["idempotency_key"], "stop-s-typed-7");
+        assert_eq!(first["evidence_input"]["kind"], "transcript");
+        assert_eq!(first["evidence_input"]["observed_prefix_len"], 7);
+        assert_eq!(
+            first["evidence_input"]["absolute_path"],
+            transcript.to_string_lossy().as_ref()
+        );
+        assert!(first.get("source_refs").is_none());
+        assert!(first.get("after").is_none());
+        assert_eq!(first["title"], "NeuroVault");
+
+        let end = outcome_event(&payload, "session_ended").unwrap();
+        assert!(end.get("evidence_input").is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

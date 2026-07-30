@@ -43,6 +43,22 @@ pub fn nv_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".neurovault"))
 }
 
+/// Claude Code's local configuration directory. Keeping this in the
+/// path registry makes hook installation and transcript approval use
+/// the same root, including custom `$CLAUDE_CONFIG_DIR` setups.
+pub fn claude_config_dir() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))
+        .unwrap_or_else(|| PathBuf::from(".claude"))
+}
+
+/// The only Claude transcript root approved in curator V1.
+pub fn claude_projects_dir() -> PathBuf {
+    claude_config_dir().join("projects")
+}
+
 /// Directory that holds every brain's per-brain state.
 pub fn brains_root() -> PathBuf {
     nv_home().join("brains")
