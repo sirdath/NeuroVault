@@ -238,7 +238,7 @@ pub enum NliPolicy {
     Disabled,
     Advisory {
         calibration_id: String,
-        contradiction_reject_bps: u16,
+        contradiction_review_bps: u16,
         entailment_pass_bps: u16,
     },
 }
@@ -919,7 +919,6 @@ pub enum RejectCode {
     AttributionMismatch,
     SemanticStateMismatch,
     SensitiveOutput,
-    NliContradiction,
 }
 
 pub enum DeferCode {
@@ -937,6 +936,7 @@ pub enum ReviewCode {
     AliasOrParaphrase,
     AmbiguousAttribution,
     ComplexSemantics,
+    NliContradiction,
     NliUncertain,
     Conflict,
     DestructiveAction,
@@ -1175,11 +1175,16 @@ cross-encoder. An NLI model requires NLI-specific weights and
 calibration on NeuroVault's own memory types and attack corpus.
 
 - Scorer intentionally not configured: `Pass`, recorded as `not_run`.
-- High calibrated contradiction: `Reject(NliContradiction)`.
+- High calibrated contradiction:
+  `RequireReview(NliContradiction)`.
 - Configured but uncalibrated, unavailable, out-of-domain, or
   uncertain score: `RequireReview(NliUncertain)`.
 - High entailment may record `Pass`, but can never override another
   gate, upgrade a class, or authorize a write.
+
+Because NLI is advisory and untrusted, G10 can emit only `Pass` or
+`RequireReview` in V1. It can never produce a terminal `Reject` or
+`Defer` outcome.
 
 A universal `entailment >= 0.9` threshold is forbidden. Thresholds and
 abstention ranges live in versioned policy and are justified by a
@@ -1747,7 +1752,26 @@ Required attack families:
 
 Measure by memory class and provenance role:
 
-- candidate precision and recall;
+- candidate precision;
+- `generator_candidate_recall`: gold memory instances proposed by the
+  generator before verification, divided by all gold memory instances;
+- `verifier_false_reject_rate`: correctly formed labeled candidates
+  whose gold disposition is `ProposalReady` or `ReviewRequired` but
+  whose verifier outcome is terminal `Rejected`, divided by all such
+  admissible labeled candidates. Attribute every error to `GateName`
+  and `RejectCode` using the section 14.1 audit receipt;
+- `verifier_over_escalation_rate`: labeled candidates whose gold
+  disposition is `ProposalReady` but whose verifier disposition is
+  `ReviewRequired`, divided by all gold `ProposalReady` candidates;
+- `defer_recovery_rate`: deferred candidates that reach a non-deferred
+  terminal outcome within the frozen retry/TTL policy, divided by all
+  deferred candidates old enough to evaluate;
+- `defer_expiry_rate`: deferred candidates that reach
+  `ExpiredVisible` without recovery, divided by all deferred candidates
+  old enough to evaluate. Still-pending candidates are reported
+  separately and excluded from both denominators until mature;
+- `end_to_end_candidate_recall`: gold memory instances that ultimately
+  reach human review, divided by all gold memory instances;
 - unsupported-claim rate;
 - valid-span and evidence-resolution rate;
 - actor/subject/object attribution accuracy;
@@ -1761,7 +1785,11 @@ Measure by memory class and provenance role:
 - replay stability and deduplication correctness.
 
 Approval rate alone is insufficient because a system can appear
-precise by proposing almost nothing.
+precise by proposing almost nothing. Precision and no-leak metrics are
+also insufficient because a verifier can appear safe by rejecting
+almost everything. `verifier_false_reject_rate` and
+`defer_expiry_rate` are the counterweight, and terminal loss matters
+most because it has no human backstop in V1.
 
 ## 20. V1 acceptance bar
 
@@ -1793,6 +1821,16 @@ true:
 - curator-derived journal events carry durable lineage and cannot feed
   later curator extraction;
 - all twenty red-team families have regression fixtures;
+- before the frozen labeled corpus is scored, a committed benchmark
+  manifest records the corpus hash, generator/verifier/policy
+  fingerprints, retry/TTL policy, included claim classes, and
+  pre-registered thresholds for `generator_candidate_recall`,
+  `verifier_false_reject_rate`, `verifier_over_escalation_rate`,
+  `defer_recovery_rate`, `defer_expiry_rate`, and
+  `end_to_end_candidate_recall`;
+- every included claim class meets those pre-registered recall and
+  verifier thresholds on the frozen corpus. "Fail closed" must not
+  degenerate into "fail empty";
 - model, prompt, schema, evidence, policy, and NLI fingerprints appear
   in safe local receipts;
 - a global curator kill switch is test-locked.
