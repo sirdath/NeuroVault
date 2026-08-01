@@ -83,7 +83,7 @@ The AppImage runs without warnings — run `chmod +x neurovault_*.AppImage` firs
 ## What you get
 
 - **Graphify your codebase** — point NeuroVault at a repo and it becomes part of your active vault: files, symbols, and call edges parsed **on-device** (tree-sitter — Rust, Python, TS/TSX, Go, Java, C#, Ruby) and rendered as a gold layer in the graph. Your connected AI can ask `where_defined`, `who_calls`, `blast_radius` (what breaks if I change this?) — and `fuse` links code to the notes and decisions about it. NeuroVault does not upload source while building the graph.
-- **Knowledge graph view** — your notes as a living, force-directed map. Node **fill = category** (folder), a **ring = health** (teal active · amber fresh · grey dormant), and **size = importance** (PageRank) in Analytics mode. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
+- **Knowledge graph view** — your notes as a living, force-directed map. In Analytics mode the on-canvas legend decodes the encoding: **fill / tint = category** (folder), **size = how often referenced**, **faded = dormant**, and a **rim = hub or newly added**. Spread/zoom controls, animations toggle, Venn-style category grouping, time-lapse playback, and a click-to-frame cluster legend.
 - **Hybrid retrieval, always on** — semantic + BM25 keywords + knowledge graph, fused via RRF, then a cross-encoder reranker (on by default). In-process Rust.
 - **Markdown editor** with live preview, auto-save, drag-to-reorder tabs, and `[[wikilinks]]`.
 - **Import inbox** — drag a file onto the window to copy it into a private staging area without changing the original. Connected workflows can turn staged material into indexed notes. [How it works →](https://neurovault.dathproject.com/docs#drop-folder)
@@ -189,7 +189,7 @@ NeuroVault is a **knowledge layer**. It differs in five ways that map to what a 
 
 **Memory strength** — Ebbinghaus forgetting curve with access reinforcement. Frequently retrieved memories stay strong; unused ones fade.
 
-**Graph view** — force-directed visualization. Fill encodes category, a ring encodes health/strength, size encodes importance (Analytics mode). Click a node to open, drag to pin, click a cluster in the legend to frame it.
+**Graph view** — force-directed visualization. In Analytics mode: fill/tint encodes category, size encodes how often a note is referenced, fading marks dormancy, and a rim marks a hub or a newly added note. Click a node to open, drag to pin, click a cluster in the legend to frame it.
 
 **Drop-folder ingest** — a per-vault **`raw/`** folder (with a `README.md` guide inside); paste documents there and the connected agent converts them into clean notes (no bundled converters — the agent is the converter). Originals are kept in `raw/_done/`.
 

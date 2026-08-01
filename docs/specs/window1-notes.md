@@ -84,3 +84,41 @@ before the redesigned Memory Review was installed (15:18). Treatment:
   results; then evaluate coverage, per-class precision, edits,
   rejection patterns, false negatives, held-out performance and
   review burden against the precommitted criteria.
+
+## Window 1 closure — INCONCLUSIVE, no promotions (2026-07-31)
+
+Dataset frozen at the 2026-07-25 boundary and inspected per the conduct
+rule (freeze before results).
+
+**Result: zero usable in-window labels.** The only decisions in the store
+for these classes are the three pre-window seed approvals (2026-07-11
+14:18:31–32), which the `decided_at >= 2026-07-11T15:18Z` filter EXCLUDES.
+In-window n = 0 for every class.
+
+**Verdict — INCONCLUSIVE:**
+
+- No class reaches its frozen sample floor (memory_strengthened needs
+  n ≥ 20; see the Wilson-bound arithmetic above), so none can pass or fail
+  the admission bars. Nothing is admitted to Stage 3.
+- **No promotions.** Every class stays exactly where it was —
+  observation-only / review-only. No consolidation rule or executor
+  changes. Frozen criteria (`stage3-admission.md`) untouched.
+
+**Why the queue was empty is itself unresolved.** Per the conduct rule an
+empty queue is either appropriate silence or insufficient sensitivity, and
+only false-negative reporting distinguishes them — window 1 produced no
+false-negative reports either, so we cannot yet tell which it was. Working
+conclusion: the observation apparatus did not surface enough real proposals
+to evaluate; this is NOT evidence the classes are known-silent-correct.
+
+**Rule-defect candidates carry forward, unvalidated.** The four candidates
+above (working_state existence check, real-activity bar, the cross-scope
+object model, headline disambiguation) got no in-window evidence. They
+remain OPEN; the cross-scope/object model in particular is a prerequisite
+the Local Memory Curator work (session → project/room mapping) is expected
+to address.
+
+**Next:** open observation window 2 only after (a) the curator Phase A
+evidence/scope plumbing lands and (b) hooks send a repo/cwd-derived room so
+proposals carry an explicit Scope. Re-use the same frozen criteria; do not
+retune them to this null result.
