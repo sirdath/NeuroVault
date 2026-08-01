@@ -271,7 +271,14 @@ pub fn read_window(
     // Which monthly segments can intersect the window?
     let months: Vec<String> = {
         let mut m = Vec::new();
-        let mut cur = start.replace_day(1).unwrap_or(start);
+        // Month-start at MIDNIGHT — NOT start's time-of-day. Carrying the
+        // time-of-day made `cur <= end` reject the end month when the
+        // window ended on the 1st before start's clock time, silently
+        // skipping that month's segment (see the boundary regression test).
+        let mut cur = start
+            .replace_day(1)
+            .unwrap_or(start)
+            .replace_time(time::Time::MIDNIGHT);
         while cur <= end {
             m.push(
                 cur.format(&Rfc3339)
@@ -587,5 +594,41 @@ mod tests {
     fn segments_are_monthly() {
         assert_eq!(segment_for("2026-07-10T12:00:00Z"), "events-2026-07.jsonl");
         assert_eq!(segment_for("2020-01-15T10:00:00Z"), "events-2020-01.jsonl");
+    }
+
+    #[test]
+    fn read_window_reads_end_month_segment_across_month_boundary() {
+        // Regression: read_window enumerated candidate month segments
+        // starting from `start` carrying start's TIME-OF-DAY (only the day
+        // was pinned to 1). When the window END landed on the 1st of a
+        // later month at a wall-clock time EARLIER than start's, the
+        // `cur <= end` check failed for that month, its
+        // `events-YYYY-MM.jsonl` segment was never opened, and its
+        // in-window events were silently dropped. The candidate cursor must
+        // be the month start at MIDNIGHT, not start's time-of-day.
+        with_temp_home(|| {
+            let b = "jmonthedge";
+            // In the start month.
+            let mut jul = Event::now(b, "note_created", "engram", "n-jul");
+            jul.ts = "2026-07-10T12:00:00Z".into();
+            append(&jul).unwrap();
+            // On the 1st of the NEXT month, at 03:00 — inside the window
+            // below, but earlier in the day than start's 12:00.
+            let mut aug = Event::now(b, "note_created", "engram", "n-aug");
+            aug.ts = "2026-08-01T03:00:00Z".into();
+            append(&aug).unwrap();
+
+            let start = OffsetDateTime::parse("2026-07-10T12:00:00Z", &Rfc3339).unwrap();
+            let end = OffsetDateTime::parse("2026-08-01T06:00:00Z", &Rfc3339).unwrap();
+            let got = read_window(b, start, end, None);
+            let ids: std::collections::HashSet<_> =
+                got.iter().map(|e| e.object_id.as_str()).collect();
+            assert!(
+                ids.contains("n-aug"),
+                "Aug-1 event is in-window but its month segment was skipped: {ids:?}"
+            );
+            assert!(ids.contains("n-jul"), "start-month event present: {ids:?}");
+            assert_eq!(got.len(), 2, "both in-window events returned");
+        });
     }
 }
