@@ -350,9 +350,10 @@ is at least that long, reads and hashes exactly that prefix, and then
 constructs the root-relative `EvidenceReference`. A shorter file is
 ineligible/deferred. Extra bytes after the observed prefix are ignored.
 
-The endpoint may accept the host's absolute path, but it canonicalizes
-and checks that path immediately, then journals only an approved root
-identifier plus a validated relative path. When the curator and
+The endpoint may accept the host's absolute path, but it checks that
+path lexically against the approved root — never canonicalizing the
+untrusted path — then journals only an approved root identifier plus a
+validated relative path. When the curator and
 transcript access are enabled, the server hashes exactly the observed
 prefix before appending the outcome event. The hook still never reads
 transcript content. If hashing exceeds its cap, fails, or lacks user
@@ -372,13 +373,18 @@ stored as safe status codes without paths or transcript bytes, while the
 primary outcome event still appends. The server-recorded opening turn is
 authoritative for host and room; request fields cannot widen that scope.
 
-The first safe-open implementation is Unix-only (macOS and Linux). It
-walks the approved root and every transcript component by directory
-handle with `openat` plus `O_NOFOLLOW`; stable or raced symlinks cannot
-redirect the final read. The final descriptor is opened non-blocking and
-must be a regular file before any read, so a raced FIFO cannot stall the
-outcome channel. Approved-root symlinks and backslashes inside Unix
-filenames are rejected so the durable locator has one meaning.
+The first safe-open implementation is Unix-only (macOS and Linux). Once
+both consent switches are enabled, it canonicalizes the server-owned
+approved root once per loaded capture policy, retains the configured
+alias for lexical containment, and starts every read from the resolved
+root. It walks every component below that root by directory handle with
+`openat` plus `O_NOFOLLOW`; stable or raced descendant symlinks cannot
+redirect the final read. This permits ordinary symlinked-home, container,
+and encrypted-home layouts without ever canonicalizing the untrusted
+transcript path. The final descriptor is opened non-blocking and must be
+a regular file before any read, so a raced FIFO cannot stall the outcome
+channel. Descendant symlinks and backslashes inside Unix filenames are
+rejected so the durable locator has one meaning.
 Windows returns `PlatformUnsupported` until equivalent handle-relative
 reparse-point rejection and file-ID verification are implemented and
 tested natively.
@@ -1873,14 +1879,22 @@ There is no V1 auto-write acceptance bar because V1 has no auto-write.
 
 ### Phase A: evidence and replay, no model
 
-- Add consent-gated typed transcript references and capture-time prefix
-  hashing.
-- Build the versioned same-host transcript parser and redaction map.
-- Materialize exact evidence spans from test fixtures.
-- Add verified-span and receipt types.
-- Fix proposal identity and evidence tombstones.
-- Add curator-unit retry state.
-- Add durable derivation lineage and the per-brain consolidation lock.
+Phase A ships as seven independently reviewable slices. The list below is
+that order; each bullet is one slice.
+
+1. **(slice 1 of 7 — implemented)** Add consent-gated typed transcript
+   references and capture-time prefix hashing. This slice binds evidence
+   at capture only: it resolves the approved root once per enabled
+   policy, opens exclusively from that resolved root under `openat`
+   `O_NOFOLLOW`, and stops at bytes and hashes. It does **not** parse,
+   redact, materialize spans, or create proposals — those are later
+   slices and remain unimplemented and unauthorized.
+2. Build the versioned same-host transcript parser and redaction map.
+3. Materialize exact evidence spans from test fixtures.
+4. Add verified-span and receipt types.
+5. Fix proposal identity and evidence tombstones.
+6. Add curator-unit retry state.
+7. Add durable derivation lineage and the per-brain consolidation lock.
 
 ### Phase B: verifier, synthetic candidates only
 

@@ -1811,16 +1811,18 @@ fn is_outcome_event(event_type: &str) -> bool {
 }
 
 fn looks_like_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let windows_drive_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
     std::path::Path::new(value).is_absolute()
         || value
             .get(..7)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file://"))
         || value.starts_with("\\\\")
         || value.starts_with("//")
-        || value
-            .as_bytes()
-            .get(1)
-            .is_some_and(|separator| *separator == b':')
+        || windows_drive_absolute
 }
 
 /// Remove the two raw-path fields emitted by older hooks. Preserve
@@ -2011,6 +2013,47 @@ mod journal_event_capture_tests {
             .join("")
     }
 
+    #[cfg(unix)]
+    struct ScopedCaptureEnvironment {
+        root: std::path::PathBuf,
+        previous_nv_home: Option<std::ffi::OsString>,
+        previous_claude_config_dir: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(unix)]
+    impl ScopedCaptureEnvironment {
+        fn install(
+            root: std::path::PathBuf,
+            home: &std::path::Path,
+            claude_config_dir: &std::path::Path,
+        ) -> Self {
+            let previous_nv_home = std::env::var_os("NEUROVAULT_HOME");
+            let previous_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+            std::env::set_var("NEUROVAULT_HOME", home);
+            std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir);
+            Self {
+                root,
+                previous_nv_home,
+                previous_claude_config_dir,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ScopedCaptureEnvironment {
+        fn drop(&mut self) {
+            match &self.previous_claude_config_dir {
+                Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+            }
+            match &self.previous_nv_home {
+                Some(value) => std::env::set_var("NEUROVAULT_HOME", value),
+                None => std::env::remove_var("NEUROVAULT_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
     #[test]
     fn evidence_input_is_typed_but_malformed_values_fail_open() {
         let valid: JournalEventBody = serde_json::from_value(serde_json::json!({
@@ -2081,8 +2124,10 @@ mod journal_event_capture_tests {
         event.source_refs = vec![
             "/Users/alex/.claude/projects/p/s-1.jsonl".into(),
             r"C:\Users\alex\.claude\projects\p\s-1.jsonl".into(),
+            "D:/Users/alex/.claude/projects/p/s-1.jsonl".into(),
             "file:///Users/alex/.claude/projects/p/s-1.jsonl".into(),
             "caused_by:turn-1".into(),
+            "x:custom-ref".into(),
             "engram-1".into(),
         ];
         event.after = Some("cwd: /Users/alex/NeuroVault".into());
@@ -2090,7 +2135,10 @@ mod journal_event_capture_tests {
 
         assert_eq!(event.title.as_deref(), Some("NeuroVault"));
         assert_eq!(event.after, None);
-        assert_eq!(event.source_refs, vec!["caused_by:turn-1", "engram-1"]);
+        assert_eq!(
+            event.source_refs,
+            vec!["caused_by:turn-1", "x:custom-ref", "engram-1"]
+        );
     }
 
     #[test]
@@ -2102,6 +2150,281 @@ mod journal_event_capture_tests {
         sanitize_legacy_outcome_fields(&mut event);
         assert_eq!(event.source_refs, vec!["/explicit/user/reference"]);
         assert_eq!(event.after.as_deref(), Some("cwd: literal note content"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consent_flip_cannot_enrich_an_idempotent_outcome_redelivery() {
+        let _guard = super::super::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let requested = std::env::temp_dir().join(format!(
+                "nv-handler-consent-redelivery-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&requested).unwrap();
+            let root = std::fs::canonicalize(requested).unwrap();
+            let home = root.join("nv-home");
+            let claude = root.join("claude");
+            let project = claude.join("projects").join("project-a");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            let _environment = ScopedCaptureEnvironment::install(root, &home, &claude);
+
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":false,"transcript_access":true}"#,
+            )
+            .unwrap();
+            let brain = "capture-consent-redelivery";
+            let session = "s-consent";
+            open_turn(brain, session, "project-a");
+            let transcript = project.join(format!("{session}.jsonl"));
+            let transcript_bytes = b"eligible-after-consent";
+            std::fs::write(&transcript, transcript_bytes).unwrap();
+            let body_json = serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "object_type": "session",
+                "object_id": session,
+                "session_id": session,
+                "host": "claude_code",
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": transcript.to_string_lossy(),
+                    "observed_prefix_len": transcript_bytes.len(),
+                },
+                "idempotency_key": format!("stop-{session}-{}", transcript_bytes.len()),
+                "capture_method": "hook",
+            });
+
+            let first_body: JournalEventBody = serde_json::from_value(body_json.clone()).unwrap();
+            let Json(first) = journal_event(State(ServerState {}), Json(first_body))
+                .await
+                .unwrap();
+            assert_eq!(first["written"], true);
+            assert_eq!(first["evidence_capture"]["status"], "disabled");
+            assert_eq!(first["evidence_capture"]["code"], "curator_disabled");
+
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":true,"transcript_access":true}"#,
+            )
+            .unwrap();
+            let redelivery_body: JournalEventBody = serde_json::from_value(body_json).unwrap();
+            let Json(redelivery) = journal_event(State(ServerState {}), Json(redelivery_body))
+                .await
+                .unwrap();
+            assert_eq!(redelivery["written"], false);
+            assert!(redelivery["evidence_capture"].is_null());
+
+            let now = time::OffsetDateTime::now_utc();
+            let outcomes: Vec<_> = super::super::journal::read_window(
+                brain,
+                now - time::Duration::hours(1),
+                now + time::Duration::minutes(1),
+                None,
+            )
+            .into_iter()
+            .filter(|event| event.event_type == "assistant_response_completed")
+            .collect();
+            assert_eq!(outcomes.len(), 1, "redelivery must not append or enrich");
+            let outcome = &outcomes[0];
+            assert!(outcome.evidence_refs.is_empty());
+            assert_eq!(
+                outcome.evidence_capture,
+                Some(super::super::journal::EvidenceCaptureReceipt {
+                    status: super::super::journal::EvidenceCaptureStatus::Disabled,
+                    code: Some(super::super::journal::EvidenceCaptureCode::CuratorDisabled),
+                })
+            );
+            let raw = journal_text(&home, brain);
+            assert!(!raw.contains(transcript.to_string_lossy().as_ref()));
+            assert!(!raw.contains(std::str::from_utf8(transcript_bytes).unwrap()));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_approved_transcript_persists_source_unavailable_without_path_leakage() {
+        let _guard = super::super::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let requested = std::env::temp_dir().join(format!(
+                "nv-handler-source-unavailable-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&requested).unwrap();
+            let root = std::fs::canonicalize(requested).unwrap();
+            let home = root.join("nv-home");
+            let claude = root.join("claude");
+            let project = claude.join("projects").join("project-a");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            let _environment = ScopedCaptureEnvironment::install(root, &home, &claude);
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":true,"transcript_access":true}"#,
+            )
+            .unwrap();
+
+            let brain = "capture-source-unavailable";
+            let session = "s-missing";
+            open_turn(brain, session, "project-a");
+            let missing = project.join(format!("{session}.jsonl"));
+            let body: JournalEventBody = serde_json::from_value(serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "object_type": "session",
+                "object_id": session,
+                "session_id": session,
+                "host": "claude_code",
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": missing.to_string_lossy(),
+                    "observed_prefix_len": 1,
+                },
+                "idempotency_key": format!("stop-{session}-1"),
+                "capture_method": "hook",
+            }))
+            .unwrap();
+            let Json(response) = journal_event(State(ServerState {}), Json(body))
+                .await
+                .unwrap();
+            assert_eq!(response["written"], true);
+            assert_eq!(response["evidence_capture"]["status"], "ineligible");
+            assert_eq!(response["evidence_capture"]["code"], "source_unavailable");
+            assert!(!response
+                .to_string()
+                .contains(missing.to_string_lossy().as_ref()));
+
+            let now = time::OffsetDateTime::now_utc();
+            let outcomes: Vec<_> = super::super::journal::read_window(
+                brain,
+                now - time::Duration::hours(1),
+                now + time::Duration::minutes(1),
+                None,
+            )
+            .into_iter()
+            .filter(|event| event.event_type == "assistant_response_completed")
+            .collect();
+            assert_eq!(outcomes.len(), 1);
+            let outcome = &outcomes[0];
+            assert!(outcome.evidence_refs.is_empty());
+            assert_eq!(
+                outcome.evidence_capture,
+                Some(super::super::journal::EvidenceCaptureReceipt {
+                    status: super::super::journal::EvidenceCaptureStatus::Ineligible,
+                    code: Some(super::super::journal::EvidenceCaptureCode::SourceUnavailable),
+                })
+            );
+            assert!(!journal_text(&home, brain).contains(missing.to_string_lossy().as_ref()));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_claude_config_root_captures_through_the_public_handler() {
+        use std::os::unix::fs::symlink;
+
+        let _guard = super::super::journal::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let requested = std::env::temp_dir().join(format!(
+                "nv-handler-symlinked-root-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&requested).unwrap();
+            let root = std::fs::canonicalize(requested).unwrap();
+            let home = root.join("nv-home");
+            let real_claude = root.join("real-claude");
+            let linked_claude = root.join("linked-claude");
+            let real_project = real_claude.join("projects").join("project-a");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&real_project).unwrap();
+            symlink(&real_claude, &linked_claude).unwrap();
+            let _environment = ScopedCaptureEnvironment::install(root, &home, &linked_claude);
+            std::fs::write(
+                home.join("local_curator.json"),
+                r#"{"enabled":true,"transcript_access":true}"#,
+            )
+            .unwrap();
+
+            let brain = "capture-symlinked-root";
+            let session = "s-linked-root";
+            open_turn(brain, session, "project-a");
+            let transcript = linked_claude
+                .join("projects")
+                .join("project-a")
+                .join(format!("{session}.jsonl"));
+            let transcript_bytes = b"symlinked-root-evidence";
+            std::fs::write(&transcript, transcript_bytes).unwrap();
+            let body: JournalEventBody = serde_json::from_value(serde_json::json!({
+                "brain_id": brain,
+                "event_type": "assistant_response_completed",
+                "object_type": "session",
+                "object_id": session,
+                "session_id": session,
+                "host": "claude_code",
+                "evidence_input": {
+                    "kind": "transcript",
+                    "absolute_path": transcript.to_string_lossy(),
+                    "observed_prefix_len": transcript_bytes.len(),
+                },
+                "idempotency_key": format!("stop-{session}-{}", transcript_bytes.len()),
+                "capture_method": "hook",
+            }))
+            .unwrap();
+            let Json(response) = journal_event(State(ServerState {}), Json(body))
+                .await
+                .unwrap();
+            assert_eq!(response["written"], true);
+            assert_eq!(response["evidence_capture"]["status"], "captured");
+
+            let now = time::OffsetDateTime::now_utc();
+            let outcome = super::super::journal::read_window(
+                brain,
+                now - time::Duration::hours(1),
+                now + time::Duration::minutes(1),
+                None,
+            )
+            .into_iter()
+            .find(|event| event.event_type == "assistant_response_completed")
+            .unwrap();
+            assert_eq!(outcome.evidence_refs.len(), 1);
+            assert!(matches!(
+                &outcome.evidence_refs[0],
+                super::super::journal::EvidenceReference::Transcript {
+                    root: super::super::journal::ApprovedTranscriptRoot::ClaudeProjects,
+                    relative_path,
+                    observed_prefix_len,
+                    ..
+                } if relative_path == &format!("project-a/{session}.jsonl")
+                    && *observed_prefix_len == transcript_bytes.len() as u64
+            ));
+            let raw = journal_text(&home, brain);
+            assert!(!raw.contains(linked_claude.to_string_lossy().as_ref()));
+            assert!(!raw.contains(real_claude.to_string_lossy().as_ref()));
+            assert!(!raw.contains(std::str::from_utf8(transcript_bytes).unwrap()));
+        });
     }
 
     #[cfg(unix)]

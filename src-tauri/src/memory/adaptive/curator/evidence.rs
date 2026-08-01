@@ -59,8 +59,42 @@ pub struct CaptureContext<'a> {
 struct CapturePolicy {
     curator_enabled: bool,
     transcript_access: bool,
-    claude_projects_root: PathBuf,
+    /// The server-owned path as configured. This alias is used only for
+    /// lexical containment so a hook reporting a symlinked `$HOME` path
+    /// can still be related to the approved root without canonicalizing
+    /// the untrusted transcript path.
+    configured_claude_projects_root: PathBuf,
+    /// The approved root resolved once when the enabled policy is loaded.
+    /// All filesystem traversal starts from this target; symlinks below
+    /// it remain forbidden and are opened with `O_NOFOLLOW`.
+    resolved_claude_projects_root: Option<PathBuf>,
     max_prefix_bytes: u64,
+}
+
+impl CapturePolicy {
+    fn load(
+        curator_enabled: bool,
+        transcript_access: bool,
+        configured_claude_projects_root: PathBuf,
+        max_prefix_bytes: u64,
+    ) -> Self {
+        // Consent checks must remain earlier than every transcript-root
+        // filesystem operation. A disabled or partially enabled policy
+        // therefore does not even resolve the configured root.
+        let resolved_claude_projects_root = (curator_enabled
+            && transcript_access
+            && configured_claude_projects_root.is_absolute()
+            && cfg!(unix))
+        .then(|| fs::canonicalize(&configured_claude_projects_root).ok())
+        .flatten();
+        Self {
+            curator_enabled,
+            transcript_access,
+            configured_claude_projects_root,
+            resolved_claude_projects_root,
+            max_prefix_bytes,
+        }
+    }
 }
 
 /// The reference is present only after every check and both hash passes
@@ -118,12 +152,12 @@ struct LocalCuratorConfig {
 fn production_policy() -> CapturePolicy {
     let raw = fs::read_to_string(crate::memory::paths::nv_home().join("local_curator.json"));
     let config = decode_local_config(raw.as_deref().ok());
-    CapturePolicy {
-        curator_enabled: config.enabled,
-        transcript_access: config.transcript_access,
-        claude_projects_root: crate::memory::paths::claude_projects_dir(),
-        max_prefix_bytes: MAX_TRANSCRIPT_PREFIX_BYTES,
-    }
+    CapturePolicy::load(
+        config.enabled,
+        config.transcript_access,
+        crate::memory::paths::claude_projects_dir(),
+        MAX_TRANSCRIPT_PREFIX_BYTES,
+    )
 }
 
 fn decode_local_config(raw: Option<&str>) -> LocalCuratorConfig {
@@ -144,6 +178,15 @@ fn capture_with_policy(
     input: &OutcomeEvidenceInput,
     context: CaptureContext<'_>,
     policy: &CapturePolicy,
+) -> CaptureResult {
+    capture_with_policy_and_hash_hook(input, context, policy, || {})
+}
+
+fn capture_with_policy_and_hash_hook(
+    input: &OutcomeEvidenceInput,
+    context: CaptureContext<'_>,
+    policy: &CapturePolicy,
+    between_hash_passes: impl FnOnce(),
 ) -> CaptureResult {
     // These checks precede every transcript filesystem operation. With
     // consent off, a caller cannot use this endpoint as a path oracle.
@@ -171,7 +214,13 @@ fn capture_with_policy(
         OutcomeEvidenceInput::Transcript {
             absolute_path,
             observed_prefix_len,
-        } => capture_transcript(absolute_path, *observed_prefix_len, session_id, policy),
+        } => capture_transcript(
+            absolute_path,
+            *observed_prefix_len,
+            session_id,
+            policy,
+            between_hash_passes,
+        ),
     }
 }
 
@@ -198,6 +247,7 @@ fn capture_transcript(
     _observed_prefix_len: u64,
     _session_id: &str,
     _policy: &CapturePolicy,
+    _between_hash_passes: impl FnOnce(),
 ) -> CaptureResult {
     // Windows needs handle-relative traversal plus file-ID comparison
     // before it can make this guarantee. Phase A fails closed there
@@ -212,6 +262,7 @@ fn capture_transcript(
     observed_prefix_len: u64,
     session_id: &str,
     policy: &CapturePolicy,
+    between_hash_passes: impl FnOnce(),
 ) -> CaptureResult {
     if absolute_path.len() > MAX_WIRE_PATH_BYTES {
         return CaptureResult::ineligible(EvidenceCaptureCode::InvalidPath);
@@ -228,7 +279,7 @@ fn capture_transcript(
         || submitted
             .components()
             .any(|part| matches!(part, Component::ParentDir))
-        || !policy.claude_projects_root.is_absolute()
+        || !policy.configured_claude_projects_root.is_absolute()
     {
         return CaptureResult::ineligible(EvidenceCaptureCode::InvalidPath);
     }
@@ -236,7 +287,16 @@ fn capture_transcript(
     // First require lexical containment. `canonicalize` alone would
     // resolve an escaping symlink and erase the evidence that it was a
     // symlink in the first place.
-    let Ok(relative_lexical) = submitted.strip_prefix(&policy.claude_projects_root) else {
+    let relative_lexical = submitted
+        .strip_prefix(&policy.configured_claude_projects_root)
+        .ok()
+        .or_else(|| {
+            policy
+                .resolved_claude_projects_root
+                .as_deref()
+                .and_then(|root| submitted.strip_prefix(root).ok())
+        });
+    let Some(relative_lexical) = relative_lexical else {
         return CaptureResult::ineligible(EvidenceCaptureCode::OutsideApprovedRoot);
     };
     if relative_lexical.as_os_str().is_empty() {
@@ -252,13 +312,13 @@ fn capture_transcript(
         Ok(path) => path,
         Err(code) => return CaptureResult::ineligible(code),
     };
-    if let Err(code) = reject_absolute_path_links(&policy.claude_projects_root) {
+    let Some(resolved_root) = policy.resolved_claude_projects_root.as_deref() else {
+        return CaptureResult::ineligible(EvidenceCaptureCode::SourceUnavailable);
+    };
+    if let Err(code) = reject_descendant_links(resolved_root, relative_lexical) {
         return CaptureResult::ineligible(code);
     }
-    if let Err(code) = reject_descendant_links(&policy.claude_projects_root, relative_lexical) {
-        return CaptureResult::ineligible(code);
-    }
-    let root = match open_absolute_directory_no_links(&policy.claude_projects_root) {
+    let root = match open_absolute_directory_no_links(resolved_root) {
         Ok(root) => root,
         Err(code) => return CaptureResult::ineligible(code),
     };
@@ -275,12 +335,13 @@ fn capture_transcript(
         return CaptureResult::ineligible(EvidenceCaptureCode::SourceShorterThanObserved);
     }
 
-    let source_prefix_sha256 = match stable_prefix_hash(&mut file, observed_prefix_len) {
-        Ok(Some(hash)) => hash,
-        Ok(None) | Err(_) => {
-            return CaptureResult::ineligible(EvidenceCaptureCode::SourceChangedDuringCapture)
-        }
-    };
+    let source_prefix_sha256 =
+        match stable_prefix_hash_with(&mut file, observed_prefix_len, between_hash_passes) {
+            Ok(Some(hash)) => hash,
+            Ok(None) | Err(_) => {
+                return CaptureResult::ineligible(EvidenceCaptureCode::SourceChangedDuringCapture)
+            }
+        };
 
     if !matches!(file.metadata(), Ok(metadata) if metadata.len() >= observed_prefix_len) {
         return CaptureResult::ineligible(EvidenceCaptureCode::SourceChangedDuringCapture);
@@ -307,7 +368,7 @@ fn portable_relative_path(path: &Path) -> Result<String, EvidenceCaptureCode> {
         // A backslash is a valid Unix filename byte but a separator on
         // Windows. Reject it rather than persist a locator whose meaning
         // changes across replay platforms.
-        if segment.contains('\\') {
+        if segment.contains('\\') || segment.contains('\0') {
             return Err(EvidenceCaptureCode::InvalidPath);
         }
         if contains_private_path_component(segment) {
@@ -319,24 +380,6 @@ fn portable_relative_path(path: &Path) -> Result<String, EvidenceCaptureCode> {
         return Err(EvidenceCaptureCode::InvalidPath);
     }
     Ok(parts.join("/"))
-}
-
-#[cfg(unix)]
-fn reject_absolute_path_links(path: &Path) -> Result<(), EvidenceCaptureCode> {
-    let mut cursor = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir => continue,
-            Component::Normal(segment) => cursor.push(segment),
-            _ => return Err(EvidenceCaptureCode::InvalidPath),
-        }
-        let metadata =
-            fs::symlink_metadata(&cursor).map_err(|_| EvidenceCaptureCode::SourceUnavailable)?;
-        if metadata.file_type().is_symlink() {
-            return Err(EvidenceCaptureCode::SymlinkNotAllowed);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -451,11 +494,6 @@ fn hash_exact_prefix(file: &mut File, len: u64) -> std::io::Result<String> {
 }
 
 #[cfg(unix)]
-fn stable_prefix_hash(file: &mut File, len: u64) -> std::io::Result<Option<String>> {
-    stable_prefix_hash_with(file, len, || {})
-}
-
-#[cfg(unix)]
 fn stable_prefix_hash_with(
     file: &mut File,
     len: u64,
@@ -488,12 +526,7 @@ mod tests {
     }
 
     fn policy(root: &Path) -> CapturePolicy {
-        CapturePolicy {
-            curator_enabled: true,
-            transcript_access: true,
-            claude_projects_root: root.to_path_buf(),
-            max_prefix_bytes: 1024,
-        }
+        CapturePolicy::load(true, true, root.to_path_buf(), 1024)
     }
 
     fn context<'a>(session_id: &'a str) -> CaptureContext<'a> {
@@ -563,12 +596,20 @@ mod tests {
         let (root, project) = fixture("mutation");
         let transcript = project.join("s-1.jsonl");
         fs::write(&transcript, b"abcdef").unwrap();
-        let mut file = File::open(&transcript).unwrap();
-        let stable = stable_prefix_hash_with(&mut file, 6, || {
-            fs::write(&transcript, b"abcXef").unwrap();
-        })
-        .unwrap();
-        assert!(stable.is_none());
+        let result = capture_with_policy_and_hash_hook(
+            &input(&transcript, 6),
+            context("s-1"),
+            &policy(&root),
+            || {
+                fs::write(&transcript, b"abcXef").unwrap();
+            },
+        );
+        assert!(result.reference.is_none());
+        assert_eq!(result.receipt.status, EvidenceCaptureStatus::Ineligible);
+        assert_eq!(
+            result.receipt.code,
+            Some(EvidenceCaptureCode::SourceChangedDuringCapture)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -679,7 +720,77 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn final_and_intermediate_symlinks_are_rejected() {
+    fn unavailable_source_is_visible_without_a_reference() {
+        let (root, project) = fixture("source-unavailable");
+        let missing = project.join("s-missing.jsonl");
+        let result = capture_with_policy(&input(&missing, 1), context("s-missing"), &policy(&root));
+        assert!(result.reference.is_none());
+        assert_eq!(result.receipt.status, EvidenceCaptureStatus::Ineligible);
+        assert_eq!(
+            result.receipt.code,
+            Some(EvidenceCaptureCode::SourceUnavailable)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_path_byte_cases_fail_before_source_access() {
+        use std::ffi::{OsStr, OsString};
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let (root, _) = fixture("invalid-bytes");
+        let p = policy(&root);
+
+        let overlong = format!("/{}/s-long.jsonl", "x".repeat(MAX_WIRE_PATH_BYTES));
+        let overlong_input = OutcomeEvidenceInput::Transcript {
+            absolute_path: overlong,
+            observed_prefix_len: 1,
+        };
+        assert_eq!(
+            capture_with_policy(&overlong_input, context("s-long"), &p)
+                .receipt
+                .code,
+            Some(EvidenceCaptureCode::InvalidPath)
+        );
+
+        let backslash = root.join("project\\alias").join("s-backslash.jsonl");
+        assert_eq!(
+            capture_with_policy(&input(&backslash, 1), context("s-backslash"), &p)
+                .receipt
+                .code,
+            Some(EvidenceCaptureCode::InvalidPath)
+        );
+
+        let nul = format!("{}/project-a/bad\0/s-nul.jsonl", root.display());
+        let nul_input = OutcomeEvidenceInput::Transcript {
+            absolute_path: nul,
+            observed_prefix_len: 1,
+        };
+        assert_eq!(
+            capture_with_policy(&nul_input, context("s-nul"), &p)
+                .receipt
+                .code,
+            Some(EvidenceCaptureCode::InvalidPath)
+        );
+
+        let non_utf8 = PathBuf::from(OsString::from_vec(vec![0xff]));
+        assert_eq!(
+            portable_relative_path(&non_utf8),
+            Err(EvidenceCaptureCode::InvalidPath)
+        );
+
+        let root_file = File::open(&root).unwrap();
+        assert_eq!(
+            openat_child(&root_file, OsStr::from_bytes(b"bad\0name"), false).unwrap_err(),
+            EvidenceCaptureCode::InvalidPath
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descendant_symlinks_are_rejected() {
         use std::os::unix::fs::symlink;
 
         let (root, project) = fixture("symlinks");
@@ -706,22 +817,39 @@ mod tests {
                 .code,
             Some(EvidenceCaptureCode::SymlinkNotAllowed)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_approved_root_resolves_once_and_captures() {
+        use std::os::unix::fs::symlink;
+
+        let (root, project) = fixture("root-symlink");
+        let transcript = project.join("s-root.jsonl");
+        fs::write(&transcript, b"root-alias").unwrap();
         let root_link = root.parent().unwrap().join(format!(
             "nv-curator-root-link-{}",
             uuid::Uuid::new_v4().simple()
         ));
         symlink(&root, &root_link).unwrap();
         let linked_policy = policy(&root_link);
-        assert_eq!(
-            capture_with_policy(
-                &input(&root_link.join("project-a/s-1.jsonl"), 1),
-                context("s-1"),
-                &linked_policy,
-            )
-            .receipt
-            .code,
-            Some(EvidenceCaptureCode::SymlinkNotAllowed)
+        let result = capture_with_policy(
+            &input(&root_link.join("project-a/s-root.jsonl"), 10),
+            context("s-root"),
+            &linked_policy,
         );
+        assert_eq!(result.receipt.status, EvidenceCaptureStatus::Captured);
+        assert_eq!(result.receipt.code, None);
+        assert!(matches!(
+            result.reference,
+            Some(EvidenceReference::Transcript {
+                root: ApprovedTranscriptRoot::ClaudeProjects,
+                relative_path,
+                observed_prefix_len: 10,
+                ..
+            }) if relative_path == "project-a/s-root.jsonl"
+        ));
         let _ = fs::remove_file(root_link);
         let _ = fs::remove_dir_all(root);
     }
