@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use regex::Regex;
-use rusqlite::params_from_iter;
+use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -788,14 +788,20 @@ fn resolve_chunk_engrams(db: &BrainDb, chunk_ids: &[String]) -> Result<HashMap<S
 /// Graph retrieve: entity match + 2-hop expand. Ported from
 /// `_graph_retrieve`. Returns up to `limit` engram ids.
 fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>> {
+    let conn = db.lock();
+    graph_retrieve_conn(&conn, query, limit)
+}
+
+/// Connection-level body of [`graph_retrieve`], split out so the hop
+/// selection's determinism contract can be pinned by a unit test
+/// against an in-memory schema (no brain dir, no vec0, no embedder).
+fn graph_retrieve_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<String>> {
     let query_entities = extract_entities_locally(query);
     let query_words: HashSet<String> = query
         .to_lowercase()
         .split_whitespace()
         .map(|w| w.to_string())
         .collect();
-
-    let conn = db.lock();
 
     let mut entity_ids: Vec<String> = Vec::new();
     for ent in &query_entities {
@@ -833,7 +839,20 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
     }
 
     // Hop 1: entity_mentions → engrams.
-    let mut hop1: HashSet<String> = HashSet::new();
+    //
+    // Collected into a SORTED Vec, not iterated out of the HashSet: a
+    // hub entity ("NeuroVault") has far more mentions than `limit`, and
+    // whichever ones survive the take(limit) below become graph_ranked
+    // — which RRF consumes BY POSITION (`.enumerate()`). Read straight
+    // off a HashSet, that subset (and its ranks) was re-rolled every
+    // process by RandomState, so two identical recalls could order
+    // near-ties differently. Same rationale as the candidate-pool and
+    // final-score id tie-breaks below: ordering never depends on
+    // hash-map iteration order, so a recall replays identically.
+    // Lexicographic id order is arbitrary but STABLE — the semantics
+    // ("an arbitrary subset of a hub's mentions") are unchanged.
+    let mut seen1: HashSet<String> = HashSet::new();
+    let mut hop1: Vec<String> = Vec::new();
     for eid in &entity_ids {
         let mut stmt = conn.prepare(
             "SELECT em.engram_id FROM entity_mentions em
@@ -845,29 +864,39 @@ fn graph_retrieve(db: &BrainDb, query: &str, limit: usize) -> Result<Vec<String>
             .query_map([eid], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         for r in rows {
-            hop1.insert(r);
+            if seen1.insert(r.clone()) {
+                hop1.push(r);
+            }
         }
     }
+    hop1.sort();
 
     // Hop 2: engram_links from hop1 engrams with similarity > 0.5.
-    let mut hop2: HashSet<String> = HashSet::new();
+    // The per-engram `LIMIT 5` needs the ORDER BY for the same reason:
+    // without one SQLite may return any five of the matching links, so
+    // the cap silently picked a different five run-to-run. Strongest
+    // links first (id-tie-broken), which is what the cap always meant.
+    let mut seen2: HashSet<String> = HashSet::new();
+    let mut hop2: Vec<String> = Vec::new();
     for eng_id in &hop1 {
         let mut stmt = conn.prepare(
             "SELECT l.to_engram FROM engram_links l
              JOIN engrams e ON e.id = l.to_engram
              WHERE l.from_engram = ?1 AND e.state != 'dormant'
                AND e.superseded_by IS NULL
-               AND l.similarity > 0.5 LIMIT 5",
+               AND l.similarity > 0.5
+             ORDER BY l.similarity DESC, l.to_engram LIMIT 5",
         )?;
         let rows: Vec<String> = stmt
             .query_map([eng_id], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         for r in rows {
-            if !hop1.contains(&r) {
-                hop2.insert(r);
+            if !seen1.contains(&r) && seen2.insert(r.clone()) {
+                hop2.push(r);
             }
         }
     }
+    hop2.sort();
 
     let mut out: Vec<String> = hop1.into_iter().take(limit).collect();
     if out.len() < limit {
@@ -2714,5 +2743,178 @@ mod channel_scores_tests {
         }
         db::close_all();
         let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+#[cfg(test)]
+mod graph_retrieve_tests {
+    // The graph channel feeds RRF *by position* (`graph_ranked` is
+    // consumed with `.enumerate()`), so WHICH ids it returns and in
+    // WHAT order decides the fused rank of every near-tie. Hop
+    // selection therefore has to be a pure function of the data —
+    // never of hash-map iteration order — for the same reason the
+    // candidate-pool and final-score sorts carry explicit id
+    // tie-breaks: a recall must replay identically for debugging and
+    // for same-brain A/B isolation.
+    use rusqlite::Connection;
+
+    use super::graph_retrieve_conn;
+
+    /// Just the slice of `schema.sql` the traversal reads. Keeps the
+    /// PRIMARY KEYs, because they're what gives the un-ORDER-BY'd
+    /// hop-2 query its (unspecified, index-driven) row order.
+    fn graph_schema(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY, state TEXT DEFAULT 'fresh',
+                superseded_by TEXT);
+             CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+             CREATE TABLE entity_mentions (entity_id TEXT NOT NULL, engram_id TEXT NOT NULL,
+                PRIMARY KEY (entity_id, engram_id));
+             CREATE TABLE engram_links (from_engram TEXT NOT NULL, to_engram TEXT NOT NULL,
+                similarity REAL NOT NULL, link_type TEXT DEFAULT 'semantic',
+                PRIMARY KEY (from_engram, to_engram));",
+        )
+        .unwrap();
+    }
+
+    fn add_engram(conn: &Connection, id: &str, state: &str, superseded_by: Option<&str>) {
+        conn.execute(
+            "INSERT INTO engrams (id, state, superseded_by) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, state, superseded_by],
+        )
+        .unwrap();
+    }
+
+    fn add_mention(conn: &Connection, entity_id: &str, engram_id: &str) {
+        conn.execute(
+            "INSERT INTO entity_mentions (entity_id, engram_id) VALUES (?1, ?2)",
+            rusqlite::params![entity_id, engram_id],
+        )
+        .unwrap();
+    }
+
+    fn add_link(conn: &Connection, from: &str, to: &str, similarity: f64) {
+        conn.execute(
+            "INSERT INTO engram_links (from_engram, to_engram, similarity) VALUES (?1, ?2, ?3)",
+            rusqlite::params![from, to, similarity],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn hop1_overflow_selection_is_stable_across_calls() {
+        // A hub entity with MORE mentions than `limit` — the case that
+        // used to hand the take(limit) an arbitrary HashSet order, so
+        // the surviving subset (and its RRF positions) changed between
+        // otherwise identical recalls.
+        let conn = Connection::open_in_memory().unwrap();
+        graph_schema(&conn);
+        conn.execute(
+            "INSERT INTO entities (id, name) VALUES ('ent-hub', 'hubword')",
+            [],
+        )
+        .unwrap();
+
+        // Insert scrambled so rowid order is not id order: if the
+        // traversal ever leaks storage order the expectation below
+        // still catches it.
+        let live = [
+            "eng-07", "eng-02", "eng-11", "eng-05", "eng-09", "eng-01", "eng-12", "eng-04",
+            "eng-08", "eng-03", "eng-10", "eng-06",
+        ];
+        for id in live {
+            add_engram(&conn, id, "fresh", None);
+            add_mention(&conn, "ent-hub", id);
+        }
+        // Two mentions that must stay filtered out even though both
+        // sort BEFORE the live winners — sorting must not smuggle
+        // dormant/superseded rows past the WHERE clause.
+        add_engram(&conn, "eng-00", "dormant", None);
+        add_mention(&conn, "ent-hub", "eng-00");
+        add_engram(&conn, "eng-0x", "fresh", Some("eng-01"));
+        add_mention(&conn, "ent-hub", "eng-0x");
+
+        let expected: Vec<String> = ["eng-01", "eng-02", "eng-03", "eng-04", "eng-05"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Exact-value assertion, not just self-consistency: under
+        // HashSet order this fails on the FIRST call in a single
+        // process, so the regression can't hide behind a lucky run.
+        let first = graph_retrieve_conn(&conn, "hubword", 5).unwrap();
+        assert_eq!(
+            first, expected,
+            "hop-1 overflow must select the lowest ids in sorted order"
+        );
+
+        // …and it must not drift between calls either (the symptom a
+        // user sees: two identical recalls, two different orderings).
+        for i in 1..20 {
+            let again = graph_retrieve_conn(&conn, "hubword", 5).unwrap();
+            assert_eq!(again, first, "graph_retrieve drifted on call {i}");
+        }
+    }
+
+    #[test]
+    fn hop2_fill_is_similarity_ranked_and_stable() {
+        // Hop-2 has its own ordering hazard: the per-engram `LIMIT 5`
+        // had no ORDER BY, so WHICH five neighbours survived was up to
+        // the query planner, not the similarity we sorted on.
+        let conn = Connection::open_in_memory().unwrap();
+        graph_schema(&conn);
+        conn.execute(
+            "INSERT INTO entities (id, name) VALUES ('ent-vault', 'vaultword')",
+            [],
+        )
+        .unwrap();
+
+        for id in ["eng-hub", "eng-two"] {
+            add_engram(&conn, id, "fresh", None);
+            add_mention(&conn, "ent-vault", id);
+        }
+        // Neighbours: lexicographic order deliberately disagrees with
+        // similarity order, so picking by index order picks the wrong
+        // five. Inserted scrambled for the same reason.
+        for (id, sim) in [
+            ("n-c6", 0.75),
+            ("n-z1", 0.99),
+            ("n-e8", 0.65),
+            ("n-a3", 0.90),
+            ("n-d7", 0.70),
+            ("n-m2", 0.95),
+            ("n-b5", 0.80),
+            ("n-q4", 0.85),
+        ] {
+            add_engram(&conn, id, "fresh", None);
+            add_link(&conn, "eng-hub", id, sim);
+        }
+        // Below the 0.5 floor, and lexicographically first — must
+        // never surface.
+        add_engram(&conn, "n-aa0", "fresh", None);
+        add_link(&conn, "eng-hub", "n-aa0", 0.45);
+        // Strongest edge of all, but it points back INTO hop 1. It
+        // still consumes one of the five (the LIMIT applies before the
+        // hop-1 exclusion) — preserved semantics, pinned here so a
+        // future reorder of those two steps is visible.
+        add_link(&conn, "eng-hub", "eng-two", 1.0);
+
+        // top-5 by similarity = eng-two(1.0), n-z1, n-m2, n-a3, n-q4;
+        // eng-two is dropped as a hop-1 id, leaving four, emitted in
+        // sorted order after the sorted hop-1 pair.
+        let expected: Vec<String> = ["eng-hub", "eng-two", "n-a3", "n-m2", "n-q4", "n-z1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let first = graph_retrieve_conn(&conn, "vaultword", 7).unwrap();
+        assert_eq!(
+            first, expected,
+            "hop-2 fill must take the highest-similarity links, deterministically"
+        );
+        for i in 1..20 {
+            let again = graph_retrieve_conn(&conn, "vaultword", 7).unwrap();
+            assert_eq!(again, first, "hop-2 fill drifted on call {i}");
+        }
     }
 }
