@@ -177,7 +177,11 @@ pub fn extract_entities_locally(content: &str) -> Vec<ExtractedEntity> {
 
     // 4. Known tech keywords appearing anywhere in content. Use the
     // properly-cased version from the source text (first occurrence).
-    let content_lower = content.to_lowercase();
+    // ASCII-only lowercasing: full `to_lowercase()` can change a char's
+    // byte length (`İ` 2→3, `ẞ` 3→2), so one such char anywhere before a
+    // keyword would skew every offset after it. All TECH_KEYWORDS are
+    // ASCII, so ascii-lowercasing matches them just as well.
+    let content_lower = content.to_ascii_lowercase();
     for tech in TECH_KEYWORDS.iter() {
         if content_lower.contains(tech) {
             // Case-insensitive find on the original content to preserve
@@ -185,9 +189,9 @@ pub fn extract_entities_locally(content: &str) -> Vec<ExtractedEntity> {
             // index; we slice by matching-length chars.
             if let Some(start) = content_lower.find(tech) {
                 let end = start + tech.len();
-                // `start..end` is valid on `content` because the lower-
-                // case form is the same byte length as the source for
-                // ASCII tech names. All TECH_KEYWORDS are ASCII.
+                // `start..end` is valid on `content` because ascii-
+                // lowercasing is byte-length-preserving everywhere, so
+                // offsets in `content_lower` are offsets in `content`.
                 if let Some(match_str) = content.get(start..end) {
                     add(match_str, "technology", &mut entities, &mut seen);
                 }
@@ -329,6 +333,40 @@ mod tests {
             .filter(|e| e.name.to_lowercase() == "claude")
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn tech_keyword_offsets_survive_length_changing_unicode() {
+        // `İ` (2 bytes) full-lowercases to 3 bytes and `ẞ` (3 bytes) to
+        // 2, so byte offsets taken from a `to_lowercase()` copy no longer
+        // address the source. A char like that before the keyword used to
+        // skew the slice — dropping the entity or cutting it wrong.
+        let ents = extract_entities_locally("İ python");
+        assert!(
+            ents.iter()
+                .any(|e| e.entity_type == "technology" && e.name == "python"),
+            "expected the `python` tech entity, got {:?}",
+            ents.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
+        );
+
+        let ents = extract_entities_locally("ẞ rust");
+        assert!(
+            ents.iter()
+                .any(|e| e.entity_type == "technology" && e.name == "rust"),
+            "expected the `rust` tech entity, got {:?}",
+            ents.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn tech_keyword_keeps_author_capitalisation() {
+        let ents = extract_entities_locally("I use Python daily");
+        assert!(
+            ents.iter()
+                .any(|e| e.entity_type == "technology" && e.name == "Python"),
+            "expected the source-cased `Python`, got {:?}",
+            ents.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

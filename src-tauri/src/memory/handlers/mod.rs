@@ -698,7 +698,11 @@ fn strip_private(text: &str) -> String {
     // wrapped content. Tag matching is case-insensitive.
     const OPEN: &str = "<private>";
     const CLOSE: &str = "</private>";
-    let lower = text.to_lowercase();
+    // ASCII-only lowercasing: offsets found in `lower` are reused to
+    // slice `text`, and full `to_lowercase()` can change a char's byte
+    // length (`İ` 2→3, `ẞ` 3→2), desyncing the two. The tags are ASCII,
+    // so this still matches `<PRIVATE>` while keeping byte positions.
+    let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0;
     while cursor < text.len() {
@@ -721,6 +725,48 @@ fn strip_private(text: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod strip_private_tests {
+    use super::*;
+
+    #[test]
+    fn strips_block_after_length_growing_char() {
+        // `İ` is 2 bytes but full-lowercases to 3, so offsets found in a
+        // `to_lowercase()` copy no longer address the source. Payloads are
+        // agent-controlled, so a skew here either panics on a non-boundary
+        // slice (the hook event is dropped) or leaks the private span.
+        assert_eq!(
+            strip_private("İ<private>secret</private>é more"),
+            "İ[private content removed]é more"
+        );
+    }
+
+    #[test]
+    fn strips_block_after_length_shrinking_char() {
+        // The other direction: `ẞ` is 3 bytes, lowercases to 2.
+        assert_eq!(
+            strip_private("ẞ<private>x</private>tail"),
+            "ẞ[private content removed]tail"
+        );
+    }
+
+    #[test]
+    fn strips_uppercase_tags() {
+        assert_eq!(
+            strip_private("a <PRIVATE>UPPER</PRIVATE> b"),
+            "a [private content removed] b"
+        );
+    }
+
+    #[test]
+    fn unclosed_tag_keeps_suffix_verbatim() {
+        assert_eq!(
+            strip_private("head <private>no close here"),
+            "head <private>no close here"
+        );
+    }
 }
 
 /// One-line summary for titles. Replaces newlines with spaces and caps
