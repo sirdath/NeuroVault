@@ -556,55 +556,27 @@ fn write_preferences(db: &Arc<BrainDb>, content: &str) -> Result<()> {
 /// Improvement #4 — record revised facts into the `facts` table with
 /// temporal supersession.
 ///
-/// For each `(subject, attribute, value)` extracted from this note:
-///   - deterministic id = sha256(subject\0attribute\0value)[:16] →
-///     idempotent: re-ingesting the same note finds the row already
-///     present and does nothing (no re-supersede storm);
-///   - if a *different* value is currently live for the same
-///     (subject, attribute), mark every such live row
-///     `superseded_by = <new id>` (the just-ingested note wins — it is
-///     the most recent statement of the value);
-///   - insert the new row as current (`superseded_by IS NULL`).
+/// Each `(subject, attribute, value)` extracted from this note is handed
+/// to `facts::upsert_fact`, which owns the supersession rules (including
+/// the restatement case, where re-asserting an older value makes it
+/// current again). The same function backs `POST /api/facts` so the two
+/// write paths cannot drift apart again.
 ///
 /// Best-effort and non-fatal (same contract as the other slow-phase
 /// steps): the markdown note is already persisted and recallable; a
 /// facts-table hiccup just means the current-value primitive is stale
 /// for this subject until the next ingest touches it.
 fn write_facts(db: &Arc<BrainDb>, engram_id: &str, content: &str) -> Result<()> {
-    let facts = super::facts::extract_facts(content);
-    if facts.is_empty() {
-        return Ok(());
-    }
     let conn = db.lock();
-    for f in facts {
-        let mut hasher = Sha256::new();
-        hasher.update(format!("{}\u{0}{}\u{0}{}", f.subject, f.attribute, f.value).as_bytes());
-        let id = format!("{:x}", hasher.finalize());
-        let id = &id[..16];
+    write_facts_conn(&conn, engram_id, content)
+}
 
-        // Idempotent: identical fact already recorded → leave it (and
-        // its current/superseded state) exactly as is.
-        let exists: bool = conn
-            .query_row("SELECT 1 FROM facts WHERE id = ?1", params![id], |_| Ok(()))
-            .is_ok();
-        if exists {
-            continue;
-        }
-
-        // Supersede any live row for the same (subject, attribute) that
-        // holds a DIFFERENT value. UNIQUE(subject,attribute,value) means
-        // a same-value live row can't coexist, so this only ever points
-        // older *different* values at the new one.
-        conn.execute(
-            "UPDATE facts SET superseded_by = ?1 \
-             WHERE subject = ?2 AND attribute = ?3 AND superseded_by IS NULL",
-            params![id, f.subject, f.attribute],
-        )?;
-        conn.execute(
-            "INSERT INTO facts (id, subject, attribute, value, source_engram, superseded_by) \
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
-            params![id, f.subject, f.attribute, f.value, engram_id],
-        )?;
+/// Connection-level half of `write_facts`, split out so the extract →
+/// upsert wiring is testable against an in-memory DB (`BrainDb` has no
+/// in-memory constructor).
+fn write_facts_conn(conn: &rusqlite::Connection, engram_id: &str, content: &str) -> Result<()> {
+    for f in super::facts::extract_facts(content) {
+        super::facts::upsert_fact(conn, &f.subject, &f.attribute, &f.value, engram_id)?;
     }
     Ok(())
 }
@@ -1280,6 +1252,45 @@ mod tests {
         // `hashlib.sha256(b"hello").hexdigest()` in Python.
         let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert_eq!(content_hash("hello"), expected);
+    }
+
+    #[test]
+    fn ingesting_a_restated_fact_makes_it_current_again() {
+        // End-to-end through the ingest write path (extract → upsert):
+        // three notes stating staging → production → staging must leave
+        // "staging" as the one live answer, not the stale "production"
+        // the old id-existence short-circuit left behind.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY);
+             INSERT INTO engrams VALUES ('e1'),('e2'),('e3');
+             CREATE TABLE facts (
+                 id            TEXT PRIMARY KEY,
+                 subject       TEXT NOT NULL,
+                 attribute     TEXT NOT NULL DEFAULT '',
+                 value         TEXT NOT NULL,
+                 source_engram TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+                 created_at    TEXT DEFAULT (datetime('now')),
+                 superseded_by TEXT,
+                 UNIQUE(subject, attribute, value)
+             );",
+        )
+        .unwrap();
+
+        write_facts_conn(&conn, "e1", "Update: deploy target = staging").unwrap();
+        write_facts_conn(&conn, "e2", "Update: deploy target = production").unwrap();
+        write_facts_conn(&conn, "e3", "Update: deploy target = staging").unwrap();
+
+        let live: Vec<String> = conn
+            .prepare(
+                "SELECT value FROM facts WHERE subject = 'deploy target' AND superseded_by IS NULL",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(live, vec!["staging"]);
     }
 
     #[test]

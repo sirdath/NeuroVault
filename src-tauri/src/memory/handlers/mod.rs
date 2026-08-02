@@ -880,24 +880,13 @@ pub async fn record_fact(
         if subject.is_empty() || value.is_empty() {
             return Ok(serde_json::json!({"ok": false, "error": "subject and value required"}));
         }
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(format!("{subject}\u{0}{attribute}\u{0}{value}").as_bytes());
-        let fid: String = format!("{:x}", hasher.finalize())
-            .chars()
-            .take(16)
-            .collect();
+        // Supersession lives in `facts::upsert_fact`, shared with the
+        // auto-ingest write path so the two can never disagree about
+        // which value is current (they once did — in opposite
+        // directions — for a re-stated value).
         let conn = db.lock();
-        conn.execute(
-            "UPDATE facts SET superseded_by = ?1 \
-             WHERE subject = ?2 AND attribute = ?3 AND value != ?4 AND superseded_by IS NULL",
-            rusqlite::params![fid, subject, attribute, value],
-        )?;
-        conn.execute(
-            "INSERT OR IGNORE INTO facts (id, subject, attribute, value, source_engram) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![fid, subject, attribute, value, body.source_engram],
-        )?;
+        let fid =
+            super::facts::upsert_fact(&conn, &subject, &attribute, &value, &body.source_engram)?;
         Ok(serde_json::json!({"ok": true, "id": fid, "subject": subject, "value": value}))
     })
     .await

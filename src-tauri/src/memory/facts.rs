@@ -27,6 +27,8 @@
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
 
 /// Max facts pulled from one note — a note that is itself a long
 /// config list shouldn't spawn dozens of rows; recall it directly.
@@ -153,9 +155,189 @@ pub fn extract_facts(content: &str) -> Vec<Fact> {
     out
 }
 
+/// Deterministic fact id: `sha256(subject \0 attribute \0 value)[:16]`.
+///
+/// Value-hashed on purpose — the id IS the identity of the statement,
+/// so re-stating the same `(subject, attribute, value)` always lands on
+/// the same row instead of accumulating duplicates. It also means the
+/// `id` PRIMARY KEY and the `UNIQUE(subject, attribute, value)`
+/// constraint on `facts` can never disagree about which row is which.
+pub fn fact_id(subject: &str, attribute: &str, value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{subject}\u{0}{attribute}\u{0}{value}").as_bytes());
+    format!("{:x}", hasher.finalize())[..16].to_string()
+}
+
+/// Record `(subject, attribute) = value` as the CURRENT fact, superseding
+/// whatever different value was live before. Returns the fact id.
+///
+/// Single implementation on purpose: auto-ingest (`ingest::write_facts`)
+/// and the `POST /api/facts` handler are the same logical operation, and
+/// when they were written separately they drifted into two *different*
+/// wrong answers for the restatement case (A → B → A): ingest skipped the
+/// third statement on "id already present" and left A superseded forever
+/// (recall kept answering B); the handler superseded B and then no-op'd on
+/// `INSERT OR IGNORE`, leaving the subject with zero live rows.
+///
+/// RESURRECT SEMANTICS — the newest STATEMENT wins, not the newest row
+/// insert. Because the id is value-hashed, restating an earlier value
+/// lands back on that original row; the row is then reset to current
+/// (`superseded_by = NULL`) rather than being treated as already-known.
+/// A fact the user re-asserts is a fact they mean *now*, whatever its
+/// row's history — so A → B → A ends with exactly one live row: A.
+pub fn upsert_fact(
+    conn: &Connection,
+    subject: &str,
+    attribute: &str,
+    value: &str,
+    source_engram: &str,
+) -> rusqlite::Result<String> {
+    let id = fact_id(subject, attribute, value);
+
+    // Point every live row holding a DIFFERENT value at this statement.
+    // The `value != ?4` guard is what keeps a re-statement of the current
+    // value from superseding itself (its row is about to be the winner).
+    conn.execute(
+        "UPDATE facts SET superseded_by = ?1 \
+         WHERE subject = ?2 AND attribute = ?3 AND value != ?4 AND superseded_by IS NULL",
+        params![id, subject, attribute, value],
+    )?;
+    // Insert-or-resurrect. ON CONFLICT targets the `id` PRIMARY KEY; since
+    // the id is the hash of the triple it fires on exactly the same rows
+    // `UNIQUE(subject, attribute, value)` would, so the two constraints
+    // cannot disagree. Clearing `superseded_by` is the resurrect.
+    conn.execute(
+        "INSERT INTO facts (id, subject, attribute, value, source_engram, superseded_by) \
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL) \
+         ON CONFLICT(id) DO UPDATE SET \
+           superseded_by = NULL, source_engram = excluded.source_engram",
+        params![id, subject, attribute, value, source_engram],
+    )?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real `facts` DDL from schema.sql (plus the `engrams` parent it
+    /// references), so these tests exercise the actual PK / UNIQUE /
+    /// foreign-key constraints rather than a permissive stand-in.
+    fn fact_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE engrams (id TEXT PRIMARY KEY);
+             INSERT INTO engrams VALUES ('e1'),('e2'),('e3');
+             CREATE TABLE facts (
+                 id            TEXT PRIMARY KEY,
+                 subject       TEXT NOT NULL,
+                 attribute     TEXT NOT NULL DEFAULT '',
+                 value         TEXT NOT NULL,
+                 source_engram TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+                 created_at    TEXT DEFAULT (datetime('now')),
+                 superseded_by TEXT,
+                 UNIQUE(subject, attribute, value)
+             );",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Every live (`superseded_by IS NULL`) value for a subject.
+    fn live_values(conn: &Connection, subject: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT value FROM facts WHERE subject = ?1 AND superseded_by IS NULL")
+            .unwrap();
+        let rows = stmt
+            .query_map(params![subject], |r| r.get::<_, String>(0))
+            .unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    fn superseded_by(conn: &Connection, id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT superseded_by FROM facts WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn newer_value_supersedes_older() {
+        let conn = fact_db();
+        let a = upsert_fact(&conn, "deploy target", "", "staging", "e1").unwrap();
+        let b = upsert_fact(&conn, "deploy target", "", "production", "e2").unwrap();
+
+        assert_eq!(live_values(&conn, "deploy target"), vec!["production"]);
+        assert_eq!(superseded_by(&conn, &a).as_deref(), Some(b.as_str()));
+        assert_eq!(superseded_by(&conn, &b), None);
+    }
+
+    #[test]
+    fn restating_an_earlier_value_makes_it_current_again() {
+        // A → B → A. The newest STATEMENT wins, so after the third call
+        // the answer to "what's the deploy target?" is staging again.
+        let conn = fact_db();
+        let a = upsert_fact(&conn, "deploy target", "", "staging", "e1").unwrap();
+        let b = upsert_fact(&conn, "deploy target", "", "production", "e2").unwrap();
+        let a2 = upsert_fact(&conn, "deploy target", "", "staging", "e3").unwrap();
+
+        // Restating reuses the original row (value-hashed id).
+        assert_eq!(a, a2);
+        assert_eq!(live_values(&conn, "deploy target"), vec!["staging"]);
+        assert_eq!(superseded_by(&conn, &a), None);
+        assert_eq!(superseded_by(&conn, &b).as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn restating_updates_the_source_engram() {
+        // The resurrected row should point at the note that most recently
+        // asserted it, not the note from the first time around.
+        let conn = fact_db();
+        upsert_fact(&conn, "deploy target", "", "staging", "e1").unwrap();
+        upsert_fact(&conn, "deploy target", "", "production", "e2").unwrap();
+        let a = upsert_fact(&conn, "deploy target", "", "staging", "e3").unwrap();
+
+        let src: String = conn
+            .query_row(
+                "SELECT source_engram FROM facts WHERE id = ?1",
+                params![a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(src, "e3");
+    }
+
+    #[test]
+    fn same_value_twice_is_idempotent() {
+        let conn = fact_db();
+        let a = upsert_fact(&conn, "grocery budget", "", "£550", "e1").unwrap();
+        let a2 = upsert_fact(&conn, "grocery budget", "", "£550", "e2").unwrap();
+
+        assert_eq!(a, a2, "id must be stable for the same statement");
+        assert_eq!(live_values(&conn, "grocery budget"), vec!["£550"]);
+        // No self-supersede: a fact must never point at itself.
+        assert_eq!(superseded_by(&conn, &a), None);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM facts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn attribute_scopes_supersession() {
+        // Different attributes on the same subject are independent facts;
+        // writing one must not supersede the other.
+        let conn = fact_db();
+        upsert_fact(&conn, "server", "region", "eu-west", "e1").unwrap();
+        upsert_fact(&conn, "server", "size", "large", "e2").unwrap();
+
+        let mut live = live_values(&conn, "server");
+        live.sort();
+        assert_eq!(live, vec!["eu-west", "large"]);
+    }
 
     #[test]
     fn catches_is_now_revision() {
