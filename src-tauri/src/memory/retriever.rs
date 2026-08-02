@@ -2264,14 +2264,16 @@ fn jaccard_similarity(
 /// chronological ordering at day-granularity (ISO-8601 like
 /// "2023-05-25...", "2023/05/25 ...", "2026-04-01T00:00:00Z").
 fn is_materially_newer(b: &str, a: &str) -> bool {
-    // Pull the first 10 chars (yyyy-mm-dd or yyyy/mm/dd). String
+    // Pull the first 10 bytes (yyyy-mm-dd or yyyy/mm/dd). String
     // comparison at that prefix is correct chronological ordering for
-    // both formats.
-    if a.len() < 10 || b.len() < 10 {
+    // both formats. `str::get` returns None both when the string is too
+    // short AND when byte 10 lands inside a multi-byte char — a raw
+    // `&a[..10]` panics on the latter, and `created_at` can hold
+    // externally authored or migrated text. Either way the answer is the
+    // same: we cannot compare, so we must not claim `b` is newer.
+    let (Some(a_day), Some(b_day)) = (a.get(..10), b.get(..10)) else {
         return false;
-    }
-    let a_day = &a[..10];
-    let b_day = &b[..10];
+    };
     b_day > a_day
 }
 
@@ -2916,5 +2918,59 @@ mod graph_retrieve_tests {
             let again = graph_retrieve_conn(&conn, "vaultword", 7).unwrap();
             assert_eq!(again, first, "hop-2 fill drifted on call {i}");
         }
+    }
+}
+
+#[cfg(test)]
+mod materially_newer_tests {
+    use super::is_materially_newer;
+
+    // `created_at` is compared as an opaque string, so the function has to
+    // survive whatever a migration or an external writer put in that
+    // column. In-repo writers emit ASCII strftime, which is why every
+    // earlier test passed and the byte-length guard looked sufficient.
+
+    #[test]
+    fn a_non_ascii_timestamp_is_not_comparable_not_a_panic() {
+        // 'é' occupies bytes 9..11, so byte 10 — the old raw `[..10]`
+        // cut — lands inside it. The length guard passes (14 bytes) and
+        // the slice panics.
+        let weird = "2026-01-0é...";
+        assert!(weird.len() >= 10);
+        assert!(!weird.is_char_boundary(10));
+        // Unparseable at day granularity in either position: we cannot
+        // prove b is newer, so we must not claim it.
+        assert!(!is_materially_newer(weird, "2026-01-01T00:00:00Z"));
+        assert!(!is_materially_newer("2026-12-31T00:00:00Z", weird));
+        assert!(!is_materially_newer(weird, weird));
+    }
+
+    #[test]
+    fn day_granularity_ordering_is_unchanged() {
+        // A later day is materially newer.
+        assert!(is_materially_newer(
+            "2026-04-02T00:00:00Z",
+            "2026-04-01T00:00:00Z"
+        ));
+        // Same day, different clock time, is not.
+        assert!(!is_materially_newer(
+            "2026-04-01T23:59:59Z",
+            "2026-04-01T00:00:00Z"
+        ));
+        // Older is never newer.
+        assert!(!is_materially_newer(
+            "2026-04-01T00:00:00Z",
+            "2026-04-02T00:00:00Z"
+        ));
+        // The slash format orders lexicographically too.
+        assert!(is_materially_newer("2023/05/26 10:00", "2023/05/25 10:00"));
+        assert!(!is_materially_newer("2023/05/25 10:00", "2023/05/26 10:00"));
+    }
+
+    #[test]
+    fn a_too_short_timestamp_is_not_comparable() {
+        assert!(!is_materially_newer("2026-04-02T00:00:00Z", "2026-04-0"));
+        assert!(!is_materially_newer("2026", "2026-04-01T00:00:00Z"));
+        assert!(!is_materially_newer("", ""));
     }
 }

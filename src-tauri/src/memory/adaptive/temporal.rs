@@ -929,8 +929,15 @@ pub fn compose_brief(
     }
 }
 
+/// Display-only prefix of an object id, for the "object: …" line of the
+/// brief. Boundary-safe on purpose: room-scoped events carry
+/// `object_id: scope.room_slug()`, and `room_slug` preserves every
+/// `c.is_alphanumeric()` char — that predicate is Unicode-aware, so a
+/// room named "report日本" keeps its multi-byte chars in the slug. The
+/// old `id[..id.len().min(8)]` guarded the *length* and not the *char
+/// boundary*, so rendering such an event panicked (see memory::text).
 fn short(id: &str) -> String {
-    id[..id.len().min(8)].to_string()
+    crate::memory::text::truncate_bytes(id, 8).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,5 +1144,33 @@ mod tests {
         rank_changes(&mut events, n - Duration::hours(24), n);
         let brief = compose_brief(&events, &anchor, &Scope::brain("b"), 700);
         assert!(!brief.block.contains("Recommended next action:"));
+    }
+
+    #[test]
+    fn short_never_splits_a_multibyte_object_id() {
+        // A room-scoped event carries `object_id: scope.room_slug()`, and
+        // room_slug keeps every `c.is_alphanumeric()` char — that is
+        // UNICODE-alphanumeric, so a room named "report日本" slugs to
+        // "report日本" with 日 spanning bytes 6..9. The old `id[..8]` cut
+        // inside 日 and panicked, which 500'd the whole temporal_diff.
+        assert_eq!(short("report日本"), "report");
+        // Emoji (4 bytes) and accents (2 bytes) must be equally safe at
+        // every offset, so no slug length can be the unlucky one.
+        for id in ["🧠🧠🧠", "héllo wörld", "日本語のテキスト"] {
+            let out = short(id);
+            assert!(id.starts_with(&out), "{id} -> {out}");
+            assert!(out.len() <= 8, "{id} -> {out}");
+        }
+    }
+
+    #[test]
+    fn short_is_unchanged_for_ascii_ids() {
+        // The overwhelmingly common case — engram/change ids are ASCII —
+        // must keep byte-for-byte identical output after the fix.
+        assert_eq!(short("abcdefghij"), "abcdefgh");
+        assert_eq!(short("abcdefgh"), "abcdefgh");
+        // A shorter-than-the-cap id passes through whole.
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
     }
 }
