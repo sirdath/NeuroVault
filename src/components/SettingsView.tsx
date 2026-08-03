@@ -653,7 +653,7 @@ function UpdatesSection() {
 type McpTier = "lite" | "standard" | "full";
 const TIER_INFO: { value: McpTier; label: string; tokens: string; description: string }[] = [
   { value: "lite", label: "Lite", tokens: "~1.5k tok",
-    description: "8 essentials only — recall, remember, related, session_start, status, list/switch_brain, update." },
+    description: "9 essentials only — recall, recall_chunks, remember, related, session_start, status, list/switch_brain, update." },
   { value: "standard", label: "Standard", tokens: "~3.5k tok",
     description: "21 tools — Lite plus deeper recall, core memory, maintenance, and project workflows." },
   { value: "full", label: "Full", tokens: "~6-8k tok",

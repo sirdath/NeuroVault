@@ -38,8 +38,8 @@ Markdown in `~/.neurovault/brains/<id>/vault/*.md` is **canonical**; `brain.db` 
 The MCP server exposes **55 tools** via a data-driven registry, gated by a **tier** system so an agent only loads the slice it needs:
 
 - **`minimal`** (3): `recall`, `related`, `session_start`
-- **`lite`** (8, the default): minimal + `remember`, `status`, `list_brains`, `switch_brain`, `update`
-- **`standard`** (21): lite + `recall_chunks`, `temporal_recall`, `check_duplicate`, `core_memory_read/set/append/replace`, `delete_engrams`, `find_clutter`, `engram_history`, `get_relevant_context`, and the multi-agent coordination pair `handoff` (route a directed, inert message to another agent through the shared brain) / `agent_inbox` (read the open handoffs addressed to an agent)
+- **`lite`** (9, the default): minimal + `remember`, `status`, `list_brains`, `switch_brain`, `update`, `recall_chunks`
+- **`standard`** (21): lite + `temporal_recall`, `check_duplicate`, `core_memory_read/set/append/replace`, `delete_engrams`, `find_clutter`, `engram_history`, `get_relevant_context`, and the multi-agent coordination pair `handoff` (route a directed, inert message to another agent through the shared brain) / `agent_inbox` (read the open handoffs addressed to an agent)
 - **`full`** (55): the whole surface — maintenance (`diagnose_brain`, `optimize_disk`, `reindex_embeddings`, `bulk_set_kind`/`bulk_add_tag`), graph editing (`add_link`/`remove_link`, `find_orphan_links`), contradictions (`find_contradictions`, `supersede_note`, `resolve_contradiction`), images (`list_images`, `remember_image`), compilation (`compile_prepare`/`compile_submit`), the drop-folder inbox, and the **graphify code tools** (`graphify`, `where_defined`, `whats_in_file`, `who_calls`, `blast_radius`, `fuse` — codebase → on-device knowledge graph).
 
 Set the tier via the `NEUROVAULT_MCP_TIER` env var or `~/.neurovault/mcp_tier.txt`. Every tool takes an optional `brain` parameter to target a specific brain.
@@ -86,7 +86,7 @@ npm run tauri build        # or: make build
 You have NeuroVault itself available as an MCP server — use it. The
 active brain for this project is `NeuroVaultBrain1` (the meta-brain
 that documents NeuroVault's own architecture). The MCP defaults to the
-`lite` tier (8 tools); set `full` in `~/.neurovault/mcp_tier.txt` for
+`lite` tier (9 tools); set `full` in `~/.neurovault/mcp_tier.txt` for
 the whole surface. **Default behavior:**
 
 - **Before answering a project question** → call `session_start(agent_id="claude-code")` once per session, then `recall(query)` for specifics. Do not answer from pre-training alone when the brain has context.
@@ -97,4 +97,4 @@ the whole surface. **Default behavior:**
 - **When the user says "save this" / "remember this" / "write this down"** → always use `remember`, never a raw file write.
 - **To explore around a hit** → `related(engram_id)` is ~50-100× cheaper than a second `recall`. Use it after a recall hit instead of re-querying.
 
-The default (`lite`) tools: `session_start`, `recall`, `related`, `remember`, `status`, `list_brains`, `switch_brain`, `update`. The `standard` and `full` tiers add chunk/temporal recall, duplicate detection, core-memory blocks, brain maintenance, graph editing, and the rest of the surface — switch tiers via Settings → MCP or `~/.neurovault/mcp_tier.txt`.
+The default (`lite`) tools: `session_start`, `recall`, `recall_chunks`, `related`, `remember`, `status`, `list_brains`, `switch_brain`, `update`. The `standard` and `full` tiers add temporal recall, duplicate detection, core-memory blocks, brain maintenance, graph editing, and the rest of the surface — switch tiers via Settings → MCP or `~/.neurovault/mcp_tier.txt`.
