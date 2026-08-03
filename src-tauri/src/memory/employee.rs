@@ -1168,6 +1168,96 @@ async fn sentinel_fetch(client: &reqwest::Client, path: &str) -> Option<Value> {
         .ok()
 }
 
+/// Hard cap on the rows one sentinel leg may queue per sweep. Keeps a
+/// noisy detector from swallowing a whole day's judge budget.
+const SENTINEL_LEG_LIMIT: usize = 20;
+
+/// The Curator's contradiction leg: unresolved rows of the
+/// `contradictions` table, shaped into `(dedupe key, work-item payload)`.
+///
+/// Read-only by construction — the employee is propose-only, so a
+/// detected contradiction becomes at most a *suggested* supersede once
+/// the judge has weighed in. Nothing here writes.
+///
+/// Why raw SQL instead of the loopback `/api/contradictions` hop this
+/// leg used to make: the employee loop already runs inside the process
+/// that owns the DB (`chronicler_tick` reads the same way), so the
+/// round-trip bought nothing but failure modes — server not yet
+/// listening, response-shape guessing — and made the leg untestable.
+/// One bounded, indexed SELECT is "free" by this module's economy
+/// rules; no LLM and no O(n²) scan is involved.
+fn contradiction_work_items(conn: &rusqlite::Connection, limit: usize) -> Vec<(String, Value)> {
+    // Only rows worth a judge call:
+    //   resolved = 0        — resolved is an annotation, not a delete;
+    //                         resolved pairs must never resurface.
+    //   both engrams exist  — INNER JOIN; a pair pointing at a purged
+    //                         note would propose a supersede on a ghost.
+    //   both engrams live   — a dormant/superseded side is already
+    //                         retired, so "which of these wins?" is
+    //                         noise. Matches what the detector that
+    //                         fills this table excludes up front
+    //                         (`ingest::find_conflicts`). IFNULL because
+    //                         `state` is only DEFAULT 'fresh', not NOT
+    //                         NULL — a NULL would silently drop the row
+    //                         under a bare `!=`.
+    // detected_at has 1-second granularity, so a batch written by one
+    // sweep shares a timestamp; the id tie-break keeps the LIMIT cut
+    // stable instead of picking a different 20 each wake.
+    let mut stmt = match conn.prepare(
+        "SELECT c.id, c.engram_a, ea.title, c.fact_a,
+                c.engram_b, eb.title, c.fact_b
+         FROM contradictions c
+         JOIN engrams ea ON ea.id = c.engram_a
+         JOIN engrams eb ON eb.id = c.engram_b
+         WHERE c.resolved = 0
+           AND IFNULL(ea.state, 'fresh') != 'dormant' AND ea.superseded_by IS NULL
+           AND IFNULL(eb.state, 'fresh') != 'dormant' AND eb.superseded_by IS NULL
+         ORDER BY c.detected_at DESC, c.id ASC
+         LIMIT ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([limit as i64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?,
+        ))
+    });
+    let Ok(rows) = rows else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in rows.flatten() {
+        let (cid, a_id, a_title, a_fact, b_id, b_title, b_fact) = row;
+        // The claim text the judge reads: the stored fact when the
+        // detector captured one, else the note title. A pair-level
+        // detector (cosine band) knows the notes, not the sentences —
+        // falling back keeps the judge from being handed `""`.
+        let claim = |fact: &str, title: &str| {
+            let s = if fact.trim().is_empty() { title } else { fact };
+            truncate_chars(s, 200)
+        };
+        out.push((
+            format!("contra:{cid}"),
+            json!({
+                "a_id": a_id,
+                "a": claim(&a_fact, &a_title),
+                "a_title": a_title,
+                "b_id": b_id,
+                "b": claim(&b_fact, &b_title),
+                "b_title": b_title,
+            }),
+        ));
+    }
+    out
+}
+
 /// One free sentinel sweep for the Curator: local detectors via
 /// loopback, dedupe-keyed into the queue.
 pub async fn sentinel_scan(id: &str) -> usize {
@@ -1219,27 +1309,26 @@ pub async fn sentinel_scan(id: &str) -> usize {
             }
         }
     }
-    if let Some(v) = sentinel_fetch(&client, "/api/contradictions?resolved=false").await {
-        if let Some(rows) = v.as_array().or_else(|| {
-            v.get("contradictions")
-                .and_then(|c| c.as_array())
-                .or_else(|| v.get("items").and_then(|c| c.as_array()))
-        }) {
-            for c in rows.iter().take(20) {
-                let cid = c.get("id").and_then(|x| x.as_str()).unwrap_or_default();
-                if cid.is_empty() {
-                    continue;
-                }
-                enqueue(
-                    "contradiction",
-                    format!("contra:{cid}"),
-                    json!({
-                        "a_id": c.get("engram_a_id").and_then(|x| x.as_str()).unwrap_or(""),
-                        "a": truncate_chars(c.get("fact_a").and_then(|x| x.as_str()).unwrap_or(""), 200),
-                        "b_id": c.get("engram_b_id").and_then(|x| x.as_str()).unwrap_or(""),
-                        "b": truncate_chars(c.get("fact_b").and_then(|x| x.as_str()).unwrap_or(""), 200),
-                    }),
-                );
+    // Contradictions come straight from the table (see
+    // `contradiction_work_items`), not from the loopback endpoint.
+    //
+    // The sentinel deliberately does NOT kick off a conflict sweep when
+    // the table is empty. `ingest::find_conflicts` is an O(n²) cosine
+    // scan over up to 2000 document embeddings — seconds of blocking
+    // CPU. Paying that on every 20-minute wake, on the off chance the
+    // brain grew a conflict, breaks the "watching is free" rule this
+    // whole loop is built on. Filling the table is the detector's job
+    // on its own cadence; the sentinel only reads what is already there.
+    let brain = super::read_ops::resolve_brain_id(None).unwrap_or_default();
+    if !brain.is_empty() {
+        if let Ok(db) = open_brain(&brain) {
+            // Scope the lock: enqueue touches the filesystem.
+            let rows = {
+                let conn = db.lock();
+                contradiction_work_items(&conn, SENTINEL_LEG_LIMIT)
+            };
+            for (key, payload) in rows {
+                enqueue("contradiction", key, payload);
             }
         }
     }
@@ -1301,14 +1390,26 @@ fn judge_prompt(items: &[WorkItem]) -> String {
                     .and_then(|x| x.as_str())
                     .unwrap_or(""),
             )),
+            // Titles ride along with the claims: the detector behind
+            // this pair works at note level, so the title is often the
+            // only thing that tells the judge WHICH two notes disagree.
             "contradiction" => body.push_str(&format!(
-                "Item {i} (contradiction): A(id={}): {:?}  B(id={}): {:?}\n\
+                "Item {i} (contradiction): A(id={} title={:?}): {:?}  \
+                 B(id={} title={:?}): {:?}\n\
                  Verdicts: {{\"i\":{i},\"verdict\":\"supersede\",\"winner\":\"a\"}} (or \"b\") \
                  when one clearly replaces the other (newer decision, corrected fact), or \
                  {{\"i\":{i},\"verdict\":\"coexist\"}} when both can be true.\n\n",
                 w.payload.get("a_id").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload
+                    .get("a_title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
                 w.payload.get("a").and_then(|x| x.as_str()).unwrap_or(""),
                 w.payload.get("b_id").and_then(|x| x.as_str()).unwrap_or(""),
+                w.payload
+                    .get("b_title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(""),
                 w.payload.get("b").and_then(|x| x.as_str()).unwrap_or(""),
             )),
             _ => body.push_str(&format!(
@@ -2189,6 +2290,182 @@ mod tests {
             "scribe-3".to_string(),
         ];
         assert_eq!(next_instance_id("scribe", &more), "scribe-4");
+    }
+
+    // ---- Curator sentinel: the contradiction leg -------------------------
+    //
+    // The leg used to reach the `contradictions` table over a loopback
+    // HTTP hop, which nothing could exercise in a unit test — and the
+    // table had no writer, so the leg had never returned a row in
+    // production either. These fixtures are the first proof it maps
+    // real rows at all, and they pin the filters the old hop lacked.
+
+    /// In-memory brain carrying the REAL schema (the same file `db.rs`
+    /// applies), so these tests break if `contradictions` or `engrams`
+    /// ever drift out from under the sentinel's query.
+    fn schema_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn
+    }
+
+    fn seed_engram(
+        conn: &rusqlite::Connection,
+        id: &str,
+        title: &str,
+        state: &str,
+        superseded_by: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO engrams (id, filename, title, content, content_hash, state, superseded_by)
+             VALUES (?1, ?2, ?3, 'body', 'hash', ?4, ?5)",
+            rusqlite::params![id, format!("{id}.md"), title, state, superseded_by],
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seed_contradiction(
+        conn: &rusqlite::Connection,
+        id: &str,
+        a: &str,
+        fact_a: &str,
+        b: &str,
+        fact_b: &str,
+        resolved: i64,
+        detected_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO contradictions
+                (id, engram_a, engram_b, fact_a, fact_b, detected_at, resolved)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, a, b, fact_a, fact_b, detected_at, resolved],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn contradiction_leg_surfaces_only_live_unresolved_pairs() {
+        let conn = schema_conn();
+        seed_engram(&conn, "e-a", "Deploy target", "fresh", None);
+        seed_engram(&conn, "e-b", "Deploy target (revised)", "fresh", None);
+        seed_engram(&conn, "e-c", "Pricing v1", "fresh", None);
+        seed_engram(&conn, "e-d", "Pricing v2", "fresh", None);
+        seed_engram(&conn, "e-old", "Retired fact", "fresh", Some("e-a"));
+        seed_engram(&conn, "e-zzz", "Archived fact", "dormant", None);
+
+        // 2 unresolved live pairs — the second stores no fact text, so
+        // the judge must still get a readable claim (the title).
+        seed_contradiction(
+            &conn,
+            "c1",
+            "e-a",
+            "we deploy from staging",
+            "e-b",
+            "we deploy from production",
+            0,
+            "2026-07-30 10:00:00",
+        );
+        seed_contradiction(&conn, "c2", "e-c", "", "e-d", "", 0, "2026-07-30 09:00:00");
+        // 1 resolved pair — resolution is an annotation, not a delete;
+        // it must never come back round.
+        seed_contradiction(
+            &conn,
+            "c3",
+            "e-a",
+            "old claim",
+            "e-c",
+            "new claim",
+            1,
+            "2026-07-30 08:00:00",
+        );
+        // Already-retired sides: superseded, dormant, and purged. All
+        // unresolved, none worth a judge call.
+        seed_contradiction(
+            &conn,
+            "c4",
+            "e-a",
+            "x",
+            "e-old",
+            "y",
+            0,
+            "2026-07-30 07:00:00",
+        );
+        seed_contradiction(
+            &conn,
+            "c5",
+            "e-zzz",
+            "x",
+            "e-b",
+            "y",
+            0,
+            "2026-07-30 06:00:00",
+        );
+        // A pair pointing at a note that no longer exists. A live brain
+        // can't grow one (the FK cascades), which is exactly why the
+        // pragma has to come off to plant it — the JOIN is the guard
+        // for rows that predate enforcement or arrive from a repair.
+        conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        seed_contradiction(
+            &conn,
+            "c6",
+            "e-a",
+            "x",
+            "e-purged",
+            "y",
+            0,
+            "2026-07-30 05:00:00",
+        );
+        conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+
+        let items = contradiction_work_items(&conn, SENTINEL_LEG_LIMIT);
+        let keys: Vec<&str> = items.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["contra:c1", "contra:c2"],
+            "newest live pair first"
+        );
+
+        // Both engrams are addressable, so the judge's supersede
+        // proposal can name a real old_id / new_id.
+        let p1 = &items[0].1;
+        assert_eq!(p1["a_id"], "e-a");
+        assert_eq!(p1["b_id"], "e-b");
+        assert_eq!(p1["a"], "we deploy from staging");
+        assert_eq!(p1["b"], "we deploy from production");
+        assert_eq!(p1["a_title"], "Deploy target");
+        assert_eq!(p1["b_title"], "Deploy target (revised)");
+
+        // Fact-less pair falls back to titles rather than handing the
+        // judge two empty claims.
+        let p2 = &items[1].1;
+        assert_eq!(p2["a"], "Pricing v1");
+        assert_eq!(p2["b"], "Pricing v2");
+    }
+
+    #[test]
+    fn contradiction_leg_is_quiet_and_bounded() {
+        let conn = schema_conn();
+        // Empty table: no rows, no error, nothing queued.
+        assert!(contradiction_work_items(&conn, SENTINEL_LEG_LIMIT).is_empty());
+
+        seed_engram(&conn, "e-1", "One", "fresh", None);
+        seed_engram(&conn, "e-2", "Two", "fresh", None);
+        for (i, ts) in ["09:00:00", "10:00:00", "11:00:00"].iter().enumerate() {
+            seed_contradiction(
+                &conn,
+                &format!("k{i}"),
+                "e-1",
+                "a",
+                "e-2",
+                "b",
+                0,
+                &format!("2026-07-30 {ts}"),
+            );
+        }
+        let items = contradiction_work_items(&conn, 2);
+        assert_eq!(items.len(), 2, "limit is honoured");
+        assert_eq!(items[0].0, "contra:k2", "newest first");
     }
 
     #[test]
