@@ -4470,13 +4470,21 @@ pub async fn engram_version_get(
 }
 
 // ---------------------------------------------------------------------------
-// Contradictions endpoint — surfaces fact-level conflicts that the
-// ingest pipeline has already auto-detected and stored in the
-// `contradictions` table. Until v0.1.9 these were silently
-// accumulating with no read path; agents now query this to audit
-// the brain. Each row carries both contradicting facts and pointers
-// back to their source engrams so the caller can show provenance
-// when proposing a resolution.
+// Contradictions endpoint — the review queue written by the conflict
+// sweep (`ingest::find_conflicts`, reached on demand via
+// /api/conflicts and via the diagnostic report).
+//
+// The comment that used to sit here claimed the ingest pipeline
+// auto-detected and stored these rows. It did not: the table had this
+// reader plus the resolve endpoint below, and no writer at all, so
+// both MCP tools reported an empty brain no matter what was in it.
+// The sweep now records what it finds.
+//
+// Rows are CANDIDATES, not confirmed contradictions. The detector is a
+// cosine band over document embeddings — it spots "same topic,
+// different note" and cannot tell agreement from disagreement. Each
+// row carries both notes and pointers back to their engrams so the
+// caller can read them and make the call.
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize, Default)]
@@ -4513,6 +4521,50 @@ pub struct ContradictionsResponse {
     contradictions: Vec<ContradictionEntry>,
 }
 
+/// Connection-level half of `contradictions_list`, split out so the
+/// sweep → persist → read loop can be exercised against an in-memory
+/// connection without standing up a real brain directory.
+pub(crate) fn contradiction_rows(
+    conn: &rusqlite::Connection,
+    resolved: Option<bool>,
+    limit: i64,
+) -> Result<Vec<ContradictionEntry>, MemoryError> {
+    let where_clause = match resolved {
+        None => "",
+        Some(true) => " WHERE c.resolved = 1",
+        Some(false) => " WHERE c.resolved = 0",
+    };
+    let sql = format!(
+        "SELECT c.id, c.fact_a, c.fact_b, \
+            c.engram_a, ea.title, \
+            c.engram_b, eb.title, \
+            c.detected_at, c.resolved, c.resolution \
+     FROM contradictions c \
+     JOIN engrams ea ON ea.id = c.engram_a \
+     JOIN engrams eb ON eb.id = c.engram_b \
+     {} \
+     ORDER BY c.detected_at DESC \
+     LIMIT ?1",
+        where_clause,
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mapped = stmt.query_map([limit], |r| {
+        Ok(ContradictionEntry {
+            id: r.get(0)?,
+            fact_a: r.get(1)?,
+            fact_b: r.get(2)?,
+            engram_a_id: r.get(3)?,
+            engram_a_title: r.get(4)?,
+            engram_b_id: r.get(5)?,
+            engram_b_title: r.get(6)?,
+            detected_at: r.get(7)?,
+            resolved: r.get::<_, i64>(8)? != 0,
+            resolution: r.get(9)?,
+        })
+    })?;
+    Ok(mapped.filter_map(std::result::Result::ok).collect())
+}
+
 pub async fn contradictions_list(
     Query(q): Query<ContradictionsQuery>,
     _s: State<ServerState>,
@@ -4523,42 +4575,7 @@ pub async fn contradictions_list(
             let id = resolve_brain_id(q.brain.as_deref())?;
             let db = open_brain(&id)?;
             let conn = db.lock();
-
-            let where_clause = match q.resolved {
-                None => "",
-                Some(true) => " WHERE c.resolved = 1",
-                Some(false) => " WHERE c.resolved = 0",
-            };
-            let sql = format!(
-                "SELECT c.id, c.fact_a, c.fact_b, \
-                    c.engram_a, ea.title, \
-                    c.engram_b, eb.title, \
-                    c.detected_at, c.resolved, c.resolution \
-             FROM contradictions c \
-             JOIN engrams ea ON ea.id = c.engram_a \
-             JOIN engrams eb ON eb.id = c.engram_b \
-             {} \
-             ORDER BY c.detected_at DESC \
-             LIMIT ?1",
-                where_clause,
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let mapped = stmt.query_map([limit], |r| {
-                Ok(ContradictionEntry {
-                    id: r.get(0)?,
-                    fact_a: r.get(1)?,
-                    fact_b: r.get(2)?,
-                    engram_a_id: r.get(3)?,
-                    engram_a_title: r.get(4)?,
-                    engram_b_id: r.get(5)?,
-                    engram_b_title: r.get(6)?,
-                    detected_at: r.get(7)?,
-                    resolved: r.get::<_, i64>(8)? != 0,
-                    resolution: r.get(9)?,
-                })
-            })?;
-            let contradictions: Vec<ContradictionEntry> =
-                mapped.filter_map(std::result::Result::ok).collect();
+            let contradictions = contradiction_rows(&conn, q.resolved, limit)?;
             let total = contradictions.len();
             Ok(ContradictionsResponse {
                 brain_id: id,

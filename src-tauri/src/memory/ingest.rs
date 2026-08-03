@@ -1157,12 +1157,110 @@ pub struct ConflictPair {
 /// notes. This is the proactive companion to write-time conflict detection
 /// (the `remember` heads-up): run it to find stale/contradictory notes to
 /// reconcile via `supersede_note`. O(n^2) cosine, bounded by `MAX_SCAN`.
+///
+/// The pairs it returns are also RECORDED in the `contradictions` table,
+/// which is what `find_contradictions` / `resolve_contradiction` read.
+/// Persistence lives here rather than at the call sites so every caller
+/// of the sweep contributes to the same review queue — before this, the
+/// table had readers and no writer, so both tools reported an empty
+/// brain no matter what the detector saw.
 pub fn find_conflicts(db: &BrainDb, limit: usize) -> Result<Vec<ConflictPair>> {
-    const FLOOR: f64 = 0.82;
-    const CEIL: f64 = 0.92;
-    const MAX_SCAN: usize = 2000;
+    // Read under the lock, score outside it: the O(n^2) pass can run
+    // for a second or more on a full brain, and holding the brain lock
+    // through it would stall every other query for that brain.
+    let raw = {
+        let conn = db.lock();
+        load_conflict_rows(&conn)?
+    };
+    let pairs = score_conflict_pairs(raw, limit);
+    {
+        let conn = db.lock();
+        persist_conflict_candidates(&conn, &pairs)?;
+    }
+    Ok(pairs)
+}
 
-    let conn = db.lock();
+/// Connection-level composition of the sweep — read, score, record.
+/// `find_conflicts` does the same three steps but drops the brain lock
+/// across the scoring pass; this variant is for callers (and tests)
+/// that already hold a single connection.
+#[cfg(test)]
+fn find_conflicts_conn(conn: &rusqlite::Connection, limit: usize) -> Result<Vec<ConflictPair>> {
+    let raw = load_conflict_rows(conn)?;
+    let pairs = score_conflict_pairs(raw, limit);
+    persist_conflict_candidates(conn, &pairs)?;
+    Ok(pairs)
+}
+
+/// Stable id for a candidate pair: `sha256(min(id) ‖ max(id))` cut to
+/// 16 hex chars. Order-independent by construction, so a later sweep
+/// that happens to visit the pair as (b, a) still lands on the row it
+/// wrote as (a, b) — that collision is what makes `INSERT OR IGNORE`
+/// idempotent, and what keeps a resolved pair resolved.
+fn conflict_pair_id(a: &str, b: &str) -> String {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    let mut hasher = Sha256::new();
+    hasher.update(lo.as_bytes());
+    hasher.update(hi.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        out.push_str(&format!("{:02x}", byte));
+    }
+    out
+}
+
+/// Record the sweep's hits in the `contradictions` review queue.
+///
+/// Deliberately honest about what the detector actually knows: a cosine
+/// band finds "same-ish topic, different note". It cannot tell agreement
+/// from disagreement — two notes that say the exact same thing in
+/// different words land in the same band as two that flatly contradict.
+/// So rows are written as CANDIDATES for human review, and the stored
+/// `fact_a` / `fact_b` say so in the text (the table has no kind column
+/// to carry it structurally).
+///
+/// `INSERT OR IGNORE` on the deterministic pair id does double duty: it
+/// keeps re-sweeps from piling up duplicate rows, and — because
+/// `resolved` lives on that same row — it silently declines to
+/// resurrect a pair the user already judged.
+fn persist_conflict_candidates(conn: &rusqlite::Connection, pairs: &[ConflictPair]) -> Result<()> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO contradictions (id, engram_a, engram_b, fact_a, fact_b)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for p in pairs {
+        // Store the endpoints in the same sorted order the id hashes so
+        // the row is canonical, not dependent on scan order.
+        let ((a_id, a_title), (b_id, b_title)) = if p.a_id <= p.b_id {
+            ((&p.a_id, &p.a_title), (&p.b_id, &p.b_title))
+        } else {
+            ((&p.b_id, &p.b_title), (&p.a_id, &p.a_title))
+        };
+        let label = |title: &str| {
+            format!(
+                "[candidate · same topic, claim unverified · similarity {:.2}] {}",
+                p.similarity, title
+            )
+        };
+        stmt.execute(params![
+            conflict_pair_id(a_id, b_id),
+            a_id,
+            b_id,
+            label(a_title),
+            label(b_title),
+        ])?;
+    }
+    Ok(())
+}
+
+/// The read half of the sweep: one row per live note (id, title, stored
+/// document embedding). Split out so `find_conflicts` can drop the brain
+/// lock before scoring.
+fn load_conflict_rows(conn: &rusqlite::Connection) -> Result<Vec<(String, String, Vec<u8>)>> {
     let mut stmt = conn.prepare(
         "SELECT c.engram_id, e.title, v.embedding
          FROM vec_chunks v
@@ -1175,8 +1273,15 @@ pub fn find_conflicts(db: &BrainDb, limit: usize) -> Result<Vec<ConflictPair>> {
     let raw: Vec<(String, String, Vec<u8>)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    drop(stmt);
-    drop(conn);
+    Ok(raw)
+}
+
+/// The pure half of the sweep: all-pairs cosine over the loaded rows,
+/// keeping only the mid band. No DB access, so it runs off-lock.
+fn score_conflict_pairs(raw: Vec<(String, String, Vec<u8>)>, limit: usize) -> Vec<ConflictPair> {
+    const FLOOR: f64 = 0.82;
+    const CEIL: f64 = 0.92;
+    const MAX_SCAN: usize = 2000;
 
     // Normalise each note's document embedding once; drop degenerate ones.
     let mut notes: Vec<(String, String, Vec<f32>)> = Vec::new();
@@ -1220,7 +1325,7 @@ pub fn find_conflicts(db: &BrainDb, limit: usize) -> Result<Vec<ConflictPair>> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     pairs.truncate(limit);
-    Ok(pairs)
+    pairs
 }
 
 fn l2_norm(v: &[f32]) -> f32 {
@@ -1418,5 +1523,164 @@ mod tests {
         assert_eq!(resolve_wikilink_target(&conn, "literatureXreview"), None);
         // Same basename in two folders → ambiguous, no edge.
         assert_eq!(resolve_wikilink_target(&conn, "readme"), None);
+    }
+
+    // -- conflict sweep persistence -------------------------------------
+    //
+    // The `contradictions` table had readers (`find_contradictions` /
+    // `resolve_contradiction`) but no writer, so both MCP tools reported
+    // fiction. These tests pin the missing half: the sweep records what
+    // it finds, exactly once, and never resurrects a resolved pair.
+
+    /// Brain with three notes: e1/e2 sit at cosine 0.87 (inside the
+    /// [0.82, 0.92) candidate band), e3 is orthogonal to both. So a
+    /// sweep must find exactly one pair.
+    fn conflict_fixture() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE engrams (
+                 id TEXT PRIMARY KEY, title TEXT, state TEXT, superseded_by TEXT);
+             CREATE TABLE chunks (
+                 id TEXT PRIMARY KEY,
+                 engram_id TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+                 granularity TEXT NOT NULL);
+             CREATE TABLE vec_chunks (chunk_id TEXT PRIMARY KEY, embedding BLOB);
+             CREATE TABLE contradictions (
+                 id          TEXT PRIMARY KEY,
+                 engram_a    TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+                 engram_b    TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+                 fact_a      TEXT NOT NULL,
+                 fact_b      TEXT NOT NULL,
+                 detected_at TEXT DEFAULT (datetime('now')),
+                 resolved    INTEGER DEFAULT 0,
+                 resolution  TEXT);
+             INSERT INTO engrams VALUES ('e1','Deploy target is staging','active',NULL);
+             INSERT INTO engrams VALUES ('e2','Deploy target is production','active',NULL);
+             INSERT INTO engrams VALUES ('e3','Coffee order','active',NULL);
+             INSERT INTO chunks VALUES ('c1','e1','document');
+             INSERT INTO chunks VALUES ('c2','e2','document');
+             INSERT INTO chunks VALUES ('c3','e3','document');",
+        )
+        .unwrap();
+
+        // cos(e1, e2) = 0.87 by construction: unit vector vs. the same
+        // vector rotated by acos(0.87). e3 is on a third axis → cos 0.
+        let sin = (1.0f32 - 0.87 * 0.87).sqrt();
+        for (chunk, v) in [
+            ("c1", vec![1.0f32, 0.0, 0.0, 0.0]),
+            ("c2", vec![0.87f32, sin, 0.0, 0.0]),
+            ("c3", vec![0.0f32, 0.0, 1.0, 0.0]),
+        ] {
+            conn.execute(
+                "INSERT INTO vec_chunks VALUES (?1, ?2)",
+                params![chunk, serialize_float32(&v)],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// The id the spec calls for, computed independently of the
+    /// implementation: sha256(min(id) ‖ max(id)) truncated to 16 hex.
+    fn expected_pair_id(a: &str, b: &str) -> String {
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let mut hasher = Sha256::new();
+        hasher.update(lo.as_bytes());
+        hasher.update(hi.as_bytes());
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()[..16]
+            .to_string()
+    }
+
+    fn contradiction_count(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM contradictions", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn conflict_sweep_records_each_candidate_pair_once() {
+        let conn = conflict_fixture();
+        let pairs = find_conflicts_conn(&conn, 20).unwrap();
+        assert_eq!(pairs.len(), 1, "only e1/e2 sit in the candidate band");
+
+        assert_eq!(contradiction_count(&conn), 1, "the sweep must persist");
+        let (id, a, b): (String, String, String) = conn
+            .query_row(
+                "SELECT id, engram_a, engram_b FROM contradictions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(id, expected_pair_id("e1", "e2"));
+        assert_eq!(id.len(), 16);
+        // Endpoints stored in the same sorted order the id hashes.
+        assert_eq!((a.as_str(), b.as_str()), ("e1", "e2"));
+
+        // Honesty: a cosine band cannot tell agreement from disagreement,
+        // so the stored text must read as a candidate, not a verdict.
+        let (fact_a, fact_b): (String, String) = conn
+            .query_row("SELECT fact_a, fact_b FROM contradictions", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert!(fact_a.contains("candidate"), "fact_a was: {fact_a}");
+        assert!(fact_b.contains("candidate"), "fact_b was: {fact_b}");
+        assert!(fact_a.contains("Deploy target is staging"));
+        assert!(fact_b.contains("Deploy target is production"));
+    }
+
+    #[test]
+    fn re_sweeping_does_not_duplicate_candidates() {
+        let conn = conflict_fixture();
+        find_conflicts_conn(&conn, 20).unwrap();
+        find_conflicts_conn(&conn, 20).unwrap();
+        assert_eq!(
+            contradiction_count(&conn),
+            1,
+            "deterministic pair id + INSERT OR IGNORE = one row per pair"
+        );
+    }
+
+    #[test]
+    fn a_resolved_candidate_is_not_resurrected_by_a_re_sweep() {
+        let conn = conflict_fixture();
+        find_conflicts_conn(&conn, 20).unwrap();
+        conn.execute(
+            "UPDATE contradictions SET resolved = 1, resolution = 'kept staging'",
+            [],
+        )
+        .unwrap();
+
+        find_conflicts_conn(&conn, 20).unwrap();
+
+        let (n, resolved, resolution): (i64, i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(resolved), MAX(resolution) FROM contradictions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "no second row for an already-judged pair");
+        assert_eq!(resolved, 1, "the resolved flag must survive the re-sweep");
+        assert_eq!(resolution.as_deref(), Some("kept staging"));
+    }
+
+    #[test]
+    fn persisted_candidates_are_visible_to_contradictions_list() {
+        let conn = conflict_fixture();
+        find_conflicts_conn(&conn, 20).unwrap();
+
+        // The read path behind the `find_contradictions` MCP tool.
+        let rows = super::super::handlers::contradiction_rows(&conn, Some(false), 50).unwrap();
+        let json = serde_json::to_value(&rows).unwrap();
+        assert_eq!(json.as_array().map(Vec::len), Some(1));
+        assert_eq!(json[0]["id"], expected_pair_id("e1", "e2").as_str());
+        assert_eq!(json[0]["engram_a_title"], "Deploy target is staging");
+        assert_eq!(json[0]["engram_b_title"], "Deploy target is production");
+        assert_eq!(json[0]["resolved"], false);
     }
 }
