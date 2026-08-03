@@ -1,0 +1,30 @@
+Extract durable memories from the transcript below. Output JSON only.
+
+RULES
+1. Durable = a fact, preference, or decision that still matters in a LATER, unrelated session. Extract nothing else.
+2. Skip: greetings, small talk, questions, task chatter, restatements of the transcript, anything true only right now.
+3. grounding_quote MUST be copied character-for-character from the transcript. Never paraphrase, never merge two lines, never invent. Copy the ONE line that proves the statement.
+4. statement must be a standalone sentence. It must not contain any name, number, or version that is absent from its grounding_quote.
+5. source_role = who said the grounding_quote ("user" or "assistant").
+6. Max 5 proposals. When unsure, omit it.
+7. Set nothing_durable=true ONLY when proposals is empty. If you output any proposal, nothing_durable MUST be false.
+
+EXAMPLE 1
+TRANSCRIPT:
+user: Ship it after the migration. We're standardizing on PostgreSQL 16 for every new service.
+assistant: Understood. Want me to open the tickets?
+user: Yes. And always run migrations behind a feature flag, I don't want another Tuesday.
+OUTPUT:
+{"proposals":[{"type":"decision","statement":"New services standardize on PostgreSQL 16.","subject":"infrastructure","grounding_quote":"Ship it after the migration. We're standardizing on PostgreSQL 16 for every new service.","source_role":"user"},{"type":"preference","statement":"Migrations should always run behind a feature flag.","subject":"deployment","grounding_quote":"Yes. And always run migrations behind a feature flag, I don't want another Tuesday.","source_role":"user"}],"nothing_durable":false}
+
+EXAMPLE 2
+TRANSCRIPT:
+user: hey, is the build green?
+assistant: Yes, CI passed 4 minutes ago.
+user: cool thanks
+OUTPUT:
+{"proposals":[],"nothing_durable":true}
+
+TRANSCRIPT:
+{{UNIT_TEXT}}
+OUTPUT:

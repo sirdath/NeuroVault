@@ -1,0 +1,17 @@
+# Curator benchmark — LOCAL-ONLY data. Never commit any of this.
+#
+# `units/` holds slices of real Claude Code session transcripts from this
+# machine. Redacted, but still the owner's private work. Same for the labels
+# derived from them and every model run over them.
+
+# Anchored to this directory so the synthetic `smoke/` fixtures stay committable.
+/units/
+/gold/
+/results/
+
+# Derived from the same private data: project names, session ids, dates.
+# Regenerate with `python3 eval/curator/build_units.py`.
+/units_manifest.json
+
+__pycache__/
+*.pyc

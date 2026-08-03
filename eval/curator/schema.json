@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CuratorProposals",
+  "type": "object",
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["fact", "preference", "decision"]
+          },
+          "statement": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "grounding_quote": {
+            "type": "string"
+          },
+          "source_role": {
+            "type": "string",
+            "enum": ["user", "assistant"]
+          }
+        },
+        "required": ["type", "statement", "grounding_quote", "source_role"]
+      }
+    },
+    "nothing_durable": {
+      "type": "boolean"
+    }
+  },
+  "required": ["proposals", "nothing_durable"]
+}
