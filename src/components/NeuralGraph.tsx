@@ -19,6 +19,12 @@ import {
 import type { AtlasPatternId } from "../lib/atlasPatterns";
 import { GraphPresetBar } from "./GraphPresetBar";
 import { edgeConfidence, pageRank, louvain, graphCacheKey } from "../lib/graphMetrics";
+import {
+  atlasEdgeTheme,
+  buildEdgeLegendRows,
+  edgeThemeColor,
+  type EdgeLegendRow,
+} from "../lib/graphEdgeLegend";
 import { AnalyticsTipBar } from "./AnalyticsTipBar";
 import { GraphLegend } from "./GraphLegend";
 import { BrainDiagnostic } from "./BrainDiagnostic";
@@ -1727,6 +1733,34 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
     return from === a ? 0.15 : -0.15;
   }, [graphData.bidi]);
 
+  // Legend rows for the edges, derived from the painter that is actually on
+  // screen: the force-graph snapshots colour by `edgeColor`, the Atlas
+  // compositions by `edgeThemeColor`. Passing the paint function itself (rather
+  // than restating the palette in the legend) is what stops a row from
+  // outliving its encoding — including the cases where two link types honestly
+  // share one colour, which `buildEdgeLegendRows` folds into a single row.
+  const edgeLegendRows = useMemo<EdgeLegendRow[]>(() => {
+    if (mode === "engine") {
+      const atlas = atlasEdgeTheme(graphTheme);
+      return buildEdgeLegendRows(edges, (type) => edgeThemeColor(type, atlas), {
+        inheritColor: atlas.dim,
+      });
+    }
+    // 0.95 keeps the swatch readable; the painter's own alpha carries per-edge
+    // confidence, which `edgeIntensityLabel` decodes on its own row.
+    return buildEdgeLegendRows(edges, (type) => edgeColor(type, 0.95));
+  }, [edges, mode, graphTheme]);
+
+  // Confidence reads differently per renderer: 2D scales width AND alpha, 3D
+  // draws fixed-width lines so only alpha moves, Atlas fixes the blend and
+  // scales width. Claim only what the active one does.
+  const edgeIntensityLabel =
+    mode === "engine"
+      ? "Thicker = higher confidence"
+      : mode === "3d"
+        ? "Brighter = higher confidence"
+        : "Thicker + brighter = higher confidence";
+
   // Edge-type labels (the "manual" / "semantic" / "uses" / etc.
   // pills) were REMOVED in the aesthetic pass. Even at zoom ≥1.6×
   // they produced wall-of-text — a 200-edge subgraph means 200
@@ -1802,6 +1836,8 @@ export function NeuralGraph({ onOpenNote }: NeuralGraphProps = {}) {
       <GraphLegend
         visible={analyticsMode}
         clusters={legendClusters}
+        edges={edgeLegendRows}
+        edgeIntensityLabel={edgeIntensityLabel}
         onFocusCluster={handleFocusCluster}
       />
       <BrainDiagnostic

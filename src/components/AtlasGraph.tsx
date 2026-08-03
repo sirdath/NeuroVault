@@ -32,6 +32,9 @@ import {
   type AtlasPosition,
 } from "../lib/atlasLayoutTypes";
 import type { SimNode } from "../stores/graphStore";
+// The edge palette lives in lib/ so GraphLegend can decode exactly what this
+// component paints without importing (and eagerly bundling) Sigma.
+import { atlasEdgeTheme, edgeThemeColor } from "../lib/graphEdgeLegend";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
   folderColor,
@@ -217,22 +220,6 @@ function nodeSize(node: { degree: number; importance: number; access_count: numb
     7.5,
     1.15 + Math.sqrt(degree) * 0.36 + Math.sqrt(importance) * 0.5 + Math.min(0.8, Math.sqrt(access) * 0.1),
   );
-}
-
-function edgeThemeColor(linkType: string, colors: ThemeColors): string {
-  switch (linkType) {
-    case "manual":
-    case "defines":
-    case "part_of":
-    case "extends":
-      return colors.accent;
-    case "contradicts":
-      return colors.negative;
-    case "supersedes":
-      return colors.warning;
-    default:
-      return colors.dim;
-  }
 }
 
 /** A sparse visual skeleton. Truth is never discarded from the model; this
@@ -574,12 +561,11 @@ export const AtlasGraph = forwardRef<AtlasGraphHandle, AtlasGraphProps>(function
   const colors = useMemo<ThemeColors>(() => ({
     background: appTheme.bg,
     text: appTheme.text,
-    dim: appTheme.textDim,
     border: appTheme.border,
-    accent: appTheme.accent,
     positive: appTheme.positive,
-    negative: appTheme.negative,
-    warning: appTheme.accent,
+    // accent / negative / warning / dim come from the shared edge palette so
+    // the legend decodes the same values this canvas paints.
+    ...atlasEdgeTheme(appTheme),
   }), [appTheme]);
   // Every built-in composition generates its own deterministic geometry from
   // this seed; none simulates physics. (A ForceAtlas worker + IndexedDB layout

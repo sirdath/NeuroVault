@@ -1,7 +1,8 @@
 import { useState } from "react";
+import type { EdgeLegendRow } from "../lib/graphEdgeLegend";
 
 /**
- * On-canvas legend for Analytics mode. Two jobs:
+ * On-canvas legend for Analytics mode. Three jobs:
  *
  *   1. A visual KEY that decodes the encoding the graph uses — what node
  *      size means, what the fill / background tint means (category), and
@@ -9,7 +10,11 @@ import { useState } from "react";
  *      understand what the analytics are showing me." Every row here must
  *      match NeuralGraph's painter; a row that outlives its encoding is
  *      worse than no legend at all.
- *   2. A CLUSTER readout — the communities NeuroVault found, biggest
+ *   2. An EDGE key — the lines were the one encoding this card never
+ *      decoded. The rows arrive pre-built from whichever renderer is
+ *      actually on screen (see lib/graphEdgeLegend), so this component
+ *      renders swatches and never decides for itself what a colour means.
+ *   3. A CLUSTER readout — the communities NeuroVault found, biggest
  *      first, each with its colour, name (or anchor note) and size.
  *      Clicking a cluster flies the camera to frame it, so the legend
  *      doubles as a way to *navigate* the structure, not just read it.
@@ -29,10 +34,23 @@ export interface LegendClusterRow {
 interface GraphLegendProps {
   visible: boolean;
   clusters: LegendClusterRow[];
+  /** Decoded edge colours for the active renderer. Empty → no edge section:
+   *  a view with no edges on screen has nothing to explain. */
+  edges?: EdgeLegendRow[];
+  /** How the active renderer encodes edge confidence, in its own terms — 2D
+   *  varies width AND alpha, 3D only alpha, Atlas only width. Omitted when
+   *  the caller has nothing true to say. */
+  edgeIntensityLabel?: string;
   onFocusCluster: (id: number) => void;
 }
 
-export function GraphLegend({ visible, clusters, onFocusCluster }: GraphLegendProps) {
+export function GraphLegend({
+  visible,
+  clusters,
+  edges = [],
+  edgeIntensityLabel,
+  onFocusCluster,
+}: GraphLegendProps) {
   const [open, setOpen] = useState(true);
   if (!visible) return null;
 
@@ -114,6 +132,54 @@ export function GraphLegend({ visible, clusters, onFocusCluster }: GraphLegendPr
               </span>
             </div>
           </div>
+
+          {/* Edge key. Every row is a colour the active renderer actually
+              produced for a link type present in this view — the caller builds
+              them with its own paint function, so there is no list here to
+              fall out of date. */}
+          {edges.length > 0 && (
+            <div className="space-y-2 pt-1" style={{ borderTop: "1px solid var(--nv-border)" }}>
+              <p className="text-[10px] font-[Geist,sans-serif] uppercase tracking-wider pt-2" style={{ color: "var(--nv-text-dim)" }}>
+                Links
+              </p>
+              {edges.map((row) => (
+                <div key={row.color} className="flex items-center gap-2.5" title={row.types.join(", ")}>
+                  <span className="flex items-center flex-shrink-0" style={{ width: 34 }}>
+                    <span
+                      className="block w-full rounded-full"
+                      style={{
+                        height: 2,
+                        // The untyped bucket has no colour of its own: Atlas
+                        // draws those lines in the source note's colour, so the
+                        // swatch shows a colour shift rather than lying with a
+                        // single hue.
+                        background: row.inheritsNodeColor
+                          ? "linear-gradient(90deg, #6ea8ff, #c98aff)"
+                          : row.color,
+                      }}
+                    />
+                  </span>
+                  <span className="text-[11px] font-[Geist,sans-serif] leading-tight" style={{ color: "var(--nv-text)" }}>
+                    {row.label}
+                    {row.inheritsNodeColor && (
+                      <span style={{ color: "var(--nv-text-dim)" }}> — takes the note’s colour</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+              {edgeIntensityLabel && (
+                <div className="flex items-center gap-2.5">
+                  <span className="flex items-center gap-1 flex-shrink-0" style={{ width: 34 }}>
+                    <span className="block rounded-full" style={{ width: 15, height: 1, background: "var(--nv-text-muted)", opacity: 0.4 }} />
+                    <span className="block rounded-full" style={{ width: 15, height: 3, background: "var(--nv-text-muted)" }} />
+                  </span>
+                  <span className="text-[11px] font-[Geist,sans-serif] leading-tight" style={{ color: "var(--nv-text)" }}>
+                    {edgeIntensityLabel}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Cluster list */}
           {clusters.length > 0 && (

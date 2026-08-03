@@ -100,6 +100,12 @@ export interface NoteDetail {
   access_count: number;
   connections: { engram_id: string; title: string; similarity: number; link_type: string }[];
   entities: { name: string; type: string }[];
+  /** Supersession columns. `get_note` does `SELECT *` on the engram row, so
+   *  both travel with every note — null unless `supersede_note` marked this
+   *  one replaced. Optional because a hand-built fixture (or an older build)
+   *  may omit the keys entirely rather than send null. */
+  superseded_by?: string | null;
+  superseded_reason?: string | null;
 }
 
 export interface RecallResult {
@@ -175,13 +181,16 @@ export const fetchStatus = () => get<ServerStatus>("/api/status");
 export const fetchHealth = () => get<{ service: string; status: string }>("/api/health");
 export const fetchBrains = () => get<BrainSummary[]>("/api/brains");
 export const fetchSessionContext = () => get<SessionContext>("/api/session-context");
-export const fetchNote = (id: string) =>
+/** `brainId` is optional and defaults to the server's active brain. Pass it
+ *  from a view that already knows which vault it is rendering, so a brain
+ *  switch mid-flight can't answer with the other brain's note. */
+export const fetchNote = (id: string, brainId?: string) =>
   preferNv<NoteDetail>(
     async () => {
-      const full = (await nvGetNote(id)) as NvFullNote;
+      const full = (await nvGetNote(id, brainId)) as NvFullNote;
       return full as unknown as NoteDetail;
     },
-    () => get<NoteDetail>(`/api/notes/${id}`)
+    () => get<NoteDetail>(`/api/notes/${id}${brainId ? `?brain=${encodeURIComponent(brainId)}` : ""}`)
   );
 export interface NoteSummary {
   id: string;
@@ -194,16 +203,17 @@ export interface NoteSummary {
   kind?: string;
 }
 
-export async function fetchNotesList(): Promise<NoteSummary[]> {
+export async function fetchNotesList(brainId?: string): Promise<NoteSummary[]> {
   // Rust `nv_list_notes` first — if it throws (command not registered
   // or browser mode) fall through to the HTTP path. Empty-on-error
   // behaviour stays the same so the sidebar never crashes.
   try {
-    const rows = (await nvListNotes()) as NvNoteListRow[];
+    const rows = (await nvListNotes(brainId)) as NvNoteListRow[];
     return rows;
   } catch {
     try {
-      const res = await fetch(`${BASE}/api/notes`);
+      const query = brainId ? `?brain=${encodeURIComponent(brainId)}` : "";
+      const res = await fetch(`${BASE}/api/notes${query}`);
       if (!res.ok) return [];
       return res.json();
     } catch {

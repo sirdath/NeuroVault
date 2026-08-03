@@ -27,6 +27,7 @@ import {
 } from "../lib/brainScopedUiState";
 import { ContextMenu } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SupersededBanner } from "./SupersededBanner";
 import { neurovaultEditorTheme } from "./editor/theme";
 import { livePreviewPlugin, livePreviewTheme } from "./editor/livePreview";
 import { buildCompletions } from "./editor/completions";
@@ -326,6 +327,14 @@ function BrainEditor({ scope }: { scope: string }) {
             </button>
           </div>
         )}
+
+        {/* Lifecycle notice. Sits under the recovery banner (which demands an
+            answer) and above the title, because it qualifies the title: what
+            you are about to read is not what the brain now considers current. */}
+        <SupersededBanner
+          filename={activeFilename}
+          onOpen={(newer) => { void selectNote(newer); }}
+        />
 
         {/* Header */}
         <div
