@@ -267,6 +267,12 @@ fn router() -> Router {
         .route("/api/optimize_disk", post(optimize_disk))
         .route("/api/mcp_tier", get(mcp_tier_get).put(mcp_tier_set))
         .route("/api/rerank", get(rerank_get).put(rerank_set))
+        .route(
+            "/api/consolidation_auto",
+            get(consolidation_auto_get)
+                .put(consolidation_auto_set)
+                .post(consolidation_auto_set),
+        )
         // The Curator (AI employee): loopback-only, like everything here.
         .route(
             "/api/employee/status",

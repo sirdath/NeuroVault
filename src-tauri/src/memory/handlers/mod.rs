@@ -5374,6 +5374,68 @@ pub async fn rerank_set(
 }
 
 // ---------------------------------------------------------------------------
+// Automatic consolidation — ~/.neurovault/consolidation_auto.txt. The clock in
+// `memory::consolidation_schedule` runs `adaptive::consolidate::run_proposal`
+// for the active brain every few hours. ON by default, unlike the AI-employee
+// scheduler, because a proposal run is INERT: it only appends Unreviewed /
+// Pending records to the review store. Nothing it produces touches an engram
+// until a human clicks Approve in MemoryReview (`proposal_approve` above is the
+// sole executor). The toggle writes "off" for users who want an empty queue.
+// ---------------------------------------------------------------------------
+
+pub fn consolidation_auto_pref_path() -> std::path::PathBuf {
+    super::paths::nv_home().join("consolidation_auto.txt")
+}
+
+/// Whether the consolidation clock may run. ON unless the user wrote "off".
+pub fn consolidation_auto_enabled() -> bool {
+    match std::fs::read_to_string(consolidation_auto_pref_path()) {
+        Ok(s) => !matches!(s.trim().to_lowercase().as_str(), "off" | "false" | "0"),
+        Err(_) => true,
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct ConsolidationAutoResponse {
+    enabled: bool,
+    interval_hours: i64,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ConsolidationAutoBody {
+    enabled: bool,
+}
+
+pub async fn consolidation_auto_get(
+    _s: State<ServerState>,
+) -> Result<Json<ConsolidationAutoResponse>, ApiError> {
+    Ok(Json(ConsolidationAutoResponse {
+        enabled: consolidation_auto_enabled(),
+        interval_hours: super::consolidation_schedule::RUN_INTERVAL_HOURS,
+    }))
+}
+
+pub async fn consolidation_auto_set(
+    _s: State<ServerState>,
+    Json(body): Json<ConsolidationAutoBody>,
+) -> Result<Json<ConsolidationAutoResponse>, ApiError> {
+    let path = consolidation_auto_pref_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, if body.enabled { "on" } else { "off" }).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write consolidation_auto: {e}"),
+        )
+    })?;
+    Ok(Json(ConsolidationAutoResponse {
+        enabled: body.enabled,
+        interval_hours: super::consolidation_schedule::RUN_INTERVAL_HOURS,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // API key management — loopback-mounted ONLY. The gateway must
 // never expose these; an external client managing its own keys
 // is a footgun (and a privilege-escalation pathway).

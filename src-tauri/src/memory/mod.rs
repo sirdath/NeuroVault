@@ -38,6 +38,7 @@ pub mod api_keys;
 pub mod bm25;
 pub mod chunker;
 pub mod cluster_state;
+pub mod consolidation_schedule;
 pub mod core_memory;
 pub mod db;
 pub mod diagnostic;

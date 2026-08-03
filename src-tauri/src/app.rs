@@ -1838,6 +1838,15 @@ pub fn run() {
                         }
                     }
                 }
+
+                // 3) Adaptive consolidation clock. Same contract as the
+                // two above: detached, never blocks startup, failures
+                // are logged and survived. Defaults ON because a
+                // proposal run is INERT — it only fills the MemoryReview
+                // queue with Unreviewed/Pending suggestions; nothing
+                // touches an engram until a human clicks Approve.
+                // Settings can turn it off via /api/consolidation_auto.
+                memory::consolidation_schedule::start();
             });
 
             eprintln!(
