@@ -117,6 +117,9 @@ REDACTION_RULES: list[tuple[str, re.Pattern[str], Any]] = [
     ("API_KEY", re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"), None),
     ("GITHUB_TOKEN", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"), None),
     ("GITHUB_TOKEN", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), None),
+    # Supabase personal access tokens — found live in a real transcript
+    # after the first labeling pass; a PAT the original list missed.
+    ("SUPABASE_PAT", re.compile(r"\bsbp_[A-Za-z0-9_]{16,}"), None),
     ("SLACK_TOKEN", re.compile(r"\bxox[abposr]-[A-Za-z0-9\-]{10,}"), None),
     ("AWS_KEY", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{12,20}\b"), None),
     ("GOOGLE_API_KEY", re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"), None),
@@ -725,6 +728,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
 
     read_stats = ReadStats()
     candidates: list[Unit] = []
+    seen_unit_ids: set[str] = set()
     dropped_redaction = 0
     dropped_small = 0
     dropped_no_user = 0
@@ -782,9 +786,23 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 score, tool_ratio, user_turns, user_chars, terms, args.positive_threshold
             )
 
+            # Collision-safe id. The same session UUID can appear under
+            # several project dirs (cwd changes re-encode the project
+            # path), so prefix+index alone collided and silently
+            # OVERWROTE units (3 lost in the first corpus build).
+            # Disambiguate collisions only — never rename a first
+            # occupant — so existing gold files keyed on old ids stay
+            # valid across rebuilds.
+            base_id = f"{sf.session_id[:8]}-{start_index:04d}"
+            unit_id = base_id
+            suffix = ord("b")
+            while unit_id in seen_unit_ids:
+                unit_id = f"{base_id}{chr(suffix)}"
+                suffix += 1
+            seen_unit_ids.add(unit_id)
             candidates.append(
                 Unit(
-                    unit_id=f"{sf.session_id[:8]}-{start_index:04d}",
+                    unit_id=unit_id,
                     session_id=sf.session_id,
                     project=project_label,
                     approx_tokens=tokens,
