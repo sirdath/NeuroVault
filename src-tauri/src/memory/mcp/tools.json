@@ -2,7 +2,7 @@
  {
   "name": "recall",
   "title": "Recall from memory",
-  "description": "Hybrid semantic + keyword + graph search over the user's memory.\nCall before answering anything the user may have told you in a past\nconversation — preferences, decisions, people, projects, history.\n\nDon't stop after one call. If the top hit doesn't fully answer,\nre-query with different phrasing (reuse the user's proper nouns\nverbatim), try `recall_chunks(q)` for passages inside long notes,\nor `query=\"entity:<Name>\"` to anchor on a known entity.\n\nModes (token cost/hit): titles ~20 · preview ~100 (default) · full ~400.\nQuery operators (combine freely): `kind:insight` `folder:work`\n`after:2026-04-01` `entity:Sarah` `state:fresh`.\n`additional_queries=[...]` is escalation-only — reruns the pipeline\nper phrasing and RRF-merges; use only when a plain recall was weak.\n\nEACH HIT NOW CARRIES `confidence` (0-1): how much to TRUST the fact, distinct from the relevance `score`. Zero-LLM — structural (by provenance/kind: source-mirrored=1.0, authored notes≈0.9, passive observations≈0.6), or an authoritative value if one was set. Use it to weigh facts, especially ones written by OTHER agents.",
+  "description": "Hybrid semantic + keyword + graph search over the user's memory.\nCall before answering anything the user may have told you in a past\nconversation — preferences, decisions, people, projects, history.\n\nDon't stop after one call. If the top hit doesn't fully answer,\nre-query with different phrasing (reuse the user's proper nouns\nverbatim), try `recall_chunks(q)` for passages inside long notes,\nor `query=\"entity:<Name>\"` to anchor on a known entity.\n\nModes (token cost/hit): titles ~20 · preview ~100 (default) · full ~400.\nQuery operators (combine freely): `kind:insight` `folder:work`\n`after:2026-04-01` `entity:Sarah` `state:fresh`.\n`additional_queries=[...]` is escalation-only — reruns the pipeline\nper phrasing and RRF-merges; use only when a plain recall was weak.\n\nEVERY HIT EXPLAINS ITSELF. Alongside `score` (relevance) and\n`strength` (usage/recency) each hit carries:\n  `why`        — one line naming the channels that surfaced it, e.g.\n                 \"semantic match 0.82 (rank 1) + keyword match (rank 3);\n                 reranked 0.91\". Use it to judge WHY something matched:\n                 a keyword-only hit on a rare term is strong evidence;\n                 a weak semantic-only hit is a guess.\n  `source`     — the vault-relative .md file. The markdown is\n                 canonical; cite or open that path, not the index.\n  `kind`       — note / decision / insight / source / observation …\n  `created_at` — when the note was written.\n  `agent_id`   — which agent wrote it, when one was recorded.\n  `confidence` — 0-1, how much to TRUST the fact, distinct from\n                 relevance. Zero-LLM and NOT learned or adaptive: it is\n                 a structural constant per `kind` (source-mirrored 1.0,\n                 authored notes ≈0.9, passive observations ≈0.6) unless\n                 someone explicitly set an authoritative value on that\n                 note, which then wins. It never affects ranking.",
   "annotations": {
    "read_only": true,
    "idempotent": true,
@@ -219,7 +219,7 @@
  {
   "name": "recall_chunks",
   "title": "Chunk-level recall",
-  "description": "Passage-level semantic search — returns the specific paragraphs\ninside notes that match, not the whole notes. Use this when `recall`\nis returning huge wiki pages where only one paragraph is relevant.\n\nWHEN TO CALL:\n- The query is narrow but the matching engram is a long document\n- User asks \"what did I write about X in Y\" (X is specific, Y is long)\n- You need to quote a specific passage rather than summarise a whole\n  note\n\nEach returned chunk is 200-400 tokens. Deduped to one chunk per engram\n(the top-ranked one wins) so a single long note can't flood results.",
+  "description": "Passage-level semantic search — returns the specific paragraphs\ninside notes that match, not the whole notes. Use this when `recall`\nis returning huge wiki pages where only one paragraph is relevant.\nThe biggest context-saver on the surface: prefer it over `recall` for\nanything you expect to live inside a long document.\n\nWHEN TO CALL:\n- The query is narrow but the matching engram is a long document\n- User asks \"what did I write about X in Y\" (X is specific, Y is long)\n- You need to quote a specific passage rather than summarise a whole\n  note\n\nEach returned chunk is 200-400 tokens. Deduped to one chunk per engram\n(the top-ranked one wins) so a single long note can't flood results.\n\nSame visibility rules as `recall`: superseded and dormant notes are\nnever served. Takes the same query operators — `kind:insight`\n`folder:work` `after:2026-04-01` `before:…` `entity:Sarah`\n`state:fresh` `agent:…` — which are stripped from the text before\nembedding and applied as filters, so `folder:specs retry policy`\nsearches passages only under `specs/`.",
   "annotations": {
    "read_only": true,
    "idempotent": true,
@@ -702,10 +702,12 @@
  {
   "name": "diagnose_brain",
   "title": "Diagnose brain health",
-  "description": "Run a health scorecard on the brain and get back a graded report\nplus a worst-first list of concrete fixes.\n\nReturns `{grade, score, total, categories[], issues[]}`:\n- `grade` is A–F; `score` is 0–100 over `total` notes.\n- `categories` each have `{key, label, score (0..1), detail}` —\n  connectivity, interlinking, cohesion, freshness, organization.\n- `issues` each have `{label, count, severity}`, severity high→low.\n\nUSE THIS to drive maintenance. A typical loop:\n1. `diagnose_brain()` to see what's weak.\n2. For \"orphan notes\" / \"outside the main cluster\" → find the notes\n   (`recall`/`list` by folder) and add `[[wikilinks]]` between\n   related ones, or merge duplicates.\n3. For \"unfiled notes\" → rename them into folders (e.g. `research/x`).\n4. For \"dormant notes\" → revisit the still-relevant ones; let the\n   rest decay.\n5. Re-run `diagnose_brain()` to confirm the grade improved.\n\nIt's read-only — it never changes the vault. You make the fixes with\nthe normal write tools (`remember`, save/rename).",
+  "description": "Run a health scorecard on the brain and get back a graded report\nplus a worst-first list of concrete fixes.\n\nReturns `{grade, score, total, categories[], issues[]}`:\n- `grade` is A–F; `score` is 0–100 over `total` notes.\n- `categories` each have `{key, label, score (0..1), detail}` —\n  connectivity, interlinking, cohesion, freshness, organization.\n- `issues` each have `{label, count, severity}`, severity high→low.\n\nUSE THIS to drive maintenance. A typical loop:\n1. `diagnose_brain()` to see what's weak.\n2. For \"orphan notes\" / \"outside the main cluster\" → find the notes\n   (`recall`/`list` by folder) and add `[[wikilinks]]` between\n   related ones, or merge duplicates.\n3. For \"unfiled notes\" → rename them into folders (e.g. `research/x`).\n4. For \"dormant notes\" → revisit the still-relevant ones; let the\n   rest decay.\n5. Re-run `diagnose_brain()` to confirm the grade improved.\n\nNOT read-only, for one narrow reason: the report includes the\ncontradiction sweep, and that sweep queues the candidate pairs it finds\nfor `find_contradictions` (same deterministic, re-run-safe rows as\n`find_conflicts`). It never edits, deletes, or reorganises a note — you\nmake every fix yourself with the normal write tools.",
   "annotations": {
-   "read_only": true,
-   "open_world": false
+   "read_only": false,
+   "open_world": false,
+   "destructive": false,
+   "idempotent": true
   },
   "input_schema": {
    "type": "object",
@@ -864,7 +866,7 @@
  {
   "name": "remember",
   "title": "Remember a fact (write)",
-  "description": "Save a memory permanently. This is how information persists across\nconversations — if you don't call this, the fact is gone when the\nsession ends.\n\nWHEN TO CALL:\n- User shares a durable fact: \"I prefer Rust over Go\"\n- User makes a decision: \"we're moving to Postgres\"\n- User reveals an identity / preference / constraint you should\n  remember for future conversations\n- You reach a conclusion worth preserving: \"the auth migration\n  decision was to use JWT because...\"\n\nWHEN NOT TO CALL:\n- Ephemeral requests (\"summarize this for me right now\")\n- Content the user is typing that will obviously be in the next\n  message\n- You're unsure it matters — better to ask the user or skip\n\nALMOST ALWAYS pass `deduplicate=0.92`. It runs a cosine-similarity\ncheck against existing engrams; on near-match the existing engram\nid comes back with `status=\"merged\"` and no new note is created.\nSaves the \"same insight captured five times\" clutter — and is\n10x faster than a fresh ingest when a duplicate exists.\n\n`title` is auto-derived from the first line if omitted. `folder`\nplaces the note under that subdirectory. `content` supports\nmarkdown + `[[wikilinks]]` to other notes.\n\n`supersedes` — pass the engram ids of older notes this one REPLACES\n(info that's now wrong/outdated). They're marked superseded so recall\nstops serving the stale version; the new note wins. The old notes\naren't deleted (reversible). Use this when the new fact contradicts an\nold one, not for unrelated notes.\n\nHard ceiling: 32 KB. Split longer content into multiple engrams.",
+  "description": "Save a memory permanently. This is how information persists across\nconversations — if you don't call this, the fact is gone when the\nsession ends.\n\nWHEN TO CALL:\n- User shares a durable fact: \"I prefer Rust over Go\"\n- User makes a decision: \"we're moving to Postgres\"\n- User reveals an identity / preference / constraint you should\n  remember for future conversations\n- You reach a conclusion worth preserving: \"the auth migration\n  decision was to use JWT because...\"\n\nWHEN NOT TO CALL:\n- Ephemeral requests (\"summarize this for me right now\")\n- Content the user is typing that will obviously be in the next\n  message\n- You're unsure it matters — better to ask the user or skip\n\nALMOST ALWAYS pass `deduplicate=0.92`. It runs a cosine-similarity\ncheck against existing engrams; on near-match the existing engram\nid comes back with `status=\"merged\"` and no new note is created.\nSaves the \"same insight captured five times\" clutter — and is\n10x faster than a fresh ingest when a duplicate exists.\n\n`title` is auto-derived from the first line if omitted. `folder`\nplaces the note under that subdirectory. `content` supports\nmarkdown + `[[wikilinks]]` to other notes.\n\n`supersedes` — pass the engram ids of older notes this one REPLACES\n(info that's now wrong/outdated). They're marked superseded so recall\nstops serving the stale version; the new note wins. The old notes\naren't deleted (reversible). Use this when the new fact contradicts an\nold one, not for unrelated notes.\n\n`confidence` (optional, 0-1) records an AUTHORITATIVE trust value on\nthe note, which recall hits then report instead of the structural\ndefault for that kind. It is an annotation for readers, not a ranking\ninput, and nothing learns or adjusts it — so only pass it when you\nactually have grounds for the number. Skipped on a \"merged\" result.\n\nHard ceiling: 32 KB. Split longer content into multiple engrams.",
   "annotations": {
    "read_only": false,
    "destructive": false,
@@ -905,6 +907,10 @@
       "type": "string"
      },
      "description": "Engram ids of older notes this one REPLACES; they're marked superseded (reversible, not deleted)."
+    },
+    "confidence": {
+     "type": "number",
+     "description": "Optional authoritative trust value in [0,1] for this note, recorded as an annotation readers see on recall hits. Omit unless you have a real reason for the number — omitted means the reader falls back to the structural default for the note's kind. Never affects ranking. Ignored when the call returns status=\"merged\" (no new note was written)."
     }
    },
    "required": [
@@ -958,6 +964,12 @@
      "from": "supersedes",
      "transform": "none",
      "omit": "if_falsy"
+    },
+    {
+     "param": "confidence",
+     "from": "confidence",
+     "transform": "float",
+     "omit": "if_none"
     }
    ],
    "special": null
@@ -966,10 +978,12 @@
  {
   "name": "find_conflicts",
   "title": "Find potential contradictions",
-  "description": "Sweep the brain for note pairs that are likely the SAME topic with a\nDIFFERENT claim — potential contradictions to reconcile.\n\nReturns up to `limit` pairs `{a_id, a_title, b_id, b_title, similarity}`,\nstrongest first, where the two notes sit in the mid-similarity band\n(~0.82–0.92): close enough to be about the same thing, far enough to\nprobably disagree. Near-duplicates (>0.92) and unrelated notes are\nexcluded, as are already-superseded notes.\n\nUSE THIS for brain maintenance: for each pair, read both notes, decide\nwhich is current, and `supersede_note(old, new)` the stale one (or\nmerge them). It's read-only — it never changes anything itself. Pairs\nare candidates, not confirmed conflicts; always check the content\nbefore retiring a note.",
+  "description": "Sweep the brain for note pairs that are likely the SAME topic with a\nDIFFERENT claim — candidate contradictions to reconcile.\n\nReturns up to `limit` pairs `{a_id, a_title, b_id, b_title, similarity}`,\nstrongest first, where the two notes sit in the mid-similarity band\n(~0.82-0.92): close enough to be about the same thing, far enough to\npossibly disagree. Near-duplicates (>0.92) and unrelated notes are\nexcluded, as are already-superseded notes.\n\nRECORDING IS A SIDE EFFECT: the returned pairs are also queued in the\ncontradictions table for `find_contradictions`. That is the only reason\nthis tool is not marked read-only — it never touches your notes, the\nvault, or the graph. Re-running is safe: rows are keyed by a\ndeterministic hash of the pair, so a re-sweep neither duplicates a row\nnor re-opens one you already resolved.\n\nUSE THIS for brain maintenance: for each pair, read both notes, decide\nwhich is current, and `supersede_note(old, new)` the stale one (or\nmerge them). Pairs are candidates, not confirmed conflicts — the\ndetector compares embeddings, not claims, so always read the content\nbefore retiring a note.",
   "annotations": {
-   "read_only": true,
-   "open_world": false
+   "read_only": false,
+   "open_world": false,
+   "destructive": false,
+   "idempotent": true
   },
   "input_schema": {
    "type": "object",
@@ -1621,8 +1635,8 @@
  },
  {
   "name": "find_contradictions",
-  "title": "Find contradictions — facts that conflict with each other",
-  "description": "Surface auto-detected fact-level conflicts in the brain. The\ningest pipeline flags contradictions whenever two engrams assert\nincompatible things (e.g. \"user prefers Rust\" then later \"user\nprefers Go\"). They sit in the contradictions table waiting for\nreview.\n\nWHEN TO CALL:\n- User asks \"what conflicts in my brain\" / \"what changed my mind\"\n- You're about to make a confident assertion in a recall response\n  and want to check if it's been superseded\n- Auditing the brain after a long session of writes\n\nReturns:\n    brain_id        — which brain was queried\n    total           — number of contradictions in the response\n    contradictions  — list of:\n        { id, fact_a, fact_b,\n          engram_a_id, engram_a_title,\n          engram_b_id, engram_b_title,\n          detected_at, resolved, resolution }\n    Each row includes both engram titles so you can quote them\n    when proposing a resolution.\n\nArgs:\n    resolved: filter by state. False (default) shows only\n        unresolved — the actionable list. True shows the audit\n        trail of past resolutions. None shows everything.\n    brain: target brain id (defaults to active).\n    limit: cap. Default 50, max 500.",
+  "title": "Find contradiction candidates — pairs queued for review",
+  "description": "Surface candidate contradictions queued for review.\n\nThe source is the conflict sweep (`find_conflicts`), which pairs notes\nwhose embeddings sit in a mid-similarity band — same topic, different\nnote. It cannot tell agreement from disagreement, so every row is an\nUNVERIFIED CANDIDATE: read both notes before acting on one.\n\nRows appear only after a sweep has run (via `find_conflicts` or\n`diagnose_brain`). An empty result may mean \"no sweep yet\" rather than\n\"no conflicts\" — if you need a current answer, run `find_conflicts`\nfirst, then read the queue here.\n\nWHEN TO CALL:\n- User asks \"what conflicts in my brain\" / \"what changed my mind\"\n- You're about to make a confident assertion in a recall response\n  and want to check whether the note has a rival\n- Auditing the brain after a long session of writes\n\nReturns:\n    brain_id        — which brain was queried\n    total           — number of rows in the response\n    contradictions  — list of:\n        { id, fact_a, fact_b,\n          engram_a_id, engram_a_title,\n          engram_b_id, engram_b_title,\n          detected_at, resolved, resolution }\n    `fact_a` / `fact_b` are NOT extracted facts. Nothing reads the\n    notes' claims — each is a candidate marker plus the note's title\n    and the pair's similarity. Open both engrams to see the claims.\n\nArgs:\n    resolved: filter by state. False (default) shows only\n        unresolved — the actionable list. True shows the audit\n        trail of past resolutions. None shows everything.\n    brain: target brain id (defaults to active).\n    limit: cap. Default 50, max 500.",
   "annotations": {
    "read_only": true,
    "idempotent": true,
@@ -1686,7 +1700,7 @@
  {
   "name": "resolve_contradiction",
   "title": "Resolve a contradiction — mark it reviewed",
-  "description": "Mark a contradiction as resolved with an optional human-\nreadable note explaining the call. Does NOT delete or rewrite\nthe underlying engrams — resolution is annotation, not action.\n\nWHEN TO CALL:\n- After find_contradictions() and the user has decided how to\n  reconcile a specific conflict\n- When you've written a new engram that supersedes one of the\n  facts and want the conflict closed\n\nTo actually fix the underlying data, the user should edit the\nout-of-date engram (or use `delete_engrams` if it should be\nremoved entirely). This tool just clears the entry from the\n\"needs review\" list.\n\nArgs:\n    contradiction_id: id from find_contradictions()\n    resolution: optional note explaining the resolution\n    brain: target brain id (defaults to active).",
+  "description": "Mark a contradiction candidate as resolved, with an optional\nhuman-readable note explaining the call. Does NOT delete or rewrite\nthe underlying engrams — resolution is annotation, not action.\n\nResolution is DURABLE. The id is a deterministic hash of the engram\npair, so a later re-sweep of those same two notes lands on this same\nrow and will not re-open it. You judge a pair once.\n\nWHEN TO CALL:\n- After find_contradictions() and the user has decided how to\n  reconcile a specific pair\n- When you've written a new engram that supersedes one of the\n  notes and want the pair closed\n\nTo actually fix the underlying data, the user should edit the\nout-of-date engram (or use `delete_engrams` if it should be\nremoved entirely). This tool just clears the entry from the\n\"needs review\" list.\n\nArgs:\n    contradiction_id: id from find_contradictions()\n    resolution: optional note explaining the resolution\n    brain: target brain id (defaults to active).",
   "annotations": {
    "read_only": false,
    "destructive": false,

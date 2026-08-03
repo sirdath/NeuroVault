@@ -2303,8 +2303,13 @@ pub async fn recall(
         tokio::task::spawn_blocking(move || -> Result<(String, Vec<RecallHit>), MemoryError> {
             let id = resolve_brain_id(brain_id.as_deref())?;
             let db = open_brain(&id)?;
+            // Both branches run the score-CAPTURING pipeline so every
+            // hit carries its `why` (the channel breakdown was always
+            // computed; it just never left the retriever). Identical
+            // hits/order/scores to the plain path — see
+            // `hybrid_retrieve_with_scores`.
             let hits = if skip_throttle {
-                super::retriever::hybrid_retrieve(&db, &query_str, &opts)?
+                super::retriever::hybrid_retrieve_with_scores(&db, &query_str, &opts)?.0
             } else {
                 hybrid_retrieve_throttled(&db, &query_str, &opts)?
             };
@@ -2837,6 +2842,29 @@ pub struct RememberBody {
     /// was written to supersede with).
     #[serde(default)]
     supersedes: Vec<String>,
+    /// Optional AUTHORITATIVE trust value in [0,1] for the new note.
+    /// Absent (the normal case) = the reader falls back to the
+    /// structural estimate derived from the note's kind. Annotation
+    /// only: confidence never enters ranking. Ignored on a dedupe
+    /// "merged" result — no new note was written, and silently
+    /// re-scoring somebody else's existing note is not this call's job.
+    #[serde(default)]
+    confidence: Option<f64>,
+}
+
+/// Reject a `confidence` outside [0,1] instead of clamping it. A caller
+/// that sends 60 (meaning 60%) has a bug we want surfaced, not a value
+/// silently rewritten to 1.0 that then reads as "certain".
+fn validate_confidence(c: Option<f64>) -> Result<(), ApiError> {
+    if let Some(c) = c {
+        if !c.is_finite() || !(0.0..=1.0).contains(&c) {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("confidence must be a number in [0.0, 1.0]; got {c}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -2894,12 +2922,14 @@ pub async fn remember(
             ),
         ));
     }
+    validate_confidence(body.confidence)?;
     let brain_id = body.brain.clone();
     let title_hint = body.title.clone();
     let content = body.content.clone();
     let dedupe = body.deduplicate;
     let folder = body.folder.clone();
     let supersedes = body.supersedes.clone();
+    let confidence = body.confidence;
 
     let result = tokio::task::spawn_blocking(move || -> Result<RememberResult, MemoryError> {
         let id = resolve_brain_id(brain_id.as_deref())?;
@@ -2960,6 +2990,16 @@ pub async fn remember(
         let vault = super::read_ops::resolve_vault_path(&id)?;
         let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
         let write = super::write_ops::save_note(&ctx, &filename, &seed)?;
+
+        // Authoritative confidence, when the caller asserted one. Best
+        // effort: the note is already on disk and indexed, so a failure
+        // to annotate must not fail the save — the reader just falls
+        // back to the structural estimate.
+        if let Some(c) = confidence {
+            if let Err(e) = super::retriever::set_engram_confidence(&db, &write.engram_id, c) {
+                eprintln!("[remember] confidence annotation failed: {e}");
+            }
+        }
 
         // Audit the write. `args` carries title + a short preview of
         // the content so the activity panel can render a meaningful
@@ -3046,6 +3086,13 @@ pub struct SaveBody {
     content: String,
     #[serde(default)]
     brain: Option<String>,
+    /// Optional AUTHORITATIVE trust value in [0,1] for the saved note —
+    /// the update-side twin of `remember`'s parameter. Absent leaves any
+    /// existing annotation untouched (and the reader keeps falling back
+    /// to the structural estimate). Annotation only, never a ranking
+    /// input.
+    #[serde(default)]
+    confidence: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3077,11 +3124,20 @@ pub async fn notes_save(
             ),
         ));
     }
+    validate_confidence(body.confidence)?;
     let result = tokio::task::spawn_blocking(move || -> Result<WriteResponse, MemoryError> {
         let id = resolve_brain_id(body.brain.as_deref())?;
         let vault = super::read_ops::resolve_vault_path(&id)?;
         let ctx = super::write_ops::BrainContext::resolve(Some(&id), vault)?;
         let res = super::write_ops::save_note(&ctx, &body.filename, &body.content)?;
+        // Best-effort annotation, same contract as `remember`: the file
+        // is already saved and indexed, so this can't fail the write.
+        if let Some(c) = body.confidence {
+            let db = open_brain(&id)?;
+            if let Err(e) = super::retriever::set_engram_confidence(&db, &res.engram_id, c) {
+                eprintln!("[save] confidence annotation failed: {e}");
+            }
+        }
         Ok(WriteResponse {
             status: res.status,
             engram_id: res.engram_id,
@@ -6504,6 +6560,90 @@ pub struct RecallChunksResponse {
     hits: Vec<ChunkHit>,
 }
 
+/// Second stage of chunk recall, split out from the vec0 KNN so it can
+/// be exercised against a plain in-memory connection (the vec0
+/// extension is not loadable from a unit test).
+///
+/// `ranked` is the KNN result — `(chunk_id, distance)` in ascending
+/// distance order. This resolves those ids to rows, applies the SAME
+/// visibility rules every other retrieval channel applies
+/// (`state != 'dormant'` AND `superseded_by IS NULL`) plus any
+/// `kind:`/`folder:`/`after:`/`entity:` operators the caller parsed out
+/// of the query, then dedupes to the best chunk per engram while
+/// preserving KNN order.
+pub(crate) fn chunk_rows_for_candidates(
+    conn: &rusqlite::Connection,
+    ranked: &[(String, f64)],
+    filters: &super::query_parser::QueryFilters,
+    limit: usize,
+) -> Result<Vec<ChunkHit>, MemoryError> {
+    if ranked.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    // Bare `?` placeholders throughout: `filter_sql` emits unnumbered
+    // ones, and SQLite refuses a mix of numbered and unnumbered.
+    let placeholders = std::iter::repeat_n("?", ranked.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let (filter_frag, filter_params) = super::query_parser::filter_sql(filters);
+    let sql = format!(
+        "SELECT c.id, c.engram_id, e.title, c.content, c.granularity \
+         FROM chunks c \
+         JOIN engrams e ON e.id = c.engram_id \
+         WHERE c.id IN ({}) \
+               AND e.state != 'dormant' \
+               AND e.superseded_by IS NULL{}",
+        placeholders, filter_frag
+    );
+    let mut params: Vec<rusqlite::types::Value> = ranked
+        .iter()
+        .map(|(id, _)| rusqlite::types::Value::Text(id.clone()))
+        .collect();
+    params.extend(filter_params);
+
+    let mut stmt = conn.prepare(&sql)?;
+    // chunk_id -> (engram_id, title, content, granularity)
+    let mut by_chunk: std::collections::HashMap<String, (String, String, String, String)> =
+        std::collections::HashMap::new();
+    let mapped = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+        ))
+    })?;
+    for row in mapped {
+        let (cid, eid, title, text, gran) = row?;
+        by_chunk.insert(cid, (eid, title, text, gran));
+    }
+
+    // Walk the KNN order, keeping only the best-ranked surviving chunk
+    // per engram so one long note can't flood the result.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut rows: Vec<ChunkHit> = Vec::with_capacity(limit);
+    for (chunk_id, dist) in ranked {
+        let Some((eid, title, text, gran)) = by_chunk.get(chunk_id) else {
+            continue;
+        };
+        if !seen.insert(eid.clone()) {
+            continue;
+        }
+        rows.push(ChunkHit {
+            engram_id: eid.clone(),
+            title: title.clone(),
+            chunk_text: text.clone(),
+            granularity: gran.clone(),
+            similarity: 1.0 - dist,
+        });
+        if rows.len() >= limit {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
 pub async fn recall_chunks(
     Query(q): Query<RecallChunksQuery>,
     _s: State<ServerState>,
@@ -6511,51 +6651,44 @@ pub async fn recall_chunks(
     let resp = tokio::task::spawn_blocking(move || -> Result<RecallChunksResponse, MemoryError> {
         let id = resolve_brain_id(q.brain.as_deref())?;
         let db = open_brain(&id)?;
-        let qvec = super::embedder::encode(&q.q)?;
+        // Honour the same query operators plain `recall` honours: pull
+        // `kind:`/`folder:`/`after:`/`entity:`… out before embedding, so
+        // the vector search sees only the free text and the operators
+        // gate rows in SQL. An operators-only query keeps the raw string
+        // as the embedding input (mirrors `hybrid_retrieve_inner`).
+        let (filters, free_text) = super::query_parser::parse(&q.q);
+        let effective_query = if free_text.is_empty() {
+            q.q.clone()
+        } else {
+            free_text
+        };
+        let qvec = super::embedder::encode(&effective_query)?;
         let conn = db.lock();
-        // Over-fetch (limit*5) so we can dedup by engram in Rust
-        // afterwards. vec0's MATCH operator doesn't compose with
-        // window functions cleanly, so a two-stage approach is
-        // both simpler and more reliable.
+        // Over-fetch so the post-KNN visibility/operator pass still has
+        // enough survivors to fill `limit` after dedup-by-engram. vec0's
+        // MATCH operator doesn't compose with joins or window functions
+        // cleanly, so KNN first, filter second. Filters cut harder than
+        // dedup alone, so they buy a bigger over-fetch.
         let bytes = embedder_bytes(&qvec);
         let limit = q.limit.min(50);
-        let overfetch = (limit * 5).max(20) as i64;
+        let overfetch = if filters.is_empty() {
+            (limit * 5).max(20)
+        } else {
+            (limit * 20).max(100)
+        }
+        .min(1000) as i64;
         let mut stmt = conn.prepare(
-            "SELECT c.engram_id, e.title, c.content, c.granularity, v.distance \
-             FROM vec_chunks v \
-             JOIN chunks c ON c.id = v.chunk_id \
-             JOIN engrams e ON e.id = c.engram_id \
-             WHERE v.embedding MATCH ?1 AND k = ?2 \
-                   AND e.state != 'dormant' \
-             ORDER BY v.distance ASC",
+            "SELECT chunk_id, distance FROM vec_chunks \
+             WHERE embedding MATCH ?1 AND k = ?2 \
+             ORDER BY distance ASC",
         )?;
-        let raw = stmt
+        let ranked = stmt
             .query_map(rusqlite::params![bytes, overfetch], |r| {
-                let eid: String = r.get(0)?;
-                let title: String = r.get(1)?;
-                let text: String = r.get(2)?;
-                let gran: String = r.get(3)?;
-                let dist: f64 = r.get(4)?;
-                Ok(ChunkHit {
-                    engram_id: eid,
-                    title,
-                    chunk_text: text,
-                    granularity: gran,
-                    similarity: 1.0 - dist,
-                })
+                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        // Keep only the best-ranked chunk per engram_id, in order.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut rows: Vec<ChunkHit> = Vec::with_capacity(limit);
-        for hit in raw {
-            if seen.insert(hit.engram_id.clone()) {
-                rows.push(hit);
-                if rows.len() >= limit {
-                    break;
-                }
-            }
-        }
+        drop(stmt);
+        let rows = chunk_rows_for_candidates(&conn, &ranked, &filters, limit)?;
         Ok(RecallChunksResponse { hits: rows })
     })
     .await
@@ -6563,6 +6696,131 @@ pub async fn recall_chunks(
     .map_err(ApiError::from)?;
 
     Ok(Json(resp))
+}
+
+#[cfg(test)]
+mod recall_chunks_tests {
+    use super::chunk_rows_for_candidates;
+    use crate::memory::query_parser::{self, QueryFilters};
+    use rusqlite::Connection;
+
+    /// Just the columns the second stage reads. vec0 is deliberately
+    /// absent: the KNN stage is handed in as `ranked`, so the parts we
+    /// can regress on (visibility + operators + dedup) test without the
+    /// extension.
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE engrams (
+                 id TEXT PRIMARY KEY, title TEXT, kind TEXT, state TEXT,
+                 filename TEXT, agent_id TEXT, created_at TEXT, superseded_by TEXT);
+             CREATE TABLE chunks (
+                 id TEXT PRIMARY KEY, engram_id TEXT NOT NULL, content TEXT,
+                 granularity TEXT);
+             CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE entity_mentions (entity_id TEXT, engram_id TEXT);
+
+             INSERT INTO engrams VALUES
+                 ('e-live','Current deploy target','note','active',
+                  'work/deploy.md','claude-code','2026-05-01',NULL);
+             INSERT INTO engrams VALUES
+                 ('e-stale','Old deploy target','note','active',
+                  'work/deploy-old.md','claude-code','2026-01-01','e-live');
+             INSERT INTO engrams VALUES
+                 ('e-insight','Why we moved','insight','active',
+                  'notes/why.md','cursor','2026-06-01',NULL);
+             INSERT INTO engrams VALUES
+                 ('e-dormant','Deleted note','note','dormant',
+                  'work/gone.md','claude-code','2026-02-01',NULL);
+
+             INSERT INTO chunks VALUES ('c-stale','e-stale','staging is the target','paragraph');
+             INSERT INTO chunks VALUES ('c-live','e-live','production is the target','paragraph');
+             INSERT INTO chunks VALUES ('c-insight','e-insight','we moved for latency','paragraph');
+             INSERT INTO chunks VALUES ('c-dormant','e-dormant','gone','paragraph');
+             INSERT INTO chunks VALUES ('c-live-2','e-live','second passage','paragraph');",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// KNN order with the superseded note ranked FIRST — the shape that
+    /// made recall_chunks serve a retired claim as the top passage.
+    fn ranked() -> Vec<(String, f64)> {
+        vec![
+            ("c-stale".to_string(), 0.10),
+            ("c-dormant".to_string(), 0.15),
+            ("c-live".to_string(), 0.20),
+            ("c-live-2".to_string(), 0.25),
+            ("c-insight".to_string(), 0.30),
+        ]
+    }
+
+    #[test]
+    fn superseded_engram_chunks_are_excluded() {
+        let conn = fixture();
+        let rows =
+            chunk_rows_for_candidates(&conn, &ranked(), &QueryFilters::default(), 10).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.engram_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"e-stale"),
+            "a superseded engram's chunk must never be served: got {ids:?}"
+        );
+        // Dormant stays excluded too (pre-existing behaviour), and the
+        // survivors keep KNN order, deduped to one chunk per engram.
+        assert_eq!(ids, vec!["e-live", "e-insight"]);
+    }
+
+    /// A `confidence` outside [0,1] is a caller bug (60 meaning "60%"),
+    /// and clamping it to 1.0 would turn that bug into a note that
+    /// claims certainty. Reject instead.
+    #[test]
+    fn out_of_range_confidence_is_rejected_not_clamped() {
+        use super::validate_confidence;
+        assert!(validate_confidence(None).is_ok());
+        assert!(validate_confidence(Some(0.0)).is_ok());
+        assert!(validate_confidence(Some(0.6)).is_ok());
+        assert!(validate_confidence(Some(1.0)).is_ok());
+        for bad in [60.0, 1.0001, -0.1, f64::NAN, f64::INFINITY] {
+            let err = validate_confidence(Some(bad)).err();
+            assert!(err.is_some(), "confidence {bad} should be rejected");
+            assert_eq!(err.unwrap().0, super::StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn kind_operator_filters_chunks() {
+        let conn = fixture();
+        let (filters, free) = query_parser::parse("kind:insight why we moved");
+        assert_eq!(free, "why we moved", "operators must leave the free text");
+        let rows = chunk_rows_for_candidates(&conn, &ranked(), &filters, 10).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.engram_id.as_str()).collect();
+        assert_eq!(ids, vec!["e-insight"]);
+    }
+
+    #[test]
+    fn folder_and_after_operators_filter_chunks() {
+        let conn = fixture();
+        let (filters, _) = query_parser::parse("folder:notes deploy");
+        let rows = chunk_rows_for_candidates(&conn, &ranked(), &filters, 10).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.engram_id.as_str()).collect();
+        assert_eq!(ids, vec!["e-insight"], "folder: must scope to notes/");
+
+        let (filters, _) = query_parser::parse("after:2026-05-15 deploy");
+        let rows = chunk_rows_for_candidates(&conn, &ranked(), &filters, 10).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.engram_id.as_str()).collect();
+        assert_eq!(ids, vec!["e-insight"], "after: must drop older engrams");
+    }
+
+    #[test]
+    fn limit_caps_results_and_similarity_inverts_distance() {
+        let conn = fixture();
+        let rows =
+            chunk_rows_for_candidates(&conn, &ranked(), &QueryFilters::default(), 1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].engram_id, "e-live");
+        assert!((rows[0].similarity - 0.80).abs() < 1e-9);
+        assert_eq!(rows[0].chunk_text, "production is the target");
+    }
 }
 
 // --- GET /api/session_start ----------------------------------------------

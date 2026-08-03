@@ -309,9 +309,14 @@ pub fn diagnose(db: &BrainDb) -> Result<DiagnosticReport> {
             severity: "low".into(),
         });
     }
-    // Potential contradictions — a bounded read-only sweep over stored
-    // doc embeddings (no embedder call). Surfaced as an actionable issue,
-    // not a graded category, so it never moves the health score.
+    // Potential contradictions — a bounded sweep over stored doc
+    // embeddings (no embedder call). NOT read-only any more: the sweep
+    // queues the candidate pairs it finds into the `contradictions`
+    // review table, which is why `diagnose_brain` is annotated
+    // read_only:false. Rows are keyed by a deterministic pair hash, so
+    // re-running a diagnostic neither duplicates nor re-opens them.
+    // Surfaced as an actionable issue, not a graded category, so it
+    // never moves the health score.
     if let Ok(conflicts) = super::ingest::find_conflicts(db, 200) {
         let n = conflicts.len() as i64;
         if n > 0 {

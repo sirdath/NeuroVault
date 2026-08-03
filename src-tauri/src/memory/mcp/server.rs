@@ -156,13 +156,16 @@ mod tests {
     }
 
     #[test]
-    fn lite_tier_shows_eight_tools() {
+    fn lite_tier_shows_nine_tools() {
         std::env::set_var("NEUROVAULT_MCP_TIER", "lite");
         let s = NeuroVaultMcp::new(None);
         let tools = s.visible_tools();
-        assert_eq!(tools.len(), 8);
+        // 8 → 9: recall_chunks was promoted into the default tier
+        // (see TIER_LITE_ADD in registry.rs).
+        assert_eq!(tools.len(), 9);
         let names: HashSet<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(names.contains("recall"));
+        assert!(names.contains("recall_chunks"));
         assert!(names.contains("remember"));
         assert!(!names.contains("optimize_disk"));
         std::env::remove_var("NEUROVAULT_MCP_TIER");

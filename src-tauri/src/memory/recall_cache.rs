@@ -237,6 +237,11 @@ mod tests {
             strength: 1.0,
             state: "fresh".to_string(),
             confidence: 1.0,
+            kind: "note".to_string(),
+            created_at: String::new(),
+            source: String::new(),
+            agent_id: None,
+            why: None,
         }
     }
 

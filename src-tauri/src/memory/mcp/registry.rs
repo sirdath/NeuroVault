@@ -112,9 +112,15 @@ const TIER_LITE_ADD: &[&str] = &[
     "list_brains",
     "switch_brain",
     "update",
+    // Promoted from `standard` (2026-08). `recall`'s own description
+    // tells the agent to reach for `recall_chunks` when a hit is a long
+    // wiki page, and the project guidance says to prefer it — but at
+    // `standard` the DEFAULT (`lite`) agent could not call the tool it
+    // was being pointed at. It is also the biggest context-saver on the
+    // surface, which is what the default tier is for.
+    "recall_chunks",
 ];
 const TIER_STANDARD_ADD: &[&str] = &[
-    "recall_chunks",
     "temporal_recall",
     "check_duplicate",
     "core_memory_read",
@@ -213,11 +219,33 @@ mod tests {
     #[test]
     fn tier_sets_match_proxy_counts() {
         assert_eq!(allowed_for_tier("minimal").unwrap().len(), 3);
-        assert_eq!(allowed_for_tier("lite").unwrap().len(), 8);
+        // lite went 8 → 9 when recall_chunks was promoted out of
+        // standard; standard is unchanged at 21 because the tool moved
+        // between the two add-sets rather than joining a new one.
+        assert_eq!(allowed_for_tier("lite").unwrap().len(), 9);
         assert_eq!(allowed_for_tier("standard").unwrap().len(), 21);
         assert!(allowed_for_tier("full").is_none());
         // unknown -> lite
-        assert_eq!(allowed_for_tier("bogus").unwrap().len(), 8);
+        assert_eq!(allowed_for_tier("bogus").unwrap().len(), 9);
+    }
+
+    /// The default tier must be able to call every tool the default
+    /// tier's own descriptions tell an agent to call. `recall` points at
+    /// `recall_chunks`; for a whole release that pointer dangled for
+    /// anyone on the default tier.
+    #[test]
+    fn lite_tier_can_call_what_lite_tier_descriptions_recommend() {
+        let lite = allowed_for_tier("lite").unwrap();
+        let tools = load_tools();
+        let recall = tools.iter().find(|t| t.name == "recall").unwrap();
+        assert!(
+            recall.description.contains("recall_chunks"),
+            "guard assumes recall still recommends recall_chunks"
+        );
+        assert!(
+            lite.contains("recall_chunks"),
+            "recall recommends recall_chunks but lite can't call it"
+        );
     }
 
     /// Every argument an agent can pass must explain itself: a schema

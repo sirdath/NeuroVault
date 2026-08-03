@@ -96,10 +96,84 @@ pub struct RecallHit {
     /// written by OTHER agents — instead of trusting every hit equally.
     #[serde(default = "default_confidence")]
     pub confidence: f64,
+
+    // --- Provenance (added 2026-08; serde-ADDITIVE) ---------------------
+    // A hit used to be three floats and a text blob: an agent could see
+    // WHAT matched but not where it came from or why it won. These
+    // fields are read off the engram row the pipeline already fetched,
+    // so they cost nothing extra. All default to empty/None so a
+    // payload from an older build still deserializes.
+    /// `engrams.kind` — the provenance class the structural confidence
+    /// is derived from (`source`, `decision`, `note`, `observation`, …).
+    #[serde(default)]
+    pub kind: String,
+    /// `engrams.created_at` — when the note was first written.
+    #[serde(default)]
+    pub created_at: String,
+    /// Vault-relative markdown path this engram indexes. The markdown
+    /// is canonical; this is how a reader gets back to the real file.
+    #[serde(default)]
+    pub source: String,
+    /// Which agent wrote the note (`claude-code`, `cursor`, `user`, …),
+    /// when one was recorded. Absent for notes with no author stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// One short human sentence naming the channels that surfaced this
+    /// hit — the explainable half of "explainable recall". Present on
+    /// the agent-facing recall paths (which run the score-capturing
+    /// pipeline); absent on internal callers that skip the capture.
+    /// See [`explain_hit`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 fn default_confidence() -> f64 {
     1.0
+}
+
+/// Render one hit's [`ChannelScores`] as a short human string.
+///
+/// Rules, learned the hard way from field reports: name only the
+/// channels that actually fired (a zero is noise, not evidence), keep
+/// it to a sentence, and never print the fusion arithmetic — an agent
+/// reading `rrf 0.031 > 0.028` learns nothing it can act on, while
+/// "keyword match (rank 1)" tells it to trust the exact term it typed.
+/// The reranker is reported as its probability, never its raw logit.
+///
+/// Pure function of its inputs: no DB, no model, no allocation beyond
+/// the returned string.
+pub fn explain_hit(cs: &ChannelScores, via_spread: bool) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(3);
+    if let Some(rank) = cs.semantic_rank {
+        match cs.semantic_sim {
+            Some(sim) => parts.push(format!("semantic match {:.2} (rank {})", sim, rank)),
+            None => parts.push(format!("semantic match (rank {})", rank)),
+        }
+    }
+    if let Some(rank) = cs.bm25_rank {
+        // The raw BM25 score is unbounded and corpus-relative, so it
+        // means nothing to a reader; its RANK does.
+        parts.push(format!("keyword match (rank {})", rank));
+    }
+    if let Some(rank) = cs.graph_rank {
+        parts.push(format!("entity-graph link (rank {})", rank));
+    }
+
+    let mut out = if parts.is_empty() {
+        // No channel surfaced this row. Either spreading activation
+        // appended it as a neighbour, or it arrived through a path we
+        // don't capture — say which, rather than implying no reason.
+        if via_spread {
+            return "linked neighbour (spreading activation)".to_string();
+        }
+        "fused candidate".to_string()
+    } else {
+        parts.join(" + ")
+    };
+    if let Some(p) = cs.ce_prob {
+        out.push_str(&format!("; reranked {:.2}", p));
+    }
+    out
 }
 
 /// Zero-LLM structural confidence by engram kind. Source-mirrored facts
@@ -117,22 +191,69 @@ pub fn structural_confidence(kind: &str) -> f64 {
     }
 }
 
+/// Inclusive bounds for a stored confidence. Anything outside is
+/// clamped on the way in AND on the way out — a bad row written by an
+/// older build or a hand-edited DB can never push a hit's confidence
+/// out of [0,1].
+pub const MIN_CONFIDENCE: f64 = 0.0;
+pub const MAX_CONFIDENCE: f64 = 1.0;
+
 /// Confidence for one engram: the authoritative `memory_types` value if
-/// written (the column is otherwise dormant), else the structural
-/// estimate from kind. Cheap PK lookup; safe to call per hit.
+/// written, else the structural estimate from kind. Cheap PK lookup;
+/// safe to call per hit.
 fn engram_confidence(db: &BrainDb, engram_id: &str, kind: &str) -> f64 {
-    let stored = {
-        let conn = db.lock();
-        conn.query_row(
-            "SELECT confidence FROM memory_types WHERE engram_id = ?1",
-            [engram_id],
-            |r| r.get::<_, f64>(0),
-        )
-        .ok()
-    };
-    stored
-        .map(|c| c.clamp(0.0, 1.0))
-        .unwrap_or_else(|| structural_confidence(kind))
+    let conn = db.lock();
+    engram_confidence_conn(&conn, engram_id, kind)
+}
+
+/// Connection-level half of [`engram_confidence`], so the
+/// authoritative-vs-structural decision can be tested against an
+/// in-memory connection.
+fn engram_confidence_conn(conn: &Connection, engram_id: &str, kind: &str) -> f64 {
+    conn.query_row(
+        "SELECT confidence FROM memory_types WHERE engram_id = ?1",
+        [engram_id],
+        |r| r.get::<_, f64>(0),
+    )
+    .ok()
+    .map(|c| c.clamp(MIN_CONFIDENCE, MAX_CONFIDENCE))
+    .unwrap_or_else(|| structural_confidence(kind))
+}
+
+/// Record an AUTHORITATIVE confidence for one engram — the writer the
+/// `memory_types.confidence` column never had.
+///
+/// Until now the read side above was dead code: nothing in the product
+/// wrote that column, so every hit fell through to the structural
+/// estimate and the lookup was per-hit cost for nothing. Callers today
+/// are the explicit `confidence` parameter on the write surfaces; the
+/// planned curator will write here too, which is why this is an upsert
+/// keyed on the engram rather than an insert.
+///
+/// Deliberately NOT part of ranking. Confidence is an annotation a
+/// reader weighs, not a retrieval signal — folding it into scoring was
+/// tried and rejected in the ablation history, because "how much do I
+/// trust this" and "does this answer the question" are different
+/// questions and blending them makes both worse.
+///
+/// `memory_type` is left NULL on purpose: it duplicates `engrams.kind`,
+/// has no reader in the product, and we have not classified anything —
+/// storing a default there would be asserting something we didn't
+/// compute.
+pub fn set_engram_confidence(db: &BrainDb, engram_id: &str, confidence: f64) -> Result<()> {
+    let conn = db.lock();
+    set_confidence_conn(&conn, engram_id, confidence)
+}
+
+/// Connection-level half of [`set_engram_confidence`].
+fn set_confidence_conn(conn: &Connection, engram_id: &str, confidence: f64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO memory_types (engram_id, memory_type, confidence)
+         VALUES (?1, NULL, ?2)
+         ON CONFLICT(engram_id) DO UPDATE SET confidence = excluded.confidence",
+        rusqlite::params![engram_id, confidence.clamp(MIN_CONFIDENCE, MAX_CONFIDENCE)],
+    )?;
+    Ok(())
 }
 
 /// Recall inputs. `mode` is accepted for forwards-compat with the
@@ -1039,6 +1160,13 @@ fn hybrid_retrieve_inner(
     let mut cap_bm25_score: HashMap<String, f64> = HashMap::new();
     let mut cap_graph_rank: HashMap<String, usize> = HashMap::new();
     let mut cap_ce_logit: HashMap<String, f32> = HashMap::new();
+    // Provenance side-table: `(filename, agent_id)` per materialised
+    // candidate. Both come off the row the candidate loop already reads,
+    // so this is a move, not a query. Kept beside `Candidate` rather
+    // than inside it because `spread.rs` also builds `Candidate`s and
+    // has no filename/agent_id to hand — spread rows simply miss from
+    // this map and fall back to a point lookup at hit-mapping time.
+    let mut provenance: HashMap<String, (String, String)> = HashMap::new();
     let exclude_set: HashSet<String> = opts.exclude_kinds.iter().cloned().collect();
     // Pull any `kind:`, `folder:`, `after:` … operators out of the
     // query before embedding. The remaining free text is what goes
@@ -1693,6 +1821,7 @@ fn hybrid_retrieve_inner(
             }
             _ => head,
         };
+        provenance.insert(id.clone(), (filename, agent_id));
         candidates.push(Candidate {
             engram_id: id,
             title,
@@ -1983,24 +2112,54 @@ fn hybrid_retrieve_inner(
         // `ce_*` stay None whenever the reranker didn't score this
         // candidate: rerank off/errored, or the candidate sat past the
         // reranked prefix (docs/specs/ambient-recall.md).
-        if let Some(cap) = capture.as_deref_mut() {
+        // `why` rides the SAME capture: it is a rendering of the
+        // ChannelScores this loop already assembles, so an explained
+        // recall costs one string format per hit — no extra query, no
+        // extra inference, no second pipeline pass. Non-capturing
+        // callers keep the old shape (`why: None`) and the old cost.
+        let why = if capturing {
             let logit = cap_ce_logit.get(&c.engram_id).copied();
-            cap.insert(
-                c.engram_id.clone(),
-                ChannelScores {
-                    semantic_rank: cap_sem_rank.get(&c.engram_id).copied(),
-                    semantic_sim: cap_sem_sim.get(&c.engram_id).copied(),
-                    bm25_rank: cap_bm25_rank.get(&c.engram_id).copied(),
-                    bm25_score: cap_bm25_score.get(&c.engram_id).copied(),
-                    graph_rank: cap_graph_rank.get(&c.engram_id).copied(),
-                    graph_score: None,
-                    rrf: c.rrf_score,
-                    final_score: c.final_score,
-                    ce_logit: logit,
-                    ce_prob: logit.map(ce_prob),
-                },
-            );
-        }
+            let cs = ChannelScores {
+                semantic_rank: cap_sem_rank.get(&c.engram_id).copied(),
+                semantic_sim: cap_sem_sim.get(&c.engram_id).copied(),
+                bm25_rank: cap_bm25_rank.get(&c.engram_id).copied(),
+                bm25_score: cap_bm25_score.get(&c.engram_id).copied(),
+                graph_rank: cap_graph_rank.get(&c.engram_id).copied(),
+                graph_score: None,
+                rrf: c.rrf_score,
+                final_score: c.final_score,
+                ce_logit: logit,
+                ce_prob: logit.map(ce_prob),
+            };
+            let rendered = explain_hit(&cs, c.via_spread);
+            // Score capture: one entry per RETURNED hit, so the map and
+            // the hit list always agree. `ce_*` stay None whenever the
+            // reranker didn't score this candidate: rerank off/errored,
+            // or the candidate sat past the reranked prefix
+            // (docs/specs/ambient-recall.md).
+            if let Some(cap) = capture.as_deref_mut() {
+                cap.insert(c.engram_id.clone(), cs);
+            }
+            Some(rendered)
+        } else {
+            None
+        };
+        // Provenance: materialised candidates are already in the map;
+        // spread-appended neighbours are not, so they pay one point
+        // lookup each (spread is opt-in and bounded).
+        let (source, agent_id) = match provenance.get(&c.engram_id) {
+            Some((f, a)) => (f.clone(), a.clone()),
+            None => {
+                let conn = db.lock();
+                conn.query_row(
+                    "SELECT COALESCE(filename, ''), COALESCE(agent_id, '') \
+                     FROM engrams WHERE id = ?1",
+                    [&c.engram_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .unwrap_or_default()
+            }
+        };
         results.push(RecallHit {
             engram_id: c.engram_id,
             title: c.title,
@@ -2009,6 +2168,11 @@ fn hybrid_retrieve_inner(
             strength: c.strength,
             state: c.state,
             confidence,
+            kind: c.kind,
+            created_at: c.created_at,
+            source,
+            agent_id: Some(agent_id).filter(|a| !a.is_empty()),
+            why,
         });
     }
     Ok(results)
@@ -2349,6 +2513,11 @@ pub fn hybrid_retrieve_throttled(
                         strength: 0.0,
                         state: "throttle_hint".to_string(),
                         confidence: 1.0,
+                        kind: "throttle_hint".to_string(),
+                        created_at: String::new(),
+                        source: String::new(),
+                        agent_id: None,
+                        why: Some("rate-limit notice, not a memory".to_string()),
                     },
                 );
             }
@@ -2359,7 +2528,15 @@ pub fn hybrid_retrieve_throttled(
     let mut hits = if effective_top_k == 0 {
         Vec::new()
     } else {
-        let h = hybrid_retrieve(db, query, &effective_opts)?;
+        // The score-CAPTURING path, so every hit carries its `why`.
+        // Same pipeline, same hits, same order (both entry points
+        // delegate to `hybrid_retrieve_inner`); the capture is a
+        // passive side channel that runs no extra query and loads no
+        // extra model — it reads maps the fusion stage already built.
+        // This is the agent-facing entry point (Tauri IPC + the HTTP
+        // recall the MCP server forwards to), which is exactly where
+        // explainability has to land.
+        let (h, _scores) = hybrid_retrieve_with_scores(db, query, &effective_opts)?;
         // Cache the fresh result BEFORE we layer in any hint. The
         // hint is ephemeral (throttle-window-local); the recall
         // result is what we want to reuse.
@@ -2382,6 +2559,11 @@ pub fn hybrid_retrieve_throttled(
                 strength: 0.0,
                 state: "throttle_hint".to_string(),
                 confidence: 1.0,
+                kind: "throttle_hint".to_string(),
+                created_at: String::new(),
+                source: String::new(),
+                agent_id: None,
+                why: Some("rate-limit notice, not a memory".to_string()),
             },
         );
     }
@@ -2472,7 +2654,12 @@ fn compute_superseded_fraction(
 
 #[cfg(test)]
 mod confidence_tests {
-    use super::structural_confidence;
+    use rusqlite::Connection;
+
+    use super::{
+        engram_confidence_conn, set_confidence_conn, structural_confidence, MAX_CONFIDENCE,
+        MIN_CONFIDENCE,
+    };
 
     #[test]
     fn structural_confidence_orders_provenance() {
@@ -2484,6 +2671,170 @@ mod confidence_tests {
         // Unknown kind gets the conservative middle default, never >1 or <0.
         let d = structural_confidence("something-new");
         assert!((0.0..=1.0).contains(&d) && d == 0.8);
+    }
+
+    /// `memory_types` as `schema.sql` declares it — including the
+    /// `memory_type DEFAULT 'fact'` column we deliberately do NOT
+    /// populate (it duplicates `engrams.kind` and nothing reads it).
+    fn conf_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE engrams (id TEXT PRIMARY KEY, kind TEXT);
+             CREATE TABLE memory_types (
+                 engram_id TEXT PRIMARY KEY,
+                 memory_type TEXT DEFAULT 'fact',
+                 confidence  REAL DEFAULT 1.0);
+             INSERT INTO engrams VALUES ('e1','preference');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn without_an_authoritative_row_confidence_is_structural() {
+        let conn = conf_fixture();
+        assert_eq!(
+            engram_confidence_conn(&conn, "e1", "preference"),
+            structural_confidence("preference")
+        );
+    }
+
+    #[test]
+    fn an_explicit_confidence_overrides_the_structural_constant() {
+        let conn = conf_fixture();
+        set_confidence_conn(&conn, "e1", 0.6).unwrap();
+        let got = engram_confidence_conn(&conn, "e1", "preference");
+        assert!(
+            (got - 0.6).abs() < 1e-9,
+            "authoritative value must win over the structural {} (got {got})",
+            structural_confidence("preference")
+        );
+        // Re-setting is an upsert, not a duplicate-key error.
+        set_confidence_conn(&conn, "e1", 0.25).unwrap();
+        assert!((engram_confidence_conn(&conn, "e1", "preference") - 0.25).abs() < 1e-9);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_types", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "upsert must not pile up rows");
+    }
+
+    #[test]
+    fn memory_type_column_is_left_unclassified() {
+        // The writer must not invent a Hindsight memory_type — that
+        // column duplicates engrams.kind and has no reader. Storing a
+        // guess there would be a claim we never computed.
+        let conn = conf_fixture();
+        set_confidence_conn(&conn, "e1", 0.6).unwrap();
+        let mt: Option<String> = conn
+            .query_row(
+                "SELECT memory_type FROM memory_types WHERE engram_id='e1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(mt.is_none(), "memory_type must stay NULL, got {mt:?}");
+    }
+
+    #[test]
+    fn stored_confidence_is_clamped_into_range() {
+        let conn = conf_fixture();
+        set_confidence_conn(&conn, "e1", 4.2).unwrap();
+        assert_eq!(engram_confidence_conn(&conn, "e1", "note"), MAX_CONFIDENCE);
+        set_confidence_conn(&conn, "e1", -1.0).unwrap();
+        assert_eq!(engram_confidence_conn(&conn, "e1", "note"), MIN_CONFIDENCE);
+    }
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::{explain_hit, ChannelScores, RecallHit};
+
+    fn cs() -> ChannelScores {
+        ChannelScores::default()
+    }
+
+    #[test]
+    fn only_matched_channels_appear() {
+        // Semantic + keyword, no graph, no rerank.
+        let mut c = cs();
+        c.semantic_rank = Some(1);
+        c.semantic_sim = Some(0.8231);
+        c.bm25_rank = Some(3);
+        c.bm25_score = Some(4.7);
+        assert_eq!(
+            explain_hit(&c, false),
+            "semantic match 0.82 (rank 1) + keyword match (rank 3)"
+        );
+
+        // Graph only — the zero channels stay out entirely.
+        let mut c = cs();
+        c.graph_rank = Some(2);
+        assert_eq!(explain_hit(&c, false), "entity-graph link (rank 2)");
+    }
+
+    #[test]
+    fn rerank_is_reported_as_a_probability_not_a_logit() {
+        let mut c = cs();
+        c.semantic_rank = Some(2);
+        c.semantic_sim = Some(0.71);
+        c.ce_logit = Some(2.0);
+        c.ce_prob = Some(0.8808);
+        let why = explain_hit(&c, false);
+        assert_eq!(why, "semantic match 0.71 (rank 2); reranked 0.88");
+        // Never leak the raw logit or fusion arithmetic into agent text.
+        assert!(!why.contains("logit") && !why.contains("rrf") && !why.contains('>'));
+    }
+
+    #[test]
+    fn a_semantic_hit_without_a_similarity_still_explains_itself() {
+        let mut c = cs();
+        c.semantic_rank = Some(4);
+        assert_eq!(explain_hit(&c, false), "semantic match (rank 4)");
+    }
+
+    #[test]
+    fn spread_neighbours_say_so_instead_of_claiming_a_channel() {
+        // Spreading activation appends neighbours that no channel
+        // surfaced; "" would read as "no reason", which is worse than
+        // naming the real one.
+        assert_eq!(
+            explain_hit(&cs(), true),
+            "linked neighbour (spreading activation)"
+        );
+        assert_eq!(explain_hit(&cs(), false), "fused candidate");
+    }
+
+    #[test]
+    fn all_three_channels_join_in_a_stable_order() {
+        let mut c = cs();
+        c.semantic_rank = Some(5);
+        c.semantic_sim = Some(0.6);
+        c.bm25_rank = Some(1);
+        c.graph_rank = Some(7);
+        c.ce_prob = Some(0.91);
+        assert_eq!(
+            explain_hit(&c, false),
+            "semantic match 0.60 (rank 5) + keyword match (rank 1) + entity-graph link (rank 7); reranked 0.91"
+        );
+    }
+
+    /// serde-ADDITIVE contract: a payload written by an older build
+    /// (no provenance, no `why`) must still deserialize, and the new
+    /// fields must land on their documented defaults.
+    #[test]
+    fn old_recall_hit_json_still_deserializes() {
+        let legacy = r#"{
+            "engram_id": "e1", "title": "T", "content": "C",
+            "score": 0.5, "strength": 1.0, "state": "fresh"
+        }"#;
+        let hit: RecallHit = serde_json::from_str(legacy).expect("legacy shape must parse");
+        assert_eq!(hit.engram_id, "e1");
+        assert_eq!(hit.confidence, 1.0);
+        assert_eq!(hit.kind, "");
+        assert_eq!(hit.created_at, "");
+        assert_eq!(hit.source, "");
+        assert!(hit.agent_id.is_none());
+        assert!(hit.why.is_none());
     }
 }
 
@@ -2742,7 +3093,54 @@ mod channel_scores_tests {
             assert!(cs.graph_score.is_none(), "graph has no raw score by design");
             // Reranker ablated → the CE stage never ran.
             assert!(cs.ce_logit.is_none() && cs.ce_prob.is_none());
+
+            // --- Explainable recall: provenance + why on every hit ---
+            // The capturing path must hand back a hit an agent can act
+            // on without a second query: which file it came from, what
+            // kind of note it is, when it was written, and one sentence
+            // naming the channels that surfaced it.
+            assert!(
+                h.source.ends_with(".md"),
+                "hit {} has no vault-relative source file: {:?}",
+                h.engram_id,
+                h.source
+            );
+            assert!(!h.kind.is_empty(), "hit {} has no kind", h.engram_id);
+            assert!(
+                !h.created_at.is_empty(),
+                "hit {} has no created_at",
+                h.engram_id
+            );
+            let why = h
+                .why
+                .as_deref()
+                .unwrap_or_else(|| panic!("hit {} carries no why", h.engram_id));
+            // The rendering must agree with the captured breakdown …
+            assert_eq!(why, super::explain_hit(cs, false));
+            // … name at least one real channel …
+            assert!(
+                why.contains("semantic match")
+                    || why.contains("keyword match")
+                    || why.contains("entity-graph link"),
+                "why names no channel: {why:?}"
+            );
+            // … and never leak fusion math at an agent.
+            assert!(
+                !why.contains("rrf") && !why.contains("logit"),
+                "why leaks internals: {why:?}"
+            );
+            // Reranker ablated → no rerank clause.
+            assert!(!why.contains("reranked"), "why claims a rerank: {why:?}");
         }
+
+        // The non-capturing entry point keeps the old shape: same hits,
+        // provenance still filled (it is free), but no `why` — nothing
+        // computed it, so nothing is claimed.
+        for h in &plain {
+            assert!(h.why.is_none(), "plain path must not synthesise a why");
+            assert!(h.source.ends_with(".md"));
+        }
+
         db::close_all();
         let _ = std::fs::remove_dir_all(&home);
     }
