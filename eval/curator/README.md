@@ -241,6 +241,12 @@ Python 3 stdlib only. Ollama on `localhost:11434` is the only dependency.
 | `verify.py` | deterministic G1/G2/G3 gauntlet, model-free |
 | `score.py` | metrics vs gold, emits `metrics.json` + markdown table |
 | `smoke_test.py` | 2 synthetic units end-to-end; proves the plumbing |
+| `test_score.py` | scorer/gauntlet unit tests on synthetic fixtures; no Ollama |
+
+The 58-unit gold set is the **DEV set**. It has been looked at, argued with and
+scored against many times, so it can no longer measure generalization. A blind
+test set is built separately and is the only thing a training run may be
+reported on.
 
 ## Running
 
@@ -260,6 +266,9 @@ python eval/curator/verify.py \
 python eval/curator/score.py \
     --results-dir eval/curator/results/qwen3-1.7b eval/curator/results/nuextract-2b \
     --gold-dir eval/curator/gold --units-dir eval/curator/units
+
+# 4. scorer's own tests -- run these before trusting any number above
+python3 eval/curator/test_score.py
 ```
 
 `run_bench.py` is **idempotent** — a unit already present in the results dir is
@@ -297,6 +306,27 @@ or `none`. Only the first two pass. `case_insensitive` is broken out because it
 is the signature of a model that trims or re-capitalizes a quote — one step from
 paraphrasing, and worth measuring separately from outright fabrication.
 
+G2 records **how** it passed. `span_pass` means every content token was in the
+grounding quote the model chose. `unit_fallback` means at least one token was
+found only elsewhere in the unit — legal, but much weaker evidence, and the
+scorer reports the two rates separately so the leniency is visible instead of
+being folded into a single pass number. `vacuous` means the statement had no
+content tokens to check at all.
+
+### Role attribution (a flag, not a gate)
+
+`source_role` is checked deterministically. The verifier locates the grounding
+quote in the unit, walks back to the nearest role-marker line (`USER:`,
+`ASSISTANT:`, `ASSISTANT [tool:…]`, `TOOL_RESULT:`), and compares. A
+disagreement sets `role_mismatch` — recorded and counted, never a reject,
+because a misattributed but true memory is a different failure from an invented
+one.
+
+A quote whose home is a `TOOL_RESULT` block, or that cannot be located at all,
+is **ungradable** and is excluded from the denominator: the schema offers only
+`user` and `assistant`, so there is no correct answer to grade a tool-sourced
+quote against. `role_ungradable_breakdown` reports why each one was excluded.
+
 ## Metrics
 
 Pre-registered. **Do not tune these after seeing results.**
@@ -308,13 +338,24 @@ Pre-registered. **Do not tune these after seeing results.**
   abstention: `nothing_durable: true` **and** no proposals.
 - `pre_gate_unsupported_rate` — G1 rejects / all proposals. How often the model
   invents a quote, measured *before* gating, because post-gate numbers hide it.
-- `post_gate_precision` / `post_gate_recall` — vs gold, over proposals that
-  survive the gauntlet.
+- `post_gate_precision` — surviving proposals on gold-positive units that were
+  **assigned** to a gold item, over all surviving proposals on those units.
+- `post_gate_recall` — gold items claimed by an assigned proposal, over all gold
+  items.
+- `duplicate_rate` — proposals that matched gold but only items already claimed
+  by a better proposal, over all proposals. Restatement padding.
 - `over_extraction_rate` — gold-negative units with ≥1 surviving proposal, i.e.
   noise injected into a clean brain.
-- `verifier_false_reject_rate` — rejected proposals whose statement *did* match
-  gold. The gauntlet's own error rate; a high value means the gates are too
-  tight, not that the model is bad.
+- `verifier_false_reject_rate` — of the **admissible** candidates (every
+  pre-gate proposal whose statement matches gold), the fraction the gauntlet
+  routes to a terminal reject (G1 or G2). The gauntlet's own error rate; a high
+  value means the gates are too tight, not that the model is bad.
+- `source_role_accuracy` — of the role-gradable proposals, the fraction whose
+  claimed `source_role` matches the derived one.
+- `g2_span_pass_rate` / `g2_unit_fallback_rate` / `g2_vacuous_rate` — how the
+  proposals that survived G2 did so. The three partition the survivors.
+- `type_agreement_rate` — on assigned pairs, how often the model's declared
+  `type` equals the gold item's.
 - `incoherent_abstention_rate` — `nothing_durable: true` emitted *alongside*
   proposals. See below.
 - `latency_p50_s` / `latency_p95_s` (warm), `cold_load_s` (measured once).
@@ -322,6 +363,64 @@ Pre-registered. **Do not tune these after seeing results.**
 
 Rates return `n/a`, never `0.0`, when the denominator is zero — "no negative
 units in the set" must not read as "0% correct abstention".
+
+### One-to-one matching
+
+A gold item is creditable **at most once**, and a proposal claims **at most
+one** gold item. Candidate (proposal, gold) pairs are assigned greedily: most
+`must_match_terms` first — satisfying a 3-term item is a more specific claim
+than satisfying a 1-term one — with ties broken by proposal order, then gold
+order.
+
+Before scorer v2 the post-gate numerator counted every surviving proposal that
+matched *any* gold item, so a model that restated one memory three ways was
+credited three times. `duplicate_rate` now measures exactly that behaviour
+instead of rewarding it.
+
+### Per-class breakdown
+
+Precision, recall and false-reject are also reported per gold `type`
+(`fact` / `preference` / `decision`), because an aggregate can look healthy
+while one class is a total loss. Recall and false-reject key off the **gold**
+item's type; precision keys off the type the model **declared**, because a
+false positive has no gold item to inherit a type from. `type_agreement_rate`
+reports how often the two agree on an assigned pair.
+
+Abstention metrics (`abstention_correctness`, `over_extraction_rate`,
+`incoherent_abstention_rate`) are reported in their own block, over the
+gold-negative units only, and are never blended into the extraction numbers.
+
+### Confidence intervals
+
+Precision, recall and false-reject carry a 95% **unit-level percentile
+bootstrap** interval — 1000 resamples, seed 42, stdlib `random` — printed as
+`0.232 [0.172, 0.296]`. Units are resampled with replacement and the metric is
+recomputed as a ratio of sums over the resampled per-unit (numerator,
+denominator) pairs.
+
+The resampling unit is the **unit**, not the proposal: five proposals from one
+transcript slice share a topic, a speaker and a failure mode, so resampling
+them individually would report an interval several times too narrow. The seed
+is fixed so a rerun cannot quietly improve an interval.
+
+Abstention metrics get no interval — 5 gold-negative units cannot support one.
+
+### Deprecated fields
+
+`verifier_false_reject_est` is the **v1** formula: gold-matching rejects over
+*all* rejects. It is kept so pre-v2 runs stay comparable, and it is not the
+headline number, because its denominator grows with every piece of junk the
+model emits — a model can improve it by getting worse.
+
+`metrics.json` files written before scorer v2 have no `scorer_version` key. In
+those files `verifier_false_reject_rate` carries the **v1** formula; from v2 on
+it carries the spec formula and the v1 value lives in
+`verifier_false_reject_est`.
+
+`verify.py` reports carry `schema_version: 2`. All v1 fields are unchanged and
+`counts` still holds exactly the four verdicts, so `sum(counts.values()) ==
+n_proposals` keeps holding; the new per-proposal flags live in a separate
+`flags` dict. Pass `--out <dir>/verify_v2.json` if a v1 report must be kept.
 
 ## Two findings the harness is built around
 

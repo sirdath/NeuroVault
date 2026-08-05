@@ -24,6 +24,24 @@ Gates
 
 Verdicts: pass | reject(G1) | reject(G2) | flag(G3), precedence G1 > G2 > G3.
 
+Flags (v2, additive -- they never change a verdict)
+  role_mismatch    `source_role` claims "user" but the grounding quote sits
+                   under an ASSISTANT marker, or vice versa. Attribution is
+                   derived deterministically: locate the quote in the unit,
+                   walk back to the nearest role-marker line, compare. A quote
+                   whose home is a TOOL_RESULT (or that cannot be located at
+                   all) is *ungradable*, not a mismatch -- the schema offers no
+                   "tool" value, so there is no right answer to grade against.
+  g2 span_pass /   whether G2 was satisfied by the grounding span alone
+  g2 unit_fallback (span_pass) or only by falling back to the whole unit
+                   (unit_fallback). Both survive the gate -- the distinction is
+                   reported, not enforced -- because "the number appears
+                   somewhere in 3,000 tokens" is much weaker evidence than "the
+                   number appears in the quote the model chose".
+
+Report schema version 2 adds those fields. Every v1 field is retained
+unchanged, so an old consumer keeps working.
+
 Usage:
     python eval/curator/verify.py --results-dir eval/curator/results/qwen3-1.7b \
         --units-dir eval/curator/units
@@ -34,6 +52,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -42,6 +61,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from run_bench import load_units  # noqa: E402  (shared unit loader)
+
+VERIFY_SCHEMA_VERSION = 2
 
 
 # --------------------------------------------------------------------------
@@ -163,6 +184,136 @@ def polarity_flag(statement: str, quote: str) -> dict[str, Any] | None:
 
 
 # --------------------------------------------------------------------------
+# source_role attribution  (v2)
+# --------------------------------------------------------------------------
+
+# The unit renderer (build_units.py) emits exactly four line shapes:
+#   USER: ...
+#   ASSISTANT: ...
+#   ASSISTANT [tool:Bash] npm run tauri dev     <- still the assistant speaking
+#   TOOL_RESULT: ...                            <- neither party spoke this
+# SYSTEM is accepted defensively in case the renderer ever grows one.
+_ROLE_MARKER_RE = re.compile(r"^(USER|ASSISTANT|TOOL_RESULT|SYSTEM)\b")
+
+MARKER_ROLE = {
+    "USER": "user",
+    "ASSISTANT": "assistant",
+    "TOOL_RESULT": "tool_result",
+    "SYSTEM": "system",
+}
+
+# Roles the schema lets a model claim. Anything else is ungradable rather than
+# wrong: punishing a model for a value it is forbidden to emit measures the
+# schema, not the model.
+GRADABLE_ROLES = ("user", "assistant")
+
+
+@functools.lru_cache(maxsize=256)
+def _role_spans(unit_text: str) -> tuple[tuple[int, str], ...]:
+    """[(char offset of a role-marker line, role)] in document order."""
+    spans: list[tuple[int, str]] = []
+    offset = 0
+    for line in unit_text.split("\n"):
+        m = _ROLE_MARKER_RE.match(line)
+        if m:
+            spans.append((offset, MARKER_ROLE[m.group(1)]))
+        offset += len(line) + 1
+    return tuple(spans)
+
+
+@functools.lru_cache(maxsize=256)
+def _norm_index(unit_text: str) -> tuple[str, tuple[int, ...]]:
+    """Whitespace-collapsed text plus a map back to original offsets."""
+    chars: list[str] = []
+    idx: list[int] = []
+    prev_space = False
+    for i, ch in enumerate(unit_text):
+        if ch.isspace():
+            if prev_space:
+                continue
+            chars.append(" ")
+            idx.append(i)
+            prev_space = True
+        else:
+            chars.append(ch)
+            idx.append(i)
+            prev_space = False
+    return "".join(chars), tuple(idx)
+
+
+def locate_quote(unit_text: str, quote: str) -> tuple[int | None, str]:
+    """Character offset of `quote` inside `unit_text`, and how it was found.
+
+    Mirrors G1's ladder (exact -> whitespace-normalized -> case-folded) so a
+    quote G1 accepts is always locatable, and a quote G1 only *nearly* accepts
+    can still be attributed for the role check.
+    """
+    if not isinstance(quote, str) or not quote.strip():
+        return None, "none"
+    pos = unit_text.find(quote)
+    if pos >= 0:
+        return pos, "exact"
+
+    norm_text, idx = _norm_index(unit_text)
+    norm_quote = normalize_ws(quote)
+    pos = norm_text.find(norm_quote)
+    if pos >= 0:
+        return idx[pos], "normalized"
+    pos = norm_text.lower().find(norm_quote.lower())
+    if pos >= 0:
+        return idx[pos], "case_insensitive"
+    return None, "none"
+
+
+def derive_source_role(unit_text: str, quote: str) -> dict[str, Any]:
+    """Who actually said `quote`, per the transcript's own role markers.
+
+    Deterministic and model-free: find the quote, walk back to the nearest
+    preceding role-marker line, read the role off it.
+    """
+    pos, how = locate_quote(unit_text, quote)
+    if pos is None:
+        return {"derived_role": None, "located": how, "offset": None}
+    role = None
+    for start, r in _role_spans(unit_text):
+        if start <= pos:
+            role = r
+        else:
+            break
+    return {"derived_role": role, "located": how, "offset": pos}
+
+
+def role_check(claimed: Any, unit_text: str, quote: str) -> dict[str, Any]:
+    """Compare the claimed `source_role` against the derived one.
+
+    `gradable` is False when the quote cannot be located, when it lives in a
+    TOOL_RESULT block (no schema value can be right), or when the model claimed
+    nothing. `mismatch` is only ever True for a gradable comparison, and it is
+    a FLAG: it never changes a verdict.
+    """
+    derived = derive_source_role(unit_text, quote)
+    role = derived["derived_role"]
+    claimed_norm = claimed.strip().lower() if isinstance(claimed, str) else None
+
+    gradable = role in GRADABLE_ROLES and claimed_norm in GRADABLE_ROLES
+    out = {
+        "claimed": claimed_norm,
+        "derived": role,
+        "located": derived["located"],
+        "offset": derived["offset"],
+        "gradable": gradable,
+        "mismatch": bool(gradable and claimed_norm != role),
+    }
+    if not gradable:
+        out["ungradable_reason"] = (
+            "unlocatable_quote" if role is None
+            else "non_speaker_source" if role not in GRADABLE_ROLES
+            else "no_claimed_role"
+        )
+    return out
+
+
+# --------------------------------------------------------------------------
 # gauntlet
 # --------------------------------------------------------------------------
 
@@ -177,11 +328,19 @@ def verify_proposal(proposal: dict, unit_text: str) -> dict[str, Any]:
         "source_role": proposal.get("source_role"),
     }
 
+    # A malformed proposal is ungradable for role too -- keep the key present
+    # so every checked proposal has the same shape.
+    role_stub = {
+        "claimed": None, "derived": None, "located": "none", "offset": None,
+        "gradable": False, "mismatch": False, "ungradable_reason": "malformed_proposal",
+    }
     if not isinstance(statement, str) or not statement.strip():
-        out.update(verdict="reject(G1)", g1={"match": "none", "reason": "missing_statement"})
+        out.update(verdict="reject(G1)", g1={"match": "none", "reason": "missing_statement"},
+                   role=role_stub, role_mismatch=False)
         return out
     if not isinstance(quote, str) or not quote.strip():
-        out.update(verdict="reject(G1)", g1={"match": "none", "reason": "missing_quote"})
+        out.update(verdict="reject(G1)", g1={"match": "none", "reason": "missing_quote"},
+                   role=role_stub, role_mismatch=False)
         return out
 
     # --- G1 -------------------------------------------------------------
@@ -212,17 +371,31 @@ def verify_proposal(proposal: dict, unit_text: str) -> dict[str, Any]:
         else:
             missing.append(t["token"])
 
+    g2_ok = not missing
     out["g2"] = {
         "checked": [t["token"] for t in tokens],
         "in_quote": in_quote,
         "unit_only": unit_only,
         "missing": missing,
+        # v2: how G2 was satisfied, so the scorer can separate real span
+        # grounding from the lenient whole-unit fallback. Gated on g1_ok as
+        # well: token containment against a FABRICATED quote says nothing, so
+        # G1 rejects must not vote here. Exactly one of the three is true for
+        # a proposal that survives the gauntlet, and none for one that does
+        # not -- so the three counts partition the survivors.
+        "n_tokens": len(tokens),
+        "vacuous": g1_ok and g2_ok and not tokens,
+        "span_pass": g1_ok and g2_ok and bool(tokens) and not unit_only,
+        "unit_fallback": g1_ok and g2_ok and bool(unit_only),
     }
-    g2_ok = not missing
 
     # --- G3 -------------------------------------------------------------
     pol = polarity_flag(statement, quote)
     out["g3"] = pol
+
+    # --- role attribution (flag only, never a verdict) -------------------
+    out["role"] = role_check(proposal.get("source_role"), unit_text, quote)
+    out["role_mismatch"] = out["role"]["mismatch"]
 
     # --- verdict, by precedence -----------------------------------------
     if not g1_ok:
@@ -244,9 +417,15 @@ def verify_unit(row: dict, unit_text: str) -> dict[str, Any]:
 
     checked = [
         verify_proposal(p, unit_text) if isinstance(p, dict)
-        else {"verdict": "reject(G1)", "g1": {"match": "none", "reason": "not_an_object"}}
+        else {"verdict": "reject(G1)", "g1": {"match": "none", "reason": "not_an_object"},
+              "role": {"gradable": False, "mismatch": False,
+                       "ungradable_reason": "not_an_object"},
+              "role_mismatch": False}
         for p in proposals
     ]
+
+    def _g2(c: dict, key: str) -> bool:
+        return bool((c.get("g2") or {}).get(key))
 
     return {
         "unit_id": row.get("unit_id"),
@@ -257,11 +436,21 @@ def verify_unit(row: dict, unit_text: str) -> dict[str, Any]:
         "wall_seconds": row.get("wall_seconds"),
         "n_proposals": len(checked),
         "proposals": checked,
+        # v1 keys: the four verdicts, and only those. Anything summing
+        # counts.values() to get "how many proposals" keeps working.
         "counts": {
             "pass": sum(1 for c in checked if c["verdict"] == "pass"),
             "flag_g3": sum(1 for c in checked if c["verdict"] == "flag(G3)"),
             "reject_g1": sum(1 for c in checked if c["verdict"] == "reject(G1)"),
             "reject_g2": sum(1 for c in checked if c["verdict"] == "reject(G2)"),
+        },
+        # v2 keys: flags, kept in their own dict for exactly that reason.
+        "flags": {
+            "role_gradable": sum(1 for c in checked if (c.get("role") or {}).get("gradable")),
+            "role_mismatch": sum(1 for c in checked if c.get("role_mismatch")),
+            "g2_span_pass": sum(1 for c in checked if _g2(c, "span_pass")),
+            "g2_unit_fallback": sum(1 for c in checked if _g2(c, "unit_fallback")),
+            "g2_vacuous": sum(1 for c in checked if _g2(c, "vacuous")),
         },
     }
 
@@ -270,7 +459,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Verify curator proposals against unit text.")
     ap.add_argument("--results-dir", required=True, type=Path, help="results/<model>/")
     ap.add_argument("--units-dir", required=True, type=Path)
-    ap.add_argument("--out", type=Path, default=None, help="default: <results-dir>/verify.json")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="default: <results-dir>/verify.json. Pass "
+                         "<results-dir>/verify_v2.json to keep a v1 report intact.")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -299,21 +490,38 @@ def main(argv: list[str] | None = None) -> int:
         verified.append(verify_unit(row, text))
 
     totals = {"pass": 0, "flag_g3": 0, "reject_g1": 0, "reject_g2": 0}
+    flags = {"role_gradable": 0, "role_mismatch": 0,
+             "g2_span_pass": 0, "g2_unit_fallback": 0, "g2_vacuous": 0}
     for v in verified:
         for k in totals:
             totals[k] += v["counts"][k]
+        for k in flags:
+            flags[k] += v["flags"][k]
     n_props = sum(totals.values())
+    g2_survived = flags["g2_span_pass"] + flags["g2_unit_fallback"] + flags["g2_vacuous"]
+
+    def _rate(num: int, den: int) -> float:
+        return round(num / den, 4) if den else 0.0
 
     report = {
+        "schema_version": VERIFY_SCHEMA_VERSION,
         "results_dir": str(args.results_dir),
         "n_units": len(verified),
         "n_proposals": n_props,
         "totals": totals,
+        "flags": flags,
         "rates": {
-            "pass_rate": round(totals["pass"] / n_props, 4) if n_props else 0.0,
-            "g1_reject_rate": round(totals["reject_g1"] / n_props, 4) if n_props else 0.0,
-            "g2_reject_rate": round(totals["reject_g2"] / n_props, 4) if n_props else 0.0,
-            "g3_flag_rate": round(totals["flag_g3"] / n_props, 4) if n_props else 0.0,
+            "pass_rate": _rate(totals["pass"], n_props),
+            "g1_reject_rate": _rate(totals["reject_g1"], n_props),
+            "g2_reject_rate": _rate(totals["reject_g2"], n_props),
+            "g3_flag_rate": _rate(totals["flag_g3"], n_props),
+            # v2: role attribution + how G2 was actually satisfied.
+            "role_mismatch_rate": _rate(flags["role_mismatch"], flags["role_gradable"]),
+            "source_role_accuracy": _rate(
+                flags["role_gradable"] - flags["role_mismatch"], flags["role_gradable"]),
+            "g2_span_pass_rate": _rate(flags["g2_span_pass"], g2_survived),
+            "g2_unit_fallback_rate": _rate(flags["g2_unit_fallback"], g2_survived),
+            "g2_vacuous_rate": _rate(flags["g2_vacuous"], g2_survived),
         },
         "units": verified,
     }
@@ -324,6 +532,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"verified {len(verified)} units / {n_props} proposals -> {dest}")
         print(f"  pass={totals['pass']} flag(G3)={totals['flag_g3']} "
               f"reject(G1)={totals['reject_g1']} reject(G2)={totals['reject_g2']}")
+        print(f"  role: gradable={flags['role_gradable']} "
+              f"mismatch={flags['role_mismatch']} "
+              f"(accuracy={report['rates']['source_role_accuracy']})")
+        print(f"  G2 survivors: span={flags['g2_span_pass']} "
+              f"unit_fallback={flags['g2_unit_fallback']} vacuous={flags['g2_vacuous']}")
     return 0
 
 
