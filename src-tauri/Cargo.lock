@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "neurovault"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
