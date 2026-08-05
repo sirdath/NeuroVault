@@ -3194,6 +3194,7 @@ dependencies = [
  "fastembed",
  "getrandom 0.2.17",
  "ignore",
+ "libc",
  "netstat2",
  "notify",
  "once_cell",

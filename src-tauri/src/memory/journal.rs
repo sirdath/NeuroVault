@@ -23,7 +23,7 @@
 //!   log and continue — but failures are eprintln'd loudly.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -38,12 +38,78 @@ fn default_schema_version() -> u8 {
     1
 }
 
+/// Schema stamped on newly-created events. The serde default above
+/// intentionally remains v1 so historical JSONL without a version
+/// continues to decode as the schema that produced it.
+pub const CURRENT_SCHEMA_VERSION: u8 = 2;
+
 /// Per-process monotonic counter backing `Event.seq`.
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Bounded evidence: large payloads are stored by REFERENCE
 /// (`source_refs`), never inlined — before/after are summaries.
 const FIELD_CAP: usize = 500;
+
+/// Server-owned transcript roots. Callers may submit a path to the
+/// outcome endpoint, but they can never choose or persist a root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovedTranscriptRoot {
+    ClaudeProjects,
+}
+
+/// Durable, replayable evidence locator. Unlike legacy `source_refs`,
+/// this is created only by the server after path validation and hashing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EvidenceReference {
+    Transcript {
+        root: ApprovedTranscriptRoot,
+        relative_path: String,
+        observed_prefix_len: u64,
+        source_prefix_sha256: String,
+    },
+}
+
+/// Safe reason codes for an attempted evidence capture. These codes can
+/// be journaled and counted without leaking the submitted absolute path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceCaptureCode {
+    CuratorDisabled,
+    TranscriptAccessDisabled,
+    InvalidInput,
+    UnsupportedOutcome,
+    PlatformUnsupported,
+    MissingScope,
+    InvalidPath,
+    OutsideApprovedRoot,
+    SymlinkNotAllowed,
+    PrivatePath,
+    UnsupportedFile,
+    EmptyPrefix,
+    PrefixTooLarge,
+    SourceShorterThanObserved,
+    SourceUnavailable,
+    SourceChangedDuringCapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceCaptureStatus {
+    Captured,
+    Disabled,
+    Ineligible,
+}
+
+/// Capture status is stored even when no reference was eligible, so a
+/// fail-open outcome does not turn into an invisible evidence loss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceCaptureReceipt {
+    pub status: EvidenceCaptureStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<EvidenceCaptureCode>,
+}
 
 /// One experience. Field names follow the adaptive-memory spec.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -113,6 +179,12 @@ pub struct Event {
     pub after: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<String>,
+    /// Typed references are server-stamped. Raw paths in legacy
+    /// `source_refs` are never promoted into this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<EvidenceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_capture: Option<EvidenceCaptureReceipt>,
     /// Emitter's trust in the event content, [0,1].
     #[serde(default)]
     pub confidence: f64,
@@ -129,7 +201,7 @@ impl Event {
     /// Convenience constructor stamping id/ts and the common fields.
     pub fn now(brain_id: &str, event_type: &str, object_type: &str, object_id: &str) -> Self {
         Event {
-            schema_version: 1,
+            schema_version: CURRENT_SCHEMA_VERSION,
             emitter: format!("neurovault-core/{}", env!("CARGO_PKG_VERSION")),
             seq: SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             event_id: uuid::Uuid::new_v4().to_string(),
@@ -208,35 +280,103 @@ pub fn append(event: &Event) -> Result<()> {
 /// Gatekeeper employee extends this later). Matches any path segment.
 fn is_private(event: &Event) -> bool {
     let private_seg = |s: &str| {
-        s.split('/')
-            .any(|seg| seg == "_private" || seg == ".private" || seg.starts_with('.'))
+        s.split(['/', '\\']).any(|seg| {
+            seg.eq_ignore_ascii_case("_private")
+                || seg.eq_ignore_ascii_case(".private")
+                || seg.starts_with('.')
+        })
     };
-    event.privacy_label.as_deref() == Some("sensitive")
+    event
+        .privacy_label
+        .as_deref()
+        .is_some_and(|label| label.eq_ignore_ascii_case("sensitive"))
         || event.room.as_deref().is_some_and(private_seg)
         || (event.object_type == "engram" && private_seg(&event.object_id))
         || event.title.as_deref().is_some_and(private_seg)
 }
 
-/// Append unless an event with the same `idempotency_key` already sits
-/// in the tail of the current segment (bounded 64 KiB scan — repeated
-/// hook deliveries land close together; a same-key event months apart
-/// is a different occurrence).
-pub fn append_idempotent(event: &Event) -> Result<bool> {
-    if let Some(key) = &event.idempotency_key {
-        let path = journal_dir(&event.brain_id).join(segment_for(&event.ts));
-        if let Ok(raw) = fs::read_to_string(&path) {
-            // `saturating_sub` stopped the underflow but not the real
-            // hazard: `len - 64KiB` is an arbitrary byte index into a
-            // file full of user-supplied titles and room names, and
-            // slicing a `str` mid-character panics. Every append shifts
-            // the length, so this re-sampled a fresh offset each time —
-            // for any journal containing an accent or emoji it was a
-            // question of how many events, not whether.
-            let needle = format!("\"idempotency_key\":\"{key}\"");
-            if crate::memory::text::tail_bytes(&raw, 64 * 1024).contains(&needle) {
-                return Ok(false);
+/// Shared with evidence capture so privacy exclusion happens before a
+/// transcript is opened, not merely when the event is finally appended.
+pub(crate) fn is_private_event(event: &Event) -> bool {
+    is_private(event)
+}
+
+/// Serializes the bounded tail-scan plus append within this process.
+/// `O_APPEND` protects line integrity, but it cannot make a separate
+/// read-then-write idempotency decision atomic.
+static IDEMPOTENT_APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+const IDEMPOTENCY_TAIL_BYTES: u64 = 64 * 1024;
+
+fn idempotency_segments(ts: &str) -> Vec<String> {
+    let current = segment_for(ts);
+    let mut segments = vec![current.clone()];
+    if let Ok(at) = OffsetDateTime::parse(ts, &Rfc3339) {
+        if let Ok(first_of_month) = at.replace_day(1) {
+            let previous = first_of_month - time::Duration::days(1);
+            if let Ok(previous_ts) = previous.format(&Rfc3339) {
+                let previous = segment_for(&previous_ts);
+                if previous != current {
+                    segments.push(previous);
+                }
             }
         }
+    }
+    segments
+}
+
+fn idempotency_key_exists_in(path: &std::path::Path, key: &str) -> bool {
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return false;
+    };
+    let start = len.saturating_sub(IDEMPOTENCY_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return false;
+    }
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    if file.read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Event>(line).ok())
+        .any(|existing| existing.idempotency_key.as_deref() == Some(key))
+}
+
+fn idempotency_key_exists(event: &Event) -> bool {
+    let Some(key) = &event.idempotency_key else {
+        return false;
+    };
+    let dir = journal_dir(&event.brain_id);
+    idempotency_segments(&event.ts)
+        .into_iter()
+        .any(|segment| idempotency_key_exists_in(&dir.join(segment), key))
+}
+
+/// Read-only fast path for handlers that want to avoid re-hashing an
+/// immutable duplicate. `append_idempotent` repeats this check under
+/// its lock, so a concurrent miss here cannot create a duplicate.
+pub fn already_recorded(event: &Event) -> bool {
+    idempotency_key_exists(event)
+}
+
+/// Append unless an event with the same `idempotency_key` already sits
+/// in the bounded tails of the current or immediately previous monthly
+/// segment. The previous segment closes the retry race at UTC month
+/// rollover; a same-key event more than one month apart is a different
+/// occurrence.
+pub fn append_idempotent(event: &Event) -> Result<bool> {
+    if is_private(event) {
+        return Ok(false);
+    }
+    let _guard = IDEMPOTENT_APPEND_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if idempotency_key_exists(event) {
+        return Ok(false);
     }
     append(event)?;
     Ok(true)
@@ -501,6 +641,77 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_idempotent_redelivery_writes_exactly_once() {
+        with_temp_home(|| {
+            let mut event = Event::now(
+                "jidem-concurrent",
+                "assistant_response_completed",
+                "session",
+                "s1",
+            );
+            event.idempotency_key = Some("stop-s1-concurrent".into());
+            let event = std::sync::Arc::new(event);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    let event = std::sync::Arc::clone(&event);
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        append_idempotent(&event).unwrap()
+                    })
+                })
+                .collect();
+            let writes = threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .filter(|written| *written)
+                .count();
+            assert_eq!(writes, 1, "concurrent redelivery has one effect");
+            let now = OffsetDateTime::now_utc();
+            assert_eq!(
+                read_window(
+                    "jidem-concurrent",
+                    now - time::Duration::hours(1),
+                    now,
+                    None,
+                )
+                .len(),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn idempotent_redelivery_survives_month_rollover() {
+        with_temp_home(|| {
+            let mut first = Event::now(
+                "jidem-rollover",
+                "assistant_response_completed",
+                "session",
+                "s1",
+            );
+            first.ts = "2026-07-31T23:59:59Z".into();
+            first.idempotency_key = Some("stop-s1-rollover".into());
+            assert!(append_idempotent(&first).unwrap());
+
+            let mut retry = Event::now(
+                "jidem-rollover",
+                "assistant_response_completed",
+                "session",
+                "s1",
+            );
+            retry.ts = "2026-08-01T00:00:01Z".into();
+            retry.idempotency_key = first.idempotency_key.clone();
+            assert!(!append_idempotent(&retry).unwrap());
+
+            let start = OffsetDateTime::parse("2026-07-31T23:00:00Z", &Rfc3339).unwrap();
+            let end = OffsetDateTime::parse("2026-08-01T01:00:00Z", &Rfc3339).unwrap();
+            assert_eq!(read_window("jidem-rollover", start, end, None).len(), 1);
+        });
+    }
+
+    #[test]
     fn ordering_uses_seq_within_same_timestamp_and_replay_is_deterministic() {
         with_temp_home(|| {
             let b = "jorder";
@@ -533,9 +744,39 @@ mod tests {
             let all = read_window(b, now - time::Duration::hours(1), now, None);
             assert_eq!(all.len(), 1, "private event never journaled");
             assert!(all[0].before.as_ref().unwrap().chars().count() <= 500);
-            assert_eq!(all[0].schema_version, 1);
+            assert_eq!(all[0].schema_version, CURRENT_SCHEMA_VERSION);
             assert!(all[0].emitter.starts_with("neurovault-core/"));
         });
+    }
+
+    #[test]
+    fn typed_evidence_is_v2_and_legacy_v1_still_decodes() {
+        let legacy: Event = serde_json::from_value(serde_json::json!({
+            "event_id": "old",
+            "event_type": "assistant_response_completed"
+        }))
+        .unwrap();
+        assert_eq!(legacy.schema_version, 1);
+        assert!(legacy.evidence_refs.is_empty());
+        assert!(legacy.evidence_capture.is_none());
+
+        let mut current = Event::now("brain", "assistant_response_completed", "session", "s-1");
+        current.evidence_refs.push(EvidenceReference::Transcript {
+            root: ApprovedTranscriptRoot::ClaudeProjects,
+            relative_path: "project/s-1.jsonl".into(),
+            observed_prefix_len: 42,
+            source_prefix_sha256: "a".repeat(64),
+        });
+        current.evidence_capture = Some(EvidenceCaptureReceipt {
+            status: EvidenceCaptureStatus::Captured,
+            code: None,
+        });
+        let encoded = serde_json::to_string(&current).unwrap();
+        assert_eq!(current.schema_version, 2);
+        assert!(!encoded.contains("/Users/"));
+        let decoded: Event = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.evidence_refs, current.evidence_refs);
+        assert_eq!(decoded.evidence_capture, current.evidence_capture);
     }
 
     #[test]

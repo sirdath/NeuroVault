@@ -159,6 +159,9 @@ regex = "1"
 # — we match so a row written by either runtime is seen as unchanged
 # by the other and doesn't trigger an unnecessary re-embed.
 sha2 = "0.10"
+# O_NOFOLLOW on Unix closes the final-component symlink race when the
+# curator opens a validated transcript path.
+libc = "0.2"
 
 # Phase 6: async runtime + HTTP server. `tokio` powers axum's event
 # loop. `axum` gives us the same `/api/*` surface the Python FastAPI
