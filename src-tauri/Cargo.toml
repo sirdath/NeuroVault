@@ -109,7 +109,7 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "v5"] }
 slug = "0.1"
 dirs = "6"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 # --- Rust memory-layer dependencies -----------------------------------
 # These power the in-process backend that replaced the Python HTTP
