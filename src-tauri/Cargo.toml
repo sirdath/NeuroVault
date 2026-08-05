@@ -158,7 +158,7 @@ regex = "1"
 # unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
 # — we match so a row written by either runtime is seen as unchanged
 # by the other and doesn't trigger an unnecessary re-embed.
-sha2 = "0.10"
+sha2 = "0.11"
 # O_NOFOLLOW on Unix closes the final-component symlink race when the
 # curator opens a validated transcript path.
 libc = "0.2"
