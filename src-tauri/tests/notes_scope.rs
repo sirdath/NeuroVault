@@ -10,6 +10,16 @@ use neurovault_lib::memory::{db, paths, read_ops};
 
 #[test]
 fn list_notes_is_brain_scoped() {
+    // save_note() ingests, and ingest embeds. Share the embedding-model cache
+    // as retrieval_integration.rs does and for the same reason: the temp home
+    // below would otherwise miss nv_home()/.fastembed_cache and re-download
+    // ~130 MB every run. Must precede the override; only the model cache is
+    // shared.
+    std::env::set_var(
+        "FASTEMBED_CACHE_DIR",
+        paths::nv_home().join(".fastembed_cache"),
+    );
+
     let home = std::env::temp_dir().join(format!(
         "nv-notes-scope-{}-{}",
         std::process::id(),

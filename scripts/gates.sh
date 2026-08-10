@@ -11,6 +11,35 @@ cd "$(dirname "$0")/../src-tauri"
 
 fail() { echo "GATE FAILED: $*" >&2; exit 1; }
 
+# The integration suites dlopen sqlite-vec out of src-tauri/resources/.
+# vec0.dll and vec0.dylib are committed; Linux ships NOTHING, and the fetch
+# lived only inside the workflows — so a Linux contributor's very first
+# `cargo test` died on "vec0.so missing … build resources are incomplete"
+# with no way to find out where to get it. Fetch the same pinned release the
+# workflows use, and verify the same pinned sha256: this binary is loaded
+# into our process on every brain open, so an unverified download is
+# arbitrary code execution. Keep VERSION/SHA256 in step with ci.yml,
+# release.yml and npm-release.yml — bump all four together.
+if [ "$(uname -s)" = "Linux" ] && [ ! -f resources/vec0.so ]; then
+  ARCH=$(uname -m)
+  [ "$ARCH" = "x86_64" ] || fail "no pinned sqlite-vec loadable for Linux $ARCH — build vec0.so from https://github.com/asg017/sqlite-vec and drop it in src-tauri/resources/"
+  VERSION="v0.1.9"; STRIPPED="${VERSION#v}"
+  ASSET="sqlite-vec-${STRIPPED}-loadable-linux-x86_64.tar.gz"
+  SHA256="b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7"
+  echo "── fetching sqlite-vec ${VERSION} (vec0.so — not committed for Linux)"
+  TMP=$(mktemp -d)
+  curl -fL --retry 5 --retry-delay 5 --retry-all-errors -o "$TMP/vec.tgz" \
+    "https://github.com/asg017/sqlite-vec/releases/download/${VERSION}/${ASSET}" \
+    || fail "could not download ${ASSET}"
+  ACTUAL=$(sha256sum "$TMP/vec.tgz" | awk '{print $1}')
+  [ "$ACTUAL" = "$SHA256" ] || fail "sqlite-vec checksum mismatch for ${ASSET} — expected $SHA256, got $ACTUAL"
+  mkdir -p resources
+  tar -xzf "$TMP/vec.tgz" -C resources/
+  rm -rf "$TMP"
+  [ -f resources/vec0.so ] || fail "vec0.so absent after extracting ${ASSET}"
+  echo "   staged resources/vec0.so (sha256 verified)"
+fi
+
 echo "── cargo fmt --check"
 cargo fmt --check || fail "rustfmt"
 

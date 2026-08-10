@@ -22,7 +22,7 @@ and verify the behavior. Dev setup is in CONTRIBUTING.md. -->
 
 ## Checklist
 
-- [ ] Tests added or updated (pytest / vitest / cargo test as appropriate)
+- [ ] Tests added or updated (cargo test / vitest as appropriate)
 - [ ] `make test` passes locally (or the individual suite for your change)
 - [ ] CHANGELOG.md `[Unreleased]` updated if this is user-visible
 - [ ] Docs updated if this changes the MCP tool surface, HTTP API, or

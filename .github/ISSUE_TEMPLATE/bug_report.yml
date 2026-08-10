@@ -17,8 +17,8 @@ body:
     id: version
     attributes:
       label: NeuroVault version
-      description: Help → About, or the installer filename (e.g. NeuroVault_0.5.2_x64-setup.exe)
-      placeholder: "0.5.2"
+      description: Help → About, or the installer filename (e.g. NeuroVault_0.6.1_x64-setup.exe)
+      placeholder: "0.6.1"
     validations:
       required: true
   - type: dropdown
@@ -29,7 +29,7 @@ body:
         - Windows 11
         - Windows 10
         - macOS Apple Silicon (.dmg)
-        - macOS Intel (build from source)
+        - macOS Intel (unsupported)
         - Linux (AppImage / deb / rpm)
         - Other
     validations:

@@ -20,11 +20,22 @@
 // This MUST run in `build.beforeBuildCommand` (before the app's compile), not
 // `beforeBundleCommand` (after), or the app's build.rs check fails first.
 //
+// It ALSO runs in `beforeDevCommand`: without it a fresh clone can't even
+// `cargo check`, because the default `gui` feature makes build.rs run the same
+// externalBin validation. `tauri dev` therefore died with "resource path
+// binaries/neurovault-server-<triple> doesn't exist" on every clean checkout,
+// and the only cure anyone had was to run a full `tauri build` first.
+//
+// Because `tauri dev` restarts run this on every rebuild, the release-profile
+// build below (lto = "fat", codegen-units = 1 — minutes, not seconds) is
+// SKIPPED when the staged binary is already newer than every input that could
+// change it. Delete src-tauri/binaries/ to force a rebuild.
+//
 // All our release builds are native (target == host), so the host triple from
 // `rustc` is the triple Tauri bundles for.
 
 import { execSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +50,35 @@ if (!hostLine) throw new Error('[stage-sidecar] could not determine host triple 
 const triple = hostLine.slice('host:'.length).trim();
 const exe = triple.includes('windows') ? '.exe' : '';
 const bin = `neurovault-server${exe}`;
+
+const outDir = join(srcTauri, 'binaries');
+const dest = join(outDir, `neurovault-server-${triple}${exe}`);
+
+/** Newest mtime (ms) under a file or directory. Missing paths count as 0. */
+function newestMtimeMs(path) {
+  let st;
+  try {
+    st = statSync(path);
+  } catch {
+    return 0;
+  }
+  if (!st.isDirectory()) return st.mtimeMs;
+  let newest = st.mtimeMs;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    newest = Math.max(newest, newestMtimeMs(join(path, entry.name)));
+  }
+  return newest;
+}
+
+// Everything that can change the bytes of the sidecar: the Rust sources, the
+// manifest/lockfile, build.rs, and the Tauri config baked in by tauri_build.
+const inputs = ['src', 'build.rs', 'Cargo.toml', 'Cargo.lock', 'tauri.conf.json'];
+const newestInput = Math.max(...inputs.map((p) => newestMtimeMs(join(srcTauri, p))));
+
+if (existsSync(dest) && statSync(dest).mtimeMs >= newestInput) {
+  console.log(`[stage-sidecar] reused ${dest} (up to date with src-tauri sources)`);
+  process.exit(0);
+}
 
 console.log(`[stage-sidecar] building sidecar for ${triple} (externalBin check disabled for this build)`);
 
@@ -55,8 +95,6 @@ if (!existsSync(built)) {
   throw new Error(`[stage-sidecar] built sidecar not found at ${built}`);
 }
 
-const outDir = join(srcTauri, 'binaries');
 mkdirSync(outDir, { recursive: true });
-const dest = join(outDir, `neurovault-server-${triple}${exe}`);
 copyFileSync(built, dest);
 console.log(`[stage-sidecar] staged ${built} -> ${dest}`);

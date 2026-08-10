@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use neurovault_lib::memory::retriever::RecallOpts;
-use neurovault_lib::memory::{db, ingest, retriever};
+use neurovault_lib::memory::{db, ingest, paths, retriever};
 
 /// Fixed corpus. Each tuple is (filename, markdown). Content is written
 /// so each query below has exactly one obviously-correct answer that a
@@ -266,6 +266,21 @@ const PREFERENCE_FIXTURE: (&str, &str) = (
 
 #[test]
 fn recall_ranks_known_facts_top1_recency_ablated() {
+    // --- shared model cache (MUST precede the NEUROVAULT_HOME override) ---
+    // The temp home below is per-run, and embedder.rs caches the BGE-small
+    // ONNX weights under nv_home()/.fastembed_cache — so every `cargo test`
+    // missed the cache and re-downloaded ~130 MB from HuggingFace, and the
+    // suite could not pass offline at all. embedder.rs honours an explicit
+    // FASTEMBED_CACHE_DIR ahead of nv_home(), so pin it at the REAL
+    // ~/.neurovault/.fastembed_cache — the exact directory the app itself
+    // uses, so a contributor who has ever launched NeuroVault downloads
+    // nothing. The MODEL CACHE is the only thing shared; the brain, vault and
+    // audit log all still live in the throwaway home.
+    std::env::set_var(
+        "FASTEMBED_CACHE_DIR",
+        paths::nv_home().join(".fastembed_cache"),
+    );
+
     // --- isolation: unique temp NEUROVAULT_HOME ---
     let home: PathBuf = std::env::temp_dir().join(format!("nv-itest-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);

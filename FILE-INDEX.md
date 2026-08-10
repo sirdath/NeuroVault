@@ -1,6 +1,8 @@
 # NeuroVault — File Index
 
-> **Every tracked file in this repo, with a one-line purpose.** 384 files, grouped by area.
+> **Every tracked file in this repo, with a one-line purpose.** Grouped by area.
+> File count: `git ls-files | wc -l` — 413 on 2026-08-10. Derive it, don't trust it:
+> the number hard-coded here read 384 while the tree held 412.
 > Generated 2026-07-15, updated 2026-07-16 after the Tier A–C cleanup (22 files removed).
 > Build artifacts are excluded (`node_modules/`, `src-tauri/target/`, `dist/`, `.fastembed_cache/`, `.git/`).
 

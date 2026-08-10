@@ -16,7 +16,7 @@
 use std::fs;
 use std::path::Path;
 
-use neurovault_lib::memory::{db, http_server};
+use neurovault_lib::memory::{db, http_server, paths};
 
 const PORT: u16 = 18987;
 
@@ -53,6 +53,15 @@ fn write_fixture_repo(root: &Path) {
 
 #[tokio::test]
 async fn graphify_end_to_end_over_http() {
+    // Share the embedding-model cache, as retrieval_integration.rs does and
+    // for the same reason: the isolated home below would otherwise miss
+    // nv_home()/.fastembed_cache and re-download ~130 MB every run. Must
+    // precede the override; only the model cache is shared.
+    std::env::set_var(
+        "FASTEMBED_CACHE_DIR",
+        paths::nv_home().join(".fastembed_cache"),
+    );
+
     // ---- isolated home + active brain ------------------------------------
     let home = std::env::temp_dir().join(format!("nv_graphify_e2e_{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);

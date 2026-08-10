@@ -18,7 +18,7 @@ use neurovault_lib::memory::adaptive::types::{
 };
 use neurovault_lib::memory::adaptive::Scope;
 use neurovault_lib::memory::ambient::{run_at, AmbientQueryPacket};
-use neurovault_lib::memory::{db, todos};
+use neurovault_lib::memory::{db, paths, todos};
 
 fn packet(prompt: &str, intent: Option<&str>) -> AmbientQueryPacket {
     AmbientQueryPacket {
@@ -33,6 +33,15 @@ fn packet(prompt: &str, intent: Option<&str>) -> AmbientQueryPacket {
 
 #[test]
 fn consulting_room_story() {
+    // Share the embedding-model cache, as retrieval_integration.rs does and
+    // for the same reason: the temp home below would otherwise miss
+    // nv_home()/.fastembed_cache and re-download ~130 MB every run. Must
+    // precede the override; only the model cache is shared.
+    std::env::set_var(
+        "FASTEMBED_CACHE_DIR",
+        paths::nv_home().join(".fastembed_cache"),
+    );
+
     // --- isolation: unique temp NEUROVAULT_HOME ---
     let home = std::env::temp_dir().join(format!(
         "nv-adaptive-scenario-{}-{}",
