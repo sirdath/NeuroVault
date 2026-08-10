@@ -13,10 +13,13 @@ the bug is critical.
 
 | Version | Supported |
 |---|---|
-| 0.5.x (current) | ✅ |
-| < 0.5 (pre-release) | ❌ — upgrade to 0.5.x |
+| 0.6.x (current) | ✅ |
+| 0.5.x | ⚠️ — critical fixes only, until 2026-08-19 |
+| < 0.5 (pre-release) | ❌ — upgrade to 0.6.x |
 
-Once 0.6 ships, 0.5.x gets a 30-day security-fix window before EOL.
+0.6.0 shipped on 2026-07-20, which opened 0.5.x's 30-day security-fix
+window. That window closes on **2026-08-19**; after that date 0.5.x is
+end-of-life and gets no further fixes.
 
 ## What counts as a vulnerability
 
@@ -57,7 +60,8 @@ Open a private advisory at
 [github.com/sirdath/NeuroVault/security/advisories/new](https://github.com/sirdath/NeuroVault/security/advisories/new).
 Include:
 
-- Version you tested (from the About dialog or `neurovault --version`)
+- Version you tested (Settings → About, or `curl 127.0.0.1:8765/api/version`
+  against the running backend)
 - OS + platform
 - A proof-of-concept or clear reproduction
 - Impact description — what can an attacker do?
@@ -69,7 +73,7 @@ a public issue for anything that might expose real users.
 
 ## Response SLA
 
-At the current project maturity (v0.5.x, single-maintainer):
+At the current project maturity (v0.6.x, single-maintainer):
 
 - **Acknowledgement**: within 72 hours of a report. Usually much faster.
 - **Severity triage**: within 7 days.
@@ -119,17 +123,44 @@ we'll prioritize the fix regardless and appreciate your patience.
   interpreter. The Python-subprocess bridge this section used to
   describe (`run_python_job`) was removed in 2026-05 with the Python
   server package; there is no PDF/Zotero helper process and no
-  `python` invocation anywhere in the product.
+  `python` invocation anywhere in the product. The only subprocess the
+  product ever spawns is your own `claude` CLI, and only on behalf of an
+  AI employee you enabled — see below.
 - The cross-encoder reranker is a bundled on-device ONNX model
   (fastembed-rs), with no `torch`, `sentence-transformers`, or Python in
   the app and no network call. Recall falls back to the fusion ranker if
   the model can't load.
+- **macOS releases are Developer ID signed, notarized and stapled** —
+  since v0.6.0, the first build with Apple credentials in the pipeline.
+  The release workflow treats it as a hard gate rather than a
+  best-effort step: it verifies the Developer ID authority, that the
+  `.app` is notarized and stapled, that Gatekeeper accepts it, and that
+  the bundled `vec0.dylib` carries a Team ID signature rather than an
+  adhoc one (a passing `codesign --verify` on the outer bundle does not
+  cover resources). The DMG is notarized and stapled separately and the
+  stapled bytes are re-uploaded, because the bundler signs the DMG but
+  never notarizes it. A macOS build without those credentials stays an
+  unsigned draft and is not published.
+- **AI employees are opt-in and propose-only.** No employee runs until
+  you hire and enable one. When one does, NeuroVault spawns your own
+  `claude` CLI — never an interpreter, never agent-supplied code — with
+  `--strict-mcp-config` so your other MCP servers stay out of its
+  context, and a per-role `--allowedTools` whitelist enforced by Claude
+  Code's own permission layer, so destructive tools are unavailable
+  rather than merely discouraged. Destructive intents come back as
+  proposals into an approval queue; approving executes server-side
+  against a hard-coded action whitelist. Every run is capped in turns
+  and wall clock, and journaled.
 
 ## Things we know we don't do yet
 
-- **No Windows/macOS code signing** on 0.5.x builds — users see
-  SmartScreen / Gatekeeper warnings. Signing and notarization are next
-  on the release plan (an Apple Developer account is in progress).
+- **Windows artifacts are not Authenticode-signed.** There is no Windows
+  certificate in the release pipeline, so SmartScreen reports an unknown
+  publisher on the NSIS installer and the MSI. That is expected, not a
+  sign of tampering: verify the published SHA-256 checksum and the
+  Sigstore-backed build-provenance attestation instead. A certificate is
+  on the roadmap. (macOS is a different story — see the mitigations
+  above.)
 - **No vault encryption at rest** — documented in
   [PRIVACY.md § Encryption at rest](PRIVACY.md#encryption-at-rest);
   on the research roadmap.
@@ -140,4 +171,4 @@ we'll prioritize the fix regardless and appreciate your patience.
 
 ---
 
-*Last updated: 2026-07-13.*
+*Last updated: 2026-08-10. Applies to NeuroVault 0.6.x.*

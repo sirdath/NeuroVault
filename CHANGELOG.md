@@ -16,6 +16,181 @@ _Nothing yet._
 
 ---
 
+## [0.6.1] — 2026-08-05
+
+The release where recall stops asking to be trusted and starts showing
+its work. Every hit now says where it came from and why it won, the
+biggest context-saver on the tool surface reaches the default tier, the
+contradiction sweep finally writes down what it finds, and the
+consolidation machine gets the clock it never had. Behind that, a run of
+correctness fixes in the places the system quietly returned the wrong
+answer: restated facts, non-deterministic graph hops, Unicode redaction,
+month-boundary journal reads.
+
+### Added
+
+- **Explainable recall — every hit says where it came from and why it
+  won.** A hit used to be a title, a body and three floats: an agent
+  could see *what* matched but not its provenance or the reason it
+  ranked. Each hit now also carries `kind` (the provenance class the
+  structural confidence is derived from), `created_at`, `source` (the
+  vault-relative markdown path — the canonical file, so a reader can
+  always get back to it), `agent_id` where one was recorded, and a
+  one-sentence `why` such as `semantic match 0.82 (rank 1) + keyword
+  match (rank 2); reranked 0.91`. The `why` is rendered from channel
+  scores the pipeline already computed and never exposed — no extra
+  inference and no extra query. Channels that did not fire are omitted
+  rather than printed as zeroes, the reranker is reported as a
+  probability rather than a raw logit, and a negative similarity is
+  shown rather than hidden: "ranked #2 but similarity ~0" is exactly the
+  over-trust warning a reader needs. The fields are additive, so an
+  older client is unaffected.
+- **A clock for consolidation.** The proposal pipeline — deterministic
+  rules, review store, approve/reject endpoints, the Memory Review inbox
+  — was complete in 0.6.0 but nothing ever invoked it, so the queue
+  stayed empty unless you POSTed `/api/consolidate` by hand. A
+  conservative scheduler now runs the active brain roughly every 6
+  hours: it reads the local journal, applies the same deterministic
+  rules, and appends proposals. **It makes no network call, loads no
+  model, and applies nothing** — a run can only put Unreviewed items in
+  your review queue, and the one path that mutates a memory is still you
+  clicking Approve. Restarts cannot make it run more often (a per-brain
+  last-run stamp debounces it), a missed tick costs nothing, and a
+  corrupt stamp fails towards running rather than silently stopping the
+  clock. Off switch: `PUT /api/consolidation_auto {"enabled": false}`,
+  or write `off` into `~/.neurovault/consolidation_auto.txt`. (There is
+  no Settings toggle for it yet — unlike the reranker.)
+- **Explicit confidence on write.** `remember` and note-save accept an
+  optional `confidence` in [0,1], stored as the authoritative value a
+  reader sees on a recall hit instead of the structural default for the
+  note's kind. It is an annotation only — **it never affects ranking**.
+  An out-of-range value is rejected rather than clamped, because
+  clamping turns a caller's percent-vs-fraction slip into a note
+  claiming certainty.
+- **Two trust surfaces in the app.** Opening a superseded note now shows
+  a slim amber notice naming the newer note and the reason, with
+  click-through — the data was already in the note payload and nothing
+  consumed it. And the graph legend gains a Links section decoding edge
+  types, derived *from* the painter rather than hand-written, so it can
+  never describe an encoding the renderer isn't drawing.
+
+### Changed
+
+- **`recall_chunks` moved into the default `lite` tier — lite is now 9
+  tools (was 8).** `recall`'s own description tells an agent to reach
+  for `recall_chunks` when a hit is a long wiki page, and the project
+  guidance says to prefer it, but at `standard` the default agent could
+  not call the tool it was being pointed at. It is also the biggest
+  context-saver on the surface, which is what the default tier is for. A
+  test now pins the rule: the default tier must be able to call every
+  tool its own descriptions recommend.
+- **`recall_chunks` stopped serving retired content, and learned the
+  query operators.** It now applies the same visibility rules every
+  other retrieval channel applies — superseded and dormant notes are
+  never served, where before a superseded note could come back as the
+  *top* passage — and honours the same operators `recall` does
+  (`kind:`, `folder:`, `after:`, `before:`, `entity:`, `state:`,
+  `agent:`), stripped from the text before embedding and applied as
+  filters.
+- **Contradiction candidates are now written down.** The
+  `contradictions` table had two readers and no writer: the
+  `find_contradictions` / `resolve_contradiction` tools read a table
+  that was always empty (so a resolve could never match a row), while
+  the working detector behind `find_conflicts` computed candidate pairs
+  and discarded them. The sweep now records what it finds, so both tools
+  work against real data. **These are candidates, not confirmed
+  contradictions**: the detector compares embeddings in a mid-similarity
+  band (~0.82-0.92), which means "same topic, different note" — it
+  cannot tell agreement from disagreement, so read both notes before
+  retiring one. Rows are keyed by a deterministic hash of the pair, so
+  re-sweeping neither duplicates a row nor re-opens one you already
+  resolved.
+- **Tool descriptions now match tool behaviour.** `find_conflicts` and
+  `diagnose_brain` dropped their `read_only` annotation and disclose the
+  recording side effect above — they still never touch a note, the vault
+  or the graph, but an annotation that claims read-only has to be true.
+  `find_contradictions` stopped claiming fact-level detection (its
+  `fact_a` / `fact_b` are candidate markers and note titles, not
+  extracted claims), `resolve_contradiction` documents that resolution
+  is durable and is annotation rather than action, and overstated
+  confidence claims were brought back to reality across the surface.
+
+### Fixed
+
+- **Restating an earlier value left the wrong answer current.** The
+  auto-ingest path and `POST /api/facts` implemented fact supersession
+  separately and had drifted into two different wrong answers for
+  A → B → A. Ingest skipped on "id already present" and left the
+  restated value superseded forever, so recall kept answering the stale
+  B; the endpoint superseded B and then no-op'd on insert, leaving the
+  subject with **no** live value at all. Both paths now share one
+  upsert — supersede live different-value rows, then insert-or-resurrect
+  — so the newest *statement* wins, not the newest row insert.
+- **A private-content redaction bug that could leak.** `strip_private`,
+  which removes `<private>…</private>` blocks from Claude Code hook
+  events before anything is stored, searched a fully-lowercased copy of
+  the text and then sliced the *original* with the offsets it found.
+  Full Unicode lowercasing changes some characters' byte length (`İ`
+  2→3, `ẞ` 3→2), desyncing the two — so a message containing one of them
+  could put the redaction range in the wrong place and **write content
+  you had marked private into stored memory**, or panic and drop the
+  event entirely. The tags are pure ASCII, so ASCII-only lowercasing
+  (byte-length-preserving, same matches) is the fix. The same bug in the
+  tech-keyword extractor was silently dropping keywords or storing a
+  garbage sliced name like `rus` into the graph.
+- **Recall could return a different order on a different run.**
+  `graph_retrieve` read its hop-1 and hop-2 ids straight out of hash
+  sets, so when a hub entity had more mentions than the limit, *which*
+  engrams survived the cut — and the ranks fusion assigned them —
+  re-rolled every process. The hop-2 query also capped links with no
+  ordering, so the database could return any five. Ids are now collected
+  in sorted order before the cut, and the hop-2 cap means "the strongest
+  five". A recall replays identically.
+- **Two more non-ASCII crashes.** `short()` byte-sliced object ids at 8,
+  so a room named `report日本` produced an id whose 8th byte lands
+  mid-character — rendering that event in a temporal brief panicked and
+  500'd the whole temporal diff. `is_materially_newer()` checked byte
+  *length* and then sliced at 10, so a multibyte character straddling
+  that boundary panicked recall's temporal disambiguation. Both now snap
+  to a character boundary, and a slice that cannot be taken means
+  "cannot compare", not "newer".
+- **A journal month boundary could swallow events.** `read_window`
+  seeded its month cursor from the start date's first-of-month while
+  keeping the start's *time of day*, so a window ending on the 1st of a
+  later month before that clock time never opened that month's segment
+  file and silently dropped its in-window events. The cursor is now
+  normalized to month-start midnight.
+- **Bulk import stopped inventing your preferences.** Importing
+  third-party documents ran the personal-derivation passes — preference
+  extraction and fact supersession — over content you did not write.
+  Importing eight AI books produced 22 bogus `kind='preference'` engrams
+  lifted from quotes in the text (e.g. `Preference: "I love my current
+  job," Altman said to laughter`), which then surfaced in
+  `session_start` as *your own* preferences. The extractor is
+  content-only and cannot tell an author's "I love X" from yours, so the
+  fix is upstream: editor saves and the vault watcher keep full
+  derivation (those really are your notes), and `import_folder` derives
+  no preferences or facts at all.
+- **The Curator's contradiction sentinel was working against fiction.**
+  It fetched contradictions over loopback — a correct query against the
+  table nothing wrote — and forwarded whatever came back, so pairs whose
+  note was already superseded or dormant went to the judge (a supersede
+  verdict on an already-retired note) and empty claim text reached
+  prompts as bare ids. It now reads in-process with one bounded indexed
+  query: unresolved only, both sides live, titles joined, stable order.
+  Propose-only is unchanged.
+
+### Security
+
+- **quick-xml advisories cleared (RUSTSEC-2026-0194 / RUSTSEC-2026-0195).**
+  `plist` 1.8.0 → 1.10.0 pulls quick-xml 0.41.0. Lockfile-only; Tauri is
+  unchanged at 2.10.3.
+- The `strip_private` fix above is a privacy fix as well as a crash fix:
+  on the mis-placement branch, content you had explicitly marked private
+  could be written into a stored memory.
+
+---
+
 ## [0.6.0] — 2026-07-20
 
 The release where memory stops waiting to be asked. NeuroVault can now feed
@@ -96,6 +271,14 @@ crash audit.
   on a server, in Docker, or to sidestep the macOS Gatekeeper warning on the
   unsigned app. Ships for macOS (Apple Silicon + Intel), Linux x64, and
   Windows x64; the binary links no GUI frameworks and no OpenSSL.
+  **Correction (noted 2026-08-05, entry left intact for the record):**
+  `@neurovault/mcp` was never published — the npm registry returns 404 for
+  it — so the `npx` command above does not work. Build the headless server
+  from source instead: `node scripts/build-headless.mjs`. Two other claims
+  in this bullet are also wrong: the Intel-macOS package never shipped (the
+  bundled `vec0` extension is arm64-only, so an Intel build cannot open a
+  brain), and the macOS app has not been unsigned since this release —
+  0.6.0 was the first Developer ID signed and notarized build.
 - **Sources.** Settings → Sources is now the single place to bring knowledge
   in: use a Markdown/Obsidian folder as a vault, mirror additional folders
   without touching the originals (enable, disable, preview and apply sync),
@@ -986,6 +1169,7 @@ sqlite-vec) knowledge graph. Its changes shipped with the 0.1.2 tag.
 
 ---
 
-[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/sirdath/NeuroVault/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/sirdath/NeuroVault/compare/v0.5.2...v0.6.0
 [0.1.0]: https://github.com/sirdath/NeuroVault/releases/tag/v0.1.0
