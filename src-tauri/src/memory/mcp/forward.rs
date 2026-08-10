@@ -595,11 +595,43 @@ fn pct_encode(s: &str) -> String {
 }
 
 async fn read_response(resp: reqwest::Response) -> Value {
-    match resp.bytes().await {
+    let status = resp.status().as_u16();
+    let body = match resp.bytes().await {
         Ok(b) if b.is_empty() => Value::Null,
         Ok(b) => serde_json::from_slice::<Value>(&b)
             .unwrap_or_else(|_| json!({ "error": String::from_utf8_lossy(&b).to_string() })),
-        Err(e) => json!({ "error": format!("failed to read backend response: {e}") }),
+        Err(e) => return json!({ "error": format!("failed to read backend response: {e}") }),
+    };
+    shape_response(status, body)
+}
+
+/// Guarantee that a non-2xx backend reply carries an `error` field.
+///
+/// The MCP layer decides success-vs-failure by looking for that field, so
+/// an HTTP failure whose body isn't error-shaped (an empty 404, a proxy's
+/// HTML, a bare list) would otherwise reach the agent looking exactly like
+/// an answer. 2xx bodies are the tool's answer and pass through untouched.
+fn shape_response(status: u16, body: Value) -> Value {
+    if (200..300).contains(&status) {
+        return body;
+    }
+    match body {
+        Value::Object(mut o) => {
+            if !matches!(o.get("error"), Some(Value::String(s)) if !s.trim().is_empty()) {
+                let detail = Value::Object(o.clone());
+                o.insert(
+                    "error".into(),
+                    json!(format!("NeuroVault backend returned HTTP {status}")),
+                );
+                o.entry("detail").or_insert(detail);
+            }
+            Value::Object(o)
+        }
+        Value::Null => json!({ "error": format!("NeuroVault backend returned HTTP {status}") }),
+        other => json!({
+            "error": format!("NeuroVault backend returned HTTP {status}"),
+            "detail": other,
+        }),
     }
 }
 
@@ -717,6 +749,44 @@ mod tests {
         let a = args(&[("engram_id", json!("a b/c"))]);
         let p = subst_path("/api/related/{engram_id}", &["engram_id".to_string()], &a);
         assert_eq!(p, "/api/related/a%20b%2Fc");
+    }
+
+    /// A 2xx body is the tool's answer — it must arrive untouched.
+    #[test]
+    fn success_bodies_pass_through_unchanged() {
+        let ok = json!({"hits": [{"id": "a"}], "brain": "main"});
+        assert_eq!(shape_response(200, ok.clone()), ok);
+        assert_eq!(shape_response(204, Value::Null), Value::Null);
+    }
+
+    /// The backend's own `{"error": ...}` body is already legible; keep it
+    /// verbatim so the cause isn't paraphrased away.
+    #[test]
+    fn error_bodies_keep_their_message() {
+        let v = shape_response(500, json!({"error": "brains.json unreadable"}));
+        assert_eq!(v["error"].as_str(), Some("brains.json unreadable"));
+    }
+
+    /// An HTTP failure with a body that ISN'T error-shaped (empty 404, a
+    /// proxy's HTML, a bare list) must still come back as a failure —
+    /// otherwise it reaches the agent looking exactly like an answer.
+    #[test]
+    fn failure_status_without_an_error_field_becomes_error_shaped() {
+        for (status, body) in [
+            (404u16, Value::Null),
+            (500, json!({"detail": "boom"})),
+            (502, json!([])),
+        ] {
+            let v = shape_response(status, body.clone());
+            let msg = v
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or_else(|| panic!("HTTP {status} must be error-shaped, got {v}"));
+            assert!(
+                msg.contains(&status.to_string()),
+                "the status belongs in the message: {msg}"
+            );
+        }
     }
 
     #[test]

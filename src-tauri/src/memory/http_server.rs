@@ -114,6 +114,15 @@ pub async fn start_server(port: Option<u16>) -> Result<ServerHandle, String> {
     let port = port.unwrap_or(DEFAULT_PORT);
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
 
+    // First run: make sure this home has a brain BEFORE anything can be
+    // served. Only the GUI's onboarding ever created one, so an agent that
+    // auto-started the backend (README: "Agent auto-start … no need to open
+    // the app first") got `brains.json unreadable` from every tool call.
+    // Bootstrapping ahead of the bind means `/api/health` answering already
+    // implies a usable brain — which is exactly what the MCP shim waits on.
+    // Idempotent, and it never touches an existing registry.
+    super::bootstrap::ensure_default_brain();
+
     let app = router();
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,

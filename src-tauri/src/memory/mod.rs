@@ -36,6 +36,7 @@ pub mod api_audit;
 pub mod api_gateway;
 pub mod api_keys;
 pub mod bm25;
+pub mod bootstrap;
 pub mod chunker;
 pub mod cluster_state;
 pub mod consolidation_schedule;
