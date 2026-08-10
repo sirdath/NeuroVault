@@ -8,31 +8,31 @@
 //!
 //! ## Default state — read this before trusting anything else
 //!
-//! This header used to read: "Off by default … users who never turn it
-//! on pay zero memory cost." That is FALSE as shipped, and the gap
-//! matters because the model is ~1 GB.
+//! OPT-IN, as of the 2026-08-10 audit fixes. It is worth having: the
+//! benchmark credits it with +3.83pp hit@5 (0.9362 → 0.9745). It is also
+//! ~1.1 GB on disk and resident, downloaded on first use.
 //!
-//! `RecallOpts::default()` does set `use_reranker: false`, but the
-//! HTTP/MCP layer overrides it: `handlers::rerank_enabled()` returns
-//! `true` when the rerank pref file is absent — which is every fresh
-//! install. So on a new machine the first keyword-shaped recall
-//! triggers a ~1 GB download, then pins ~1 GB resident for the life of
-//! the process (`OnceCell`, never unloaded). Nobody pays "zero".
+//! Two things used to make that an ambush rather than a choice, and both
+//! are now fixed:
 //!
-//! The repo currently argues with itself about whether ON is right:
-//! the comment in `instance()` below records the reranker as NEUTRAL
-//! vs engine-only at scale on LongMemEval, while `docs/benchmarks/`
-//! credits it with the headline +3.83pp hit@5 (0.9362 → 0.9745). Both
-//! cannot describe the same configuration. Until that is re-measured
-//! the default is left ON, so the shipped product matches the
-//! published benchmark — but the cost is now stated instead of denied.
+//! - `handlers::rerank_enabled()` returned `true` when the pref file was
+//!   absent — every fresh install. First search = silent 1.1 GB fetch.
+//!   It now returns `false`; Settings writes `on` to opt in.
+//! - Even with the pref off, `hybrid_retrieve` OR'd the caller's flag
+//!   with a query-shape heuristic, so any short query re-enabled it
+//!   anyway. The caller's `false` is now final (`rerank_decision`).
 //!
-//! Users opt out in Settings, which writes `off` to the pref file.
+//! The remaining tension is a measurement question, not a shipping one:
+//! `build_reranker` below records the CE as NEUTRAL vs engine-only at
+//! scale on LongMemEval while `docs/benchmarks/` credits the +3.83pp.
+//! Both cannot describe the same configuration; until that is
+//! re-measured, the user decides.
 
 use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::Mutex;
 
+use super::embedder::{init_once, ModelInitGate};
 use super::paths::nv_home;
 use super::types::{MemoryError, Result};
 
@@ -43,36 +43,57 @@ struct Reranker {
     model: Mutex<TextRerank>,
 }
 
+/// How long a recall waits for the cross-encoder before going on without
+/// it. Short on purpose, and much shorter than the embedder's: losing the
+/// CE costs a re-ordering of results the hybrid engine already found
+/// (`rerank` returning `Err` falls back to RRF), so there is no reason to
+/// hold a search hostage to a 1.1 GB download. The download continues in
+/// the background and a later query picks it up.
+const RERANKER_INIT_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn build_reranker() -> Result<Reranker> {
+    // `BGERerankerBase` is fastembed's default cross-encoder — a
+    // ~278M-param model whose fp32 ONNX is ~1.0 GB on disk and
+    // resident (NOT ~110 MB; corrected 2026-06-26). fastembed 4.9.1
+    // exposes NO quantized BGERerankerBase variant (RerankerModel has
+    // only BGERerankerBase / BGERerankerV2M3 / JINA*), so this cannot
+    // be int8-swapped the way the embedder can (BGESmallENV15Q).
+    // It is CPU/RAM-heavy and — measured on LongMemEval — NEUTRAL vs
+    // engine-only at scale, which is why it is opt-in (see the module
+    // header). Model cache is shared at `~/.neurovault/.fastembed_cache/`;
+    // first-use download is the full ~1 GB.
+    let model = TextRerank::try_new(
+        RerankInitOptions::new(RerankerModel::BGERerankerBase)
+            // Progress ON (it was suppressed): a user who has explicitly
+            // opted into a ~1.1 GB download deserves to see it happen
+            // somewhere. fastembed's embedder already defaults to true, so
+            // this is also the consistent choice; indicatif draws to
+            // stderr and stays silent when that isn't a terminal, so it
+            // can't corrupt the MCP server's stdio.
+            .with_show_download_progress(true)
+            // Pin the model cache to ~/.neurovault/.fastembed_cache (matches
+            // embedder.rs). Without this, fastembed defaults to the process
+            // CWD — fine for the GUI app (launched from a stable dir) but
+            // wrong for a headless `neurovault-server` started from an
+            // arbitrary cwd (npm bin shim, brew, curl), which would scatter
+            // a ~1.0 GB model under whatever folder the agent ran from.
+            .with_cache_dir(nv_home().join(".fastembed_cache")),
+    )
+    .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
+    Ok(Reranker {
+        model: Mutex::new(model),
+    })
+}
+
 fn instance() -> Result<&'static Reranker> {
     static INSTANCE: OnceCell<Reranker> = OnceCell::new();
-    INSTANCE.get_or_try_init(|| {
-        // `BGERerankerBase` is fastembed's default cross-encoder — a
-        // ~278M-param model whose fp32 ONNX is ~1.0 GB on disk and
-        // resident (NOT ~110 MB; corrected 2026-06-26). fastembed 4.9.1
-        // exposes NO quantized BGERerankerBase variant (RerankerModel has
-        // only BGERerankerBase / BGERerankerV2M3 / JINA*), so this cannot
-        // be int8-swapped the way the embedder can (BGESmallENV15Q).
-        // It is CPU/RAM-heavy and — measured on LongMemEval — NEUTRAL vs
-        // engine-only at scale, so it stays OFF by default (use_reranker
-        // false; fires only for keyword-shaped queries). Model cache is
-        // shared at `~/.neurovault/.fastembed_cache/`; first-use download
-        // is the full ~1 GB.
-        let model = TextRerank::try_new(
-            RerankInitOptions::new(RerankerModel::BGERerankerBase)
-                .with_show_download_progress(false)
-                // Pin the model cache to ~/.neurovault/.fastembed_cache (matches
-                // embedder.rs). Without this, fastembed defaults to the process
-                // CWD — fine for the GUI app (launched from a stable dir) but
-                // wrong for a headless `neurovault-server` started from an
-                // arbitrary cwd (npm bin shim, brew, curl), which would scatter
-                // a ~1.0 GB model under whatever folder the agent ran from.
-                .with_cache_dir(nv_home().join(".fastembed_cache")),
-        )
-        .map_err(|e| MemoryError::Other(format!("reranker init failed: {}", e)))?;
-        Ok::<Reranker, MemoryError>(Reranker {
-            model: Mutex::new(model),
-        })
-    })
+    // Shares the embedder's gate machinery: bounded wait, one attempt at
+    // a time, negative-cached failure with backoff. Without it a failed
+    // download was re-attempted from scratch on every recall, because
+    // `OnceCell::get_or_try_init` leaves the cell empty on error.
+    static GATE: Lazy<ModelInitGate> =
+        Lazy::new(|| ModelInitGate::new("reranker model", RERANKER_INIT_WAIT));
+    init_once(&GATE, &INSTANCE, build_reranker)
 }
 
 /// Rerank `documents` against `query`. Returns the cross-encoder

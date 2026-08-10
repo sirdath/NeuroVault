@@ -430,6 +430,79 @@ fn weights_for(query_type: &str) -> (f64, f64, f64) {
     }
 }
 
+/// Redistribute the semantic channel's RRF weight over the channels that
+/// are still alive, returning `(w_bm25, w_graph)`.
+///
+/// WHY renormalise instead of just dropping the term: the fused RRF score
+/// is not consumed on its own. Downstream stages add ABSOLUTE bonuses to
+/// it (title +0.30·coverage, quoted-phrase +0.20, fact +0.25) and then
+/// multiply by strength/recency. Leaving the surviving weights at 0.50 +
+/// 0.20 when they used to sit inside a 1.00 budget shrinks every ranking
+/// signal against those fixed bonuses, so a single title-token match
+/// starts outranking a strong keyword hit — the ordering quietly changes
+/// character exactly when the user is already getting a worse product.
+/// Preserving the total weight mass keeps the degraded ranking on the
+/// same scale as the healthy one.
+fn renormalize_without_semantic(w_sem: f64, w_bm25: f64, w_graph: f64) -> (f64, f64) {
+    let rest = w_bm25 + w_graph;
+    if rest <= 0.0 {
+        return (w_bm25, w_graph);
+    }
+    let scale = (w_sem + w_bm25 + w_graph) / rest;
+    (w_bm25 * scale, w_graph * scale)
+}
+
+/// What the caller decided about the cross-encoder reranker.
+///
+/// A bool cannot carry this: "false" has to mean *no reranker*, not
+/// "no opinion, feel free to switch it on". The distinction is not
+/// academic — the cross-encoder pulls a ~1.1 GB model on first use, so
+/// something that can silently upgrade an off to an on is a several-
+/// minute stall the user never asked for (and, before this type existed,
+/// exactly what any short query did).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RerankPref {
+    /// Caller has no preference — the query-shape heuristic decides.
+    #[default]
+    Unset,
+    /// Caller asked for the reranker regardless of query shape.
+    On,
+    /// Caller refused it. Nothing may upgrade this.
+    Off,
+}
+
+/// Resolve the caller's stance against the query-shape heuristic.
+///
+/// The heuristic (see the rerank block in `hybrid_retrieve_inner`) is an
+/// UPGRADE path, never an override: it may only speak when the caller
+/// said nothing.
+fn resolve_rerank(pref: RerankPref, query_type: &str) -> bool {
+    match pref {
+        RerankPref::On => true,
+        RerankPref::Off => false,
+        RerankPref::Unset => query_type == "keyword",
+    }
+}
+
+/// The single place the pipeline decides whether to run the cross-encoder.
+/// Split out of `hybrid_retrieve_inner` so the decision is testable without
+/// a 1.1 GB model on disk — the whole point of the off switch is that it
+/// holds on a machine that has never downloaded one.
+fn rerank_decision(opts: &RecallOpts, effective_query: &str) -> bool {
+    // `use_reranker` is EXPLICIT in both directions. It used to be OR'd
+    // with the shape heuristic, which meant `false` was worth nothing: any
+    // short query re-enabled the reranker over the caller's head, so
+    // `nv_recall`'s "stay fast" opt-out and the user's own Settings toggle
+    // both silently triggered a ~1.1 GB download. An off switch that a
+    // heuristic can flip back on is not an off switch.
+    let pref = if opts.use_reranker {
+        RerankPref::On
+    } else {
+        RerankPref::Off
+    };
+    resolve_rerank(pref, classify_query(effective_query)) && !is_ablated(opts, "reranker")
+}
+
 // ---- Cross-encoder rank fusion -------------------------------------------
 //
 // The cross-encoder reranker (cross-attention query↔doc) is a stronger
@@ -1101,7 +1174,7 @@ pub fn hybrid_retrieve_with_scores(
     opts: &RecallOpts,
 ) -> Result<(Vec<RecallHit>, HashMap<String, ChannelScores>)> {
     let mut scores: HashMap<String, ChannelScores> = HashMap::new();
-    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), true)?;
+    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), true, None)?;
     Ok((hits, scores))
 }
 
@@ -1117,7 +1190,7 @@ pub fn hybrid_retrieve_with_scores_quiet(
     opts: &RecallOpts,
 ) -> Result<(Vec<RecallHit>, HashMap<String, ChannelScores>)> {
     let mut scores: HashMap<String, ChannelScores> = HashMap::new();
-    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), false)?;
+    let hits = hybrid_retrieve_inner(db, query, opts, Some(&mut scores), false, None)?;
     Ok((hits, scores))
 }
 
@@ -1129,7 +1202,77 @@ pub fn hybrid_retrieve_with_scores_quiet(
 /// score-capture side channel (`hybrid_retrieve_with_scores`) shares
 /// the exact same pipeline so the two callers can never diverge.
 pub fn hybrid_retrieve(db: &BrainDb, query: &str, opts: &RecallOpts) -> Result<Vec<RecallHit>> {
-    hybrid_retrieve_inner(db, query, opts, None, true)
+    hybrid_retrieve_inner(db, query, opts, None, true, None)
+}
+
+/// How much of the retrieval pipeline actually ran.
+///
+/// Serialisable so the HTTP/MCP layer can hand it to a UI verbatim: a
+/// keyword-only result set that *looks* like a normal one is a lie of
+/// omission, and the caller needs one sentence it can show ("semantic
+/// search unavailable — keyword results only") rather than a silent
+/// quality drop.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecallDegradation {
+    /// True when at least one retrieval channel could not run.
+    pub degraded: bool,
+    /// Short, user-showable reason. `None` when nothing degraded.
+    pub reason: Option<String>,
+}
+
+/// Latch for "the vector channel is down", process-wide.
+///
+/// Process-wide rather than per-brain because the thing that breaks is
+/// the ONE shared embedding model, not any brain's index. Holding the
+/// reason here is also what keeps the log honest but quiet: we print on
+/// the TRANSITION into (and out of) the degraded state, so a broken
+/// install says it once instead of once per keystroke in the search box.
+static SEMANTIC_DOWN: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+fn note_semantic_unavailable(reason: &str) {
+    let mut cur = SEMANTIC_DOWN.lock();
+    if cur.is_none() {
+        eprintln!(
+            "[retriever] semantic channel unavailable ({reason}) — \
+             serving keyword + entity-graph results only"
+        );
+    }
+    *cur = Some(reason.to_string());
+}
+
+fn note_semantic_available() {
+    let mut cur = SEMANTIC_DOWN.lock();
+    if cur.take().is_some() {
+        eprintln!("[retriever] semantic channel recovered — full hybrid retrieval restored");
+    }
+}
+
+/// Current degradation state, for callers that can't thread the
+/// per-query value out (the throttled entry point's signature is shared
+/// with the Tauri command and the HTTP handler). Cheap: one mutex read.
+pub fn semantic_degradation() -> RecallDegradation {
+    match SEMANTIC_DOWN.lock().clone() {
+        Some(reason) => RecallDegradation {
+            degraded: true,
+            reason: Some(reason),
+        },
+        None => RecallDegradation::default(),
+    }
+}
+
+/// `hybrid_retrieve` plus an honest account of which channels ran.
+///
+/// The per-query answer, unlike [`semantic_degradation`]: two recalls can
+/// straddle the moment the model finishes loading, so a caller that needs
+/// to describe THIS result set asks here.
+pub fn hybrid_retrieve_with_status(
+    db: &BrainDb,
+    query: &str,
+    opts: &RecallOpts,
+) -> Result<(Vec<RecallHit>, RecallDegradation)> {
+    let mut status = RecallDegradation::default();
+    let hits = hybrid_retrieve_inner(db, query, opts, None, true, Some(&mut status))?;
+    Ok((hits, status))
 }
 
 /// The shared retrieval pipeline. When `capture` is `Some`, it is
@@ -1145,6 +1288,7 @@ fn hybrid_retrieve_inner(
     opts: &RecallOpts,
     mut capture: Option<&mut HashMap<String, ChannelScores>>,
     bump: bool,
+    status: Option<&mut RecallDegradation>,
 ) -> Result<Vec<RecallHit>> {
     // One-time flag: keeps the per-channel capture branches (temp maps
     // below) off the hot path entirely for the `hybrid_retrieve` caller.
@@ -1232,9 +1376,56 @@ fn hybrid_retrieve_inner(
     // parsed free-text verbatim.
     let expanded = effective_query.to_string();
 
-    // --- Signal 1: semantic KNN ---
-    let query_embedding = embedder::encode_query(&expanded)?;
-    let semantic_hits = knn_search(db, &query_embedding, chunk_search_depth)?;
+    // --- Signal 1: semantic KNN (OPTIONAL) ---
+    //
+    // The vector channel is the ONLY part of retrieval that needs
+    // something the machine might not have: an ONNX model on disk, and a
+    // network to fetch it the first time. BM25 (signal 2) and the entity
+    // graph (signal 3) are pure SQL over an index that is already local.
+    // Propagating the embedder's error with `?` therefore threw away two
+    // working local channels because a third one couldn't reach
+    // HuggingFace — a local-first app answering HTTP 500 for a fully
+    // indexed local brain. The channel is now allowed to be absent: we
+    // record WHY, fuse whatever survived, and tell the caller the answer
+    // is partial (`RecallDegradation`) instead of pretending it is whole.
+    let mut semantic_down: Option<String> = None;
+    let mut query_embedding: Option<Vec<f32>> = None;
+    let mut semantic_hits: Vec<KnnHit> = Vec::new();
+    match embedder::encode_query(&expanded) {
+        Ok(emb) => match knn_search(db, &emb, chunk_search_depth) {
+            Ok(hits) => {
+                semantic_hits = hits;
+                query_embedding = Some(emb);
+            }
+            // Same outage, different hat: no sqlite-vec extension, or a
+            // brain whose `vec_chunks` was never built. The query has a
+            // vector but nothing to compare it against, so the channel is
+            // just as absent — and just as survivable.
+            Err(e) => semantic_down = Some(format!("vector index unavailable: {e}")),
+        },
+        Err(e) => semantic_down = Some(format!("embedding model unavailable: {e}")),
+    }
+    match &semantic_down {
+        Some(reason) => note_semantic_unavailable(reason),
+        None => note_semantic_available(),
+    }
+    if let Some(out) = status {
+        out.degraded = semantic_down.is_some();
+        out.reason = semantic_down
+            .as_ref()
+            .map(|r| format!("semantic search unavailable — keyword results only ({r})"));
+    }
+    // Redistribute the dead channel's RRF weight over the survivors so the
+    // fused score keeps its scale (see `renormalize_without_semantic`).
+    // Only on DEGRADATION, never on ablation: `--ablate semantic` zeroes
+    // the weight deliberately to measure retrieval without it, and
+    // renormalising there would silently rescale the A/B it exists to run.
+    let (w_sem, w_bm25, w_graph) = if semantic_down.is_some() && !is_ablated(opts, "semantic") {
+        let (b, g) = renormalize_without_semantic(w_sem, w_bm25, w_graph);
+        (0.0, b, g)
+    } else {
+        (w_sem, w_bm25, w_graph)
+    };
     let mut seen_semantic = HashSet::new();
     let mut semantic_ranked: Vec<String> = Vec::new();
     for h in &semantic_hits {
@@ -1451,32 +1642,40 @@ fn hybrid_retrieve_inner(
         // top-10-capped semantic-title boost for engrams ALREADY outside
         // all three primary signals. Keyword-title (above) is unscoped, so
         // exact "find by title" is unaffected.
-        let scope_pool = !is_ablated(opts, "title_pool_scope");
-        let pool: HashSet<&String> = if scope_pool {
-            semantic_ranked
+        //
+        // Skipped wholesale when the semantic channel is down: there is no
+        // query vector to compare against, and `title_embeddings` would
+        // walk straight back into the same dead model. The `?` inside is
+        // still honest — reached only when the model has ALREADY answered
+        // once for this query, so a failure here is a genuine anomaly.
+        if let Some(q_emb) = &query_embedding {
+            let scope_pool = !is_ablated(opts, "title_pool_scope");
+            let pool: HashSet<&String> = if scope_pool {
+                semantic_ranked
+                    .iter()
+                    .chain(bm25_ranked.iter())
+                    .chain(graph_ranked.iter())
+                    .collect()
+            } else {
+                engrams_meta.iter().map(|(e, _, _)| e).collect()
+            };
+            let scored: Vec<(&String, &String)> = engrams_meta
                 .iter()
-                .chain(bm25_ranked.iter())
-                .chain(graph_ranked.iter())
-                .collect()
-        } else {
-            engrams_meta.iter().map(|(e, _, _)| e).collect()
-        };
-        let scored: Vec<(&String, &String)> = engrams_meta
-            .iter()
-            .filter(|(e, _, _)| pool.contains(e))
-            .map(|(e, t, _)| (e, t))
-            .collect();
-        let titles: Vec<String> = scored.iter().map(|(_, t)| (*t).clone()).collect();
-        let t_embeddings = title_embeddings(&titles)?;
-        let mut q_norm = query_embedding.clone();
-        if normalize_inplace(&mut q_norm) {
-            for (j, (eid, _)) in scored.iter().enumerate() {
-                if j < t_embeddings.len() && t_embeddings[j].len() == EMBEDDING_DIM {
-                    let mut t_emb = t_embeddings[j].clone();
-                    if normalize_inplace(&mut t_emb) {
-                        let sim = cosine(&q_norm, &t_emb) as f64;
-                        if sim > 0.45 {
-                            semantic_title_scores.insert((*eid).clone(), sim);
+                .filter(|(e, _, _)| pool.contains(e))
+                .map(|(e, t, _)| (e, t))
+                .collect();
+            let titles: Vec<String> = scored.iter().map(|(_, t)| (*t).clone()).collect();
+            let t_embeddings = title_embeddings(&titles)?;
+            let mut q_norm = q_emb.clone();
+            if normalize_inplace(&mut q_norm) {
+                for (j, (eid, _)) in scored.iter().enumerate() {
+                    if j < t_embeddings.len() && t_embeddings[j].len() == EMBEDDING_DIM {
+                        let mut t_emb = t_embeddings[j].clone();
+                        if normalize_inplace(&mut t_emb) {
+                            let sim = cosine(&q_norm, &t_emb) as f64;
+                            if sim > 0.45 {
+                                semantic_title_scores.insert((*eid).clone(), sim);
+                            }
                         }
                     }
                 }
@@ -1959,8 +2158,7 @@ fn hybrid_retrieve_inner(
     // HEURISTIC pending per-category bench tuning on a bench-capable
     // machine; fails safe toward no-rerank per adaptive-retrieval
     // guidance (Adaptive-RAG 2403.14403, DAT 2503.23013).
-    let rerank_by_shape = classify_query(effective_query) == "keyword";
-    let do_rerank = (opts.use_reranker || rerank_by_shape) && !is_ablated(opts, "reranker");
+    let do_rerank = rerank_decision(opts, effective_query);
     if do_rerank && candidates.len() > 1 {
         let limit = candidates.len().min(20);
         let docs: Vec<String> = candidates
@@ -3370,5 +3568,214 @@ mod materially_newer_tests {
         assert!(!is_materially_newer("2026-04-02T00:00:00Z", "2026-04-0"));
         assert!(!is_materially_newer("2026", "2026-04-01T00:00:00Z"));
         assert!(!is_materially_newer("", ""));
+    }
+}
+
+#[cfg(test)]
+mod degraded_channel_tests {
+    //! The local-first contract: an indexed brain on a machine with no
+    //! embedding model and no network still answers. Everything here runs
+    //! model-free — the embedder is deliberately killed (see
+    //! `embedder::DeadModelGuard`) and the reranker is never allowed to
+    //! load, so the suite proves the offline path without touching one.
+
+    use super::{
+        classify_query, hybrid_retrieve_with_status, note_semantic_available,
+        renormalize_without_semantic, rerank_decision, resolve_rerank, semantic_degradation,
+        RecallOpts, RerankPref,
+    };
+    use crate::memory::{bm25, db, embedder};
+
+    /// One target note plus four distractors, built WITHOUT the ingest
+    /// pipeline so no embedding is ever computed: `db::open_file` applies
+    /// the full schema and skips sqlite-vec, which is exactly the shape of
+    /// a machine that can't do vectors. Rows go in by hand.
+    ///
+    /// Five documents, not two, because BM25's IDF is
+    /// `ln((N − df + 0.5)/(df + 0.5))` — at N=2, df=1 that is EXACTLY
+    /// zero, so a two-note corpus scores every term at 0 and the whole
+    /// channel looks broken when it isn't.
+    fn keyword_brain(path: &std::path::Path) -> db::BrainDb {
+        const NOTES: [(&str, &str, &str, &str); 5] = [
+            (
+                "e-vec",
+                "vector-db.md",
+                "Storage decision",
+                "We chose sqlite-vec over Chroma for the embedding store.",
+            ),
+            (
+                "e-yoga",
+                "yoga.md",
+                "Health",
+                "Yoga classes happen on Camden High Street on Mondays.",
+            ),
+            (
+                "e-guitar",
+                "guitar.md",
+                "Music",
+                "For electric guitar I prefer a Stratocaster to a Les Paul.",
+            ),
+            (
+                "e-coffee",
+                "espresso.md",
+                "Coffee",
+                "I pull a 1:2 ratio espresso from Ethiopian beans every morning.",
+            ),
+            (
+                "e-garden",
+                "garden.md",
+                "Garden",
+                "The tomatoes need staking before the greenhouse gets too warm.",
+            ),
+        ];
+        let brain = db::open_file(path).expect("open test brain");
+        {
+            let conn = brain.lock();
+            for (id, filename, title, body) in NOTES {
+                conn.execute(
+                    "INSERT INTO engrams (id, filename, title, content, content_hash, kind,
+                                          state, strength, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?1, 'note', 'fresh', 1.0,
+                             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    rusqlite::params![id, filename, title, body],
+                )
+                .expect("seed engram");
+                conn.execute(
+                    "INSERT INTO chunks (id, engram_id, content, granularity, chunk_index)
+                     VALUES (?1 || '-c', ?1, ?2, 'paragraph', 0)",
+                    rusqlite::params![id, body],
+                )
+                .expect("seed chunk");
+            }
+        }
+        // The BM25 index is a process-global cache keyed by brain id, and
+        // `open_file` always names the brain "test" — drop any index a
+        // sibling test left behind so this one indexes its own rows.
+        bm25::drop_index(brain.brain_id());
+        brain
+    }
+
+    /// `SEMANTIC_DOWN` and the BM25 index cache for brain id "test" are
+    /// process-global, so the tests that touch them run one at a time.
+    /// Deliberately NOT `TEST_HOME_LOCK`: nothing here redirects
+    /// NEUROVAULT_HOME, and mutating the environment mid-suite is what
+    /// breaks the tests that do.
+    static LATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// THE headline regression. Before the fix this returned
+    /// `Err("fastembed init failed: Failed to retrieve onnx/model.onnx")`
+    /// for a brain whose every byte was already on local disk.
+    #[test]
+    fn recall_survives_a_dead_embedder_and_says_so() {
+        let _lock = LATCH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "nv-degraded-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let brain = keyword_brain(&path);
+
+        let opts = RecallOpts {
+            top_k: 5,
+            // Recency ablated so the assertion is about channels, not decay.
+            ablate: vec!["recency".to_string()],
+            ..RecallOpts::default()
+        };
+
+        let _dead = embedder::DeadModelGuard::new();
+        let (hits, status) = hybrid_retrieve_with_status(&brain, "sqlite-vec Chroma", &opts)
+            .expect("a dead embedder must cost the semantic channel, not the recall");
+
+        assert!(
+            !hits.is_empty(),
+            "keyword channel is pure local SQL — it must still answer"
+        );
+        assert_eq!(
+            hits[0].engram_id,
+            "e-vec",
+            "BM25 alone should still rank the matching note first, got {:?}",
+            hits.iter().map(|h| &h.engram_id).collect::<Vec<_>>()
+        );
+        assert!(status.degraded, "a keyword-only result set must admit it");
+        let reason = status.reason.unwrap_or_default();
+        assert!(
+            reason.contains("model"),
+            "the reason has to name the outage, got {reason:?}"
+        );
+        // Same story on the process-wide latch the UI reads.
+        assert!(semantic_degradation().degraded);
+
+        drop(_dead);
+        bm25::drop_index(brain.brain_id());
+        drop(brain);
+        note_semantic_available();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A healthy pipeline must not advertise a degradation — the flag is
+    /// worthless if it is sticky.
+    #[test]
+    fn a_healthy_recall_reports_no_degradation() {
+        let _lock = LATCH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        note_semantic_available();
+        assert_eq!(semantic_degradation(), Default::default());
+    }
+
+    #[test]
+    fn a_missing_channel_keeps_the_total_rrf_weight() {
+        // "keyword" weights: semantic 0.30, bm25 0.50, graph 0.20.
+        let (b, g) = renormalize_without_semantic(0.30, 0.50, 0.20);
+        assert!((b + g - 1.0).abs() < 1e-12, "weight mass leaked: {b} + {g}");
+        // Survivors keep their RELATIVE standing — BM25 was 2.5× the graph
+        // channel before and must still be after.
+        assert!((b / g - 2.5).abs() < 1e-12);
+        // Degenerate input can't divide by zero or invent weight.
+        assert_eq!(renormalize_without_semantic(1.0, 0.0, 0.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn an_explicit_rerank_off_beats_the_keyword_heuristic() {
+        // "espresso ratio beans" is 3 words with no question word — the
+        // exact shape that used to force the 1.1 GB cross-encoder on.
+        let kw = "espresso ratio beans";
+        assert_eq!(
+            classify_query(kw),
+            "keyword",
+            "fixture must be keyword-shaped"
+        );
+
+        let off = RecallOpts {
+            use_reranker: false,
+            ..RecallOpts::default()
+        };
+        assert!(
+            !rerank_decision(&off, kw),
+            "an explicit `use_reranker: false` must not be overridden by query shape"
+        );
+
+        // …and an explicit ON still works for any shape.
+        let on = RecallOpts {
+            use_reranker: true,
+            ..RecallOpts::default()
+        };
+        assert!(rerank_decision(
+            &on,
+            "what did we decide about the espresso ratio"
+        ));
+        // …and the ablation switch still wins over everything.
+        let ablated = RecallOpts {
+            use_reranker: true,
+            ablate: vec!["reranker".to_string()],
+            ..RecallOpts::default()
+        };
+        assert!(!rerank_decision(&ablated, kw));
+    }
+
+    #[test]
+    fn only_an_absent_preference_may_be_upgraded_by_shape() {
+        assert!(resolve_rerank(RerankPref::Unset, "keyword"));
+        assert!(!resolve_rerank(RerankPref::Unset, "natural"));
+        assert!(resolve_rerank(RerankPref::On, "natural"));
+        assert!(!resolve_rerank(RerankPref::Off, "keyword"));
     }
 }

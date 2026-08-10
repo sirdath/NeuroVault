@@ -18,7 +18,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::Mutex;
 
 use super::paths::nv_home;
@@ -111,31 +111,223 @@ struct Embedder {
     cache: Mutex<QueryCache>,
 }
 
-fn instance() -> Result<&'static Embedder> {
-    static INSTANCE: OnceCell<Embedder> = OnceCell::new();
-    INSTANCE.get_or_try_init(|| {
-        // `InitOptions::new` + explicit model id matches what the
-        // Python side passes: "BAAI/bge-small-en-v1.5".
-        //
-        // Cache dir: fastembed-rs defaults to a CWD-RELATIVE
-        // `.fastembed_cache`. That silently breaks a GUI app launched
-        // from Finder/`open`, whose working directory is `/` — it can't
-        // create/write there, so the first embed fails with "Failed to
-        // retrieve onnx/model.onnx". Pin an absolute, app-owned, writable
-        // dir under the data root so the model resolves no matter where
-        // the app was launched from. An explicit FASTEMBED_CACHE_DIR env
-        // still wins (fastembed reads it when we don't override).
-        let mut opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
-        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
-            opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
+// ---- Test seam: a deliberately dead model ---------------------------------
+//
+// The offline first-run failure (no model cache + no network) is the one
+// behaviour the retriever MUST survive, so it has to be reproducible in a
+// unit test — and a test may never reach the network to prove it. The
+// switch is thread-local, not an env var, because `cargo test` runs the
+// lib tests in parallel threads of ONE process: a global toggle would
+// blind every other test that happens to embed at the same moment.
+#[cfg(test)]
+thread_local! {
+    static FORCE_DEAD_MODEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII switch that makes every embedder entry point on THIS thread fail
+/// exactly the way a cache-less offline install does. Restores the
+/// previous value on drop so a panicking test can't leak the state.
+#[cfg(test)]
+pub(super) struct DeadModelGuard(bool);
+
+#[cfg(test)]
+impl DeadModelGuard {
+    pub(super) fn new() -> Self {
+        Self(FORCE_DEAD_MODEL.with(|f| f.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for DeadModelGuard {
+    fn drop(&mut self) {
+        FORCE_DEAD_MODEL.with(|f| f.set(self.0));
+    }
+}
+
+/// The exact error text a missing ONNX cache produces in the wild, so the
+/// test asserts against the real string and not a friendlier stand-in.
+#[cfg(test)]
+const DEAD_MODEL_ERROR: &str = "fastembed init failed: Failed to retrieve onnx/model.onnx";
+
+// ---- Model-init gate ------------------------------------------------------
+//
+// Shared by this module and `reranker.rs`; both load an ONNX model that
+// fastembed may have to DOWNLOAD, and both were failing the same three
+// ways.
+//
+// 1. No retry, no timeout, and no way to add either. fastembed 4.9.1
+//    builds its own `hf_hub::api::sync::ApiBuilder` inside `pull_from_hf`
+//    and never exposes it, so `.with_retries()` is unreachable
+//    (`max_retries` stays 0) and so is the ureq agent (`timeout_read` is
+//    None — a stalled socket mid-download blocks forever). Neither knob
+//    can be set from here at these pinned versions.
+// 2. `OnceCell::get_or_try_init` leaves the cell EMPTY on failure, so
+//    every later call re-enters the closure. With a download in that
+//    closure, one dead network turned into a fresh ~130 MB (embedder) /
+//    ~1.1 GB (reranker) attempt on every single recall — and the ambient
+//    hook recalls on every prompt.
+// 3. The attempt ran on the caller's thread, so a hung download hung the
+//    request instead of degrading it.
+//
+// Since the upstream knobs are out of reach, the gate supplies the same
+// guarantees from outside: at most one attempt in flight, a bounded wait
+// before the caller is released to the degraded path, and a
+// negative-cached failure with exponential backoff so a broken network
+// costs one attempt per cooldown rather than one per keystroke.
+
+/// First cooldown after a failed init, and the ceiling backoff walks to.
+/// 30 s is long enough that a recall storm can't re-trigger a download,
+/// short enough that plugging the network back in feels immediate.
+const INIT_COOLDOWN_MIN: std::time::Duration = std::time::Duration::from_secs(30);
+const INIT_COOLDOWN_MAX: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Serialises init attempts and remembers failures. See the module note
+/// above for why this lives outside fastembed rather than inside it.
+pub(super) struct ModelInitGate {
+    label: &'static str,
+    /// How long a caller waits before giving up on a first-time load.
+    /// Per-model: losing the reranker costs a rank ordering, losing the
+    /// embedder costs ingestion, so they buy different amounts of patience.
+    wait: std::time::Duration,
+    state: Mutex<GateState>,
+}
+
+#[derive(Default)]
+struct GateState {
+    /// An attempt is running on a background thread right now.
+    in_flight: bool,
+    /// (when it failed, what it said, how long to wait before retrying).
+    last_failure: Option<(std::time::Instant, String, std::time::Duration)>,
+}
+
+impl ModelInitGate {
+    pub(super) fn new(label: &'static str, wait: std::time::Duration) -> Self {
+        Self {
+            label,
+            wait,
+            state: Mutex::new(GateState::default()),
         }
-        let model = TextEmbedding::try_new(opts)
-            .map_err(|e| MemoryError::Other(format!("fastembed init failed: {}", e)))?;
-        Ok::<Embedder, MemoryError>(Embedder {
-            model: Mutex::new(model),
-            cache: Mutex::new(QueryCache::new()),
-        })
+    }
+}
+
+/// Initialise `cell` at most once, without ever parking the caller for an
+/// unbounded time.
+///
+/// The build runs on a detached thread and the caller waits for `wait`.
+/// If the deadline passes first the caller gets an error (and, upstream,
+/// degrades to the keyword path) while the download keeps going — so a
+/// slow first fetch costs one degraded query instead of a frozen app, and
+/// the model is simply there for the next one. Nothing is retried in a
+/// loop: a failure is remembered, and the backoff doubles to
+/// `INIT_COOLDOWN_MAX` so a permanently offline machine stops asking.
+pub(super) fn init_once<T: Send + Sync + 'static>(
+    gate: &'static ModelInitGate,
+    cell: &'static OnceCell<T>,
+    build: fn() -> Result<T>,
+) -> Result<&'static T> {
+    if let Some(v) = cell.get() {
+        return Ok(v);
+    }
+    {
+        let mut st = gate.state.lock();
+        if st.in_flight {
+            return Err(MemoryError::Other(format!(
+                "{} is still loading in the background",
+                gate.label
+            )));
+        }
+        if let Some((at, msg, backoff)) = &st.last_failure {
+            if at.elapsed() < *backoff {
+                return Err(MemoryError::Other(msg.clone()));
+            }
+        }
+        st.in_flight = true;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+    std::thread::spawn(move || {
+        let outcome = match build() {
+            Ok(v) => {
+                // `set` can only lose a race it can't be in (one attempt
+                // at a time), but ignore the result either way — a value
+                // already present is the same success.
+                let _ = cell.set(v);
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        };
+        {
+            let mut st = gate.state.lock();
+            st.in_flight = false;
+            st.last_failure = match &outcome {
+                Ok(()) => None,
+                Err(msg) => {
+                    let backoff = st
+                        .last_failure
+                        .as_ref()
+                        .map(|(_, _, b)| (*b * 2).min(INIT_COOLDOWN_MAX))
+                        .unwrap_or(INIT_COOLDOWN_MIN);
+                    Some((std::time::Instant::now(), msg.clone(), backoff))
+                }
+            };
+        }
+        // The caller may already have walked away past the deadline.
+        let _ = tx.send(outcome);
+    });
+
+    match rx.recv_timeout(gate.wait) {
+        Ok(Ok(())) => cell.get().ok_or_else(|| {
+            MemoryError::Other(format!("{} init reported success but is empty", gate.label))
+        }),
+        Ok(Err(msg)) => Err(MemoryError::Other(msg)),
+        Err(_) => Err(MemoryError::Other(format!(
+            "{} did not load within {}s — still downloading in the background",
+            gate.label,
+            gate.wait.as_secs()
+        ))),
+    }
+}
+
+/// How long a caller waits for the embedding model. Generous because the
+/// write path needs it: ingest has no keyword fallback to degrade to, so
+/// timing out a first-run download costs an unindexed note, while recall
+/// (which does have one) rarely waits at all — an offline machine fails
+/// the connection in seconds, well inside this.
+const EMBEDDER_INIT_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn build_embedder() -> Result<Embedder> {
+    // `InitOptions::new` + explicit model id matches what the
+    // Python side passes: "BAAI/bge-small-en-v1.5".
+    //
+    // Cache dir: fastembed-rs defaults to a CWD-RELATIVE
+    // `.fastembed_cache`. That silently breaks a GUI app launched
+    // from Finder/`open`, whose working directory is `/` — it can't
+    // create/write there, so the first embed fails with "Failed to
+    // retrieve onnx/model.onnx". Pin an absolute, app-owned, writable
+    // dir under the data root so the model resolves no matter where
+    // the app was launched from. An explicit FASTEMBED_CACHE_DIR env
+    // still wins (fastembed reads it when we don't override).
+    let mut opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
+    if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+        opts = opts.with_cache_dir(nv_home().join(".fastembed_cache"));
+    }
+    let model = TextEmbedding::try_new(opts)
+        .map_err(|e| MemoryError::Other(format!("fastembed init failed: {}", e)))?;
+    Ok(Embedder {
+        model: Mutex::new(model),
+        cache: Mutex::new(QueryCache::new()),
     })
+}
+
+fn instance() -> Result<&'static Embedder> {
+    #[cfg(test)]
+    if FORCE_DEAD_MODEL.with(|f| f.get()) {
+        return Err(MemoryError::Other(DEAD_MODEL_ERROR.to_string()));
+    }
+    static INSTANCE: OnceCell<Embedder> = OnceCell::new();
+    static GATE: Lazy<ModelInitGate> =
+        Lazy::new(|| ModelInitGate::new("embedding model", EMBEDDER_INIT_WAIT));
+    init_once(&GATE, &INSTANCE, build_embedder)
 }
 
 /// Assert the embedder emits the expected dimension. Called once on
@@ -275,6 +467,58 @@ mod tests {
         let _ = encode_query("repeated").unwrap();
         let stats = query_cache_stats().unwrap();
         assert!(stats.hits >= 1);
+    }
+
+    /// The download-storm regression. `OnceCell::get_or_try_init` leaves
+    /// the cell empty when init fails, so before the gate every recall
+    /// (and the ambient hook runs one per prompt) re-entered a closure
+    /// that tries to fetch ~1.1 GB. One offline machine, unbounded
+    /// attempts.
+    #[test]
+    fn a_failed_init_is_negative_cached_instead_of_retried_per_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+        static CELL: OnceCell<u8> = OnceCell::new();
+        static GATE: Lazy<ModelInitGate> =
+            Lazy::new(|| ModelInitGate::new("test model", std::time::Duration::from_secs(5)));
+        fn always_fails() -> Result<u8> {
+            ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+            Err(MemoryError::Other("no network".to_string()))
+        }
+
+        let first = super::init_once(&GATE, &CELL, always_fails);
+        assert!(first.is_err(), "a failing build must surface as an error");
+        assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 1);
+
+        for _ in 0..25 {
+            let again = super::init_once(&GATE, &CELL, always_fails);
+            assert!(again.is_err(), "the cached failure is still a failure");
+        }
+        assert_eq!(
+            ATTEMPTS.load(Ordering::SeqCst),
+            1,
+            "the cooldown must absorb the retry storm, not forward it"
+        );
+    }
+
+    #[test]
+    fn a_successful_init_happens_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+        static CELL: OnceCell<u8> = OnceCell::new();
+        static GATE: Lazy<ModelInitGate> =
+            Lazy::new(|| ModelInitGate::new("test model", std::time::Duration::from_secs(5)));
+        fn succeeds() -> Result<u8> {
+            ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+            Ok(7)
+        }
+
+        for _ in 0..10 {
+            assert_eq!(*super::init_once(&GATE, &CELL, succeeds).unwrap(), 7);
+        }
+        assert_eq!(ATTEMPTS.load(Ordering::SeqCst), 1, "the model loads once");
     }
 
     #[test]

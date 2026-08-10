@@ -6164,11 +6164,30 @@ pub fn rerank_pref_path() -> std::path::PathBuf {
     super::paths::nv_home().join("rerank.txt")
 }
 
-/// Default reranker state for recall. ON unless the user wrote "off".
+/// Default reranker state for recall: OPT-IN.
+///
+/// It used to default ON when the pref file was absent — i.e. on every
+/// fresh install. The cross-encoder is worth it (+3.8pp hit@5) but its
+/// model is ~1.1 GB, the download emits no progress anywhere the user can
+/// see, and it is triggered by typing a search. So a brand-new user's
+/// first query bought them several minutes of an app that appeared to do
+/// nothing. "No pref file" means "this user has never been asked", and
+/// nobody who has never been asked should be signed up for a gigabyte.
+/// An explicit `on` (Settings → Reranker) still enables it, unchanged.
 pub fn rerank_enabled() -> bool {
-    match std::fs::read_to_string(rerank_pref_path()) {
+    rerank_enabled_at(&rerank_pref_path())
+}
+
+/// Body of [`rerank_enabled`] against an explicit path, so the default can
+/// be pinned by a test without redirecting the process-global
+/// NEUROVAULT_HOME (which races every other test that reads it).
+fn rerank_enabled_at(path: &std::path::Path) -> bool {
+    match std::fs::read_to_string(path) {
+        // An empty file is a half-written pref, not consent — same
+        // treatment as no file at all.
+        Ok(s) if s.trim().is_empty() => false,
         Ok(s) => !matches!(s.trim().to_lowercase().as_str(), "off" | "false" | "0"),
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -6205,6 +6224,46 @@ pub async fn rerank_set(
     Ok(Json(RerankResponse {
         enabled: body.enabled,
     }))
+}
+
+#[cfg(test)]
+mod rerank_pref_tests {
+    use super::rerank_enabled_at;
+
+    /// A path that is guaranteed not to exist — the state of every fresh
+    /// install. Tested against `rerank_enabled_at` rather than
+    /// `rerank_enabled` so we don't have to redirect the process-global
+    /// NEUROVAULT_HOME, which races every other test that reads it.
+    fn absent() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "nv-rerank-absent-{}",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    #[test]
+    fn a_fresh_install_does_not_opt_into_a_gigabyte_download() {
+        assert!(
+            !rerank_enabled_at(&absent()),
+            "no pref file = a user who has never been asked; \
+             they must not silently pull a ~1.1 GB model"
+        );
+    }
+
+    #[test]
+    fn the_pref_file_still_decides_in_both_directions() {
+        let p = absent();
+        std::fs::write(&p, "on").unwrap();
+        assert!(rerank_enabled_at(&p), "an explicit opt-in must enable it");
+        std::fs::write(&p, "true").unwrap();
+        assert!(rerank_enabled_at(&p));
+        // Every spelling the Settings toggle and hand-edits produce.
+        for spelling in ["off", "false", "0", "OFF", " off \n", ""] {
+            std::fs::write(&p, spelling).unwrap();
+            assert!(!rerank_enabled_at(&p), "{spelling:?} must read as off");
+        }
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 // ---------------------------------------------------------------------------
