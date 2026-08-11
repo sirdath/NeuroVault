@@ -75,7 +75,7 @@ Notes are saved as plain Markdown in `~/.neurovault/`.
 Every installer carries a **Sigstore build provenance attestation** — a signed, transparency-logged statement that these exact bytes were produced by this repo's release workflow. With the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-gh attestation verify NeuroVault_0.6.1_aarch64.dmg --repo sirdath/NeuroVault
+gh attestation verify NeuroVault_0.6.2_aarch64.dmg --repo sirdath/NeuroVault
 ```
 
 That is a stronger check than a hash published beside the file: a checksum only proves the download matches whatever the release page says, while the attestation ties the artifact to the workflow run that built it. (Releases do **not** ship a separate `SHA256SUMS` file; GitHub does display a per-asset SHA-256 digest on the release page if you want a second look.) Each release also ships an SPDX SBOM (`neurovault-*.spdx.json`).

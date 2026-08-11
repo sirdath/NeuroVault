@@ -16,6 +16,114 @@ _Nothing yet._
 
 ---
 
+## [0.6.2] — 2026-08-11
+
+The release that made the first hour work. Four independent audits — first
+run, developer setup, public claims, and Windows — went looking for what a new
+user or contributor actually hits. Recall no longer fails when it cannot reach
+the network, nobody is opted into a gigabyte download by typing a search, an
+agent that starts the backend itself now finds a brain waiting, and the first
+command in the developer docs works on a clean clone. Several claims that were
+not true are gone.
+
+### Fixed
+
+- **Recall survives without the embedding model.** On a fully-indexed local
+  brain with no model cached, recall returned HTTP 500: two hard `?` on the
+  same unavailable model aborted retrieval before BM25 and the entity graph,
+  both of which are pure local SQL sitting a hundred lines further down. A
+  local-first memory app could not search its own notes offline. The semantic
+  channel is now optional — it drops out, fusion continues, and RRF weight is
+  renormalised so the remaining channels keep total mass. That renormalisation
+  matters: the title, phrase and fact boosts are absolute, and without it they
+  would start outranking real keyword hits exactly when results are already
+  thinner. Degradation is reported rather than hidden, and logged on state
+  change instead of once per query.
+- **The cross-encoder reranker is opt-in.** It was on for every fresh install:
+  ~1 GB fetched with download progress explicitly suppressed, triggered by
+  typing a first search, with the only off-switch behind a Developer-options
+  tab labelled "most people never need these controls". First run is now
+  ~130 MB, and ~1 GB only if you turn reranking on. Progress is shown.
+- **An explicit "no reranking" is honoured.** Query shape was OR'd into the
+  caller's flag, so any short query re-enabled reranking — silently overriding
+  both the desktop recall path that documents `false` for speed and a user who
+  had switched it off. Shape may now only upgrade an *absent* preference.
+- **Agents that auto-start the backend find a brain.** Nothing ever created
+  one, so on a fresh machine every tool call returned `brains.json unreadable:
+  os error 2` — and returned it with `isError: false`, so the agent believed
+  it had succeeded and relayed a filesystem error to the user as the answer. A
+  default brain is now created before the listener binds, published by hard
+  link so a racing process cannot clobber a registry the winner already
+  extended, skipping legacy vault layouts rather than shadowing them and
+  adopting orphaned brain directories rather than hiding them.
+- **MCP failures are marked as failures.** The forwarder discarded the HTTP
+  status, so any non-2xx whose body was not error-shaped — an empty 404, proxy
+  HTML — reached the agent looking like data. Errors now carry `isError: true`
+  and a hint that says what to do.
+- **Model downloads cannot hang forever.** One attempt in flight, a bounded
+  wait, and a negative cache with backoff, since the pinned fastembed exposes
+  neither hf-hub's retries nor ureq's read timeout. A stalled download used to
+  park a blocking task and re-fire on every prompt.
+
+### Changed
+
+- **Connecting an AI is an onboarding step.** It was never mentioned:
+  onboarding ended on "Finish setup" with the connection panel reachable only
+  through an 11px text link, and its final step was Claude-Code-specific, so
+  Claude Desktop and Cursor users finished with no path to value at all. It is
+  now a named step with per-client config inline, one-click registration for
+  Claude Code, a concrete "here is what success looks like" close, and a
+  Verify connection check. Skipping is still allowed, but it is a deliberate
+  click that leaves a receipt rather than the default outcome.
+- **The vault step no longer offers to create a second brain**, now that one
+  exists before onboarding runs — it offers rename-or-continue instead.
+- **`npm run tauri dev` works on a clean clone.** The first command in the
+  developer docs failed with an error naming a file that is not in the repo:
+  the sidecar staging script was wired into `beforeBuildCommand` only. It now
+  runs before dev too, and is idempotent so restarts do not re-pay a
+  release-profile link. `CONTRIBUTING` documented a `cargo build` invocation
+  that always failed.
+- **`cargo test` runs offline.** Four suites each set a unique temporary home
+  and therefore missed the model cache, re-downloading ~130 MB per run; the
+  heaviest went from 109 s to 5.7 s. `scripts/gates.sh` now fetches the
+  checksum-verified Linux `vec0.so` that was missing entirely, so Linux
+  contributors can run the suite at all.
+
+### Docs
+
+- Removed **"Ebbinghaus strength decay + access reinforcement"**: nothing in
+  the codebase ever writes `strength`, so it entered every score as an
+  identical constant and changed no ordering. Replaced with the type-aware
+  salience half-lives and query-time recency tilt that do run, and retracted
+  in place in `HOW-NEUROVAULT-WORKS.md` rather than quietly deleted.
+- Removed the instruction to **verify SHA-256 checksums**, which no release
+  has ever published, in favour of the Sigstore attestation every release does
+  carry.
+- `SECURITY.md` had been telling macOS users the app was unsigned since 0.6.0,
+  when it has been Developer ID signed, notarized and stapled.
+- `PRIVACY.md` was scoped to 0.5.x — a Core Covenant violation on its own —
+  and omitted two flows: the consolidation scheduler, and that AI employees
+  spawn the user's local `claude` CLI.
+- Every documented Settings path was stale, and the MCP JSON snippet never
+  said which file it belonged in.
+- The benchmark doc called the reranked row the "shipped default". A fresh
+  install performs like the engine-only row (0.9362 hit@5) and reaches 0.9745
+  when reranking is enabled; both rows were already published, and the size of
+  that choice is now stated.
+- Docs-site code blocks rendered at ~1.05:1 contrast — invisible, including
+  the install commands the download funnel points at.
+
+### Security
+
+- Added a **CLA** and signature workflow, and enabled private vulnerability
+  reporting, Discussions, Dependabot security updates, and branch protection.
+  `SECURITY.md` and `CODE_OF_CONDUCT.md` had both been pointing at a
+  disclosure form that returned 404 for anyone without write access.
+- Cleared the three dev-chain advisories that had the weekly security workflow
+  red for three weeks. No breaking bumps.
+
+---
+
 ## [0.6.1] — 2026-08-05
 
 The release where recall stops asking to be trusted and starts showing
@@ -1169,7 +1277,8 @@ sqlite-vec) knowledge graph. Its changes shipped with the 0.1.2 tag.
 
 ---
 
-[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/sirdath/NeuroVault/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/sirdath/NeuroVault/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/sirdath/NeuroVault/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/sirdath/NeuroVault/compare/v0.5.2...v0.6.0
 [0.1.0]: https://github.com/sirdath/NeuroVault/releases/tag/v0.1.0
