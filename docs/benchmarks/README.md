@@ -110,12 +110,16 @@ title boosts ablated for byte-reproducibility (see the note below).
 | Stratified preliminary, engine-only (2 per type) | 1.000 | 1.000 | 1.000 | 1.000 | 0.861 | 0.819 | 12 |
 | Stratified preliminary, engine-only | 0.910 | 0.970 | 0.858 | 0.960 | 0.767 | 0.778 | 100 |
 | **Full run — engine-only (no reranker)** | 0.9362 | 0.9724 | 0.8860 | 0.9531 | 0.8282 | 0.8522 | **470** |
-| **Full run — reranker ON (shipped default)** | **0.9745** | **0.9851** | **0.9383** | **0.9787** | **0.8855** | **0.9021** | **470** |
+| **Full run — reranker ON (opt-in in the app)** | **0.9745** | **0.9851** | **0.9383** | **0.9787** | **0.8855** | **0.9021** | **470** |
 
-The **shipped default reranks** — a cross-encoder second stage; Settings has a
-toggle to disable it for a lighter, faster app. Its contribution is isolated in
-a paired A/B on the *same* ingested brains: **hit@5 0.9362 → 0.9745 (+3.8pp)**,
-every metric up. The reranker-ON aggregate is committed as
+**The reranker is opt-in, so the headline row is not what a fresh install
+does.** It was on for this run; in the app it stays off until you turn it on in
+Settings, because enabling it pulls a ~1 GB cross-encoder. A default install
+therefore behaves like the engine-only row — 0.9362 hit@5 — and reaches 0.9745
+once reranking is switched on. Publishing both rows is the point: the number you
+get depends on a choice you make, and you can see the size of that choice.
+Its contribution is isolated in a paired A/B on the *same* ingested brains:
+**hit@5 0.9362 → 0.9745 (+3.8pp)**, every metric up. The reranker-ON aggregate is committed as
 [`longmemeval-470q-rerank.json`](longmemeval-470q-rerank.json) (the engine-only
 receipts are [`longmemeval-470q.json`](longmemeval-470q.json)); raw per-chunk
 output is in [`rerank_ab/full470_matched_chunk_ab_chunks.log`](rerank_ab/), and

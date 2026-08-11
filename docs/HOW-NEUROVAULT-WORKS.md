@@ -354,7 +354,7 @@ Three primary views, togglable via the tab bar or `Ctrl+1/2/3`:
 ### Graph view (`src/components/NeuralGraph.tsx`)
 
 - 2D canvas via `react-force-graph-2d` (default) or 3D via `react-force-graph-3d` (lazy-loaded).
-- Nodes coloured by folder (deterministic FNV hash → 12-colour palette); outer ring = state (fresh/connected/dormant); size = access count; opacity = Ebbinghaus strength.
+- Nodes coloured by folder (deterministic FNV hash → 12-colour palette); size = how often referenced; faded = dormant; a rim marks a hub or a newly added note. (The on-canvas legend is generated from the painter, so it can never describe an encoding the renderer stopped drawing.)
 - Edges coloured by `link_type` (semantic, entity, uses, depends_on, contradicts, etc.). Bidirectional pairs curve apart; badges appear at zoom ≥1.6×.
 - Folder clusters have floating labels at their centroid (auto-sized to cluster weight).
 - Hover → neighbourhood focus (dims everything outside the 1-hop subgraph).
@@ -507,9 +507,21 @@ Every one of these was a real choice between alternatives. Written so a future m
 - User can edit notes in any editor. Git commits work. If the DB corrupts, rebuild by walking the vault.
 - File watcher (`notify` crate) catches external edits; 500 ms per-file debounce coalesces editor save bursts.
 
-### Strength decay (Ebbinghaus), not static scores
-- Memories fade if never accessed. Reinforced by reads. This is what makes it a *memory* system, not a *search* system.
-- Lives in the `strength` column on engrams; the retriever multiplies it into final_score at 0.15 weight.
+### Type-aware decay, not static scores
+- **Correction (2026-08-11):** this section used to describe an Ebbinghaus
+  forgetting curve driven by the `strength` column. That was never implemented.
+  Nothing in the codebase ever writes `strength` — it holds its schema default
+  of 1.0 for every engram, so the `strength * 0.15` term in `final_score` adds
+  the same constant to every candidate and changes no ordering.
+- What actually ages memory is **type-aware salience** (`adaptive/salience.rs`):
+  per-kind exponential half-lives — working state ~2 days, tasks ~14, decisions
+  ~180, preferences and sources ~365 — combined with access count, importance
+  and confidence, and emitted as an inspectable `SalienceBreakdown`.
+- Separately, `recall()` applies a **query-time recency tilt** whose strength
+  depends on the temporal intent it reads from the query, so "what did I decide
+  last week" and "how does auth work" age results differently.
+- Superseded and dormant engrams are **filtered out of the candidate pool**
+  rather than merely down-weighted; `include_superseded` brings them back.
 
 ---
 

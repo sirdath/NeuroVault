@@ -811,7 +811,7 @@ function RerankSection() {
   return (
     <Section title="Recall Reranking">
       <p className="text-[12px] font-[Geist,sans-serif]" style={{ color: "var(--nv-text-muted)" }}>
-        A cross-encoder re-scores the top candidates so the most relevant memory ranks first. It lifts retrieval quality (LongMemEval hit@5 from ~94% to ~97%) at the cost of loading a ~1&nbsp;GB model and adding roughly 50-100&nbsp;ms per recall.
+        Off by default. Turning it on downloads a ~1&nbsp;GB cross-encoder the first time you search, then re-scores the top candidates so the most relevant memory ranks first — measured at hit@5 ~94% → ~97% on LongMemEval, for roughly 50-100&nbsp;ms more per recall. Worth it if recall quality matters more to you than a gigabyte of disk.
       </p>
       <button
         onClick={onToggle}

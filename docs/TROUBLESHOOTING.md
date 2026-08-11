@@ -55,6 +55,17 @@ On first use NeuroVault downloads the embedding model
 download — subsequent calls are fast (embedding a note ≈ 20 ms). If it seems
 stuck, check your network; the download is from Hugging Face.
 
+If you switch on **Recall Reranking** in Settings, the first reranked recall
+fetches a second, much larger model (a ~1 GB cross-encoder) into the same
+cache. That is precisely why reranking is off until you ask for it. Automatic
+context reranks, so turning that on pulls the model too.
+
+**Recall keeps working while a model is missing.** If the embedder cannot be
+loaded — you're offline, or the download hasn't finished — recall drops the
+semantic channel and answers from keyword search and the entity graph rather
+than failing. Results are narrower, and the app reports that they're partial
+instead of pretending they're complete.
+
 ## The graph view is laggy
 
 The force-directed graph is comfortable into the low thousands of notes. If it
