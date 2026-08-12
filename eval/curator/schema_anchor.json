@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CuratorProposalsAnchor",
+  "type": "object",
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["fact", "preference", "decision"]
+          },
+          "statement": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "anchor": {
+            "type": "string",
+            "description": "the FIRST 5-8 words of the sentence in the transcript that supports this, copied exactly - just the beginning, never the whole sentence"
+          },
+          "source_role": {
+            "type": "string",
+            "enum": ["user", "assistant"]
+          }
+        },
+        "required": ["type", "statement", "anchor", "source_role"]
+      }
+    },
+    "nothing_durable": {
+      "type": "boolean"
+    }
+  },
+  "required": ["proposals", "nothing_durable"]
+}

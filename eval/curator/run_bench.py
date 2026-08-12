@@ -341,14 +341,45 @@ def classify(payload: dict, status: str) -> dict[str, Any]:
     }
 
 
+def render_unit_text(
+    unit: dict, render: str, max_sentences: int
+) -> tuple[str, dict[str, Any]]:
+    """The transcript body the prompt receives, plus what that rendering cost.
+
+    `raw` (default) is the unit exactly as build_units.py wrote it -- both the
+    quote and the anchor contract point into that text, so their behaviour is
+    untouched by this function existing.
+
+    `sid` is the SENTENCE-ID contract: the same enumeration `verify_sid.py`
+    resolves against, rendered as `S{n} [{role}]: text`. Imported from `sid.py`
+    rather than reimplemented -- a prompt and a verifier that enumerate
+    sentences differently would grade the wrong sentence while agreeing on the
+    label, which is precisely the failure the ID contract exists to remove.
+    """
+    if render != "sid":
+        return unit["text"], {}
+    import sid as sidmod  # local: only the sid contract needs it
+
+    table = sidmod.enumerate_unit(unit["text"], max_sentences=max_sentences)
+    return sidmod.render_unit(unit["text"], table), {
+        "render": "sid",
+        "segmenter_harness_version": sidmod.SEGMENTER_HARNESS_VERSION,
+        "n_sentences": len(table["sentences"]),
+        "n_records": table["n_records"],
+        "dropped_over_sentence_cap": table["dropped_over_cap"],
+    }
+
+
 def run_unit(
     host: str, model: str, unit: dict, template: str, schema: dict,
     think: bool | None, keep_alive: str, num_ctx: int, timeout: int,
+    render: str = "raw", max_sentences: int = 0,
 ) -> dict[str, Any]:
+    body_text, render_meta = render_unit_text(unit, render, max_sentences)
     if UNIT_PLACEHOLDER in template:
-        prompt = template.replace(UNIT_PLACEHOLDER, unit["text"])
+        prompt = template.replace(UNIT_PLACEHOLDER, body_text)
     else:
-        prompt = f"{template.rstrip()}\n\nTRANSCRIPT:\n{unit['text']}\nOUTPUT:\n"
+        prompt = f"{template.rstrip()}\n\nTRANSCRIPT:\n{body_text}\nOUTPUT:\n"
 
     body = build_body(model, prompt, schema, think, keep_alive, num_ctx)
     status, payload, elapsed = call_ollama(host, body, timeout)
@@ -373,6 +404,7 @@ def run_unit(
         "unit_chars": len(unit["text"]),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
+    row.update(render_meta)
     row.update(classify(payload, status))
 
     if status == "ok":
@@ -401,6 +433,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep-alive", default="30m")
     ap.add_argument("--num-ctx", type=int, default=8192)
     ap.add_argument("--think", choices=["auto", "true", "false", "omit"], default="auto")
+    ap.add_argument("--render", choices=["raw", "sid"], default="raw",
+                    help="how the transcript reaches the prompt. raw (default) = the "
+                         "unit text as written, for the quote/anchor contracts. sid = "
+                         "sentence-ID enumeration from sid.py ('S7 [user]: ...'); pair "
+                         "it with --schema schema_sid.json --prompt prompts/extract_sid.txt "
+                         "and verify with verify_sid.py")
+    ap.add_argument("--max-sentences", type=int, default=0,
+                    help="--render sid only: cap sentences per unit (0 = uncapped, the "
+                         "harness default; the product caps at 150 and splits into "
+                         "sub-units). verify_sid.py MUST be given the same value")
     ap.add_argument("--limit", type=int, default=0, help="only the first N units")
     ap.add_argument("--force", action="store_true", help="re-run units already present")
     ap.add_argument("--no-cold-load", action="store_true", help="skip the cold-load measurement")
@@ -436,7 +478,8 @@ def main(argv: list[str] | None = None) -> int:
     think = resolve_think(args.model, args.think)
     log = (lambda *a: None) if args.quiet else print
 
-    log(f"model={args.model}  units={len(units)}  think={think}  out={args.out}")
+    log(f"model={args.model}  units={len(units)}  think={think}  "
+        f"render={args.render}  out={args.out}")
 
     # --- cold load, measured once and kept out of the warm distribution ----
     cold: dict[str, Any] | None = None
@@ -448,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         cold = run_unit(
             args.host, args.model, probe, template, wire_schema,
             think, args.keep_alive, args.num_ctx, args.timeout,
+            args.render, args.max_sentences,
         )
         cold["ollama_ps"] = ollama_ps()
         cold_path.write_text(json.dumps(cold, indent=2), encoding="utf-8")
@@ -475,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         row = run_unit(
             args.host, args.model, unit, template, wire_schema,
             think, args.keep_alive, args.num_ctx, args.timeout,
+            args.render, args.max_sentences,
         )
         dest.write_text(json.dumps(row, indent=2), encoding="utf-8")
         ran += 1
@@ -504,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
         "timeout_seconds": args.timeout,
         "schema_path": str(args.schema),
         "prompt_path": str(args.prompt),
+        # The contract this sweep ran. verify_sid.py must be given the same
+        # --max-sentences, or it would resolve IDs against a different table.
+        "render": args.render,
+        "max_sentences": args.max_sentences,
         "host": args.host,
         "cold_load_seconds": (cold or {}).get("wall_seconds"),
         "ps_samples": ps_samples,

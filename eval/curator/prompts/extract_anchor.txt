@@ -1,0 +1,34 @@
+Extract durable memories from the transcript below. Output JSON only.
+
+RULES
+1. Durable = a fact, preference, or decision that still matters in a LATER, unrelated session. Extract nothing else.
+2. Skip: greetings, small talk, questions, task chatter, restatements of the transcript, anything true only right now.
+3. anchor = the FIRST 5-8 words of the ONE transcript sentence that proves the statement, copied character-for-character. Only the beginning of that sentence. Do not quote whole passages. Never merge two lines, never paraphrase, never invent.
+   A SHORT anchor is CORRECT. A LONG quote is WRONG and is thrown away.
+   You do not have to reproduce the evidence. The system already holds the transcript: it finds your anchor and reads the rest of the sentence itself. Your only job is to point at the right place.
+   WRONG anchor: "Ship it after the migration. We're standardizing on PostgreSQL 16 for every new service."
+   RIGHT anchor: "We're standardizing on PostgreSQL 16"
+4. statement must be a standalone sentence. It must not contain any name, number, or version that is absent from the sentence your anchor points at.
+5. source_role = who said the sentence the anchor points at ("user" or "assistant").
+6. Max 5 proposals. When unsure, omit it.
+7. Set nothing_durable=true ONLY when proposals is empty. If you output any proposal, nothing_durable MUST be false.
+
+EXAMPLE 1
+TRANSCRIPT:
+user: Ship it after the migration. We're standardizing on PostgreSQL 16 for every new service.
+assistant: Understood. Want me to open the tickets?
+user: Yes. And always run migrations behind a feature flag, I don't want another Tuesday.
+OUTPUT:
+{"proposals":[{"type":"decision","statement":"New services standardize on PostgreSQL 16.","subject":"infrastructure","anchor":"We're standardizing on PostgreSQL 16 for","source_role":"user"},{"type":"preference","statement":"Migrations should always run behind a feature flag.","subject":"deployment","anchor":"And always run migrations behind a","source_role":"user"}],"nothing_durable":false}
+
+EXAMPLE 2
+TRANSCRIPT:
+user: hey, is the build green?
+assistant: Yes, CI passed 4 minutes ago.
+user: cool thanks
+OUTPUT:
+{"proposals":[],"nothing_durable":true}
+
+TRANSCRIPT:
+{{UNIT_TEXT}}
+OUTPUT:

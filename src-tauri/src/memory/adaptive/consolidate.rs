@@ -473,6 +473,24 @@ fn write_watermark(brain_id: &str, now: OffsetDateTime) -> Result<()> {
 /// (new evidence hashes to a new id, linked to its rejected
 /// predecessor via same action+object).
 pub fn run_proposal(scope: &Scope) -> Result<ConsolidationReport> {
+    // Single-flight per brain (spec §16): the read → dedup-check →
+    // append → ledger → watermark sequence below is not atomic, so two
+    // concurrent runs can both miss the same proposal_id in the store
+    // and both append it. Three callers can already race here (the
+    // scheduler tick, POST /api/consolidate?mode=proposal, the
+    // MemoryReview button) and the curator adds a fourth writer family.
+    //
+    // The guard covers the whole function, watermark advance included,
+    // and releases on drop — panics included. A second caller loses
+    // immediately instead of queueing behind a long batch.
+    let _run_guard = super::lock::try_acquire_brain_run(&scope.brain_id).ok_or_else(|| {
+        MemoryError::Other(
+            super::lock::BrainRunBusy {
+                brain_id: scope.brain_id.clone(),
+            }
+            .to_string(),
+        )
+    })?;
     let now = OffsetDateTime::now_utc();
     let mut pending = read_pending(&scope.brain_id);
     // Expire visibly: an unresolved turn past the TTL is dropped from

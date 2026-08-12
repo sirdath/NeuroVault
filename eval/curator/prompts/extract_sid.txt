@@ -1,0 +1,60 @@
+Extract durable memories from the numbered transcript below. Output JSON only.
+
+Every sentence in the transcript has an ID like S7 and a speaker tag. You never
+copy transcript text. You point at sentence IDs. The system holds the transcript
+and reads every sentence you point at itself.
+
+DEFINITIONS
+- fact       = something true about the user, project, or environment that a later,
+               unrelated session needs. NOT: things true only right now.
+- preference = how the user wants things done, stated or clearly implied by them.
+               NOT: a one-off instruction for the current task.
+- decision   = a choice that was made and will be built on. NOT: an option discussed.
+
+RULES
+1. Durable = still matters in a LATER, unrelated session. Extract nothing else.
+2. Skip: greetings, small talk, questions, task chatter, restatements, anything
+   true only right now.
+3. evidence = 1 to 3 sentence IDs that prove the statement, exactly as printed
+   (e.g. ["S12"] or ["S12","S13"]). Prefer ONE ID. Multiple IDs must be adjacent
+   sentences. Every ID must appear in the transcript below. Never write the
+   sentence text — only its ID.
+4. statement = one standalone sentence. Every name, number, and version in it must
+   appear in the sentences your evidence points at.
+5. source_role = the speaker tag printed on the evidence sentence ("user" or
+   "assistant"). If the IDs span both speakers, use the sentence that states the
+   fact itself.
+6. Max 5 proposals. When unsure, omit.
+7. nothing_durable=true ONLY when proposals is empty. Any proposal => false.
+
+EXAMPLE 1
+TRANSCRIPT:
+S1 [user]: Ship it after the migration.
+S2 [user]: We're standardizing on PostgreSQL 16 for every new service.
+S3 [assistant]: Understood. Want me to open the tickets?
+S4 [user]: Yes.
+S5 [user]: And always run migrations behind a feature flag, I don't want another Tuesday.
+OUTPUT:
+{"proposals":[{"type":"decision","statement":"New services standardize on PostgreSQL 16.","subject":"infrastructure","evidence":["S2"],"source_role":"user"},{"type":"preference","statement":"Migrations should always run behind a feature flag.","subject":"deployment","evidence":["S5"],"source_role":"user"}],"nothing_durable":false}
+
+EXAMPLE 2
+TRANSCRIPT:
+S1 [user]: hey, is the build green?
+S2 [assistant]: Yes, CI passed 4 minutes ago.
+S3 [user]: cool thanks
+OUTPUT:
+{"proposals":[],"nothing_durable":true}
+
+EXAMPLE 3
+TRANSCRIPT:
+S1 [user]: what timezone does the cron run in?
+S2 [assistant]: The nightly sync runs at 02:00 UTC.
+S3 [assistant]: That was set in March because the EU replica lags until 01:30.
+S4 [user]: ok run it now for me
+S5 [assistant]: Done, sync completed.
+OUTPUT:
+{"proposals":[{"type":"fact","statement":"The nightly sync runs at 02:00 UTC.","subject":"operations","evidence":["S2","S3"],"source_role":"assistant"}],"nothing_durable":false}
+
+TRANSCRIPT:
+{{UNIT_TEXT}}
+OUTPUT:

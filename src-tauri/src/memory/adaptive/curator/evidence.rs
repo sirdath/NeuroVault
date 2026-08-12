@@ -382,8 +382,18 @@ fn portable_relative_path(path: &Path) -> Result<String, EvidenceCaptureCode> {
     Ok(parts.join("/"))
 }
 
+// ── slice-1 hardened open path, shared with slice A2 ─────────────────
+//
+// `transcript::reopen_verified` must re-open a captured transcript under
+// EXACTLY the guarantees capture used: no symlink anywhere on the path,
+// no descendant link, regular file only, and a hash over exactly
+// `observed_prefix_len` bytes. Re-implementing that in transcript.rs
+// would be two subtly different security checks with one name — so the
+// five primitives below are `pub(crate)` instead. They are still private
+// to the crate; nothing outside `memory` can reach them.
+
 #[cfg(unix)]
-fn open_absolute_directory_no_links(path: &Path) -> Result<File, EvidenceCaptureCode> {
+pub(crate) fn open_absolute_directory_no_links(path: &Path) -> Result<File, EvidenceCaptureCode> {
     let mut current = File::open("/").map_err(|_| EvidenceCaptureCode::SourceUnavailable)?;
     for component in path.components() {
         match component {
@@ -404,7 +414,10 @@ fn open_absolute_directory_no_links(path: &Path) -> Result<File, EvidenceCapture
 }
 
 #[cfg(unix)]
-fn open_relative_no_links(mut current: File, path: &Path) -> Result<File, EvidenceCaptureCode> {
+pub(crate) fn open_relative_no_links(
+    mut current: File,
+    path: &Path,
+) -> Result<File, EvidenceCaptureCode> {
     let components: Vec<_> = path.components().collect();
     for (index, component) in components.iter().enumerate() {
         let Component::Normal(segment) = component else {
@@ -423,7 +436,7 @@ fn open_relative_no_links(mut current: File, path: &Path) -> Result<File, Eviden
 }
 
 #[cfg(unix)]
-fn openat_child(
+pub(crate) fn openat_child(
     parent: &File,
     name: &std::ffi::OsStr,
     directory: bool,
@@ -455,7 +468,10 @@ fn openat_child(
 }
 
 #[cfg(unix)]
-fn reject_descendant_links(root: &Path, relative: &Path) -> Result<(), EvidenceCaptureCode> {
+pub(crate) fn reject_descendant_links(
+    root: &Path,
+    relative: &Path,
+) -> Result<(), EvidenceCaptureCode> {
     let mut cursor = root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(segment) = component else {
@@ -472,7 +488,7 @@ fn reject_descendant_links(root: &Path, relative: &Path) -> Result<(), EvidenceC
 }
 
 #[cfg(unix)]
-fn hash_exact_prefix(file: &mut File, len: u64) -> std::io::Result<String> {
+pub(crate) fn hash_exact_prefix(file: &mut File, len: u64) -> std::io::Result<String> {
     file.seek(SeekFrom::Start(0))?;
     let mut remaining = len;
     let mut buffer = [0u8; HASH_BUFFER_BYTES];
