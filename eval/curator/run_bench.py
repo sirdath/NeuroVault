@@ -63,6 +63,10 @@ THINKING_FAMILIES = ("qwen3", "deepseek-r1", "magistral", "granite3.2", "cogito"
 
 # Sample `ollama ps` every N units. It shells out, so we do not do it per unit.
 PS_SAMPLE_EVERY = 10
+# Consecutive transport failures that abort the sweep. A model can be slow
+# (timeout) or wrong (parse_error) many times in a row, but it cannot be
+# unreachable three times in a row unless the server itself is gone.
+TRANSPORT_ABORT_AFTER = 3
 
 
 # --------------------------------------------------------------------------
@@ -508,13 +512,25 @@ def main(argv: list[str] | None = None) -> int:
     # --- warm sweep -------------------------------------------------------
     started = time.time()
     ran = skipped = 0
+    transport_errors = 0
+    consecutive_transport = 0
+    aborted = False
     ps_samples: list[dict[str, Any]] = []
 
     for i, unit in enumerate(units):
         dest = units_out / f"unit_{unit['id']}.json"
         if dest.exists() and not args.force:
-            skipped += 1
-            continue
+            # A written row only counts as done if the request actually reached
+            # the model. Infrastructure rows (transport_error, http_error,
+            # bad_body, timeout) are not results — a resumed sweep re-runs them
+            # instead of silently keeping a dead server's rows.
+            try:
+                prev = json.loads(dest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                prev = None
+            if prev is not None and prev.get("status") == "ok":
+                skipped += 1
+                continue
 
         row = run_unit(
             args.host, args.model, unit, template, wire_schema,
@@ -523,6 +539,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         dest.write_text(json.dumps(row, indent=2), encoding="utf-8")
         ran += 1
+
+        if row.get("status") == "transport_error":
+            transport_errors += 1
+            consecutive_transport += 1
+        else:
+            consecutive_transport = 0
+        if consecutive_transport >= TRANSPORT_ABORT_AFTER:
+            aborted = True
+            print(
+                f"FATAL: {consecutive_transport} consecutive transport errors — "
+                f"the server at {args.host} is unreachable. Aborting the sweep "
+                f"so a dead server is never recorded as model output. The "
+                f"failed rows re-run automatically on the next invocation.",
+                file=sys.stderr,
+            )
+            break
 
         if i % PS_SAMPLE_EVERY == 0:
             snap = {"after_unit": unit["id"], "rows": ollama_ps()}
@@ -542,6 +574,9 @@ def main(argv: list[str] | None = None) -> int:
         "n_units": len(units),
         "ran": ran,
         "skipped_existing": skipped,
+        # complete | aborted_transport — score.py refuses aborted sweeps.
+        "status": "aborted_transport" if aborted else "complete",
+        "transport_errors": transport_errors,
         "think_setting": args.think,
         "think_sent": think,
         "options": {"temperature": 0, "num_ctx": args.num_ctx},
@@ -562,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
     (args.out / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     log(f"done: ran={ran} skipped={skipped} in {meta['sweep_seconds']}s")
-    return 0
+    return 3 if aborted else 0
 
 
 if __name__ == "__main__":

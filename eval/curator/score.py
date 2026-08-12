@@ -282,7 +282,10 @@ def bootstrap_ci(
 # --------------------------------------------------------------------------
 
 def score(
-    results_dir: Path, gold: dict[str, dict[str, Any]], units: dict[str, str]
+    results_dir: Path,
+    gold: dict[str, dict[str, Any]],
+    units: dict[str, str],
+    allow_partial: bool = False,
 ) -> dict[str, Any]:
     units_out = results_dir / "units"
     rows: list[dict[str, Any]] = []
@@ -291,6 +294,30 @@ def score(
             rows.append(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
             continue
+
+    # Run-validity guard. `timeout` is a model outcome and stays scoreable;
+    # transport_error / http_error / bad_body mean the request never produced
+    # model output. Scoring them would report a dead server as abstention
+    # (fail-closed degenerating into fail-empty — the exact failure this
+    # harness exists to measure, not commit).
+    infra = [r for r in rows if r.get("status") not in ("ok", "timeout")]
+    if infra:
+        by_status: dict[str, int] = {}
+        for r in infra:
+            key = str(r.get("status") or "?")
+            by_status[key] = by_status.get(key, 0) + 1
+        msg = (
+            f"{results_dir}: {len(infra)}/{len(rows)} rows are infrastructure "
+            f"failures ({by_status}), not model output"
+        )
+        if not allow_partial:
+            raise SystemExit(
+                f"FATAL: {msg}. Re-run the bench (failed rows re-run "
+                f"automatically) or pass --allow-partial to score only the "
+                f"rows that reached the model."
+            )
+        print(f"  ! {msg} — excluded from scoring (--allow-partial)", file=sys.stderr)
+        rows = [r for r in rows if r.get("status") in ("ok", "timeout")]
 
     meta = {}
     meta_path = results_dir / "run_meta.json"
@@ -761,6 +788,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--units-dir", required=True, type=Path)
     ap.add_argument("--out-md", type=Path, default=None,
                     help="markdown summary path (default: alongside the first results dir)")
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="score a run containing infrastructure-failure rows "
+                         "(transport_error/http_error/bad_body) by excluding "
+                         "them, instead of refusing the run outright")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -778,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
         if not (rd / "units").is_dir():
             print(f"  ! skipping {rd}: no units/ subdir", file=sys.stderr)
             continue
-        m = score(rd, gold, units)
+        m = score(rd, gold, units, allow_partial=args.allow_partial)
         (rd / "metrics.json").write_text(json.dumps(m, indent=2), encoding="utf-8")
         all_metrics.append(m)
 
