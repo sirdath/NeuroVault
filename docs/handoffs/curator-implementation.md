@@ -1699,6 +1699,15 @@ single-day wave for 2–3 Opus agents given the type sketches in §2–§4.
 
 ## 9. SPEC AMENDMENTS NEEDED (the list for Codex)
 
+> **APPLIED** — all 15 deltas landed in the spec as `7a121e9 docs(curator): bind evidence to
+> sentence ids` (2026-08-12), with adaptations recorded in that session. The one that corrects
+> *this guide*: delta 6's total-coverage Primary rule, taken literally, strands the §6.5 P2
+> fixture at G05 (statement token `03:00` is covered by no sentence), when the fixture requires
+> it to reach G06 and die as `LiteralMismatch`. The spec as amended adds a deterministic
+> **highest-coverage fallback Primary** (tie → lowest sid), so token mismatches always surface
+> at G06 with the precise code rather than failing ambiguously at designation. Implementers:
+> the spec text is now the authority over this section wherever the two differ.
+
 Deltas to `docs/specs/local-memory-curator.md` — normative-text changes only, in spec order. Gates
 G01, G03, G04, G07, G08, G09, G10, G12 translate **unchanged** (wording touch-ups only where they
 mention byte spans).
