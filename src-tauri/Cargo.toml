@@ -164,6 +164,12 @@ regex = "1"
 # SEGMENTER_VERSION fails CI (spec §5.2 step 2).
 unicode-segmentation = "=1.13.2"
 
+# Identity canonicalization (spec §12.5): NFC before hashing, in
+# `identity::canonicalize_value`. Pinned exact for the same reason as
+# unicode-segmentation — a Unicode data update must be a deliberate,
+# versioned decision (IDENTITY_VERSION bump), never a silent digest change.
+unicode-normalization = "=0.1.24"
+
 # SHA-256 for the `content_hash` column used by ingest's "skip if
 # unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
 # — we match so a row written by either runtime is seen as unchanged

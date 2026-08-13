@@ -84,6 +84,17 @@ impl SourceRole {
     }
 }
 
+/// Parser V1 realizes only the two conversational roles; the stored
+/// vocabulary is wider so future parser versions never migrate receipts.
+impl From<super::transcript::SourceRole> for SourceRole {
+    fn from(role: super::transcript::SourceRole) -> Self {
+        match role {
+            super::transcript::SourceRole::User => SourceRole::User,
+            super::transcript::SourceRole::Assistant => SourceRole::Assistant,
+        }
+    }
+}
+
 /// A server-resolved citation. Safe to persist: coordinates + hashes,
 /// never sentence text, never a filesystem path.
 ///

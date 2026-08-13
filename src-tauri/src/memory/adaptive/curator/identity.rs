@@ -257,12 +257,14 @@ fn canonical_spans(ids: &[SpanIdentity]) -> Canon {
 /// paths and identifiers are case-sensitive, so `fooBar()` must never
 /// hash like `foo_bar()`.
 ///
-/// Known gap: the spec also asks for Unicode NFC before hashing. NFC
-/// needs a normalization crate that is not a declared dependency of
-/// this crate, so it is not applied yet. This function is the single
-/// place it belongs, and switching it on is by definition an
-/// [`IDENTITY_VERSION`] bump.
+/// Unicode NFC is applied last (spec §12.5), so a decomposed `zoë` and a
+/// composed one mint the same key. NFC has been part of
+/// [`IDENTITY_VERSION`] 2 since before any digest was ever persisted;
+/// changing the pinned `unicode-normalization` crate (and with it the
+/// Unicode data tables) is by definition an [`IDENTITY_VERSION`] bump.
 pub fn canonicalize_value(raw: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+
     let mut out = String::with_capacity(raw.len());
     let mut gap = false;
     for ch in raw.trim().chars() {
@@ -276,7 +278,7 @@ pub fn canonicalize_value(raw: &str) -> String {
         gap = false;
         out.push(ch);
     }
-    out
+    out.nfc().collect()
 }
 
 // ---------------------------------------------------------------------
@@ -931,6 +933,21 @@ mod tests {
             evidence_key(ACTION, SCOPE, &slot(), &[]),
             claim_key(ACTION, SCOPE, &slot())
         );
+    }
+
+    #[test]
+    fn canonicalization_applies_nfc_so_decomposed_text_mints_the_same_key() {
+        // "zoë" typed composed (U+00EB) vs decomposed (e + U+0308).
+        assert_eq!(
+            canonicalize_value("zo\u{00eb}"),
+            canonicalize_value("zoe\u{0308}")
+        );
+        assert_eq!(
+            claim_key(ACTION, SCOPE, &ClaimSlot::new().with("who", "zo\u{00eb}")),
+            claim_key(ACTION, SCOPE, &ClaimSlot::new().with("who", "zoe\u{0308}"))
+        );
+        // NFC never rewrites already-composed ASCII/steady text.
+        assert_eq!(canonicalize_value("plain ascii"), "plain ascii");
     }
 
     #[test]
