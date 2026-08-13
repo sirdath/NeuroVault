@@ -37,6 +37,7 @@ in it is a judgement call.
 | `policy_fingerprint` | `POLICY_EPOCH = 2026-08-vp1`, three claim classes, no destructive actions |
 | `retry_and_ttl_policy` | 3 attempts · 14-day TTL · [1, 6, 24] h backoff · 48 h grace |
 | `redteam_corpus` | 20 families / 36 cases, executed by `curator_redteam_e2e.rs` |
+| `grammar_corpus` | 24 cases (5 accept / 13 reject / 6 divergent), executed by `grammar_check.py` against the vendored llama.cpp converter `c5760701…bf3a` |
 | `measured_baselines` | the last SID and quote-contract runs, as evidence to anchor thresholds against |
 
 The corpus and gold hashes are directory digests, not file lists, because the
@@ -73,18 +74,33 @@ should record what the Rust side already knows how to demand.
 content hash, no git SHA, no scorer version. Reproducibility currently rests on
 nobody having edited a file underneath a result.
 
-**4. Four of the six metrics do not exist.** `generator_candidate_recall`,
-`verifier_over_escalation_rate`, `defer_recovery_rate` and `defer_expiry_rate`
-appear nowhere in the repo outside the spec. The first two are `score.py`
-changes. The last two cannot come from the Python harness at all — defer and
+**4. Two of the six metrics do not exist.** *(Four, at manifest version 1.)*
+`defer_recovery_rate` and `defer_expiry_rate` appear nowhere in the repo
+outside the spec, and cannot come from the Python harness at all — defer and
 retry live in the Rust ledger, so measuring them needs a reader over
-`state.rs::CuratorLedger`.
+`state.rs::CuratorLedger` **and** a deferral cohort matured under this
+manifest's exact retry/TTL clock. `defer_expiry_rate` is the terminal-loss
+counterweight §19.1 names, so this is the most consequential remaining gap,
+not the smallest.
 
-Of the two that do exist: `verifier_false_reject_rate` shares the spec's name
-but not its denominator (score.py's admissible set is "statement matches a gold
-item", because the gold set carries no disposition labels), and
-`end_to_end_candidate_recall` has no equivalent — `post_gate_recall` stands in,
-and only stays equivalent while every survivor reaches review.
+`generator_candidate_recall` and `verifier_over_escalation_rate` were
+implemented in `score.py` at manifest version 2. Implementing the second one
+did not remove a blocker; it removed an excuse for not looking.
+
+Of the four that now exist, exactly one is the spec's metric:
+
+| metric | status |
+|---|---|
+| `generator_candidate_recall` | **exact.** The same one-to-one assignment `post_gate_recall` uses, run over every pre-gate proposal; denominator is the 230 gold items. |
+| `verifier_false_reject_rate` | **proxy.** Shares the spec's name, not its denominator: score.py's admissible set is "statement matches a gold item", because the gold set carries no disposition labels. |
+| `verifier_over_escalation_rate` | **proxy, twice over.** The same admissible stand-in, *plus* an assumption that every gold item is a gold `ProposalReady` — the gold set records memories a human judged durable, never memories a human wanted reviewed. |
+| `end_to_end_candidate_recall` | **no equivalent.** `post_gate_recall` stands in, and only stays equivalent while every survivor reaches review. |
+
+No threshold may be frozen against a proxy row. `generator_candidate_recall −
+post_gate_recall` is the one piece of arithmetic §20 asks for directly: what
+the generator found, minus what survived, is what the verifier destroyed. On
+the strongest measured arm that is 0.291 → 0.209, i.e. **19 of the 67 gold
+memories the model actually found were killed by the gauntlet**.
 
 **5. The gold set has no dispositions.** Two of the six metrics are defined
 against a gold `ProposalReady` / `ReviewRequired` label that has never been

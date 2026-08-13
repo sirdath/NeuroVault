@@ -1,0 +1,1 @@
+{"proposals":[],"nothing_durable":true}

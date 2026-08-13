@@ -1,0 +1,1 @@
+{"proposals":[{"statement":"Atlas deploys only on Tuesdays.","type":"fact","subject":"deployment","evidence":["S1"],"source_role":"user"}],"nothing_durable":false}

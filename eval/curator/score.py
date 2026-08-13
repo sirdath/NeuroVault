@@ -26,11 +26,24 @@ Metric definitions (pre-registered -- do not tune these after seeing results):
   pre_gate_unsupported     G1 rejects / all proposals. How often the model
                            invents a quote. Measured BEFORE gating, because
                            post-gate numbers hide it.
+  generator_candidate_recall
+                           spec section 19.1, verbatim: "gold memory instances
+                           proposed by the generator BEFORE verification,
+                           divided by all gold memory instances". Same
+                           one-to-one assignment as post_gate_recall, run over
+                           EVERY pre-gate proposal instead of the survivors, so
+                           the pair brackets the verifier: whatever the
+                           generator found and post_gate_recall lost, the
+                           gauntlet destroyed. A generator ceiling this metric
+                           cannot exceed is the point -- it is the honest
+                           denominator for judging the verifier.
   post_gate_precision      of the proposals that SURVIVE the gauntlet on
                            gold-positive units, the fraction ASSIGNED to a
                            gold item under one-to-one matching (see below).
   post_gate_recall         of all gold items, the fraction claimed by an
-                           assigned proposal.
+                           assigned proposal. The harness stand-in for the
+                           spec's `end_to_end_candidate_recall`, exact only
+                           while every survivor reaches review (true in V1).
   duplicate_rate           proposals that matched only gold items already
                            claimed by a better proposal, over all proposals.
                            The measure of restatement padding.
@@ -44,6 +57,36 @@ Metric definitions (pre-registered -- do not tune these after seeing results):
                            per the curator spec (545cda0): the denominator is
                            what the model got right, not what the gauntlet
                            happened to reject.
+  verifier_over_escalation_rate
+                           spec section 19.1: labeled candidates whose gold
+                           disposition is ProposalReady but whose verifier
+                           disposition is ReviewRequired, over all gold
+                           ProposalReady candidates. Same ADMISSIBLE
+                           denominator as verifier_false_reject_rate, for the
+                           same reason -- see the PROXY note below -- so the
+                           two partition the admissible set together with the
+                           clean passes. A candidate counts as escalated when
+                           it SURVIVES (never terminally rejected) and carries
+                           a non-terminal review outcome: verify.py's
+                           `flag(G3)`, or a review flag verify_sid.py wrote
+                           back to the row (`synthesis`, `oversized_evidence`,
+                           `unclaimable_role`). Every escalation is attributed
+                           to a GateName:ReviewCode pair in
+                           `over_escalation_by_code`, with OversizedEvidence
+                           reported separately from Synthesis, as section 19.1
+                           requires.
+
+PROXY WARNING on the two verifier metrics. The spec defines both against a
+per-item gold DISPOSITION (`ProposalReady` / `ReviewRequired`) that the gold
+set has never been annotated with. Both therefore use the harness's only
+available stand-in: "the statement matches a gold item", i.e. the model got
+the memory right. That set is adjacent to `ProposalReady or ReviewRequired`,
+not equal to it, and using it for `verifier_over_escalation_rate` additionally
+assumes every gold item is a gold `ProposalReady` -- the gold set records
+memories a human judged durable, never memories a human wanted reviewed. Both
+numbers are therefore CALIBRATION, not acceptance scores, until dispositions
+exist. `MANIFEST-V1.json` records this as a blocking gap; do not freeze a
+threshold against either proxy.
   source_role_accuracy     of the proposals whose grounding quote can be
                            located under a USER or ASSISTANT marker, the
                            fraction whose claimed `source_role` agrees.
@@ -109,6 +152,67 @@ BOOTSTRAP_SEED = 42
 BOOTSTRAP_ALPHA = 0.05
 
 GOLD_TYPES = ("fact", "preference", "decision")
+
+# --- non-terminal review outcomes (spec 19.1 GateName + ReviewCode) --------
+#
+# The harness has two sources of a `RequireReview`-shaped outcome and both are
+# read, because a run is re-verified through verify.py whichever contract
+# produced it:
+#
+#   verify.py      one non-terminal verdict, `flag(G3)` -- a settled-sounding
+#                  statement built on a hedged span.
+#   verify_sid.py  richer, product-shaped flags written back onto the result
+#                  row under `_sid_resolution.proposals[i].review_flags`. It
+#                  runs first and injects the materialized sentence, so by the
+#                  time score.py re-verifies through verify.py those flags are
+#                  already on disk.
+#
+# Spec 19.1 demands `OversizedEvidence` be counted apart from `Synthesis`, so
+# the code is carried through rather than collapsed into one "escalated" bit.
+SID_REVIEW_CODES = {
+    "synthesis": "G1b:Synthesis",
+    "oversized_evidence": "G1b:OversizedEvidence",
+    "unclaimable_role": "G1b:UnclaimableRole",
+}
+G3_REVIEW_CODE = "G3:PolarityHedge"
+
+# Verdicts that are NOT terminal. An escalation is a candidate that SURVIVED;
+# one the gauntlet killed is a false reject, never an over-escalation, even
+# when it also carries a review flag.
+SURVIVING_VERDICTS = ("pass", "flag(G3)")
+
+
+def row_review_flags(row: dict[str, Any], n_proposals: int) -> list[list[str]]:
+    """Per-proposal review flags from verify_sid.py's write-back, or [] each.
+
+    Positional, so it fails closed on any length disagreement: `inject()`
+    skips non-dict proposals when building its notes, which can shift the
+    indices. A mismatched row yields no flags at all rather than flags
+    attributed to the wrong candidate.
+    """
+    notes = (row.get("_sid_resolution") or {}).get("proposals")
+    if not isinstance(notes, list) or len(notes) != n_proposals:
+        return [[] for _ in range(n_proposals)]
+    out: list[list[str]] = []
+    for note in notes:
+        flags = note.get("review_flags") if isinstance(note, dict) else None
+        out.append([str(f) for f in flags] if isinstance(flags, list) else [])
+    return out
+
+
+def escalation_codes(checked: dict[str, Any], flags: list[str]) -> list[str]:
+    """GateName:ReviewCode labels for one candidate, or [] if not escalated.
+
+    Empty for a terminally rejected candidate whatever flags it carries. A
+    candidate may carry more than one code (synthesis over an over-cap block,
+    say), which is why codes are counted separately from candidates.
+    """
+    if checked.get("verdict") not in SURVIVING_VERDICTS:
+        return []
+    codes = [SID_REVIEW_CODES.get(f, f"G1b:{f}") for f in flags]
+    if checked.get("verdict") == "flag(G3)":
+        codes.append(G3_REVIEW_CODE)
+    return codes
 
 
 def pct(numerator: float, denominator: float) -> float | None:
@@ -351,10 +455,17 @@ def score(
     role_ungradable: dict[str, int] = {}
     g2_span_pass = g2_unit_fallback = g2_vacuous = 0
     type_agree = type_agree_den = 0
+
+    # spec 19.1 accumulators
+    generator_matched = 0            # gold items claimed PRE-gate
+    admissible_escalated = 0         # admissible survivors routed to review
+    over_escalation_by_code: dict[str, int] = {}
+    review_flag_breakdown: dict[str, int] = {}
+
+    _CLS_KEYS = ("prec_num", "prec_den", "rec_num", "rec_den",
+                 "fr_num", "fr_den", "gen_num", "oe_num")
     cls: dict[str, dict[str, int]] = {
-        t: {"prec_num": 0, "prec_den": 0, "rec_num": 0, "rec_den": 0,
-            "fr_num": 0, "fr_den": 0}
-        for t in GOLD_TYPES
+        t: dict.fromkeys(_CLS_KEYS, 0) for t in GOLD_TYPES
     }
 
     def cls_bucket(name: Any) -> dict[str, int]:
@@ -362,14 +473,15 @@ def score(
         model (or a gold file) is visible instead of silently dropped."""
         key = str(name).strip().lower() if isinstance(name, str) else "other"
         if key not in cls:
-            cls[key] = {"prec_num": 0, "prec_den": 0, "rec_num": 0,
-                        "rec_den": 0, "fr_num": 0, "fr_den": 0}
+            cls[key] = dict.fromkeys(_CLS_KEYS, 0)
         return cls[key]
 
     # Per-unit (numerator, denominator) pairs, for the unit-level bootstrap.
     boot_precision: list[tuple[int, int]] = []
     boot_recall: list[tuple[int, int]] = []
     boot_false_reject: list[tuple[int, int]] = []
+    boot_generator_recall: list[tuple[int, int]] = []
+    boot_over_escalation: list[tuple[int, int]] = []
 
     for row in rows:
         n_total += 1
@@ -401,6 +513,13 @@ def score(
         g2_rejects += checked["counts"]["reject_g2"]
         g3_flags += checked["counts"]["flag_g3"]
         passes += checked["counts"]["pass"]
+
+        # verify_sid.py's non-terminal review flags, positionally aligned to
+        # `props`. Empty for a quote-contract run, which has none.
+        rflags = row_review_flags(row, len(props))
+        for p, flags in zip(props, rflags):
+            for code in escalation_codes(p, flags):
+                review_flag_breakdown[code] = review_flag_breakdown.get(code, 0) + 1
 
         # --- verifier-side flags (orthogonal to gold; count everywhere) ----
         unit_flags = checked.get("flags") or {}
@@ -465,9 +584,21 @@ def score(
             boot_precision.append((len(assigned), len(surviving)))
             boot_recall.append((len(assigned), len(gold_items)))
 
+            # --- generator_candidate_recall (spec 19.1) --------------------
+            # The SAME one-to-one assignment, run over every PRE-gate
+            # proposal. Deliberately the same function: if the two used
+            # different matching rules the difference between them would
+            # measure the scorer, not the verifier.
+            gen_assigned, _ = assign_one_to_one(props, gold_items)
+            generator_matched += len(gen_assigned)
+            unit_rec["generator_matched"] = len(gen_assigned)
+            boot_generator_recall.append((len(gen_assigned), len(gold_items)))
+
             # --- per-class -------------------------------------------------
             for gold_item in gold_items:
                 cls_bucket(gold_item.get("type"))["rec_den"] += 1
+            for gi in gen_assigned.values():
+                cls_bucket(gold_items[gi].get("type"))["gen_num"] += 1
             for p in surviving:
                 cls_bucket(p.get("type"))["prec_den"] += 1
             for pi, gi in assigned.items():
@@ -486,8 +617,11 @@ def score(
             # Numerator: those the gauntlet terminally rejected. Measured
             # pre-gate on purpose; a gate cannot be audited by the survivors
             # it produced.
-            unit_adm = unit_adm_rejected = 0
-            for p in props:
+            # verifier_over_escalation_rate rides the SAME admissible
+            # denominator (see the PROXY WARNING in the module docstring), so
+            # false rejects, escalations and clean passes partition it.
+            unit_adm = unit_adm_rejected = unit_adm_escalated = 0
+            for idx, p in enumerate(props):
                 hits = [gi for gi, gold_item in enumerate(gold_items)
                         if statement_matches(p.get("statement"), gold_item)]
                 if not hits:
@@ -499,11 +633,27 @@ def score(
                     unit_adm_rejected += 1
                     bucket["fr_num"] += 1
                     unit_rec.setdefault("false_rejects", []).append(p.get("statement"))
+                    continue
+                codes = escalation_codes(p, rflags[idx])
+                if codes:
+                    unit_adm_escalated += 1
+                    bucket["oe_num"] += 1
+                    # Candidates and codes are counted separately: one
+                    # candidate can carry Synthesis AND OversizedEvidence, and
+                    # 19.1 wants both attributed.
+                    for code in codes:
+                        over_escalation_by_code[code] = (
+                            over_escalation_by_code.get(code, 0) + 1)
+                    unit_rec.setdefault("over_escalations", []).append(
+                        {"statement": p.get("statement"), "codes": codes})
             admissible_total += unit_adm
             admissible_rejected += unit_adm_rejected
+            admissible_escalated += unit_adm_escalated
             unit_rec["admissible"] = unit_adm
             unit_rec["admissible_rejected"] = unit_adm_rejected
+            unit_rec["admissible_escalated"] = unit_adm_escalated
             boot_false_reject.append((unit_adm_rejected, unit_adm))
+            boot_over_escalation.append((unit_adm_escalated, unit_adm))
 
             # --- v1 false-reject formula, kept for continuity --------------
             for p in rejected:
@@ -532,12 +682,16 @@ def score(
         per_class[name] = {
             "precision": pct(c["prec_num"], c["prec_den"]),
             "recall": pct(c["rec_num"], c["rec_den"]),
+            "generator_candidate_recall": pct(c["gen_num"], c["rec_den"]),
             "false_reject_rate": pct(c["fr_num"], c["fr_den"]),
+            "over_escalation_rate": pct(c["oe_num"], c["fr_den"]),
             "gold_items": c["rec_den"],
             "gold_matched": c["rec_num"],
+            "gold_matched_pre_gate": c["gen_num"],
             "surviving_declared": c["prec_den"],
             "admissible": c["fr_den"],
             "admissible_rejected": c["fr_num"],
+            "admissible_escalated": c["oe_num"],
         }
 
     metrics = {
@@ -561,6 +715,14 @@ def score(
         "post_gate_recall": pct(gold_items_matched, gold_items_total),
         "over_extraction_rate": pct(over_extracted_units, neg_units),
 
+        # spec 19.1: the generator's own ceiling, measured PRE-gate. The gap
+        # to post_gate_recall is exactly what the verifier destroyed, which is
+        # the "fail closed must not degenerate into fail empty" reading.
+        "generator_candidate_recall": pct(generator_matched, gold_items_total),
+        "generator_candidate_recall_count": generator_matched,
+        "gold_matched_count": gold_items_matched,
+        "gold_item_count": gold_items_total,
+
         # v2: one-to-one matching fallout.
         "duplicate_rate": pct(duplicate_proposals, all_proposals),
         "duplicate_rate_of_surviving": pct(duplicate_proposals, postgate_on_positive),
@@ -571,6 +733,19 @@ def score(
         "verifier_false_reject_rate": pct(admissible_rejected, admissible_total),
         "verifier_false_reject_count": admissible_rejected,
         "admissible_candidate_count": admissible_total,
+
+        # spec 19.1: the OTHER half of the same denominator -- admissible
+        # candidates the gauntlet neither killed nor passed clean, but routed
+        # to a human. `over_escalation_by_code` counts CODES (a candidate can
+        # carry two); `verifier_over_escalation_count` counts CANDIDATES, and
+        # only that one is the rate's numerator.
+        "verifier_over_escalation_rate": pct(admissible_escalated, admissible_total),
+        "verifier_over_escalation_count": admissible_escalated,
+        "over_escalation_by_code": over_escalation_by_code,
+        # Every escalation in the run, admissible or not: the queue-burden
+        # view, since a reviewer pays for the escalations gold never labeled
+        # too.
+        "review_flag_breakdown": review_flag_breakdown,
 
         # DEPRECATED (v1 formula: gold-matching rejects / ALL rejects). Kept
         # so pre-v2 metrics.json files stay comparable. Do not headline it.
@@ -603,6 +778,8 @@ def score(
             "post_gate_precision": bootstrap_ci(boot_precision),
             "post_gate_recall": bootstrap_ci(boot_recall),
             "verifier_false_reject_rate": bootstrap_ci(boot_false_reject),
+            "generator_candidate_recall": bootstrap_ci(boot_generator_recall),
+            "verifier_over_escalation_rate": bootstrap_ci(boot_over_escalation),
             "method": {
                 "kind": "unit-level percentile bootstrap",
                 "resamples": BOOTSTRAP_RESAMPLES,
@@ -644,11 +821,13 @@ ROWS = [
     ("Degenerate rate (gold+, empty out)", "degenerate_rate", "lower", False),
     ("Abstention correctness (gold-)", "abstention_correctness", "higher", False),
     ("Pre-gate unsupported (G1/props)", "pre_gate_unsupported_rate", "lower", False),
+    ("Generator candidate recall (pre-gate)", "generator_candidate_recall", "higher", True),
     ("Post-gate precision", "post_gate_precision", "higher", True),
     ("Post-gate recall", "post_gate_recall", "higher", True),
     ("Duplicate rate (dupes/props)", "duplicate_rate", "lower", False),
     ("Over-extraction rate (gold-)", "over_extraction_rate", "lower", False),
     ("Verifier false-reject rate", "verifier_false_reject_rate", "lower", True),
+    ("Verifier over-escalation rate", "verifier_over_escalation_rate", "lower", True),
     ("Verifier false-reject est. (v1, deprecated)", "verifier_false_reject_est", "lower", False),
     ("Source-role accuracy", "source_role_accuracy", "higher", False),
     ("G2 span pass rate", "g2_span_pass_rate", "higher", False),
@@ -662,8 +841,10 @@ ROWS = [
 
 PER_CLASS_ROWS = [
     ("precision", "precision"),
+    ("generator recall", "generator_candidate_recall"),
     ("recall", "recall"),
     ("false-reject", "false_reject_rate"),
+    ("over-escalation", "over_escalation_rate"),
 ]
 
 
@@ -702,8 +883,12 @@ def markdown_table(all_metrics: list[dict[str, Any]]) -> str:
         ("  reject(G1)", ("proposal_totals", "reject_g1")),
         ("  reject(G2)", ("proposal_totals", "reject_g2")),
         ("duplicate proposals", "duplicate_proposal_count"),
+        ("gold items (denominator)", "gold_item_count"),
+        ("  claimed pre-gate", "generator_candidate_recall_count"),
+        ("  still claimed post-gate", "gold_matched_count"),
         ("admissible candidates (pre-gate)", "admissible_candidate_count"),
         ("  of which rejected", "verifier_false_reject_count"),
+        ("  of which escalated to review", "verifier_over_escalation_count"),
         ("role-gradable proposals", "role_gradable_count"),
         ("  role mismatches", "role_mismatch_count"),
         ("timeouts", "timeout_count"),
@@ -769,6 +954,42 @@ def markdown_table(all_metrics: list[dict[str, Any]]) -> str:
     lines.append(f"Computed over {n_neg} gold-negative units — too few for a "
                  "usable interval, so no CI is quoted. Treat these as a "
                  "directional smell test, not a measurement.")
+
+    # --- spec 19.1 escalation attribution ---------------------------------
+    lines.append("")
+    lines.append("### Review escalations, by gate and code (spec 19.1)")
+    lines.append("")
+    codes = sorted({c for m in all_metrics
+                    for c in (m.get("review_flag_breakdown") or {})})
+    if not codes:
+        lines.append("No non-terminal review outcome in any run "
+                     "(`flag(G3)` and the sentence-ID review flags were all "
+                     "absent). An over-escalation rate of 0.000 here means "
+                     "*nothing was escalated*, not that escalation was "
+                     "measured and found correct.")
+    else:
+        lines.append("| GateName:ReviewCode | " + " | ".join(models) + " |")
+        lines.append("|---|" + "---|" * len(models))
+        for code in codes:
+            cells = " | ".join(
+                fmt((m.get("review_flag_breakdown") or {}).get(code, 0))
+                for m in all_metrics)
+            lines.append(f"| {code} | {cells} |")
+        lines.append("")
+        lines.append("Whole-run counts (the reviewer's queue). The "
+                     "`verifier_over_escalation_rate` above restricts the same "
+                     "attribution to ADMISSIBLE candidates and counts "
+                     "candidates, not codes — one candidate can carry two. "
+                     "`OversizedEvidence` is listed apart from `Synthesis` "
+                     "because §19.1 requires it.")
+    lines.append("")
+    lines.append("**Proxy caveat.** `generator_candidate_recall` is the spec's "
+                 "metric exactly. `verifier_false_reject_rate` and "
+                 "`verifier_over_escalation_rate` are NOT: both are defined "
+                 "against a gold `ProposalReady`/`ReviewRequired` disposition "
+                 "that has never been annotated, and both stand in "
+                 "\"the statement matches a gold item\" for it. Calibration "
+                 "numbers, not acceptance scores.")
 
     ci_method = (all_metrics[0].get("ci") or {}).get("method") or {}
     lines.append("")

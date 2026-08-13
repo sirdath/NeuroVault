@@ -71,8 +71,15 @@ def build_case(
     gold: dict[str, dict],
     proposals: dict[str, list[dict]],
     nothing_durable: dict[str, bool] | None = None,
+    review_flags: dict[str, list[list[str]]] | None = None,
 ) -> dict[str, Any]:
-    """Write a mini units/ + gold/ + results/ tree and score it."""
+    """Write a mini units/ + gold/ + results/ tree and score it.
+
+    `review_flags[uid]` is one flag list per proposal, written into the row's
+    `_sid_resolution` block exactly the way verify_sid.py's `inject()` writes
+    it, so the escalation path is exercised through the real on-disk shape
+    rather than a scorer-internal hook.
+    """
     units_dir = root / "units"
     gold_dir = root / "gold"
     results_dir = root / "results" / "fixture"
@@ -96,6 +103,13 @@ def build_case(
             "nothing_durable": (nothing_durable or {}).get(uid, not props),
             "incoherent_abstention": False,
         }
+        flags = (review_flags or {}).get(uid)
+        if flags is not None:
+            row["_sid_resolution"] = {
+                "contract": "sid",
+                "segmenter_harness_version": 1,
+                "proposals": [{"review_flags": f} for f in flags],
+            }
         (results_dir / "units" / f"unit_{uid}.json").write_text(
             json.dumps(row, indent=2), encoding="utf-8")
 
@@ -594,6 +608,247 @@ def test_abstention_metrics_are_reported_separately() -> None:
 
 
 # ==========================================================================
+# spec 19.1 -- generator_candidate_recall
+# ==========================================================================
+
+def test_generator_candidate_recall_is_measured_before_the_gauntlet() -> None:
+    """The generator's own ceiling, and the verifier's bill.
+
+    FR_PROPOSALS proposes all three gold memories correctly; the gauntlet
+    kills two of them. Pre-gate the generator found 3/3; post-gate 1/3
+    survives. The gap IS the verifier's damage, and it is the whole reason
+    the spec asks for both numbers instead of only the one that flatters.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"fr": FR_UNIT}, {"fr": FR_GOLD},
+                       {"fr": FR_PROPOSALS})
+
+    assert m["gold_item_count"] == 3, m["gold_item_count"]
+    assert m["generator_candidate_recall_count"] == 3
+    assert m["generator_candidate_recall"] == 1.0, m["generator_candidate_recall"]
+
+    assert m["gold_matched_count"] == 1
+    assert m["post_gate_recall"] == round(1 / 3, 4), m["post_gate_recall"]
+
+    # Recall can only ever be lost between the two, never gained.
+    assert m["generator_candidate_recall"] >= m["post_gate_recall"]
+
+
+def test_generator_recall_counts_a_gold_item_once_like_post_gate_recall() -> None:
+    """Pre-gate uses the SAME one-to-one assignment.
+
+    Three restatements of one memory are one gold instance found, not three,
+    exactly as post-gate. Otherwise `generator_candidate_recall` would exceed
+    1.0 on a padding model and the gap to post_gate_recall would stop being
+    readable as verifier damage.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"dup": DUP_UNIT}, {"dup": DUP_GOLD},
+                       {"dup": DUP_PROPOSALS})
+    assert m["gold_item_count"] == 1
+    assert m["generator_candidate_recall"] == 1.0
+    assert m["generator_candidate_recall_count"] == 1
+
+
+def test_generator_recall_is_reported_per_gold_class() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"fr": FR_UNIT}, {"fr": FR_GOLD},
+                       {"fr": FR_PROPOSALS})
+    # gold: 1 decision (alpha, survives) + 2 fact (beta, gamma -- both killed).
+    assert m["per_class"]["decision"]["generator_candidate_recall"] == 1.0
+    assert m["per_class"]["decision"]["recall"] == 1.0
+    assert m["per_class"]["fact"]["generator_candidate_recall"] == 1.0
+    assert m["per_class"]["fact"]["recall"] == 0.0, m["per_class"]["fact"]
+    assert m["per_class"]["fact"]["gold_matched_pre_gate"] == 2
+
+
+# ==========================================================================
+# spec 19.1 -- verifier_over_escalation_rate
+# ==========================================================================
+
+ESC_UNIT = """USER: The Postgres port is 5433.
+
+USER: We might switch to Redis 7 for the cache.
+
+ASSISTANT: Noted.
+"""
+
+ESC_GOLD = {
+    "nothing_durable": False,
+    "gold_proposals": [
+        {"statement": "The Postgres port is 5433.",
+         "must_match_terms": ["5433"], "type": "fact"},
+        {"statement": "The team standardized on Redis.",
+         "must_match_terms": ["Redis"], "type": "decision"},
+    ],
+}
+
+ESC_PROPOSALS = [
+    # admissible, clean pass
+    {"type": "fact", "statement": "The Postgres port is 5433.",
+     "grounding_quote": "The Postgres port is 5433.", "source_role": "user"},
+    # admissible, survives -- but "always" over a "might" span is a judgement
+    # call, so G3 routes it to a human.
+    {"type": "decision", "statement": "The team always uses Redis for the cache.",
+     "grounding_quote": "We might switch to Redis 7 for the cache.",
+     "source_role": "user"},
+]
+
+
+def test_over_escalation_counts_a_g3_flag_on_an_admissible_candidate() -> None:
+    checked = [verify_mod.verify_proposal(p, ESC_UNIT) for p in ESC_PROPOSALS]
+    assert [c["verdict"] for c in checked] == ["pass", "flag(G3)"], \
+        [c["verdict"] for c in checked]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"esc": ESC_UNIT}, {"esc": ESC_GOLD},
+                       {"esc": ESC_PROPOSALS})
+
+    # Both candidates match gold; one of the two is escalated.
+    assert m["admissible_candidate_count"] == 2, m["admissible_candidate_count"]
+    assert m["verifier_over_escalation_count"] == 1
+    assert m["verifier_over_escalation_rate"] == 0.5, m["verifier_over_escalation_rate"]
+    assert m["over_escalation_by_code"] == {"G3:PolarityHedge": 1}, \
+        m["over_escalation_by_code"]
+
+    # An escalation is NOT a rejection, and it is not a lost memory: the
+    # flagged candidate still survives and still claims its gold item.
+    assert m["verifier_false_reject_rate"] == 0.0
+    assert m["post_gate_recall"] == 1.0
+    assert m["generator_candidate_recall"] == 1.0
+
+
+def test_over_escalation_is_reported_per_gold_class() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"esc": ESC_UNIT}, {"esc": ESC_GOLD},
+                       {"esc": ESC_PROPOSALS})
+    assert m["per_class"]["fact"]["over_escalation_rate"] == 0.0
+    assert m["per_class"]["decision"]["over_escalation_rate"] == 1.0
+    assert m["per_class"]["decision"]["admissible_escalated"] == 1
+
+
+# --- the sentence-ID contract's richer review flags ------------------------
+
+SID_UNIT = """USER: The build server is at 10.0.0.7.
+
+USER: We deploy Atlas on Tuesdays.
+
+ASSISTANT: The staging cron runs at 03:30 UTC.
+
+USER: The cache is Redis 7.
+"""
+
+SID_GOLD = {
+    "nothing_durable": False,
+    "gold_proposals": [
+        {"statement": "The build server is at 10.0.0.7.",
+         "must_match_terms": ["10.0.0.7"], "type": "fact"},
+        {"statement": "Atlas deploys on Tuesdays.",
+         "must_match_terms": ["Atlas"], "type": "decision"},
+        {"statement": "The staging cron runs at 03:30 UTC.",
+         "must_match_terms": ["03:30"], "type": "fact"},
+        {"statement": "The cache is Redis 7.",
+         "must_match_terms": ["Redis"], "type": "preference"},
+    ],
+}
+
+SID_PROPOSALS = [
+    {"type": "fact", "statement": "The build server is at 10.0.0.7.",
+     "grounding_quote": "The build server is at 10.0.0.7.", "source_role": "user"},
+    {"type": "decision", "statement": "Atlas deploys on Tuesdays.",
+     "grounding_quote": "We deploy Atlas on Tuesdays.", "source_role": "user"},
+    {"type": "fact", "statement": "The staging cron runs at 03:30 UTC.",
+     "grounding_quote": "The staging cron runs at 03:30 UTC.", "source_role": "assistant"},
+    # admissible, but invents "Memcached" -> terminal G2 reject
+    {"type": "preference", "statement": "The cache is Redis 7 with Memcached.",
+     "grounding_quote": "The cache is Redis 7.", "source_role": "user"},
+]
+
+# What verify_sid.py wrote back: P1 assembled its claim across the cited
+# window, P2 cited an over-cap opaque block, P3 also synthesized -- and P3 is
+# the one the gauntlet kills anyway.
+SID_FLAGS = [[], ["synthesis"], ["oversized_evidence"], ["synthesis"]]
+
+
+def test_sid_review_flags_escalate_and_oversized_is_counted_apart() -> None:
+    """Spec 19.1: attribute every escalation to GateName and ReviewCode,
+    'including OversizedEvidence separately from Synthesis'."""
+    checked = [verify_mod.verify_proposal(p, SID_UNIT) for p in SID_PROPOSALS]
+    assert [c["verdict"] for c in checked] == \
+        ["pass", "pass", "pass", "reject(G2)"], [c["verdict"] for c in checked]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                       {"sid": SID_PROPOSALS}, review_flags={"sid": SID_FLAGS})
+
+    assert m["admissible_candidate_count"] == 4, m["admissible_candidate_count"]
+    assert m["verifier_over_escalation_count"] == 2
+    assert m["verifier_over_escalation_rate"] == 0.5, m["verifier_over_escalation_rate"]
+    assert m["over_escalation_by_code"] == {
+        "G1b:Synthesis": 1, "G1b:OversizedEvidence": 1,
+    }, m["over_escalation_by_code"]
+
+    assert m["verifier_false_reject_count"] == 1
+    assert m["verifier_false_reject_rate"] == 0.25
+    assert m["generator_candidate_recall"] == 1.0
+    assert m["post_gate_recall"] == 0.75
+
+    # The three outcomes partition the admissible set exactly once each.
+    assert (m["verifier_false_reject_count"] + m["verifier_over_escalation_count"]
+            <= m["admissible_candidate_count"])
+
+
+def test_a_terminally_rejected_candidate_is_never_an_over_escalation() -> None:
+    """P3 carries a `synthesis` flag AND dies at G2. It is a false reject and
+    must not also be billed as an escalation -- double-counting it would let a
+    verifier look busy on both counterweight metrics for one mistake."""
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                       {"sid": SID_PROPOSALS}, review_flags={"sid": SID_FLAGS})
+    # Two `synthesis` flags on disk, one escalation counted.
+    assert m["review_flag_breakdown"].get("G1b:Synthesis") == 1
+    assert m["per_class"]["preference"]["admissible_escalated"] == 0
+    assert m["per_class"]["preference"]["false_reject_rate"] == 1.0
+
+
+def test_review_flags_are_dropped_when_the_writeback_does_not_line_up() -> None:
+    """`inject()` skips non-dict proposals when it builds its notes, so a
+    length disagreement means the indices have shifted. Attributing a flag to
+    the wrong candidate is worse than attributing none, so the row's flags are
+    discarded whole."""
+    short = [["synthesis"], ["oversized_evidence"]]     # 2 notes, 4 proposals
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                       {"sid": SID_PROPOSALS}, review_flags={"sid": short})
+    assert m["verifier_over_escalation_rate"] == 0.0
+    assert m["over_escalation_by_code"] == {}
+    assert m["review_flag_breakdown"] == {}
+    # Everything else is untouched by the dropped flags.
+    assert m["verifier_false_reject_rate"] == 0.25
+
+    assert score_mod.row_review_flags({}, 3) == [[], [], []]
+    assert score_mod.row_review_flags(
+        {"_sid_resolution": {"proposals": [{"review_flags": ["synthesis"]}]}}, 1
+    ) == [["synthesis"]]
+
+
+def test_over_escalation_is_none_not_zero_without_admissible_candidates() -> None:
+    """A model that proposes nothing right has no over-escalation rate. 0.0
+    would read as 'measured, and perfect'."""
+    gold = {"nothing_durable": False,
+            "gold_proposals": [{"statement": "nobody proposed this",
+                                "must_match_terms": ["unfindable"], "type": "fact"}]}
+    props = [{"type": "fact", "statement": "Something else entirely.",
+              "grounding_quote": "The Postgres port is 5433.", "source_role": "user"}]
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"esc": ESC_UNIT}, {"esc": gold}, {"esc": props})
+    assert m["admissible_candidate_count"] == 0
+    assert m["verifier_over_escalation_rate"] is None
+    assert m["verifier_false_reject_rate"] is None
+    assert m["generator_candidate_recall"] == 0.0     # a real, measured zero
+
+
+# ==========================================================================
 # defect 6 -- bootstrap CIs
 # ==========================================================================
 
@@ -626,6 +881,28 @@ def test_scorer_emits_intervals_for_the_three_headline_metrics() -> None:
     assert m["ci"]["method"]["seed"] == 42
 
 
+def test_the_two_spec_19_1_metrics_get_the_same_bootstrap_treatment() -> None:
+    """A metric without an interval invites a threshold set on a point
+    estimate, which is the failure mode the CIs exist to prevent."""
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                       {"sid": SID_PROPOSALS}, review_flags={"sid": SID_FLAGS})
+    for key in ("generator_candidate_recall", "verifier_over_escalation_rate"):
+        interval = m["ci"][key]
+        assert interval is not None, key
+        assert interval[0] <= m[key] <= interval[1], (key, interval, m[key])
+        assert 0.0 <= interval[0] <= interval[1] <= 1.0, (key, interval)
+
+    # Same seed, same corpus, same interval -- twice.
+    with tempfile.TemporaryDirectory() as tmp:
+        again = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                           {"sid": SID_PROPOSALS}, review_flags={"sid": SID_FLAGS})
+    assert again["ci"]["generator_candidate_recall"] == \
+        m["ci"]["generator_candidate_recall"]
+    assert again["ci"]["verifier_over_escalation_rate"] == \
+        m["ci"]["verifier_over_escalation_rate"]
+
+
 def test_markdown_table_renders_intervals() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         m = build_case(Path(tmp), {"fr": FR_UNIT}, {"fr": FR_GOLD},
@@ -638,6 +915,33 @@ def test_markdown_table_renders_intervals() -> None:
     assert "Duplicate rate" in table
     assert "Source-role accuracy" in table
     assert "deprecated" in table
+
+
+def test_markdown_table_carries_the_two_new_metrics_and_their_caveat() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"sid": SID_UNIT}, {"sid": SID_GOLD},
+                       {"sid": SID_PROPOSALS}, review_flags={"sid": SID_FLAGS})
+    table = score_mod.markdown_table([m])
+    assert "Generator candidate recall (pre-gate)" in table
+    assert "Verifier over-escalation rate" in table
+    assert "generator recall" in table          # per-class row
+    assert "over-escalation" in table           # per-class row
+    assert "G1b:OversizedEvidence" in table     # attribution, apart from Synthesis
+    assert "G1b:Synthesis" in table
+    # The proxy caveat travels with the number, always.
+    assert "Proxy caveat" in table
+    assert "has never been annotated" in table
+
+
+def test_markdown_says_so_when_nothing_was_escalated() -> None:
+    """0.000 with an empty attribution table must not read as 'measured and
+    clean'. Every committed run to date escalated nothing at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        m = build_case(Path(tmp), {"fr": FR_UNIT}, {"fr": FR_GOLD},
+                       {"fr": FR_PROPOSALS})
+    assert m["review_flag_breakdown"] == {}
+    table = score_mod.markdown_table([m])
+    assert "nothing was escalated" in table
 
 
 # ==========================================================================

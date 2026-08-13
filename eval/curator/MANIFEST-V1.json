@@ -1,8 +1,21 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "manifest_status": "PARTIAL — see `frozen_at_next_run`. Not yet a valid pre-registration.",
   "created": "2026-08-13",
   "created_by": "curator Wave 4a (proof & freeze, no-model half)",
+  "revision_log": [
+    {
+      "manifest_version": 2,
+      "date": "2026-08-13",
+      "by": "curator Wave 4b-E (eval half)",
+      "changed": [
+        "generator_candidate_recall and verifier_over_escalation_rate are IMPLEMENTED in score.py and leave the unimplemented-metrics gap, which is now TWO, not four: defer_recovery_rate and defer_expiry_rate live in the Rust ledger and no Python change can reach them.",
+        "measured_baselines gains both metrics for every run they could be recomputed over. Measured READ-ONLY by re-running score.score() in memory; no file under results/ was rewritten, so every previously reported number is unchanged and re-derivable.",
+        "grammar_corpus added — the accepted/rejected corpus and the vendored llama.cpp converter behind acceptance item 7's grammar half.",
+        "No `frozen` identity changed: corpus, gold, prompt, schema, verifier/policy fingerprints and retry policy are byte-for-byte as manifest_version 1 recorded them. The manifest is still PARTIAL and still unfreezable."
+      ]
+    }
+  ],
   "authority": "docs/specs/local-memory-curator.md §19.1 (required metrics) and §20 (acceptance bar: 'before the frozen labeled corpus is scored, a committed benchmark manifest records the corpus hash, generator/verifier/policy fingerprints, retry/TTL policy, included claim classes, and pre-registered thresholds')",
 
   "rule": [
@@ -163,6 +176,32 @@
       "unload": "keep_alive 0 then /api/ps polled until the model is gone — verified, never inferred"
     },
 
+    "grammar_corpus": {
+      "purpose": "spec §20 acceptance item 7 — 'the exact served schema-v2 object AND its generated llama.cpp grammar pass the same accepted/rejected fixture corpus using only the allowed schema subset'.",
+      "path": "eval/curator/grammar_corpus/",
+      "committed": true,
+      "manifest": "manifest.jsonl",
+      "cases": 24,
+      "families": { "accepted_by_both": 5, "rejected_by_both": 13, "divergent": 6 },
+      "runner": "eval/curator/grammar_check.py (exit 0 = every verdict as recorded)",
+      "converter": {
+        "vendored_at": "eval/curator/vendor/json_schema_to_grammar.py",
+        "upstream": "https://github.com/ggml-org/llama.cpp examples/json_schema_to_grammar.py",
+        "commit": "c57607016a1ebdd08d269e3378eee5546fc3bf3a",
+        "upstream_sha256": "ee451dc460aa31185226e58988626f64e75ab735169fa3e484fcf16889475ae3",
+        "licence": "MIT — eval/curator/vendor/LICENSE-llama.cpp",
+        "verify_with": "python3 eval/curator/grammar_check.py --verify-vendor"
+      },
+      "what_is_executable": "BOTH halves. The schema half runs a stdlib validator over the nine keywords the schema uses (jsonschema is not installed and is not installed by the script). The grammar half runs the converter's REAL output through a stdlib GBNF recognizer, itself guarded by 11 micro-grammar self-tests. No llama.cpp binary is fetched or run.",
+      "what_is_not_proven": "That llama.cpp's own C++ GBNF engine agrees with this recognizer. Running the corpus through a real llama-gbnf-validator is the one remaining upgrade and needs a binary this harness deliberately does not download.",
+      "findings": [
+        "maxLength IS honoured by the converter at this commit: `statement` becomes char{0,300} and `subject` char{0,40}. prompt.rs's comment calling maxLength 'decoration that G00/G03 re-enforce server-side' is stale — the bound is enforced twice, not once. The conclusion (do not rely on it) is unchanged.",
+        "The anchored sentence-ID pattern survives intact: S0, S01, s1, S99999, an unquoted S1 and a trailing-space \"S1 \" are all unexpressible.",
+        "The grammar is STRICTER than the schema on four cases: unknown keys, a `quote` field, byte-offset fields, and a reordered key. The schema omits `additionalProperties` by design and draft-07 defaults it to true, so JSON Schema alone would admit model-authored quote text — the exact fabrication channel the sentence-ID contract removed. Rust `deny_unknown_fields` at G00 is the authority and agrees with the grammar.",
+        "Two cases BOTH halves accept and only Rust G00 rejects: an empty `statement` (gates.rs:716 bounded_text) and `nothing_durable:true` alongside a proposal (gates.rs:680 coherence). Neither is expressible in JSON Schema or in GBNF. The corpus records them so a green run is never read as 'the schema is the contract'."
+      ]
+    },
+
     "redteam_corpus": {
       "path": "src-tauri/tests/fixtures/curator/redteam/",
       "committed": true,
@@ -194,8 +233,16 @@
             "post_gate_precision_ci95": [0.2045, 0.3417],
             "post_gate_recall": 0.2087,
             "post_gate_recall_ci95": [0.1502, 0.2712],
+            "generator_candidate_recall": 0.2913,
+            "generator_candidate_recall_ci95": [0.2375, 0.354],
+            "generator_candidate_recall_count": 67,
             "verifier_false_reject_rate": 0.2857,
             "verifier_false_reject_rate_ci95": [0.1795, 0.4219],
+            "verifier_over_escalation_rate": 0.0429,
+            "verifier_over_escalation_rate_ci95": [0.0, 0.0921],
+            "verifier_over_escalation_count": 3,
+            "over_escalation_by_code": { "G1b:Synthesis": 2, "G1b:UnclaimableRole": 1, "G1b:OversizedEvidence": 0 },
+            "review_flag_breakdown_whole_run": { "G1b:Synthesis": 8, "G1b:UnclaimableRole": 5 },
             "source_role_accuracy": 0.9842,
             "pre_gate_unsupported_rate": 0.2,
             "abstention_correctness": 0.4,
@@ -223,7 +270,14 @@
           "metrics": {
             "post_gate_precision": 0.1538,
             "post_gate_recall": 0.113,
+            "generator_candidate_recall": 0.1217,
+            "generator_candidate_recall_ci95": [0.0792, 0.1712],
+            "generator_candidate_recall_count": 28,
             "verifier_false_reject_rate": 0.0714,
+            "verifier_over_escalation_rate": 0.0,
+            "verifier_over_escalation_count": 0,
+            "over_escalation_by_code": {},
+            "review_flag_breakdown_whole_run": { "G1b:UnclaimableRole": 18 },
             "source_role_accuracy": 0.7611,
             "pre_gate_unsupported_rate": 0.0039,
             "abstention_correctness": 0.6,
@@ -239,11 +293,22 @@
           "abstention_correctness": 0.8,
           "post_gate_precision": 0.232,
           "post_gate_recall": 0.17,
+          "generator_candidate_recall": 0.2261,
+          "generator_candidate_recall_ci95": [0.177, 0.2775],
           "verifier_false_reject_rate": 0.241,
+          "verifier_over_escalation_rate": 0.0,
+          "over_escalation_note": "Structurally zero, not measured clean: the quote contract has no sentence-ID review flags, and G3 fired on nothing.",
           "source_role_accuracy": 0.978,
           "pre_gate_unsupported_rate": 0.191,
           "latency_p50_s": 87.383
         }
+      },
+
+      "how_the_two_new_baselines_were_obtained": {
+        "method": "score.score() re-run in memory over the committed results/<run>/units/*.json, the committed gold/ and units/. score.score() performs no writes; only main() does, and it was not called.",
+        "results_dir_writes": "none — every metrics.json and metrics.md under results/ is byte-for-byte as it was before Wave 4b-E.",
+        "consistency_check": "Every metric that existed before reproduced exactly (qwen3-coder-30b-sid: post_gate_recall 0.2087, verifier_false_reject_rate 0.2857, source_role_accuracy 0.9842), which is what makes the two NEW numbers on the same rows trustworthy.",
+        "caveat": "These are DEV-SET numbers on a set that has been scored against repeatedly. Calibration, never acceptance — see standing_caveats and frozen_at_next_run.blind test set."
       }
     },
 
@@ -251,8 +316,11 @@
       "note": "Verbatim intent from spec §19.1. The `harness` field records whether eval/curator/score.py emits it today — four of the six do not exist yet.",
       "generator_candidate_recall": {
         "spec": "gold memory instances proposed by the generator before verification, divided by all gold memory instances",
-        "harness": "NOT EMITTED. Derivable from score.py's admissible_candidate_count over the 230 gold items, but not computed.",
-        "denominator": 230
+        "harness": "EMITTED as `generator_candidate_recall` (scorer v2, added Wave 4b-E). The spec's definition exactly, with no proxy: the SAME one-to-one assignment post_gate_recall uses, run over every PRE-gate proposal instead of the survivors. Denominator is the 230 gold items. Per class as `per_class[t].generator_candidate_recall`; unit-level bootstrap CI as `ci.generator_candidate_recall`.",
+        "denominator": 230,
+        "implementation": "eval/curator/score.py :: score()",
+        "tests": "test_score.py::test_generator_candidate_recall_is_measured_before_the_gauntlet, ::test_generator_recall_counts_a_gold_item_once_like_post_gate_recall, ::test_generator_recall_is_reported_per_gold_class",
+        "reads_as": "The generator's own ceiling. `generator_candidate_recall - post_gate_recall` is exactly what the verifier destroyed, which is the arithmetic behind §20's 'fail closed must not degenerate into fail empty'."
       },
       "verifier_false_reject_rate": {
         "spec": "correctly formed labeled candidates whose gold disposition is ProposalReady or ReviewRequired but whose verifier outcome is terminal Rejected, divided by all such admissible labeled candidates; attribute every error to GateName and RejectCode",
@@ -261,7 +329,11 @@
       },
       "verifier_over_escalation_rate": {
         "spec": "labeled candidates whose gold disposition is ProposalReady but whose verifier disposition is ReviewRequired, divided by all gold ProposalReady candidates; attribute every escalation to GateName and ReviewCode, including OversizedEvidence separately from Synthesis",
-        "harness": "NOT EMITTED. score.py has no ReviewRequired notion; its only non-terminal flag is G3 and it is 0 in every run."
+        "harness": "EMITTED as `verifier_over_escalation_rate` (scorer v2, added Wave 4b-E) — but with a PROXY denominator, exactly like verifier_false_reject_rate and for the same missing labels. A candidate counts as escalated when it SURVIVES and carries a non-terminal review outcome: verify.py's `flag(G3)`, or a flag verify_sid.py wrote back to the row (`synthesis`, `oversized_evidence`, `unclaimable_role`). Attribution is emitted as `over_escalation_by_code` keyed GateName:ReviewCode, with G1b:OversizedEvidence separate from G1b:Synthesis as §19.1 requires. Whole-run counts (admissible or not) are `review_flag_breakdown`.",
+        "gap": "PROXY, TWICE OVER. (1) the admissible set stands in for 'gold disposition is ProposalReady or ReviewRequired'; (2) using it here additionally assumes EVERY gold item is a gold `ProposalReady` — the gold set records memories a human judged durable, never memories a human wanted reviewed, so the spec's exact denominator does not exist and cannot be approximated from these labels. No threshold may be frozen against this number.",
+        "implementation": "eval/curator/score.py :: score(), row_review_flags(), escalation_codes()",
+        "tests": "test_score.py::test_over_escalation_counts_a_g3_flag_on_an_admissible_candidate, ::test_sid_review_flags_escalate_and_oversized_is_counted_apart, ::test_a_terminally_rejected_candidate_is_never_an_over_escalation, ::test_review_flags_are_dropped_when_the_writeback_does_not_line_up, ::test_over_escalation_is_none_not_zero_without_admissible_candidates",
+        "correction_to_manifest_v1": "manifest_version 1 stated 'its only non-terminal flag is G3 and it is 0 in every run'. True of G3, and misleading: verify_sid.py had been writing product-shaped review flags into every SID result row all along, and the qwen3-coder-30b-sid run carries 8 Synthesis and 5 UnclaimableRole. They were never read."
       },
       "defer_recovery_rate": {
         "spec": "deferred candidates that reach a non-deferred terminal outcome within the frozen retry/TTL policy, divided by all deferred candidates old enough to evaluate",
@@ -317,10 +389,12 @@
       "fix": "stamp prompt_sha256, schema_sha256, git_sha, scorer_version, and units content_sha256 into run_meta.json."
     },
     {
-      "item": "four unimplemented metrics",
-      "why_not_frozen": "generator_candidate_recall, verifier_over_escalation_rate, defer_recovery_rate and defer_expiry_rate have no implementation anywhere in the repo. A threshold cannot be pre-registered against a metric nothing computes.",
+      "item": "two unimplemented metrics",
+      "was": "four unimplemented metrics (manifest_version 1)",
+      "why_not_frozen": "defer_recovery_rate and defer_expiry_rate still have no implementation anywhere in the repo. A threshold cannot be pre-registered against a metric nothing computes — and defer_expiry_rate is the terminal-loss counterweight §19.1 calls out by name, so this is the most consequential of the remaining gaps, not the smallest.",
       "blocking": true,
-      "fix": "the first two are score.py changes; the last two need a reader over the Rust curator ledger (state.rs CuratorLedger) and cannot come from the Python harness at all."
+      "fix": "Both need a reader over the Rust curator ledger (state.rs CuratorLedger) and cannot come from the Python harness at all: defer and retry are Rust-side state and the harness has no run clock. Neither can be evaluated without a deferral cohort matured under this manifest's exact retry_and_ttl_policy (3 attempts / 14-day TTL / [1,6,24] h backoff / 48 h grace); still-pending candidates are reported separately and excluded from both denominators until mature.",
+      "resolved_in_v2": "generator_candidate_recall and verifier_over_escalation_rate are now implemented — see metric_definitions. verifier_over_escalation_rate remains threshold-ineligible on the proxy grounds recorded there, so implementing it did not remove a blocker; it removed an excuse for not looking."
     },
     {
       "item": "gold dispositions",
