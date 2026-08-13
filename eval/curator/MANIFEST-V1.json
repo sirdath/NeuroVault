@@ -1,0 +1,354 @@
+{
+  "manifest_version": 1,
+  "manifest_status": "PARTIAL — see `frozen_at_next_run`. Not yet a valid pre-registration.",
+  "created": "2026-08-13",
+  "created_by": "curator Wave 4a (proof & freeze, no-model half)",
+  "authority": "docs/specs/local-memory-curator.md §19.1 (required metrics) and §20 (acceptance bar: 'before the frozen labeled corpus is scored, a committed benchmark manifest records the corpus hash, generator/verifier/policy fingerprints, retry/TTL policy, included claim classes, and pre-registered thresholds')",
+
+  "rule": [
+    "Everything under `frozen` is a measured or read fact, verifiable today by the command in `verify_with`.",
+    "Everything under `frozen_at_next_run` is NOT yet frozen. It is listed explicitly rather than omitted, because a pre-registration that is silently incomplete is worse than one that admits its gaps.",
+    "No scoring run may be reported against this manifest until `frozen_at_next_run` is empty and `manifest_status` reads FROZEN.",
+    "Thresholds are set by a human before the run and never edited after seeing results (eval/curator/README.md: 'Pre-registered. Do not tune these after seeing results.')."
+  ],
+
+  "frozen": {
+    "corpus": {
+      "name": "curator unit corpus (dev)",
+      "path": "eval/curator/units/",
+      "committed": false,
+      "why_not_committed": "Slices of the owner's real Claude Code transcripts. Redacted but private; `eval/curator/.gitignore` excludes units/, gold/, gold_sid/, gold_sid_prefix/, results/, units_manifest.json. The hashes below are the committable identity.",
+      "file_count": 80,
+      "total_bytes": 1068539,
+      "content_sha256": "b1e3684bfac5f7fa26de669a4468a77b138017b04b7a3d27e6259a46fd9a3adc",
+      "verify_with": "cd eval/curator && find units -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256",
+      "built_by": "eval/curator/build_units.py",
+      "built_at": "2026-08-03T10:34:24+00:00",
+      "token_stats": { "min": 1115, "p25": 2360, "median": 3222, "p75": 3973, "max": 4081, "mean": 3012.1, "total": 250005 },
+      "note": "units_manifest.json reports selected.total = 83 and carries 83 index rows, but only 80 unique files: three rows are exact duplicates (unit_249e3ba9-0000, unit_32b5ac8d-0000, unit_9e5056b9-0000). The corpus size for pre-registration is 80."
+    },
+
+    "gold": {
+      "path": "eval/curator/gold/",
+      "unit_count": 58,
+      "item_count": 230,
+      "gold_negative_units": 5,
+      "gold_positive_units": 53,
+      "items_by_class": { "fact": 116, "preference": 41, "decision": 73 },
+      "content_sha256": "07ad5eb8afdd74c997001fde228375c4738278bb11a123dc1756e2e4b68f1f99",
+      "verify_with": "cd eval/curator && find gold -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256",
+      "assignment_lists": {
+        "gold_assign_A.txt": { "sha256": "0cf58faaae7e57f8fba8965212696e7e57ca0608b5db1ab537e25f2920d7a729", "units": 25 },
+        "gold_assign_B.txt": { "sha256": "5351bd29f7d9bbe3a08b0f3a6aa39902f65b49b2ba2838aa0c5dc9d98caa1eef", "units": 25 },
+        "gold_assign_C.txt": { "sha256": "c273df506d81474f214c15dfbde04675ada07b6d3b6586ef7e78ac484f3f5ea7", "units": 8 },
+        "note": "None of the three ends with a newline, so `wc -l` under-reports by one each. Union = 58 unique units, no overlap, no orphans."
+      },
+      "sentence_id_reannotation": {
+        "gold_sid": {
+          "content_sha256": "d3d78027d58510d3227bb6ccfa6b097e26e423df76969e13f98af6f0f5e73347",
+          "mapped": 162,
+          "mapped_with_caveats": 10,
+          "unmapped": 58,
+          "prefix_fallback": false
+        },
+        "gold_sid_prefix": {
+          "content_sha256": "299d26c71aaa6849e0fdb41ac242ed778254b0c362b5f1671442c696c7c47be8",
+          "mapped": 162,
+          "mapped_with_caveats": 43,
+          "unmapped": 25,
+          "prefix_fallback": true,
+          "min_prefix_chars": 24
+        },
+        "recall_ceiling": "Only 162/230 (70.4%) gold items resolve to a sentence ID without prefix fallback; 205/230 (89.1%) with it. Any SID-contract recall number is capped accordingly, and the cap must be stated beside the number.",
+        "segmenter_harness_version": 1
+      },
+      "standing_caveats": [
+        "This 58-unit set is the DEV set. It has been scored against repeatedly and can no longer measure generalization (eval/curator/README.md). A blind test set is a separate, unbuilt artifact.",
+        "n=5 gold-negative units cannot support a confidence interval. Abstention numbers are a directional smell test, not a measurement.",
+        "9 gold items are sourced from TOOL_RESULT blocks, which PARSER_V1 does not emit records for, so they are unreachable under the shipped parser and ungradable for source_role (the schema offers only user/assistant).",
+        "Three gold files carry labeler_notes recording items deliberately OMITTED because no term pair could be built that a correct paraphrase would reliably contain. The gold set is knowingly under-complete for paraphrase-fragile items — a documented recall ceiling, not a model failure."
+      ]
+    },
+
+    "prompt": {
+      "path": "eval/curator/prompts/extract_sid.txt",
+      "sha256": "8de0e665f56f978c13f1b88d756fe457d832c0ab2e7c60e0ba8ea5d442c29a11",
+      "bytes": 3699,
+      "prompt_version": 1,
+      "system_message_source": "src-tauri/src/memory/adaptive/curator/prompt.rs::SYSTEM_MESSAGE",
+      "byte_identity_test": "prompt.rs::tests::template_matches_the_eval_harness_byte_for_byte — USER_TEMPLATE == this file, asserted in CI"
+    },
+
+    "schema": {
+      "path": "eval/curator/schema_sid.json",
+      "sha256": "a6346fbcaa2bb321b67228303c0407f34303e1ac593b4bb0d358a15f72f8d749",
+      "bytes": 944,
+      "output_schema_version": 2,
+      "title": "CuratorProposalsSid",
+      "constraints": {
+        "proposals_max_items": 5,
+        "statement_max_length": 300,
+        "subject_max_length": 40,
+        "evidence_min_items": 1,
+        "evidence_max_items": 3,
+        "evidence_pattern": "^S[1-9][0-9]{0,3}$",
+        "type_enum": ["fact", "preference", "decision"],
+        "source_role_enum": ["user", "assistant"],
+        "required": ["proposals", "nothing_durable"]
+      },
+      "byte_identity_test": "prompt.rs::tests::schema_matches_the_eval_harness_byte_for_byte — OUTPUT_SCHEMA_JSON == this file, asserted in CI"
+    },
+
+    "verifier_fingerprint": {
+      "source": "src-tauri/src/memory/adaptive/curator/",
+      "verifier_version": 1,
+      "parser_version": 1,
+      "redaction_policy_version": 1,
+      "segmenter_version": 1,
+      "unicode_segmentation_crate_version": "1.13.2",
+      "unicode_data_version": "17.0.0",
+      "identity_version": 2,
+      "lineage_policy_version": 1,
+      "receipts_ext_version": 1,
+      "curator_ledger_version": 1,
+      "evidence_policy": "curator-evidence-v1",
+      "note": "There is no RENDER_V1 constant and no separate canonicalization-version constant. RENDER_V1 is versioned implicitly by segmenter_version; canonicalization by identity_version. Recorded here so the absence is deliberate rather than an oversight."
+    },
+
+    "policy_fingerprint": {
+      "policy_epoch": "2026-08-vp1",
+      "claim_classes_included": ["fact", "preference", "decision"],
+      "actions": ["curator_remember_fact", "curator_remember_preference", "curator_remember_decision"],
+      "destructive_actions_in_v1": [],
+      "gates": {
+        "envelope_gate": "g00_validate_output_envelope",
+        "candidate_gates": 11,
+        "aggregation_gate": "g12_derive_disposition",
+        "nli_gate": "g10_score_entailment — records not_run in V1; no scorer is configured"
+      },
+      "bounds": {
+        "max_response_bytes_gates": 65536,
+        "max_response_bytes_provider": 262144,
+        "max_candidates": 5,
+        "max_statement_bytes": 300,
+        "max_subject_bytes": 40,
+        "min_evidence_ids": 1,
+        "max_evidence_ids": 3,
+        "max_sentences_per_unit": 150,
+        "opaque_block_render_cap_bytes": 2048
+      }
+    },
+
+    "retry_and_ttl_policy": {
+      "source": "src-tauri/src/memory/adaptive/curator/state.rs::RetryPolicy",
+      "max_attempts": 3,
+      "ttl_days": 14,
+      "backoff_hours": [1, 6, 24],
+      "grace_hours": 48,
+      "cold_start_days": 7,
+      "max_units_per_run": 24,
+      "run_wall_clock_mins": 45,
+      "in_run_backoff_secs": { "server_busy": 30, "ollama_unreachable": 5 },
+      "note": "defer_recovery_rate and defer_expiry_rate are defined against THIS policy. Changing any value invalidates both metrics and requires a new manifest version."
+    },
+
+    "provider_contract": {
+      "provider": "ollama",
+      "transport": "native /api/chat over literal loopback only",
+      "min_runtime_version": "0.9.0",
+      "constrained_decoding": "permanent — `format` carries the schema on every request",
+      "think": "top-level `think: false` for any model advertising the thinking capability; omitted entirely for families that do not",
+      "keep_alive_default_shipped": "10m",
+      "canary": "one known-answer unit per run before unit 1; failure aborts the run",
+      "unload": "keep_alive 0 then /api/ps polled until the model is gone — verified, never inferred"
+    },
+
+    "redteam_corpus": {
+      "path": "src-tauri/tests/fixtures/curator/redteam/",
+      "committed": true,
+      "spec_families": 20,
+      "cases": 36,
+      "manifest": "manifest.jsonl",
+      "executable_by": "src-tauri/tests/curator_redteam_e2e.rs (17 tests, every manifest line claimed)",
+      "known_divergences": 5,
+      "divergences_detail": "docs/handoffs/curator-v1-acceptance.md"
+    },
+
+    "measured_baselines": {
+      "disclaimer": "These are FACTS from prior runs on the dev gold set, recorded so a threshold can be anchored to evidence. They are NOT thresholds and they are NOT acceptance criteria.",
+      "sid_contract": {
+        "qwen3-coder-30b-sid": {
+          "results_dir": "eval/curator/results/qwen3-coder-30b-sid/",
+          "model_tag": "qwen3-coder:30b",
+          "model_digest_short": "06c1097efce0",
+          "model_digest_full": null,
+          "finished": "2026-08-13T03:12:42",
+          "n_units": 80,
+          "n_scored": 58,
+          "options": { "temperature": 0, "num_ctx": 8192, "keep_alive": "30m", "timeout_seconds": 900 },
+          "think_setting": "auto",
+          "think_sent": false,
+          "scorer_version": 2,
+          "metrics": {
+            "post_gate_precision": 0.2712,
+            "post_gate_precision_ci95": [0.2045, 0.3417],
+            "post_gate_recall": 0.2087,
+            "post_gate_recall_ci95": [0.1502, 0.2712],
+            "verifier_false_reject_rate": 0.2857,
+            "verifier_false_reject_rate_ci95": [0.1795, 0.4219],
+            "source_role_accuracy": 0.9842,
+            "pre_gate_unsupported_rate": 0.2,
+            "abstention_correctness": 0.4,
+            "over_extraction_rate": 0.6,
+            "duplicate_rate": 0.0082,
+            "degenerate_rate": 0.0,
+            "json_parse_failure_rate": 0.0,
+            "incoherent_abstention_rate": 0.0,
+            "latency_p50_s": 61.876,
+            "latency_p95_s": 120.73,
+            "cold_load_s": 112.459
+          }
+        },
+        "gemma3-12b-sid": {
+          "results_dir": "eval/curator/results/gemma3-12b-sid/",
+          "model_tag": "gemma3:12b",
+          "model_digest_short": "f4031aab637d",
+          "model_digest_full": null,
+          "finished": "2026-08-13T00:57:59",
+          "n_units": 80,
+          "n_scored": 58,
+          "think_setting": "auto",
+          "think_sent": null,
+          "scorer_version": 2,
+          "metrics": {
+            "post_gate_precision": 0.1538,
+            "post_gate_recall": 0.113,
+            "verifier_false_reject_rate": 0.0714,
+            "source_role_accuracy": 0.7611,
+            "pre_gate_unsupported_rate": 0.0039,
+            "abstention_correctness": 0.6,
+            "latency_p50_s": 31.763,
+            "latency_p95_s": 39.67
+          },
+          "caveat": "gemma3 is not a thinking family, so `think` was omitted rather than sent false. Its reject profile is the inverse of every other model (1 G1 reject, 79 G2), which makes its low false-reject rate a different phenomenon, not a better one."
+        }
+      },
+      "quote_contract_reference": {
+        "note": "The pre-SID baseline the sentence-ID contract was meant to beat. Same 58-unit gold set, scorer v2, reported in eval/curator/results/comparison_v2.md.",
+        "qwen3-coder-30b": {
+          "abstention_correctness": 0.8,
+          "post_gate_precision": 0.232,
+          "post_gate_recall": 0.17,
+          "verifier_false_reject_rate": 0.241,
+          "source_role_accuracy": 0.978,
+          "pre_gate_unsupported_rate": 0.191,
+          "latency_p50_s": 87.383
+        }
+      }
+    },
+
+    "metric_definitions": {
+      "note": "Verbatim intent from spec §19.1. The `harness` field records whether eval/curator/score.py emits it today — four of the six do not exist yet.",
+      "generator_candidate_recall": {
+        "spec": "gold memory instances proposed by the generator before verification, divided by all gold memory instances",
+        "harness": "NOT EMITTED. Derivable from score.py's admissible_candidate_count over the 230 gold items, but not computed.",
+        "denominator": 230
+      },
+      "verifier_false_reject_rate": {
+        "spec": "correctly formed labeled candidates whose gold disposition is ProposalReady or ReviewRequired but whose verifier outcome is terminal Rejected, divided by all such admissible labeled candidates; attribute every error to GateName and RejectCode",
+        "harness": "EMITTED as `verifier_false_reject_rate`, but with a non-identical denominator: score.py's admissible set is 'candidates whose statement matches a gold item', because the gold set carries no disposition labels. Adjacent, not equal.",
+        "gap": "The gold set must gain per-item gold dispositions before this metric means what the spec says it means."
+      },
+      "verifier_over_escalation_rate": {
+        "spec": "labeled candidates whose gold disposition is ProposalReady but whose verifier disposition is ReviewRequired, divided by all gold ProposalReady candidates; attribute every escalation to GateName and ReviewCode, including OversizedEvidence separately from Synthesis",
+        "harness": "NOT EMITTED. score.py has no ReviewRequired notion; its only non-terminal flag is G3 and it is 0 in every run."
+      },
+      "defer_recovery_rate": {
+        "spec": "deferred candidates that reach a non-deferred terminal outcome within the frozen retry/TTL policy, divided by all deferred candidates old enough to evaluate",
+        "harness": "NOT EMITTED and not measurable by the Python harness — defer/retry lives in the Rust ledger (state.rs). Needs a run-ledger reader, not a scorer change."
+      },
+      "defer_expiry_rate": {
+        "spec": "deferred candidates that reach ExpiredVisible without recovery, divided by all deferred candidates old enough to evaluate; still-pending candidates reported separately and excluded from both denominators until mature",
+        "harness": "NOT EMITTED — same reason."
+      },
+      "end_to_end_candidate_recall": {
+        "spec": "gold memory instances that ultimately reach human review, divided by all gold memory instances",
+        "harness": "No exact equivalent. `post_gate_recall` is the de-facto stand-in (gold items claimed by a surviving proposal), but the harness has no review queue, so the two are only equal while every survivor reaches review — which is true in V1 and must be re-checked if that ever changes."
+      },
+      "supporting_metrics_required_by_19_1": [
+        "unsupported-claim rate",
+        "valid-sentence-ID and evidence-resolution rate",
+        "over-cap opaque-block citation count and RequireReview(OversizedEvidence) routing accuracy, with silent Pass and terminal Reject both counted as policy errors",
+        "actor/subject/object attribution accuracy",
+        "polarity, modality, temporal, quantity, and action accuracy",
+        "conflict and supersession accuracy",
+        "secret exposure count, target zero",
+        "false-negative rate from a predetermined audit sample",
+        "untouched approval, edit, and rejection rates",
+        "review time and queue burden",
+        "p50/p95 runtime, peak RAM, deferred backlog",
+        "replay stability and deduplication correctness"
+      ]
+    }
+  },
+
+  "frozen_at_next_run": [
+    {
+      "item": "pre_registered_thresholds",
+      "why_not_frozen": "The spec requires thresholds to be pre-registered but does not supply numbers — §19.1 and §20 name the six metrics and demand a threshold for each without setting one. Wave 4a will not invent an acceptance bar and present it as normative. A human sets these, per claim class, before the scoring run.",
+      "blocking": true,
+      "required_shape": {
+        "per_metric": ["generator_candidate_recall", "verifier_false_reject_rate", "verifier_over_escalation_rate", "defer_recovery_rate", "defer_expiry_rate", "end_to_end_candidate_recall"],
+        "per_class": ["fact", "preference", "decision"],
+        "rule": "spec §20: 'every included claim class meets those pre-registered recall and verifier thresholds on the frozen corpus. Fail closed must not degenerate into fail empty.' A threshold set is invalid unless it constrains BOTH a floor on recall and a ceiling on false rejection for every included class."
+      },
+      "anchoring_evidence": "measured_baselines above. The strongest measured arm (qwen3-coder-30b-sid) sits at recall 0.209, false-reject 0.286, source_role 0.984."
+    },
+    {
+      "item": "model_digest_full",
+      "why_not_frozen": "No run_meta.json records a model digest as a first-class field. The only digests recoverable are 12-hex short forms scraped from the embedded `ollama ps` sample rows, and one results dir has no ps rows at all. A pinned generator fingerprint needs the full sha256 from /api/tags at run time.",
+      "blocking": true,
+      "fix": "run_bench.py should record the served digest from /api/tags into run_meta.json; the Rust provider already pins it (ProviderConfig::model_digest) and aborts on mismatch."
+    },
+    {
+      "item": "run_meta provenance fields",
+      "why_not_frozen": "run_meta.json records prompt/schema by PATH STRING only — no content hash, no git SHA, no scorer version. Reproducibility currently rests on the path not having changed underneath the result.",
+      "blocking": true,
+      "fix": "stamp prompt_sha256, schema_sha256, git_sha, scorer_version, and units content_sha256 into run_meta.json."
+    },
+    {
+      "item": "four unimplemented metrics",
+      "why_not_frozen": "generator_candidate_recall, verifier_over_escalation_rate, defer_recovery_rate and defer_expiry_rate have no implementation anywhere in the repo. A threshold cannot be pre-registered against a metric nothing computes.",
+      "blocking": true,
+      "fix": "the first two are score.py changes; the last two need a reader over the Rust curator ledger (state.rs CuratorLedger) and cannot come from the Python harness at all."
+    },
+    {
+      "item": "gold dispositions",
+      "why_not_frozen": "The gold set labels statements and evidence, not dispositions. verifier_false_reject_rate and verifier_over_escalation_rate are both defined against a gold ProposalReady/ReviewRequired label that does not exist yet.",
+      "blocking": true
+    },
+    {
+      "item": "blind test set",
+      "why_not_frozen": "The 58-unit set is the DEV set by its own README and has been scored against repeatedly. A frozen labeled corpus for acceptance must be held out.",
+      "blocking": true
+    },
+    {
+      "item": "peak RAM and deferred backlog",
+      "why_not_frozen": "§19.1 requires both; neither the Python harness nor the Rust run audit records peak RSS today. Latency p50/p95 IS recorded.",
+      "blocking": false
+    },
+    {
+      "item": "human-facing metrics",
+      "why_not_frozen": "untouched approval/edit/rejection rates, review time and queue burden are only observable once a human uses the review queue on real proposals. They belong to the Phase D observation window, not to a corpus score.",
+      "blocking": false
+    }
+  ],
+
+  "known_defects": [
+    "units_manifest.json double-counts three units (83 rows, 80 files).",
+    "eval/curator/README.md line 7 references README-harness.md, which does not exist — the content was merged into README.md.",
+    "eval/curator/results/qwen3-coder-30b-sid/metrics.md has two columns headed `qwen3-coder:30b` (the SID run and the older quote-contract run); the columns cannot be told apart from the header alone.",
+    "anchor_comparison.md predates scorer v2: no CIs, no source_role row, and its `verifier_false_reject_est` is the deprecated v1 formula whose denominator grows with every piece of junk a model emits.",
+    "Shipped defaults diverge from every benchmark setting: keep_alive 10m (code) vs 30m (runs), timeout_unit_secs 180 (code) vs 120-900 (runs). num_predict is not recorded in any run_meta.json."
+  ]
+}

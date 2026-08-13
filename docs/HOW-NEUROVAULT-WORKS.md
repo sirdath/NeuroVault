@@ -185,6 +185,74 @@ ingest_content
 - Content > 32 KB rejected with HTTP 413. Agents should split, not dump.
 - Embedder batch capped at 32 items per inference (peak RAM ~75 MB regardless of document size).
 
+### The local memory curator (opt-in, review-only)
+
+The three paths above all start with a human writing something. The curator is
+a fourth path, and the only one that starts with a model — which is why it is
+off by default and why it cannot write.
+
+Once a night, per active brain, while the app is open: it reads the Claude Code
+turns the user consented to keep evidence for, asks a model in the user's own
+Ollama to propose durable memories, verifies each one in deterministic Rust,
+and appends the survivors to `proposals.jsonl` as review cards. Code lives in
+`src-tauri/src/memory/adaptive/curator/` (14 modules, ~18k lines).
+
+```
+journal events ──lineage allowlist──► curator unit
+  └─► transcript re-opened under the approved root (openat, O_NOFOLLOW)
+       └─► prefix SHA-256 re-checked against capture — mismatch ⇒ DEFER, never read
+            └─► PARSER_V1 → REDACT_V1 (secrets ⇒ [REDACTED:kind], not citable)
+                 └─► SEG_V1 enumerates sentences  →  "S1 [user]: …"
+                      └─► Ollama, constrained decoding, think:false, loopback only
+                           └─► G00 … G12: the gauntlet
+                                └─► survivors ⇒ proposals.jsonl, application NotApplicable
+```
+
+**The evidence contract is sentence IDs, not quotes.** The server enumerates
+the sanitized transcript, the model points at IDs (`["S12"]`), and the server
+slices its own table to get the text. This is the part worth internalising: a
+model-authored quote is a *type error* under the served schema, not something
+the verifier has to catch afterwards. The failure mode it deletes — 19-89%
+quote fabrication across candidate models on this project's own 80-unit
+benchmark — is the reason the contract looks like this.
+
+**Thirteen gates, one lattice.** `Reject > Defer > NoOp > RequireReview >
+ProposalReady`, strictly monotonic: no number of passes outvotes one reject, and
+a later gate can never soften an earlier one. So gate *order* is a performance
+decision and never a semantic one. G06 requires every number, date, version and
+identifier in the statement to appear verbatim in the cited sentence. G04
+refuses a decision attributed to assistant text. G11 turns a re-run into a
+`NoOp` rather than a second review card.
+
+**Nothing auto-applies, and that is enforced rather than promised.** Every
+curator proposal is stored with `application_status: NotApplicable`, no curator
+path calls a write endpoint, and journal events the curator emits are marked so
+they can never become evidence for a later curator run. Approving a card in
+Memory Review changes no engram today — the executor that would apply one is
+explicitly post-V1.
+
+**What it costs.** The model is the user's, not ours: NeuroVault never pulls
+weights on someone's behalf and the settings panel has no download button. A
+12B-class model holds ~8 GB of RAM while resident, a 30B one closer to 20 GB.
+The batch keeps the model loaded across units and then unloads it — verified by
+polling `/api/ps`, never inferred from the unload request succeeding. Runs cap
+at 24 units and 45 minutes of wall clock.
+
+**Honest limits.** macOS and Linux only; Windows needs handle-relative
+traversal first (`docs/handoffs/windows-parity.md`). Nightly covers the active
+brain only. G10 (entailment scoring) records `not_run` — no NLI model ships,
+because calibrating a threshold on held-out data is a precondition and that data
+does not exist yet. And the prompt-injection boundary is role policy plus a
+tool-less provider, not detection: a user who pastes attacker text and then
+clicks Approve has authorised it, by design.
+
+Red-team coverage is 20 attack families / 36 cases in
+`src-tauri/tests/fixtures/curator/redteam/`, executed end to end by
+`src-tauri/tests/curator_redteam_e2e.rs`. Five of those cases currently land on
+a different gate than the corpus predicted — all still refused or still routed
+to a human, none of them less strict — and each is written down rather than
+papered over, in `docs/handoffs/curator-v1-acceptance.md`.
+
 ---
 
 ## 5. The retrieval pipeline — how memory comes out

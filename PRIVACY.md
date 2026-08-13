@@ -20,6 +20,7 @@ version number here and in the README.
 | Cloud sync | **None.** Your vault is a folder of markdown files you own. |
 | Does the app talk to any network? | Only for actions you enable or request: update checks/downloads and on-demand local-model downloads listed below. Connected AI clients have their own provider data flow, also described below. |
 | Background work the app does on its own | Indexing, the file watcher, and the consolidation scheduler. All three are on-device and make **no network call** — see [Local background work](#local-background-work). |
+| Reads anything outside `~/.neurovault/`? | **Only the local memory curator, and only if you turn it on.** Off by default; it reads Claude Code transcripts you separately consented to keep evidence for, runs a model on your own machine, and produces review-only proposals. Nothing leaves the machine. See [Local memory curator](#local-memory-curator-opt-in). |
 
 If any of this is wrong for a release you're running, file an issue —
 it's a bug.
@@ -31,6 +32,7 @@ it's a bug.
 ```
 ~/.neurovault/
   brains.json                        # registry of vaults (plaintext JSON)
+  local_curator.json                 # local memory curator: consent switches + which local model
   brains/
     <brain-id>/
       brain.db                       # SQLite index — contains your text, embeddings, graph
@@ -45,7 +47,14 @@ it's a bug.
       proposals.jsonl                # review-only consolidation proposals
       consolidation_state.json       # how far consolidation has read the journal
       consolidation_last_run.txt     # timestamp that debounces the 6-hour clock
+      curator_state.json             # curator: how far the nightly run has read, and what deferred
+      curator_runs-YYYY-MM.jsonl     # curator: one line per unit outcome (gate names + hashes, no text)
+      curator_tombstones.jsonl       # curator: evidence that must never be proposed again
 ```
+
+The three `curator_*` files exist only if you enabled the local memory
+curator. They hold gate names, version numbers and hashes — never transcript
+text, prompt text, or model output text.
 
 **External-folder vaults** (Obsidian-style) live wherever you pointed
 NeuroVault — the app registers the path in `brains.json` but the
@@ -102,10 +111,106 @@ outbound table above.
 | Vault indexing + file watcher | On save, and when a file in your vault changes on disk | Re-reads the changed markdown and updates the rebuildable index. On-device. | Inherent to the app. |
 | **Consolidation scheduler** | Roughly every 6 hours per active brain, starting ~2 minutes after launch (desktop app only) | Reads that brain's own local `journal/` files, applies deterministic rules in plain CPU — no embeddings, no model, **no network** — and appends **review-only proposals** to `proposals.jsonl`. Nothing it produces touches a note. A proposal changes a memory only after you click Approve in Memory Review. | `PUT /api/consolidation_auto {"enabled": false}`, or write `off` into `~/.neurovault/consolidation_auto.txt`. There is no Settings toggle for it yet. |
 | AI employees | Only for an employee you have hired *and* enabled | The watching is local and free; for judgment or writing it spawns your own `claude` CLI, which does reach the network — see the outbound table above. Autonomy is propose-only. | Off by default; disable the employee in the app. |
+| **Local memory curator** | Off by default. When enabled: once a night per active brain, while the app is open | Reads the Claude Code turns you consented to keep evidence for, asks a model **on this machine** to propose memories, verifies every one against your transcript, and appends review-only proposals. No network call. See the section below. | Settings → Local memory curator → **Curate my sessions** off, or set `"enabled": false` in `~/.neurovault/local_curator.json`. |
 
 The consolidation scheduler is new in 0.6.1. It is the only automatic
 background pass added since 0.6.0, and it does not change what can leave
 your Mac: nothing it reads or writes leaves the machine.
+
+## Local memory curator (opt-in)
+
+This is the only feature that reads anything outside `~/.neurovault/`, so it
+gets its own section. **It is off by default and does nothing until you turn
+on two switches.**
+
+### What it reads
+
+Your Claude Code session transcripts — the `.jsonl` files under
+`~/.claude/projects/` — and only the ones you consented to. Consent works in
+two stages, which is why the app shows two switches rather than one:
+
+1. **Keep evidence from my sessions.** When a Claude Code turn finishes,
+   NeuroVault records *where* the transcript lives, how many bytes it had, and
+   a SHA-256 of those bytes. It does not copy the text. Turns that finished
+   before you granted this have no evidence recorded and are permanently
+   invisible to the curator.
+2. **Curate my sessions.** Only with this on does anything ever re-open a
+   transcript.
+
+At run time the file is re-opened under the approved root only (`openat` with
+`O_NOFOLLOW`, no symlink following, no path traversal), and the bytes are
+re-hashed against what was recorded at capture. If the file changed, the run
+**stops** for that turn rather than reading the newer bytes. Secrets are
+stripped before the model sees anything: API keys, tokens, AWS keys and similar
+patterns are replaced with `[REDACTED:<kind>]`, and a sentence touched by a
+redaction can be read for context but can never be cited as evidence.
+
+macOS and Linux only. On Windows this feature refuses to run at all.
+
+### What runs
+
+A model **you** installed in **your** Ollama, on `127.0.0.1`. NeuroVault never
+downloads a model for you and there is deliberately no download button in the
+settings panel — the picker lists only what `ollama list` already shows.
+
+Stated plainly, in the app's own words:
+
+> It costs real hardware while it runs: a 12B-class model holds roughly 8 GB of
+> RAM (a 30B one closer to 20 GB), your fans will notice, and a laptop on
+> battery will notice too. The model is unloaded when the run finishes.
+
+The unload is verified, not assumed: NeuroVault sends `keep_alive: 0` and then
+polls Ollama's `/api/ps` until the model is actually gone. A run is capped at
+24 units and 45 minutes of wall clock; whatever is left waits for tomorrow.
+
+### What it produces
+
+Proposals in Memory Review, and nothing else. Every candidate the model emits
+is checked by deterministic Rust — thirteen named gates — against the exact
+sentences it cited: the model points at sentence IDs and the server slices its
+own transcript, so a model-authored quote is a type error rather than something
+to be trusted. Numbers, dates, versions and identifiers must appear verbatim in
+the cited sentence. A candidate that fails any gate is refused and recorded;
+it never becomes a card.
+
+Survivors are stored with application status **NotApplicable** — the store's
+word for "this changes nothing." No curator path calls a write endpoint. A
+proposal alters a memory only after you click Approve.
+
+### What leaves your machine
+
+Nothing. The model is local, the endpoint is a literal loopback address (a DNS
+name — including `localhost` — is refused, because a name can resolve
+off-host), and the provider is given no tools. The receipts NeuroVault keeps
+alongside each proposal hold hashes, gate names and version numbers — never
+prompt text, never response text, never transcript text.
+
+There is one honest limit, and it is worth stating: if you paste attacker-
+controlled text into a session and then approve a proposal derived from it, the
+system does what you told it to. You are the authority. Role policy, a
+tool-less provider and an envelope that carries no brain or session identifiers
+are the boundary; your own Approve click is not something they can guard.
+
+### How to turn it off
+
+The master switch is a real kill switch, described in the app as:
+
+> The kill switch. Off means no nightly run is scheduled, no transcript is
+> opened, and no proposal is ever made. On means the curator may run — and
+> every result still waits for your review.
+
+Off means off at the top of the run, before any file is touched — not "runs and
+discards." The two switches are independent on purpose: you can revoke
+curation while still keeping evidence, or revoke evidence capture and leave
+nothing for a future run to read.
+
+- **In the app:** Settings → Local memory curator → toggle **Curate my
+  sessions** off.
+- **On disk:** set `"enabled": false` in `~/.neurovault/local_curator.json`, or
+  delete the file.
+- **Already-made proposals** stay in Memory Review until you approve or reject
+  them; turning the curator off does not delete them, and it does not apply
+  them either.
 
 ## Telemetry stance
 
