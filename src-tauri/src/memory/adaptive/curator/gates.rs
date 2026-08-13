@@ -47,7 +47,14 @@ use super::transcript::ParsedRecord;
 
 /// Bump on any change to gate *logic*. Policy-data changes bump
 /// [`policy::POLICY_EPOCH`] instead; both ride in every receipt.
-pub const VERIFIER_VERSION: u32 = 1;
+///
+/// `2` — Wave 4c: G04 correlates on [`policy::correlation_anchors`]
+/// rather than the narrower anchor-entity set, and G08 routes a
+/// comparison marker to review before the one-sided-negation rule can
+/// read it as an inversion. Both are branch changes inside a gate, so
+/// both are verifier logic; the tables they read moved the epoch to
+/// `2026-08-vp2` in the same commit.
+pub const VERIFIER_VERSION: u32 = 2;
 
 /// Envelope caps (spec §10 G00). The HTTP adapter enforces the raw byte
 /// cap while streaming, so an oversized response never reaches JSON
@@ -913,12 +920,19 @@ fn g04_enforce_scope_and_source_policy(
     // ── correlated evidence (the GovMem steal) ──
     //
     // Every cited sentence must actually relate to the claim: anchors
-    // are the statement's protected tokens plus its content words, and
-    // each cited sentence must share at least one. This is what kills
-    // "verbatim but irrelevant" — a real sentence, correctly resolved,
-    // that has nothing to do with the claim. Sentence IDs alone do not
-    // fix that; this does.
-    let anchors = policy::anchor_entities(&candidate.statement);
+    // are the statement's protected tokens, its content words and its
+    // ASCII acronyms, and each cited sentence must share at least one.
+    // This is what kills "verbatim but irrelevant" — a real sentence,
+    // correctly resolved, that has nothing to do with the claim.
+    // Sentence IDs alone do not fix that; this does.
+    //
+    // Both sides are read as `correlation_anchors` (spec §10 G04, as
+    // amended). The narrower `ordered_anchors` set drops tokens under
+    // three bytes, which is right for binding order and claim identity
+    // and wrong here: it made "The DB was migrated." read as unrelated
+    // to "I will migrate the DB tomorrow morning." and rejected a
+    // planned-to-completed attack as bad evidence.
+    let anchors = policy::correlation_anchors(&candidate.statement);
     if scratch
         .cited
         .iter()
@@ -1216,6 +1230,24 @@ fn g08_verify_polarity_modality_and_time(
 ) -> GateEffect {
     let statement = candidate.statement.as_str();
     let primary = scratch.primary().text;
+
+    // 0. Comparison, not inversion. "Tabs instead of spaces" selects
+    //    between two options; it negates neither, and the polarity rule
+    //    immediately below — which only asks whether a negation marker
+    //    is present on each side — reads a source's "never spaces"
+    //    against a statement's "instead of spaces" as a flip. V1 has no
+    //    typed rule that can say which option a comparison chose, so
+    //    spec §10 G08 (as amended) routes it to a human rather than
+    //    manufacturing a polarity reject. This runs first precisely
+    //    because it is the rejection it is preventing.
+    if policy::find_marker(primary, policy::COMPARISON_MARKERS).is_some()
+        || policy::find_marker(statement, policy::COMPARISON_MARKERS).is_some()
+    {
+        scratch.note = Some("comparison".to_string());
+        return GateEffect::RequireReview {
+            code: ReviewCode::ComplexSemantics,
+        };
+    }
 
     // 1. Polarity. A negation on one side only is an inversion.
     let source_negated = policy::find_marker(primary, policy::NEGATION_MARKERS).is_some();
@@ -2322,6 +2354,66 @@ mod tests {
         assert_terminal(&outcome, GateName::G08VerifyPolarityModalityAndTime);
     }
 
+    /// Ruling 3 (Wave 4c), positive: `X instead of Y` names a choice
+    /// between two options. The one-sided-negation rule reads the
+    /// *absence* of the source's `never` as an inversion and would
+    /// reject; a comparison is exactly the "other natural-language state
+    /// interpretation" spec §10 G08 sends to a human.
+    #[test]
+    fn a_comparison_is_reviewed_rather_than_read_as_a_polarity_flip() {
+        let f = fixture(&[(
+            "user",
+            "John wrote: \"we use tabs, never spaces, in every repo\". Let me know if that changes anything.",
+        )]);
+        let c = candidate(
+            "preference",
+            "Tabs are used instead of spaces in every repo.",
+            "style",
+            &["S1"],
+            "user",
+        );
+        let outcome = verify_candidate(&c, &f.context());
+        assert_gate(
+            &outcome,
+            GateName::G08VerifyPolarityModalityAndTime,
+            GateOutcome::RequireReview,
+            Some("complex_semantics"),
+        );
+        assert_eq!(outcome.disposition, Disposition::ReviewRequired);
+        assert!(
+            outcome.terminal().is_none(),
+            "a review flag never ends the walk: {:?}",
+            outcome.records.iter().map(|r| &r.gate).collect::<Vec<_>>()
+        );
+    }
+
+    /// Ruling 3, near miss. `family_04_polarity_flip_dies_at_g08` is the
+    /// role-reversal half — a true inversion still rejects — and this is
+    /// the boundary case: a marker inside an identifier must not disarm
+    /// the polarity rule.
+    #[test]
+    fn a_comparison_marker_inside_an_identifier_does_not_disarm_polarity() {
+        let f = fixture(&[(
+            "user",
+            "Do not set renderer_versus_shim in the config. That rule stands.",
+        )]);
+        let c = candidate(
+            "preference",
+            "Set renderer_versus_shim in the config.",
+            "tooling",
+            &["S1"],
+            "user",
+        );
+        let outcome = verify_candidate(&c, &f.context());
+        assert_gate(
+            &outcome,
+            GateName::G08VerifyPolarityModalityAndTime,
+            GateOutcome::Reject,
+            Some("semantic_state_mismatch"),
+        );
+        assert_terminal(&outcome, GateName::G08VerifyPolarityModalityAndTime);
+    }
+
     // ── family 5: possibility → fact ─────────────────────────────────
 
     #[test]
@@ -2391,6 +2483,67 @@ mod tests {
             GateOutcome::Reject,
             Some("semantic_state_mismatch"),
         );
+    }
+
+    /// Ruling 2 (Wave 4c), positive: the corpus's own family-6 shape.
+    /// `DB` is two bytes — below the content-word floor — so before
+    /// correlation anchors learned about acronyms the tense change that
+    /// *is* the attack made the citation look unrelated and the
+    /// candidate died at G04 as `InvalidEvidence`, two gates early.
+    #[test]
+    fn family_06_a_shared_acronym_correlates_instead_of_false_rejecting() {
+        let f = fixture(&[(
+            "user",
+            "I will migrate the DB tomorrow morning. The backup finished an hour ago.",
+        )]);
+        let c = candidate(
+            "fact",
+            "The DB was migrated.",
+            "operations",
+            &["S1"],
+            "user",
+        );
+        let outcome = verify_candidate(&c, &f.context());
+        assert_gate(
+            &outcome,
+            GateName::G04EnforceScopeAndSourcePolicy,
+            GateOutcome::Pass,
+            None,
+        );
+        assert_gate(
+            &outcome,
+            GateName::G08VerifyPolarityModalityAndTime,
+            GateOutcome::Reject,
+            Some("semantic_state_mismatch"),
+        );
+        assert_terminal(&outcome, GateName::G08VerifyPolarityModalityAndTime);
+    }
+
+    /// Ruling 2, negative: correlating on acronyms must not correlate on
+    /// *any* acronym. An unrelated citation is still an unrelated
+    /// citation, and `family_12_a_verbatim_but_irrelevant_citation_dies_at_g04`
+    /// keeps the no-acronym half of the same guarantee.
+    #[test]
+    fn an_unrelated_acronym_is_not_a_correlation() {
+        let f = fixture(&[(
+            "user",
+            "The CDN cache was purged this morning. Ping me if anything looks off.",
+        )]);
+        let c = candidate(
+            "fact",
+            "The DB was migrated.",
+            "operations",
+            &["S1"],
+            "user",
+        );
+        let outcome = verify_candidate(&c, &f.context());
+        assert_gate(
+            &outcome,
+            GateName::G04EnforceScopeAndSourcePolicy,
+            GateOutcome::Reject,
+            Some("invalid_evidence"),
+        );
+        assert_terminal(&outcome, GateName::G04EnforceScopeAndSourcePolicy);
     }
 
     // ── family 7: historical → current ───────────────────────────────

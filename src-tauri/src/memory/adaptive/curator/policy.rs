@@ -34,7 +34,14 @@ use super::receipts::SourceRole;
 /// every [`super::receipts::VerificationReceipt`] and into every
 /// `proposal_id`, so two runs under different epochs can neither
 /// collide nor silently compare.
-pub const POLICY_EPOCH: &str = "2026-08-vp1";
+///
+/// `vp2` (2026-08, Wave 4c) carries the spec's two conformance rulings:
+/// correlation anchors admit ASCII acronyms so a shared `DB` is evidence
+/// rather than noise, and [`COMPARISON_MARKERS`] route `X instead of Y`
+/// to review instead of letting the one-sided-negation rule read it as
+/// an inversion. Both change what a verdict *means*, which is what an
+/// epoch is for.
+pub const POLICY_EPOCH: &str = "2026-08-vp2";
 
 // ---------------------------------------------------------------------
 // claim vocabulary
@@ -420,6 +427,16 @@ pub const NEGATION_MARKERS: &[&str] = &[
     "shouldn't",
     "can't",
 ];
+
+/// Comparison, not inversion (spec §10 G08, as amended). "Tabs instead
+/// of spaces" chooses between two options; it does not negate either.
+/// The polarity rule below compares the *presence* of a negation marker
+/// on each side, so a source that says "we use tabs, never spaces" and
+/// a statement that says "tabs instead of spaces" look like a flip to
+/// it. They are not, and V1 ships no typed rule that can tell which of
+/// the two options a comparison selected — so the honest verdict is a
+/// human, not a reject.
+pub const COMPARISON_MARKERS: &[&str] = &["instead of", "rather than", "as opposed to", "versus"];
 
 /// Modality — possible / desired / hypothetical rather than categorical.
 pub const MODALITY_MARKERS: &[&str] = &[
@@ -947,11 +964,45 @@ pub fn anchor_entities(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// [`anchor_entities`] plus exact ASCII all-uppercase acronym tokens,
+/// lowercased, stopwords excluded — the set G04 correlates with.
+///
+/// Why a second set instead of widening the first: [`ordered_anchors`]
+/// drops tokens under three bytes, which is right for binding order (a
+/// two-letter word carries no reliable role) and right for claim
+/// topics (identity must not churn on noise), but wrong for
+/// correlation. `DB`, `CI`, `UI`, `S3` are the ordinary vocabulary of
+/// the transcripts this runs over, and a claim that shares one with its
+/// citation is *related to it*. Spec §10 G04, as amended: "correlation
+/// anchors include exact ASCII all-uppercase acronym tokens, so common
+/// technical acronyms correlate rather than false-reject."
+///
+/// Correlation only. Binding order, protected tokens and claim-topic
+/// identity all read [`ordered_anchors`] and are deliberately unchanged
+/// — this set widens what counts as *related*, never what counts as
+/// verbatim, ordered, or the same claim.
+pub fn correlation_anchors(text: &str) -> BTreeSet<String> {
+    static ACRONYM: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\b[A-Z][A-Z0-9]{1,15}\b").expect("acronym pattern must compile"));
+    let mut anchors = anchor_entities(text);
+    for matched in ACRONYM.find_iter(text) {
+        let token = matched.as_str().to_ascii_lowercase();
+        if STOPWORDS.contains(&token.as_str()) {
+            continue;
+        }
+        anchors.insert(token);
+    }
+    anchors
+}
+
 /// G04's correlated-evidence test: does this sentence relate to the
 /// claim at all? Kills "verbatim but irrelevant" citations — the
 /// residual failure mode sentence IDs do not fix by themselves.
+///
+/// `anchors` must come from [`correlation_anchors`]; the sentence side
+/// is derived here so both halves are read under the same rule.
 pub fn shares_anchor(anchors: &BTreeSet<String>, text: &str) -> bool {
-    !anchors.is_disjoint(&anchor_entities(text))
+    !anchors.is_disjoint(&correlation_anchors(text))
 }
 
 /// Greedy subsequence test over the anchors the statement and the
@@ -1116,7 +1167,7 @@ mod tests {
         // changing the tables without changing this is a worse one
         // (spec §10 G08: "Every data change requires regression
         // fixtures and a policy epoch bump").
-        assert_eq!(POLICY_EPOCH, "2026-08-vp1");
+        assert_eq!(POLICY_EPOCH, "2026-08-vp2");
     }
 
     #[test]
@@ -1126,6 +1177,7 @@ mod tests {
         assert_eq!(ALIAS_TABLE_V1.len(), 8, "alias table size");
         assert_eq!(QUOTATION_MARKERS.len(), 12);
         assert_eq!(NEGATION_MARKERS.len(), 16);
+        assert_eq!(COMPARISON_MARKERS.len(), 4);
         assert_eq!(MODALITY_MARKERS.len(), 16);
         assert_eq!(CONDITIONAL_MARKERS.len(), 10);
         assert_eq!(COMPLETION_MARKERS.len(), 10);
@@ -1362,6 +1414,46 @@ mod tests {
         );
     }
 
+    /// Ruling 3 (Wave 4c): positive, role-reversal and near-miss for the
+    /// newest marker list, in the shape spec §10 demands of every
+    /// `POLICY_EPOCH` data change.
+    #[test]
+    fn comparison_markers_are_phrases_and_never_fire_inside_a_word() {
+        assert_eq!(
+            find_marker("Tabs are used instead of spaces.", COMPARISON_MARKERS),
+            Some("instead of")
+        );
+        assert_eq!(
+            find_marker("We picked pnpm rather than npm.", COMPARISON_MARKERS),
+            Some("rather than")
+        );
+        assert_eq!(
+            find_marker("Run the canary A versus B.", COMPARISON_MARKERS),
+            Some("versus")
+        );
+        assert_eq!(
+            find_marker(
+                "Ship the exporter as opposed to the importer.",
+                COMPARISON_MARKERS
+            ),
+            Some("as opposed to")
+        );
+        // near miss: the bare adverb is not a comparison…
+        assert_eq!(
+            find_marker("We shipped the exporter instead.", COMPARISON_MARKERS),
+            None
+        );
+        // …and a marker buried in an identifier or code literal is not
+        // one either, exactly as the other single-token lists behave.
+        assert_eq!(
+            find_marker(
+                "The flag is renderer_versus_shim today.",
+                COMPARISON_MARKERS
+            ),
+            None
+        );
+    }
+
     #[test]
     fn the_worked_fixture_primary_carries_no_state_markers() {
         let primary = "From now on we deploy Atlas only on Tuesdays.";
@@ -1522,6 +1614,41 @@ mod tests {
             "From now on we deploy Atlas only on Tuesdays."
         ));
         assert!(!shares_anchor(&anchors, "hey, is the build green?"));
+    }
+
+    /// Ruling 2 (Wave 4c): a shared technical acronym is a correlation,
+    /// not noise. `DB` is two bytes, below the content-word floor, so
+    /// before this the tense-change attack of red-team family 6 looked
+    /// like an unrelated citation and died at G04 instead of at the gate
+    /// it was written for.
+    #[test]
+    fn correlation_anchors_include_uppercase_acronyms() {
+        let statement = correlation_anchors("The DB was migrated.");
+        assert!(statement.contains("db"), "{statement:?}");
+        assert!(shares_anchor(
+            &statement,
+            "I will migrate the DB tomorrow morning."
+        ));
+
+        // Correlation only. The anchor set G07 orders, the protected
+        // tokens G06 compares and the claim topic identity hashes are
+        // all untouched — a two-letter token is still below the
+        // content-word floor everywhere else.
+        assert!(!anchor_entities("The DB was migrated.").contains("db"));
+        assert!(!topic("The DB was migrated.").contains("db"));
+        assert!(extract_protected("The DB was migrated.").is_empty());
+    }
+
+    #[test]
+    fn an_unrelated_acronym_does_not_manufacture_a_correlation() {
+        let statement = correlation_anchors("The DB was migrated.");
+        assert!(!shares_anchor(
+            &statement,
+            "The CDN cache was purged this morning."
+        ));
+        // Stopwords are excluded on the acronym path too, or SHOUTED
+        // prose would correlate with everything.
+        assert!(!correlation_anchors("ALL HANDS ON DECK").contains("all"));
     }
 
     #[test]

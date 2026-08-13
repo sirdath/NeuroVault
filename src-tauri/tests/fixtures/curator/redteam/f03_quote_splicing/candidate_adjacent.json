@@ -1,1 +1,1 @@
-{"proposals": [{"type": "fact", "statement": "Postgres is the primary store for the queue.", "subject": "storage", "evidence": ["S2", "S3"], "source_role": "user"}], "nothing_durable": false}
+{"proposals": [{"type": "fact", "statement": "Our primary store for the queue in June is Postgres.", "subject": "storage", "evidence": ["S2", "S3"], "source_role": "user"}], "nothing_durable": false}

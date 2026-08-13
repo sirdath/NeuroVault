@@ -1,5 +1,5 @@
 S1 [user]: We evaluated Redis for the session cache.
-S2 [user]: Postgres is still the primary store.
+S2 [user]: Our primary store is Postgres.
 S3 [user]: The queue moved to SQS in June.
 S4 [user]: Nothing else changed this quarter.
 S5 [user]: Ana signed off on all of it.

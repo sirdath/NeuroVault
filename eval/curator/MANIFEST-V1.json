@@ -1,5 +1,5 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "manifest_status": "PARTIAL — see `frozen_at_next_run`. Not yet a valid pre-registration.",
   "created": "2026-08-13",
   "created_by": "curator Wave 4a (proof & freeze, no-model half)",
@@ -13,6 +13,18 @@
         "measured_baselines gains both metrics for every run they could be recomputed over. Measured READ-ONLY by re-running score.score() in memory; no file under results/ was rewritten, so every previously reported number is unchanged and re-derivable.",
         "grammar_corpus added — the accepted/rejected corpus and the vendored llama.cpp converter behind acceptance item 7's grammar half.",
         "No `frozen` identity changed: corpus, gold, prompt, schema, verifier/policy fingerprints and retry policy are byte-for-byte as manifest_version 1 recorded them. The manifest is still PARTIAL and still unfreezable."
+      ]
+    },
+    {
+      "manifest_version": 3,
+      "date": "2026-08-13",
+      "by": "curator Wave 4c (convergence)",
+      "changed": [
+        "POLICY_EPOCH 2026-08-vp1 -> 2026-08-vp2 and VERIFIER_VERSION 1 -> 2. Both fingerprints move together because the spec owner's conformance rulings changed a verdict's MEANING: G04's correlated-evidence test now reads correlation anchors (anchor entities PLUS exact ASCII all-uppercase acronym tokens, stopwords excluded), so a shared `DB` is evidence rather than noise; and G08 routes a comparison marker (`instead of`, `rather than`, `as opposed to`, `versus`) to RequireReview(ComplexSemantics) before the one-sided-negation rule can read it as an inversion. New POLICY_EPOCH-versioned data: COMPARISON_MARKERS (4 entries) and policy::correlation_anchors.",
+        "IDENTITY CONSEQUENCE, stated because it is easy to miss: policy_epoch is an input to UnitKey and to every proposal_id, so a unit processed under vp1 and the same unit under vp2 mint different identities. No measured_baselines row below was produced under vp2, and no metric in this manifest may be compared across the two epochs without saying so.",
+        "The red-team corpus reaches ZERO known divergences. Three of the five Wave 4a divergences were fixture-side (family 3's Primary sentence put `Postgres` sentence-initial, where capitalization is grammar and not a protected name, so G05's synthesis condition was vacuous; family 15's role forgery is AttributionMismatch per the amended G04; family 16's older secret fixture is a G07 binding-order case that could never have reached G09 anyway). Two were gate-side and are the rulings above.",
+        "CORRECTION to frozen_at_next_run item 4 ('two unimplemented metrics'), which is stale as written: defer_recovery_rate and defer_expiry_rate DO have an implementation — src-tauri/src/bin/curator_metrics.rs, a read-only reader over state.rs::CuratorLedger, landed by Wave 4b-R after the eval half wrote that sentence. The item stays blocking, but for a different reason: no scoring run has merged the reader's output, and a defer rate needs a deferral cohort matured under this manifest's exact retry/TTL clock. Score it implemented-but-unwired, not missing.",
+        "No corpus, gold, prompt or schema identity changed. Nothing under `measured_baselines` was recomputed or rewritten. The manifest is still PARTIAL and still unfreezable."
       ]
     }
   ],
@@ -114,7 +126,7 @@
 
     "verifier_fingerprint": {
       "source": "src-tauri/src/memory/adaptive/curator/",
-      "verifier_version": 1,
+      "verifier_version": 2,
       "parser_version": 1,
       "redaction_policy_version": 1,
       "segmenter_version": 1,
@@ -129,7 +141,7 @@
     },
 
     "policy_fingerprint": {
-      "policy_epoch": "2026-08-vp1",
+      "policy_epoch": "2026-08-vp2",
       "claim_classes_included": ["fact", "preference", "decision"],
       "actions": ["curator_remember_fact", "curator_remember_preference", "curator_remember_decision"],
       "destructive_actions_in_v1": [],
@@ -206,11 +218,11 @@
       "path": "src-tauri/tests/fixtures/curator/redteam/",
       "committed": true,
       "spec_families": 20,
-      "cases": 36,
+      "cases": 37,
       "manifest": "manifest.jsonl",
-      "executable_by": "src-tauri/tests/curator_redteam_e2e.rs (17 tests, every manifest line claimed)",
-      "known_divergences": 5,
-      "divergences_detail": "docs/handoffs/curator-v1-acceptance.md"
+      "executable_by": "src-tauri/tests/curator_redteam_e2e.rs (19 tests, every manifest line claimed)",
+      "known_divergences": 0,
+      "divergences_detail": "docs/handoffs/curator-v1-acceptance.md — all five Wave 4a divergences resolved in Wave 4c under the spec owner's rulings; KNOWN_DIVERGENCES is an empty table kept as the mechanism for the next one."
     },
 
     "measured_baselines": {

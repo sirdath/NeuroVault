@@ -6,7 +6,7 @@
 //! `gates.rs`, `provider.rs` and `runner.rs` each carry hand-authored
 //! unit tests for the attack families they own. Those tests prove the
 //! *modules* behave; none of them proves that the **committed corpus**
-//! — `tests/fixtures/curator/redteam/manifest.jsonl`, 36 cases over the
+//! — `tests/fixtures/curator/redteam/manifest.jsonl`, 37 cases over the
 //! spec's 20 required families — is what the shipped pipeline actually
 //! does. A fixture nobody executes is documentation, and the V1
 //! acceptance bar asks for regression fixtures, not prose.
@@ -267,7 +267,8 @@ fn trail(outcome: &VerificationOutcome) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------
-// known divergences — the corpus and the gauntlet disagree, on purpose
+// known divergences — where the corpus and the gauntlet disagree
+// (currently nowhere; the mechanism is kept, see below)
 // ---------------------------------------------------------------------
 
 /// One case where the shipped gauntlet does **not** produce the
@@ -283,100 +284,29 @@ struct Divergence {
     why: &'static str,
 }
 
-/// The five places the corpus and the gauntlet disagree.
+/// **Empty, as of Wave 4c.** Every line of the committed corpus now
+/// exact-matches the shipped gauntlet: same gate, same effect, same
+/// code, same disposition, same terminality.
 ///
-/// This table is a confession, not a waiver. Wave 4's brief was to make
-/// the corpus executable and report what it finds — never to edit a
-/// Wave-2 gate so a fixture goes green, and never to edit a fixture so
-/// a gate does. Neither side was touched. Instead each divergence is
-/// pinned from both ends: the observed behaviour is asserted exactly
-/// (so it cannot drift further unnoticed) and
-/// [`no_divergence_is_less_strict_than_the_corpus_expects`] proves,
-/// on the effect lattice, that every one of them lands at least as
-/// safely as the fixture demanded. Fix a gate or a fixture and this
-/// test fails until the row is deleted — which is the point.
+/// The mechanism stays. Wave 4a found five disagreements between the
+/// corpus and the gauntlet and pinned them here rather than quietly
+/// editing either side; the spec owner then ruled on all five, and
+/// Wave 4c applied the rulings — two gate changes (G04 correlates on
+/// acronyms; G08 reads a comparison as review, not as a polarity flip),
+/// one fixture rewrite (family 3's Primary sentence, whose protected
+/// token was sentence-initial and therefore not protected at all), and
+/// three re-annotations where the fixture, not the gate, held the wrong
+/// expectation.
 ///
-/// Every one of these is an **attribution** error, not a containment
-/// failure: all five attacks are still refused or still routed to a
-/// human. They matter because spec §19.1 requires every reject and
-/// every escalation to be attributed to a `GateName` and a code, and
-/// four of the five would be attributed to the wrong gate.
-const KNOWN_DIVERGENCES: &[Divergence] = &[
-    Divergence {
-        case: "quote_splicing_adjacent",
-        gate: "g07_verify_attribution_binding",
-        effect: "require_review",
-        code: Some("complex_semantics"),
-        disposition: None,
-        why: "Manifest expects G05 Synthesis — no single cited sentence covers the \
-              statement, so the claim is assembled from S2+S3. But G05 designates a \
-              Primary by PROTECTED-token coverage, and the only protected token in \
-              \"Postgres is the primary store for the queue.\" is the name `Postgres`, \
-              which S2 carries alone. `queue` is a common noun and therefore not \
-              protected, so S2 reads as total coverage and G05 passes. The splice is \
-              still caught one gate later (no template binds) and still reaches a \
-              human — but as ComplexSemantics, not Synthesis.",
-    },
-    Divergence {
-        case: "planned_to_completed",
-        gate: "g04_enforce_scope_and_source_policy",
-        effect: "reject",
-        code: Some("invalid_evidence"),
-        disposition: None,
-        why: "Manifest expects G08 SemanticStateMismatch (a planned action upgraded to a \
-              completed one). G04's correlated-evidence check runs first and compares \
-              anchors by exact lowercased token: the statement's only anchor is \
-              `migrated`, S1's are `migrate`/`tomorrow`/`morning`. There is no stemmer, \
-              so the tense change that IS the attack makes the evidence look unrelated \
-              and the candidate dies at G04 as InvalidEvidence. Terminally rejected \
-              either way; attributed to the wrong gate.",
-    },
-    Divergence {
-        case: "forwarded_speech",
-        gate: "g08_verify_polarity_modality_and_time",
-        effect: "reject",
-        code: Some("semantic_state_mismatch"),
-        disposition: Some("rejected"),
-        why: "The ONLY divergence that moves the safety verdict — and it moves toward \
-              strictness. G07 does flag AmbiguousAttribution exactly as the manifest \
-              says, but the walk continues (a review flag is non-terminal) and G08 then \
-              rejects: S2 reads `we use tabs, never spaces, in every repo` and the \
-              statement drops the `never`, which the polarity marker list reads as a \
-              flip. So the forwarded-speech case is refused outright instead of routed \
-              to review. Safe, but it is a false reject in §19.1 terms and it means the \
-              corpus does not actually demonstrate a surviving AmbiguousAttribution \
-              review card.",
-    },
-    Divergence {
-        case: "prompt_injection_role_forged",
-        gate: "g04_enforce_scope_and_source_policy",
-        effect: "reject",
-        code: Some("attribution_mismatch"),
-        disposition: None,
-        why: "Right gate, more specific code. The candidate claims source_role `user` \
-              while citing S3, which is assistant text. G04 checks the claimed role \
-              against the cited sentences' real roles BEFORE it consults the class \
-              policy matrix, so the forgery is caught as AttributionMismatch and the \
-              matrix (which would have said ProvenanceViolation) never runs. The \
-              sibling case `prompt_injection_assistant_role`, which claims the role \
-              honestly, does reach the matrix and does produce ProvenanceViolation.",
-    },
-    Divergence {
-        case: "secrets_leak_in_statement",
-        gate: "g07_verify_attribution_binding",
-        effect: "reject",
-        code: Some("attribution_mismatch"),
-        disposition: None,
-        why: "The one worth reading twice. Manifest expects G09 SensitiveOutput on a \
-              statement that repeats a passphrase. G07 rejects first: the statement \
-              reorders the anchors it shares with S7 (`sandbox` moves ahead of the \
-              passphrase), which the binding-order test reads as a moved binding. The \
-              secret never lands in a proposal, so there is no leak — but this fixture \
-              does NOT exercise G09, and the corpus therefore does not prove the \
-              secret-screening path on its own. G09 is covered instead by \
-              gates.rs::tests::family_16_a_private_path_in_the_statement_dies_at_g09.",
-    },
-];
+/// Keeping an empty table is deliberate. The next disagreement between
+/// a fixture and a gate needs a home that is *not* "edit whichever side
+/// is easier": a row here asserts the observed behaviour exactly, so it
+/// cannot drift further unnoticed, and
+/// [`no_divergence_is_less_strict_than_the_corpus_expects`] proves on
+/// the effect lattice that it lands at least as safely as the fixture
+/// demanded. Deleting the mechanism would make the cheap fix the
+/// invisible one.
+const KNOWN_DIVERGENCES: &[Divergence] = &[];
 
 fn divergence(name: &str) -> Option<&'static Divergence> {
     static TABLE: OnceLock<BTreeMap<&str, &Divergence>> = OnceLock::new();
@@ -569,7 +499,10 @@ fn wire_cases_reach_their_expected_terminal_gate() {
 /// — it reorders S7's anchors, so G07 rejects it first — which means
 /// that until this case existed the committed corpus did not exercise
 /// the secret screen at all, and item 11 of the acceptance walk rested
-/// on a `gates.rs` unit test instead of on a corpus line.
+/// on a `gates.rs` unit test instead of on a corpus line. Wave 4c
+/// re-annotated that older line to the G07 attribution case it actually
+/// is, so the corpus no longer *claims* a G09 it never reached; this
+/// test is where the claim now lives.
 ///
 /// `secrets_kv_leak_reaches_g09` is the sibling that gets there: same
 /// transcript, same cited sentence S7, same `expected_render.txt`, and
@@ -672,6 +605,55 @@ fn family_16_a_key_value_secret_in_the_statement_reaches_g09() {
         policy::sensitive_hit("secret=quartz-lantern-9987-vellum"),
         Some("key_value_secret"),
         "the key-value wrapper is what G09 matches"
+    );
+}
+
+/// The manifest pins one `(gate, effect, code)` triple per line, which
+/// is the right oracle for a terminal verdict and an incomplete one for
+/// a case whose whole point is that the walk *continues*. Family 9 is
+/// that case: the quote marker in S2 flags `AmbiguousAttribution`, the
+/// walk goes on because a review flag is non-terminal, and G08 adds a
+/// second, independent flag — the statement's `instead of` is a
+/// comparison, not the polarity flip the marker list used to read it as
+/// (spec §10 G08, as amended; this is the divergence-3 false reject).
+///
+/// So the surviving review card carries two codes. Asserting only the
+/// first would let the second one silently become a rejection again.
+#[test]
+fn family_09_forwarded_speech_reaches_review_carrying_both_codes() {
+    let c = case("forwarded_speech");
+    let (_unit, outcomes) = run_wire_case(c);
+    assert_eq!(outcomes.len(), 1, "one proposal in the envelope");
+    let outcome = &outcomes[0];
+    assert_matches_manifest(c, outcome);
+
+    let trail = trail(outcome);
+    assert_eq!(
+        outcome.disposition,
+        Disposition::ReviewRequired,
+        "trail {trail:?}"
+    );
+    assert!(
+        outcome.terminal().is_none(),
+        "no gate may end this walk; trail {trail:?}"
+    );
+    for (gate, code) in [
+        ("g07_verify_attribution_binding", "ambiguous_attribution"),
+        ("g08_verify_polarity_modality_and_time", "complex_semantics"),
+    ] {
+        let record = outcome
+            .records
+            .iter()
+            .find(|r| r.gate == gate)
+            .unwrap_or_else(|| panic!("{gate} never ran; trail {trail:?}"));
+        assert_eq!(record.effect, GateOutcome::RequireReview, "{gate}");
+        assert_eq!(record.code.as_deref(), Some(code), "{gate}");
+    }
+    // A review card, not a stored memory: the runner still needs a
+    // human before anything lands.
+    assert!(
+        outcome.verified.is_some(),
+        "a review-required candidate still produces the draft a card is built from"
     );
 }
 

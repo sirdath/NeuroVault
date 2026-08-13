@@ -33,10 +33,10 @@ in it is a judgement call.
 | `gold` | 58 units / 230 items / 5 negatives, `07ad5eb8…1f99` |
 | `prompt` | `extract_sid.txt`, `8de0e665…9a11`, 3,699 bytes |
 | `schema` | `schema_sid.json`, `a6346fbc…d749`, output schema v2 |
-| `verifier_fingerprint` | parser 1 · redaction 1 · segmenter 1 · identity 2 · verifier 1 |
-| `policy_fingerprint` | `POLICY_EPOCH = 2026-08-vp1`, three claim classes, no destructive actions |
+| `verifier_fingerprint` | parser 1 · redaction 1 · segmenter 1 · identity 2 · verifier 2 |
+| `policy_fingerprint` | `POLICY_EPOCH = 2026-08-vp2`, three claim classes, no destructive actions |
 | `retry_and_ttl_policy` | 3 attempts · 14-day TTL · [1, 6, 24] h backoff · 48 h grace |
-| `redteam_corpus` | 20 families / 36 cases, executed by `curator_redteam_e2e.rs` |
+| `redteam_corpus` | 20 families / 37 cases / 0 divergences, executed by `curator_redteam_e2e.rs` |
 | `grammar_corpus` | 24 cases (5 accept / 13 reject / 6 divergent), executed by `grammar_check.py` against the vendored llama.cpp converter `c5760701…bf3a` |
 | `measured_baselines` | the last SID and quote-contract runs, as evidence to anchor thresholds against |
 
@@ -136,6 +136,20 @@ every number derived from them:
   two segmenters agree; the mapping rule between them is unproven and untested.
   Treat a SID-level comparison across the two as unverified until a fixture
   pins them together.
+
+## Version 3 — the epoch moved
+
+`POLICY_EPOCH` is `2026-08-vp2` and `VERIFIER_VERSION` is `2` as of Wave 4c,
+which applied the spec owner's conformance rulings: G04 correlates evidence on
+ASCII acronyms as well as content words, and G08 reads a comparison marker as
+review rather than as a polarity inversion. `revision_log` in the JSON carries
+the detail.
+
+**Nothing below was measured under `vp2`.** The epoch is an input to `UnitKey`
+and to every `proposal_id`, so it partitions identity as well as meaning: two
+runs under different epochs neither collide nor compare. Every number in
+`measured_baselines` was produced under `vp1` and must be labelled as such the
+moment a `vp2` number sits beside it.
 
 ## Updating this manifest
 

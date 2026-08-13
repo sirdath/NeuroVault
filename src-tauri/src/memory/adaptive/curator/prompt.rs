@@ -152,11 +152,17 @@ OUTPUT:
 /// to `eval/curator/schema_sid.json` (asserted by a test).
 ///
 /// Only the llama.cpp-grammar-solid keyword subset appears here — `type`,
-/// `properties`, `required`, `enum`, `items`, `minItems`, `maxItems`, and
-/// one anchored `pattern`. Everything else the converter skips *silently*,
-/// so nothing else may be load-bearing: `maxLength` is decoration that
-/// G00/G03 re-enforce server-side, and `additionalProperties` is absent
-/// because `deny_unknown_fields` in Rust is the authority on extra keys.
+/// `properties`, `required`, `enum`, `items`, `minItems`, `maxItems`,
+/// `maxLength`, and one anchored `pattern`. Everything else the converter
+/// skips *silently*, so nothing outside the subset may be load-bearing;
+/// `additionalProperties` is absent because `deny_unknown_fields` in Rust
+/// is the authority on extra keys.
+///
+/// `maxLength` was called decoration here until Wave 4b measured it:
+/// `eval/curator/grammar_check.py` runs the vendored converter over this
+/// exact schema and asserts the generated GBNF bounds both string rules at
+/// `char{0,300}` and `char{0,40}`. It is enforced twice — in the grammar
+/// and again by G00 server-side — which is belt and braces, not decoration.
 pub const OUTPUT_SCHEMA_JSON: &str = r#"{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "CuratorProposalsSid",
