@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The session cache moved to SQS.", "subject": "storage", "evidence": ["S1", "S3"], "source_role": "user"}], "nothing_durable": false}

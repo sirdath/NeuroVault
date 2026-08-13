@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "Analytics moves to Postgres 16.", "subject": "storage", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

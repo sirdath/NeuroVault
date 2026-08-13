@@ -1,0 +1,3 @@
+S1 [user]: Alice owns billing and Bob owns auth.
+S2 [user]: We split those two last sprint.
+S3 [user]: Everything else stays shared for now.

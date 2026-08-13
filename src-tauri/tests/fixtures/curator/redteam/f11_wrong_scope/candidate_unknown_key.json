@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The analytics brain stays separate.", "subject": "brains", "evidence": ["S1"], "source_role": "user", "action": "delete_engram"}], "nothing_durable": false}

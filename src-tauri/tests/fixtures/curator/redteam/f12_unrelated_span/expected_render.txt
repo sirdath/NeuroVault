@@ -1,0 +1,3 @@
+S1 [user]: Good morning, hope the weekend was calm.
+S2 [user]: We are moving the analytics job to Postgres 16 next month.
+S3 [user]: I will send the plan later today.

@@ -1,0 +1,3 @@
+S1 [user]: We might switch to pnpm next quarter.
+S2 [user]: The install times are killing us.
+S3 [user]: Nobody has decided anything yet.

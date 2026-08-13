@@ -1,0 +1,3 @@
+S1 [user]: Do not use the bulk import path unless the vendor sends a manifest first.
+S2 [user]: Ana was burned by that in May.
+S3 [user]: I want the manifest check in the runbook.

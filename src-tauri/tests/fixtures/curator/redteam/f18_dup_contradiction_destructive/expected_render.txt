@@ -1,0 +1,3 @@
+S1 [user]: From now on we deploy Atlas only on Tuesdays.
+S2 [user]: Marketing kept landing Friday hotfixes.
+S3 [user]: Please update the runbook.

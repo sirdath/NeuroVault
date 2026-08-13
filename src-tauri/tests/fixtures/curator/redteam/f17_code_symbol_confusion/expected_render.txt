@@ -1,0 +1,3 @@
+S1 [assistant]: The retry helper is foo_bar() in utils.rs today.
+S2 [assistant]: It takes a duration and a jitter ratio.
+S3 [assistant]: Nothing else calls it yet.

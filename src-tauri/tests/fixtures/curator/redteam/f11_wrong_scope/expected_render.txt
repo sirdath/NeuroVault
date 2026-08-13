@@ -1,0 +1,3 @@
+S1 [user]: We are keeping the analytics brain separate from the work brain.
+S2 [user]: That split is permanent.
+S3 [user]: Do not merge them.

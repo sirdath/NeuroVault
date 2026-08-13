@@ -1,0 +1,1 @@
+{"local_id": 1, "action": "record_fact", "claim_class": "extractive_fact", "object": {"kind": "existing", "reference": "brain:OtherBrain/engram/42"}, "statement": "The analytics brain stays separate.", "subject": "brains", "evidence": ["S1"], "source_role": "user"}

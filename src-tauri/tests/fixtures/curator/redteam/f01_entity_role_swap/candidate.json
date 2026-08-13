@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "Bob owns billing.", "subject": "ownership", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

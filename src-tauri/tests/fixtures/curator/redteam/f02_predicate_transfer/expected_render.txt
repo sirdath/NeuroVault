@@ -1,0 +1,2 @@
+S1 [assistant]: The staging cron still runs at 03:30 UTC, so the Tuesday deploy window opens after 04:00.
+S2 [assistant]: Nothing else moved this week.

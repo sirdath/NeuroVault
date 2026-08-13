@@ -1,0 +1,1 @@
+{"type": "user", "uuid": "u0000000-1111-4a11-9c11-000000000000", "timestamp": "2026-08-12T09:00:00Z", "sessionId": "d3c7b1a0-5e42-4f19-8b6d-9a1c0e7f3d24", "message": {"role": "user", "content": "I will migrate the DB tomorrow morning. The backup finished an hour ago. Ping me if anything looks off."}}

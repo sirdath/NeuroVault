@@ -1,0 +1,1 @@
+{"proposals": [{"type": "decision", "statement": "Atlas deploys only on Tuesdays.", "subject": "deployment", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

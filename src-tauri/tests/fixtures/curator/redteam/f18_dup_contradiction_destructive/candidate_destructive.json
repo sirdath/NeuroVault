@@ -1,0 +1,1 @@
+{"local_id": 1, "action": "delete_engram", "claim_class": "supersession", "object": {"kind": "existing", "reference": "obj_existing_1"}, "statement": "Atlas deploys only on Tuesdays.", "subject": "deployment", "evidence": ["S1"], "source_role": "user"}

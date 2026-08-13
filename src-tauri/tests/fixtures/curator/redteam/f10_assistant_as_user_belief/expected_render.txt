@@ -1,0 +1,4 @@
+S1 [user]: How should we handle the long-lived release branches?
+S2 [assistant]: You could adopt trunk-based development for this repo.
+S3 [assistant]: It would remove the long-lived release branches.
+S4 [assistant]: Want me to sketch the migration?

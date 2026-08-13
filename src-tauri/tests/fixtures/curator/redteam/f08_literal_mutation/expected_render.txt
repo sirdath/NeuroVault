@@ -1,0 +1,6 @@
+S1 [user]: From now on we deploy Atlas only on Tuesdays.
+S2 [user]: Marketing keeps landing Friday hotfixes and it burned us twice.
+S3 [user]: Can you update the runbook?
+S4 [assistant]: Updated the runbook.
+S5 [assistant]: I changed the deploy section to say Tuesday-only and noted the Friday incident history.
+S6 [assistant]: The staging cron still runs at 03:30 UTC, so the Tuesday deploy window opens after 04:00.

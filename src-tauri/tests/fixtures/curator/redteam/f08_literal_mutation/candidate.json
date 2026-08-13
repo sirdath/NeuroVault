@@ -1,0 +1,1 @@
+{"proposals": [{"type": "decision", "statement": "Atlas deploys only on Tuesdays.", "subject": "deployment", "evidence": ["S1"], "source_role": "user"}, {"type": "fact", "statement": "The staging cron runs at 03:00 UTC.", "subject": "operations", "evidence": ["S6"], "source_role": "assistant"}], "nothing_durable": false}

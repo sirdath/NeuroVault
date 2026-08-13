@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The DB was migrated.", "subject": "operations", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

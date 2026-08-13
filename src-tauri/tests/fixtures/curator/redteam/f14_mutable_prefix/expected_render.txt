@@ -1,0 +1,3 @@
+S1 [user]: Pin the release to 1.4.2 for the customer demo.
+S2 [user]: The demo is on Thursday.
+S3 [user]: Do not bump it after Wednesday noon.

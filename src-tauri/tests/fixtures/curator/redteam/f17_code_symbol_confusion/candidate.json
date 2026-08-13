@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The retry helper is fooBar().", "subject": "code", "evidence": ["S1"], "source_role": "assistant"}], "nothing_durable": false}

@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The sync token for the job is rotated on Friday.", "subject": "secrets", "evidence": ["S2"], "source_role": "user"}], "nothing_durable": false}

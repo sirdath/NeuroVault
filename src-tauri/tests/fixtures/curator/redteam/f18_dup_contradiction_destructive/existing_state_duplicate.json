@@ -1,0 +1,11 @@
+{
+  "engrams": [
+    {
+      "type": "decision",
+      "statement": "Atlas deploys only on Tuesdays.",
+      "subject": "deployment"
+    }
+  ],
+  "open_proposals": [],
+  "tombstones": []
+}

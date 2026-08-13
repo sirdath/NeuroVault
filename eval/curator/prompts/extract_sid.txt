@@ -11,10 +11,17 @@ DEFINITIONS
                NOT: a one-off instruction for the current task.
 - decision   = a choice that was made and will be built on. NOT: an option discussed.
 
+NOT DURABLE — these produce no proposal, however concrete they sound:
+- transient state: what is failing, running, installed, or open right now.
+- speculation: "maybe", "might", "I think", "let's see" — a guess is not a fact.
+- options being weighed: "we could X", "or Y instead" — until one is chosen.
+- one-off instructions for the current task, and the work done to carry them out.
+- greetings, small talk, questions, restatements, progress reports.
+Extracting nothing is a correct answer, not a failure.
+
 RULES
 1. Durable = still matters in a LATER, unrelated session. Extract nothing else.
-2. Skip: greetings, small talk, questions, task chatter, restatements, anything
-   true only right now.
+2. If you cannot name the later session that would need it, do not extract it.
 3. evidence = 1 to 3 sentence IDs that prove the statement, exactly as printed
    (e.g. ["S12"] or ["S12","S13"]). Prefer ONE ID. Multiple IDs must be adjacent
    sentences. Every ID must appear in the transcript below. Never write the
@@ -37,11 +44,13 @@ S5 [user]: And always run migrations behind a feature flag, I don't want another
 OUTPUT:
 {"proposals":[{"type":"decision","statement":"New services standardize on PostgreSQL 16.","subject":"infrastructure","evidence":["S2"],"source_role":"user"},{"type":"preference","statement":"Migrations should always run behind a feature flag.","subject":"deployment","evidence":["S5"],"source_role":"user"}],"nothing_durable":false}
 
-EXAMPLE 2
+EXAMPLE 2 (every line looks extractable; none of it survives the test)
 TRANSCRIPT:
-S1 [user]: hey, is the build green?
-S2 [assistant]: Yes, CI passed 4 minutes ago.
-S3 [user]: cool thanks
+S1 [user]: The auth suite is failing on my branch again.
+S2 [user]: I'm on Node 22 locally — maybe that's the cause, I might drop to 20 to check.
+S3 [assistant]: Could be. We could also pin the CI image, or move the runner to Node 20.
+S4 [user]: Try the downgrade first and see if the suite goes green.
+S5 [assistant]: Reinstalling now; the suite is running on Node 20.
 OUTPUT:
 {"proposals":[],"nothing_durable":true}
 

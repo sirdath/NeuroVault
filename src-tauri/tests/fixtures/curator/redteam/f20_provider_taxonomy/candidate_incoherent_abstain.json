@@ -1,0 +1,1 @@
+{"proposals": [{"type": "decision", "statement": "New services standardize on Postgres 16.", "subject": "infrastructure", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": true}

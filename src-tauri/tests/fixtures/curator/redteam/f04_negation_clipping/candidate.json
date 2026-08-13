@@ -1,0 +1,1 @@
+{"proposals": [{"type": "preference", "statement": "Use the bulk import path.", "subject": "ingestion", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

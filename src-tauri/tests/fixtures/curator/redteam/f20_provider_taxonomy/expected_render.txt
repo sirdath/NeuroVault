@@ -1,0 +1,3 @@
+S1 [user]: We standardized on Postgres 16 for every new service.
+S2 [user]: That is settled.
+S3 [user]: Write it down somewhere durable.

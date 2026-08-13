@@ -1,0 +1,1 @@
+{"local_id": 1, "action": "delete_engram", "claim_class": "extractive_fact", "object": {"kind": "new", "reference": "obj_1"}, "statement": "The analytics brain stays separate.", "subject": "brains", "evidence": ["S1"], "source_role": "user"}

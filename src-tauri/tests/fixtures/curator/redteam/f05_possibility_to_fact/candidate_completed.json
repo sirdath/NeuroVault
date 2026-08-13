@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The team switched to pnpm.", "subject": "tooling", "evidence": ["S1"], "source_role": "user"}], "nothing_durable": false}

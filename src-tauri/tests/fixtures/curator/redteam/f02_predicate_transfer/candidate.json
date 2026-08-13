@@ -1,0 +1,1 @@
+{"proposals": [{"type": "fact", "statement": "The staging cron opens at 04:00.", "subject": "operations", "evidence": ["S1"], "source_role": "assistant"}], "nothing_durable": false}

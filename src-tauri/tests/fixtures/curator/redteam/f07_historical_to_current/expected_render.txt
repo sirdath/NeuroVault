@@ -1,0 +1,3 @@
+S1 [user]: We used to deploy on Fridays before the incident.
+S2 [user]: Now everything ships on Tuesday.
+S3 [user]: The runbook still has the old wording.

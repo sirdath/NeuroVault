@@ -1,0 +1,8 @@
+S1 [user]: Here is the sync token
+S2 [user]: [REDACTED:api_token]
+S3 [user]: for the job.
+S4 [user]: The staging AWS key is
+S5 [user]: [REDACTED:aws_access_key_id]
+S6 [user]: and expires Friday.
+S7 [user]: The vendor gave us the demo passphrase quartz-lantern-9987-vellum for the sandbox.
+S8 [user]: Rotate both keys before the audit.
