@@ -1,0 +1,18 @@
+S1 [user]: We deploy at 03:30 UTC on Tuesdays, i.e. after the nightly cron finishes.
+S2 [user]: The p95 budget is 1.5 s, not 2.0 s.
+S3 [user]: Dr. Nakamura approved it.
+S4 [user]: Here is the mirror token
+S5 [user]: [REDACTED:api_token]
+S6 [user]: for staging.
+S7 [user]: 締め切りは火曜日です。よろしくお願いします。
+S8 [assistant]: Understood. The patch is below.
+S9 [assistant]: ```rust
+  fn main() {
+      println!("ship it");
+  }
+  ```
+S10 [assistant]: The failing run logged this:
+S11 [assistant]: 2026-08-12T09:14:02Z INFO starting deploy
+  2026-08-12T09:14:03Z WARN cache miss for deploy-plan
+  2026-08-12T09:14:09Z ERROR timeout after 30s
+S12 [assistant]: Three consecutive log lines collapse into one opaque sentence.

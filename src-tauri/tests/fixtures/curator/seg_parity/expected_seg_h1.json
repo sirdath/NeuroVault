@@ -1,0 +1,139 @@
+{
+  "segmenter_harness_version": 1,
+  "n_records": 2,
+  "dropped_over_cap": 0,
+  "sentences": [
+    {
+      "sid": 1,
+      "record_index": 0,
+      "sentence_index": 0,
+      "start": 6,
+      "end": 79,
+      "role": "user",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 2,
+      "record_index": 0,
+      "sentence_index": 1,
+      "start": 80,
+      "end": 115,
+      "role": "user",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 3,
+      "record_index": 0,
+      "sentence_index": 2,
+      "start": 116,
+      "end": 141,
+      "role": "user",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 4,
+      "record_index": 0,
+      "sentence_index": 3,
+      "start": 142,
+      "end": 200,
+      "role": "user",
+      "role_inferred": false,
+      "cite_ok": false,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 5,
+      "record_index": 0,
+      "sentence_index": 4,
+      "start": 201,
+      "end": 223,
+      "role": "user",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 6,
+      "record_index": 1,
+      "sentence_index": 0,
+      "start": 235,
+      "end": 266,
+      "role": "assistant",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 7,
+      "record_index": 1,
+      "sentence_index": 1,
+      "start": 267,
+      "end": 317,
+      "role": "assistant",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": true,
+      "over_cap": false
+    },
+    {
+      "sid": 8,
+      "record_index": 1,
+      "sentence_index": 2,
+      "start": 318,
+      "end": 346,
+      "role": "assistant",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 9,
+      "record_index": 1,
+      "sentence_index": 3,
+      "start": 347,
+      "end": 486,
+      "role": "assistant",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": true,
+      "over_cap": false
+    },
+    {
+      "sid": 10,
+      "record_index": 1,
+      "sentence_index": 4,
+      "start": 487,
+      "end": 549,
+      "role": "assistant",
+      "role_inferred": false,
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    }
+  ],
+  "materialized": {
+    "1": "We deploy at 03:30 UTC on Tuesdays, i.e. after the nightly cron finishes.",
+    "2": "The p95 budget is 1.5 s, not 2.0 s.",
+    "3": "Dr. Nakamura approved it.",
+    "4": "Here is the mirror token [REDACTED:api_token] for staging.",
+    "5": "締め切りは火曜日です。よろしくお願いします。",
+    "6": "Understood. The patch is below.",
+    "7": "```rust\nfn main() {\n    println!(\"ship it\");\n}\n```",
+    "8": "The failing run logged this:",
+    "9": "2026-08-12T09:14:02Z INFO starting deploy\n2026-08-12T09:14:03Z WARN cache miss for deploy-plan\n2026-08-12T09:14:09Z ERROR timeout after 30s",
+    "10": "Three consecutive log lines collapse into one opaque sentence."
+  }
+}

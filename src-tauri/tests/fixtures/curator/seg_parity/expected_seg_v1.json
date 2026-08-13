@@ -1,0 +1,138 @@
+{
+  "sentences": [
+    {
+      "sid": 1,
+      "record_index": 0,
+      "sentence_index": 0,
+      "start_byte": 0,
+      "end_byte": 73,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 2,
+      "record_index": 0,
+      "sentence_index": 1,
+      "start_byte": 74,
+      "end_byte": 109,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 3,
+      "record_index": 0,
+      "sentence_index": 2,
+      "start_byte": 110,
+      "end_byte": 135,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 4,
+      "record_index": 0,
+      "sentence_index": 3,
+      "start_byte": 136,
+      "end_byte": 160,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 5,
+      "record_index": 0,
+      "sentence_index": 4,
+      "start_byte": 161,
+      "end_byte": 181,
+      "role": "user",
+      "cite_ok": false,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 6,
+      "record_index": 0,
+      "sentence_index": 5,
+      "start_byte": 182,
+      "end_byte": 194,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 7,
+      "record_index": 0,
+      "sentence_index": 6,
+      "start_byte": 195,
+      "end_byte": 261,
+      "role": "user",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 8,
+      "record_index": 1,
+      "sentence_index": 0,
+      "start_byte": 0,
+      "end_byte": 31,
+      "role": "assistant",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 9,
+      "record_index": 1,
+      "sentence_index": 1,
+      "start_byte": 32,
+      "end_byte": 82,
+      "role": "assistant",
+      "cite_ok": true,
+      "opaque_block": true,
+      "over_cap": false
+    },
+    {
+      "sid": 10,
+      "record_index": 1,
+      "sentence_index": 2,
+      "start_byte": 83,
+      "end_byte": 111,
+      "role": "assistant",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    },
+    {
+      "sid": 11,
+      "record_index": 1,
+      "sentence_index": 3,
+      "start_byte": 112,
+      "end_byte": 251,
+      "role": "assistant",
+      "cite_ok": true,
+      "opaque_block": true,
+      "over_cap": false
+    },
+    {
+      "sid": 12,
+      "record_index": 1,
+      "sentence_index": 4,
+      "start_byte": 252,
+      "end_byte": 314,
+      "role": "assistant",
+      "cite_ok": true,
+      "opaque_block": false,
+      "over_cap": false
+    }
+  ],
+  "segmenter_version": 1,
+  "dropped_over_cap": 0
+}

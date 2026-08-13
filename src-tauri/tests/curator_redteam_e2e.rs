@@ -560,8 +560,118 @@ fn wire_cases_reach_their_expected_terminal_gate() {
         failures.join("\n  ")
     );
     assert_eq!(
-        walked, 25,
+        walked, 26,
         "the wire-driven slice of the corpus changed size"
+    );
+}
+
+/// Divergence 5, closed. `secrets_leak_in_statement` never reaches G09
+/// — it reorders S7's anchors, so G07 rejects it first — which means
+/// that until this case existed the committed corpus did not exercise
+/// the secret screen at all, and item 11 of the acceptance walk rested
+/// on a `gates.rs` unit test instead of on a corpus line.
+///
+/// `secrets_kv_leak_reaches_g09` is the sibling that gets there: same
+/// transcript, same cited sentence S7, same `expected_render.txt`, and
+/// a statement that preserves S7's anchor order exactly so G04's
+/// correlation test and G07's binding-order test both pass. Its only
+/// protected token is `-9987`, verbatim in S7, so G06 passes too. The
+/// one thing it adds is a `secret=` wrapper around the same passphrase
+/// — absent from the transcript, so REDACT_V1 never saw it, matched by
+/// G09's independent OUTPUT screen as `key_value_secret`.
+///
+/// Worth stating, because it is the whole reason the fixture is shaped
+/// this way: the bare passphrase would **not** trip G09. At 26 bytes it
+/// is under the 32-char high-entropy floor and `passphrase` is not a
+/// `key_value_secret` keyword. A fixture that only reordered the words
+/// of the existing one would have proved nothing.
+#[test]
+fn family_16_a_key_value_secret_in_the_statement_reaches_g09() {
+    let c = case("secrets_kv_leak_reaches_g09");
+    let (unit, outcomes) = run_wire_case(c);
+    assert_eq!(outcomes.len(), 1, "one proposal in the envelope");
+    let outcome = &outcomes[0];
+    assert_matches_manifest(c, outcome);
+
+    // The walk, not just the verdict: everything before G09 has to have
+    // PASSED for this to be a G09 test rather than an accident.
+    let trail = trail(outcome);
+    for gate in [
+        "g04_enforce_scope_and_source_policy",
+        "g05_enforce_atomic_claim",
+        "g06_verify_lexical_integrity",
+        "g08_verify_polarity_modality_and_time",
+    ] {
+        let record = outcome
+            .records
+            .iter()
+            .find(|r| r.gate == gate)
+            .unwrap_or_else(|| panic!("{gate} never ran; trail {trail:?}"));
+        assert_eq!(
+            record.effect,
+            GateOutcome::Pass,
+            "{gate} must pass for the candidate to reach G09; trail {trail:?}"
+        );
+    }
+    // G07 abstains on an ordinary fact — a review flag, never terminal.
+    let g07 = outcome
+        .records
+        .iter()
+        .find(|r| r.gate == "g07_verify_attribution_binding")
+        .expect("G07 ran");
+    assert_eq!(g07.effect, GateOutcome::RequireReview, "trail {trail:?}");
+    assert_eq!(g07.code.as_deref(), Some("complex_semantics"));
+
+    // The gate names the CLASS and never the value: a receipt that
+    // quoted the secret would be the leak the gate exists to stop.
+    let receipt = serde_json::to_string(&outcome.records).expect("records serialize");
+    assert!(
+        receipt.contains("key_value_secret"),
+        "G09 must record the class it matched: {trail:?}"
+    );
+    assert!(
+        !receipt.contains("quartz-lantern-9987-vellum"),
+        "the secret leaked into the gate trail"
+    );
+    assert!(
+        outcome.verified.is_none(),
+        "a rejected candidate must not hand the runner a draft to store"
+    );
+
+    // And the premise the fixture rests on, asserted rather than left in
+    // prose: the transcript itself carries no `secret=`, so REDACT_V1
+    // had nothing to match and the screen that fired is genuinely the
+    // second, independent one.
+    let render = unit.render();
+    assert!(
+        render.contains("quartz-lantern-9987-vellum"),
+        "the passphrase survives REDACT_V1 verbatim (custom format)"
+    );
+    assert!(
+        !render.contains("secret="),
+        "the key-value form exists only in the model's OUTPUT"
+    );
+
+    // The counterfactual, asserted rather than argued. Every sentence
+    // the model could read is clean under G09's own screen — including
+    // S7, which carries the passphrase in the clear. So the reject can
+    // only have come from what the model WROTE, and a fixture that
+    // merely reordered the existing statement would have proved nothing.
+    for sentence in &unit.table.sentences {
+        let text = segment::resolve(&unit.records, &unit.table, sentence.sid)
+            .expect("every enumerated sentence resolves")
+            .text;
+        assert_eq!(
+            policy::sensitive_hit(text),
+            None,
+            "S{}: the transcript must be clean under G09 for this to be an OUTPUT test",
+            sentence.sid
+        );
+    }
+    assert_eq!(
+        policy::sensitive_hit("secret=quartz-lantern-9987-vellum"),
+        Some("key_value_secret"),
+        "the key-value wrapper is what G09 matches"
     );
 }
 
@@ -1534,6 +1644,10 @@ fn every_manifest_line_is_claimed() {
         (
             "secrets_leak_in_statement",
             "wire_cases_reach_their_expected_terminal_gate",
+        ),
+        (
+            "secrets_kv_leak_reaches_g09",
+            "family_16_a_key_value_secret_in_the_statement_reaches_g09",
         ),
         (
             "code_symbol_confusion",

@@ -1,0 +1,14 @@
+USER: We deploy at 03:30 UTC on Tuesdays, i.e. after the nightly cron finishes. The p95 budget is 1.5 s, not 2.0 s. Dr. Nakamura approved it.
+Here is the mirror token [REDACTED:api_token] for staging.
+締め切りは火曜日です。よろしくお願いします。
+ASSISTANT: Understood. The patch is below.
+```rust
+fn main() {
+    println!("ship it");
+}
+```
+The failing run logged this:
+2026-08-12T09:14:02Z INFO starting deploy
+2026-08-12T09:14:03Z WARN cache miss for deploy-plan
+2026-08-12T09:14:09Z ERROR timeout after 30s
+Three consecutive log lines collapse into one opaque sentence.
