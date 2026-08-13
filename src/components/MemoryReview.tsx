@@ -14,6 +14,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_HOST } from "../lib/config";
 import {
   actionCopy,
+  curatorClassLabel,
+  curatorCodeLabel,
+  curatorGateLabel,
+  curatorGateTag,
+  curatorOutcomeLabel,
+  curatorRoleLabel,
+  curatorPreviewUnavailable,
+  CURATOR_EVIDENCE_LOADING,
+  CURATOR_G10_NOT_RUN_NOTE,
+  CURATOR_GATE_ORDER,
+  CURATOR_SPAN_DIGEST_DRIFT,
   eventSentence,
   fieldLabel,
   memoryTypeLabel,
@@ -35,6 +46,122 @@ export type ProposedField = {
   evidence: string[];
 };
 
+// ---- Local Memory Curator receipts ----------------------------------------
+// Mirrors `MEM/adaptive/curator/receipts.rs` field for field. The extension
+// is additive and optional on the SHARED proposal store — the curator does
+// not fork it — so every field below is only ever read, never required.
+// `span_identities()` / `source_roles()` are Rust-side projections of
+// `primary` + `context`; the UI derives the same thing from those two.
+
+export type CuratorSourceRole =
+  | "user"
+  | "assistant"
+  | "tool_result"
+  | "file_content"
+  | "web_content"
+  | "system_event";
+
+export type CuratorGateOutcome =
+  | "pass"
+  | "not_run"
+  | "no_op"
+  | "reject"
+  | "defer"
+  | "require_review";
+
+export type CuratorGateRecord = {
+  gate: string;
+  effect: CuratorGateOutcome;
+  code?: string | null;
+  note?: string | null;
+};
+
+export type CuratorVerifiedSpan = {
+  evidence_event_id: string;
+  transcript_prefix_sha256: string;
+  observed_prefix_len: number;
+  record_index: number;
+  segment_content_sha256: string;
+  parser_version: number;
+  redaction_policy_version: number;
+  segmenter_version: number;
+  sentence_index: number;
+  start_byte: number;
+  end_byte: number;
+  span_sha256: string;
+  role: CuratorSourceRole;
+};
+
+export type CuratorGenerationReceipt = {
+  provider: string;
+  model_id: string;
+  model_digest: string;
+  prompt_sha256: string;
+  request_sha256: string;
+  response_sha256: string;
+  output_schema_version: number;
+  started_at: string;
+  duration_ms: number;
+};
+
+export type CuratorNliRecord = {
+  model_fingerprint: string;
+  renderer_version: number;
+  entailment_bps: number;
+  neutral_bps: number;
+  contradiction_bps: number;
+};
+
+export type CuratorVerificationReceipt = {
+  verifier_version: number;
+  policy_epoch: string;
+  parser_version: number;
+  redaction_policy_version: number;
+  segmenter_version: number;
+  envelope_sha256: string;
+  gates: CuratorGateRecord[];
+  nli?: CuratorNliRecord | null;
+  verified_at: string;
+};
+
+export type CuratorExtension = {
+  ext_version: number;
+  unit_id: string;
+  claim_class: string;
+  source_role: CuratorSourceRole;
+  primary: CuratorVerifiedSpan;
+  context?: CuratorVerifiedSpan[];
+  evidence_key: string;
+  claim_key: string;
+  generation: CuratorGenerationReceipt;
+  verification: CuratorVerificationReceipt;
+  review_codes?: string[];
+};
+
+/** One re-sliced sentence, resolved server-side by `/api/curator/span_preview`
+ *  (`runner::PreviewSpan`). Transcript text is never stored in the proposal —
+ *  the server re-opens the file, re-verifies the prefix hash, and re-slices on
+ *  demand. `role` is the renderer's label (`user` / `assistant` today). */
+export type CuratorSpanText = {
+  role: string;
+  text: string;
+  primary?: boolean;
+  /** False = the file drifted under a still-valid prefix. Shown, never hidden. */
+  digest_matches?: boolean;
+  sentence_index?: number;
+  record_index?: number;
+};
+
+export type CuratorSpanPreviewResponse = {
+  proposal_id?: string;
+  brain_id?: string;
+  available?: boolean;
+  /** `evidence_unavailable` · `consent_revoked` · `platform_unsupported` ·
+   *  `not_a_curator_proposal`. */
+  code?: string | null;
+  spans?: CuratorSpanText[] | null;
+};
+
 export type Proposal = {
   proposal_id: string;
   brain_id: string;
@@ -54,6 +181,8 @@ export type Proposal = {
   decided_by?: string | null;
   decision_reason?: string | null;
   predecessor?: string | null;
+  /** Present only on local-curator proposals. */
+  curator?: CuratorExtension | null;
 };
 
 type JournalEvent = {
@@ -109,12 +238,24 @@ function useEvidence(proposal: Proposal | null, brainId: string | null) {
   return { events, failed };
 }
 
-function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
+function Disclosure({
+  label,
+  children,
+  onOpen,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Fired on every summary activation. Callers that start work here must be
+   *  idempotent — this is the lazy-load trigger for the span-preview panel,
+   *  which must not re-open a transcript until the user asks to see it. */
+  onOpen?: () => void;
+}) {
   return (
     <details className="group">
       <summary
         className="cursor-pointer list-none text-[13px] py-1 select-none"
         style={{ color: T.dim }}
+        onClick={onOpen}
       >
         <span className="inline-block w-4 group-open:rotate-90 transition-transform">▸</span>
         {label}
@@ -123,6 +264,219 @@ function Disclosure({ label, children }: { label: string; children: React.ReactN
         {children}
       </div>
     </details>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Local Memory Curator — evidence panel + gate receipt
+// ---------------------------------------------------------------------------
+
+const shortHash = (h: string): string => (h.length > 14 ? `${h.slice(0, 14)}…` : h);
+
+type SpanState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; spans: CuratorSpanText[] }
+  | { status: "unavailable"; code?: string | null };
+
+/** Re-reads the cited sentences on demand.
+ *
+ *  Nothing is fetched until `active` — opening this panel makes the server
+ *  re-open the transcript and re-verify its prefix hash, which is not work to
+ *  do for every card that scrolls past. Any failure at all (file changed,
+ *  server down, empty answer) collapses to the same honest defer state: we
+ *  would rather show nothing than bytes nobody verified. */
+function CuratorSpanPanel({
+  proposalId,
+  brainId,
+  curator,
+  active,
+}: {
+  proposalId: string;
+  brainId: string;
+  curator: CuratorExtension;
+  active: boolean;
+}) {
+  const [state, setState] = useState<SpanState>({ status: "idle" });
+
+  useEffect(() => {
+    setState({ status: "idle" });
+  }, [proposalId, brainId]);
+
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    setState((prev) => (prev.status === "idle" ? { status: "loading" } : prev));
+    (async () => {
+      try {
+        const params = new URLSearchParams({ proposal_id: proposalId, brain_id: brainId });
+        const r = await fetch(`${API_HOST}/api/curator/span_preview?${params}`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = (await r.json()) as CuratorSpanPreviewResponse;
+        const spans = data.spans ?? [];
+        if (!alive) return;
+        if (data.available === false || spans.length === 0)
+          setState({ status: "unavailable", code: data.code ?? null });
+        else setState({ status: "ready", spans });
+      } catch {
+        if (alive) setState({ status: "unavailable" });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [active, proposalId, brainId]);
+
+  const spanCount = 1 + (curator.context?.length ?? 0);
+
+  return (
+    <div className="mb-3">
+      <div className="text-[11px] font-semibold tracking-wider uppercase mb-1" style={{ color: T.dim }}>
+        {spanCount === 1 ? "The sentence this came from" : "The sentences this came from"}
+      </div>
+      {state.status !== "ready" && (
+        <p>
+          {state.status === "unavailable"
+            ? curatorPreviewUnavailable(state.code)
+            : CURATOR_EVIDENCE_LOADING}
+        </p>
+      )}
+      {state.status === "ready" &&
+        state.spans.map((s, i) => (
+          <div key={`${s.role}-${s.record_index ?? 0}-${s.sentence_index ?? i}`} className="py-1">
+            <span
+              className="text-[11px] uppercase tracking-wider mr-2"
+              style={{ color: T.accent }}
+            >
+              {curatorRoleLabel(s.role)}
+              {s.primary === false ? " · context" : ""}
+            </span>
+            <span style={{ color: T.text, opacity: 0.9 }}>“{s.text}”</span>
+            {s.digest_matches === false && (
+              <span className="ml-2" style={{ color: "var(--nv-negative)" }}>
+                ({CURATOR_SPAN_DIGEST_DRIFT})
+              </span>
+            )}
+          </div>
+        ))}
+      <p className="mt-1" style={{ opacity: 0.75 }}>
+        Quoted straight from your transcript on disk — never from the model, which is only allowed
+        to point at sentence numbers.
+      </p>
+    </div>
+  );
+}
+
+/** The gate receipt: all thirteen gates, whether they ran or not.
+ *
+ *  A gate with no record did not run — either the candidate died at an
+ *  earlier gate, or (G10) the check isn't part of this version. Both are
+ *  shown rather than hidden: a check that silently vanishes is the failure
+ *  mode this whole receipt exists to prevent. */
+function CuratorReceipt({ curator }: { curator: CuratorExtension }) {
+  const rows = useMemo(() => {
+    const byName = new Map(curator.verification.gates.map((g) => [g.gate, g]));
+    return CURATOR_GATE_ORDER.map((gate) => ({
+      gate,
+      record: byName.get(gate) ?? null,
+    }));
+  }, [curator]);
+
+  const counts = useMemo(() => {
+    const c = { pass: 0, not_run: 0, reject: 0, defer: 0, require_review: 0, no_op: 0 };
+    for (const r of rows) {
+      const effect: CuratorGateOutcome = r.record?.effect ?? "not_run";
+      c[effect] += 1;
+    }
+    return c;
+  }, [rows]);
+
+  const summary = [
+    `${counts.pass} passed`,
+    counts.require_review > 0 ? `${counts.require_review} flagged for you` : null,
+    counts.reject > 0 ? `${counts.reject} rejected` : null,
+    counts.defer > 0 ? `${counts.defer} deferred` : null,
+    counts.no_op > 0 ? `${counts.no_op} already known` : null,
+    counts.not_run > 0 ? `${counts.not_run} not run` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const gen = curator.generation;
+  const seconds = Math.round(gen.duration_ms / 1000);
+
+  return (
+    <div className="space-y-2">
+      <p>
+        {rows.length} checks ran against your transcript — {summary}. Every one of them can only
+        reject; none of them can invent.
+      </p>
+      <div className="space-y-0.5">
+        {rows.map(({ gate, record }) => {
+          const effect: CuratorGateOutcome = record?.effect ?? "not_run";
+          const tone =
+            effect === "reject" || effect === "defer"
+              ? "var(--nv-negative)"
+              : effect === "require_review"
+                ? T.accent
+                : effect === "pass"
+                  ? "var(--nv-positive)"
+                  : T.dim;
+          return (
+            <div key={gate} className="flex items-baseline gap-2">
+              <span className="font-mono text-[11px] shrink-0" style={{ opacity: 0.6 }}>
+                {curatorGateTag(gate)}
+              </span>
+              <span
+                className="text-[11px] px-1.5 py-0.5 rounded shrink-0"
+                style={{ color: tone, border: `1px solid color-mix(in srgb, ${tone} 35%, transparent)` }}
+              >
+                {curatorOutcomeLabel(effect)}
+              </span>
+              <span style={{ color: T.text, opacity: 0.85 }}>
+                {curatorGateLabel(gate)}
+                {record?.code ? ` — ${curatorCodeLabel(record.code)}` : ""}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {!curator.verification.gates.some((g) => g.gate === "g12_derive_disposition") && (
+        <p style={{ opacity: 0.75 }}>
+          G12 is the verdict itself and records no line of its own — this card is its output.
+        </p>
+      )}
+      {rows.some((r) => r.gate === "g10_score_entailment" && (r.record?.effect ?? "not_run") === "not_run") && (
+        <p style={{ opacity: 0.75 }}>{CURATOR_G10_NOT_RUN_NOTE}</p>
+      )}
+      {(curator.review_codes?.length ?? 0) > 0 && (
+        <p>
+          Flagged for you: {curator.review_codes?.map((c) => curatorCodeLabel(c)).join("; ")}.
+        </p>
+      )}
+      <div className="font-mono text-[11px] space-y-0.5 pt-1">
+        <div>
+          model: {gen.model_id} · {shortHash(gen.model_digest)} · {gen.provider}, on this Mac
+        </div>
+        <div>
+          generated: {relativeTime(gen.started_at)} · {seconds}s · output schema v
+          {gen.output_schema_version}
+        </div>
+        <div>
+          verifier: v{curator.verification.verifier_version} · policy {curator.verification.policy_epoch}
+        </div>
+        <div>
+          transforms: parser v{curator.verification.parser_version} · redaction v
+          {curator.verification.redaction_policy_version} · segmenter v
+          {curator.verification.segmenter_version}
+        </div>
+        <div>
+          evidence key: {curator.evidence_key} · claim key: {curator.claim_key}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -154,6 +508,11 @@ function FocusedProposal({
   const [rejectDetail, setRejectDetail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The transcript is only re-opened once the user asks to see the evidence.
+  const [evidenceOpened, setEvidenceOpened] = useState(false);
+  const curator = p.curator ?? null;
+  const statement = p.fields.find((f) => f.name === "statement")?.proposed_value ?? p.title;
+  const subject = p.fields.find((f) => f.name === "subject")?.proposed_value ?? null;
 
   useEffect(() => {
     setMode("view");
@@ -161,6 +520,7 @@ function FocusedProposal({
     setRejectReason("");
     setRejectDetail("");
     setError(null);
+    setEvidenceOpened(false);
   }, [p.proposal_id]);
 
   const decide = useCallback(
@@ -245,6 +605,23 @@ function FocusedProposal({
         </p>
       </div>
 
+      {/* 3b. The proposed memory itself, verbatim (curator cards only) */}
+      {curator && (
+        <div className="mb-5">
+          <div className="text-[11px] font-semibold tracking-wider uppercase mb-1" style={{ color: T.dim }}>
+            Proposed memory
+          </div>
+          <p className="text-[15px] leading-relaxed" style={{ color: T.text }}>
+            “{statement}”
+          </p>
+          <p className="text-[12px] mt-1" style={{ color: T.dim }}>
+            {curatorClassLabel(curator.claim_class)}
+            {subject ? ` · subject: ${subject}` : ""} · said by{" "}
+            {curatorRoleLabel(curator.source_role)}
+          </p>
+        </div>
+      )}
+
       {/* 4. Consequence */}
       <div className="mb-6">
         <div className="text-[11px] font-semibold tracking-wider uppercase mb-1" style={{ color: T.dim }}>
@@ -290,13 +667,32 @@ function FocusedProposal({
       <div className="mb-6 space-y-0.5">
         <Disclosure label="Why NeuroVault suggested this">
           <p>{p.reason}</p>
+          {curator && (
+            <p className="mt-1">
+              A model on this Mac proposed it from one finished turn of your{" "}
+              {project ?? "Claude Code"} session, and NeuroVault verified every value against the
+              transcript before this card existed. The model never wrote the evidence — it pointed
+              at sentence numbers, and the server read the sentences.
+            </p>
+          )}
           {p.predecessor && (
             <p className="mt-1">
               A similar suggestion was rejected before; this one exists because new evidence appeared.
             </p>
           )}
         </Disclosure>
-        <Disclosure label="Evidence from this session">
+        <Disclosure
+          label={curator ? "Evidence from your transcript" : "Evidence from this session"}
+          onOpen={curator ? () => setEvidenceOpened(true) : undefined}
+        >
+          {curator && (
+            <CuratorSpanPanel
+              proposalId={p.proposal_id}
+              brainId={brainId}
+              curator={curator}
+              active={evidenceOpened}
+            />
+          )}
           {evidenceFailed && <p>The evidence couldn't be loaded — the events are still in the journal.</p>}
           {!evidenceFailed && !events && <p>Loading…</p>}
           {events?.map((e) => (
@@ -309,6 +705,11 @@ function FocusedProposal({
           ))}
           {events && events.length === 0 && <p>The evidence events are older than the timeline window.</p>}
         </Disclosure>
+        {curator && (
+          <Disclosure label="How NeuroVault checked this">
+            <CuratorReceipt curator={curator} />
+          </Disclosure>
+        )}
         <Disclosure label="Technical details">
           <div className="font-mono text-[11px] space-y-0.5">
             <div>action: {p.action}</div>
@@ -701,9 +1102,11 @@ export default function MemoryReview({
             {similar > 1 && tab === "pending"
               ? `${similar} similar observations — reviewing them one at a time`
               : tab === "pending"
-                ? current && proposalNeedsAttention(current.action)
-                  ? "NeuroVault wants to change memory. Nothing happens until you decide."
-                  : "Optional accuracy check — this does not change memory."
+                ? current?.curator
+                  ? "A local model proposed this from your own transcript. Your answer records a verdict — nothing is written."
+                  : current && proposalNeedsAttention(current.action)
+                    ? "NeuroVault wants to change memory. Nothing happens until you decide."
+                    : "Optional accuracy check — this does not change memory."
                 : "Review history is read-only."}
           </div>
           <div className="ml-auto text-[13px] tabular-nums" style={{ color: T.dim }}>

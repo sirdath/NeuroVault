@@ -113,7 +113,55 @@ const ACTIONS: Record<string, ActionCopy> = {
       "Your answer evaluates this rule — no memory changes today. Nothing is rewritten; the summariser isn't built yet.",
     executable: false,
   },
+
+  // ---- Local Memory Curator (implementation guide §6.6) -----------------
+  // A model on this Mac proposes, a deterministic Rust gauntlet verifies,
+  // you decide. In V1 approving records the verdict and NOTHING else: these
+  // action ids have no executor arm in `proposal_approve`, and their
+  // proposals are stored `application_status: not_applicable`. So
+  // `executable: false` is a fact about the backend, not a UI softener —
+  // when the note-writing executor lands (post-V1) this copy flips with it.
+  curator_remember_decision: {
+    headline: "Your session recorded a decision",
+    meaning:
+      "A model running on this Mac read one turn of a Claude Code session and thinks you decided something durable. It was only allowed to point at sentences — NeuroVault read those sentences itself and checked every number, date and name against your transcript before showing you this.",
+    proposedChange: "Remember this decision, in the words your own transcript used.",
+    question: "Is this accurate?",
+    ifApproved:
+      "Your answer records a verdict — no memory is written today. NeuroVault does not create the note yet; that step is separate, and it will be its own opt-in.",
+    executable: false,
+  },
+  curator_remember_fact: {
+    headline: "Your session recorded a fact",
+    meaning:
+      "A model running on this Mac read one turn of a Claude Code session and found a fact worth keeping. It was only allowed to point at sentences — NeuroVault read those sentences itself and checked every number, date and name against your transcript before showing you this.",
+    proposedChange: "Remember this fact, in the words your own transcript used.",
+    question: "Is this accurate?",
+    ifApproved:
+      "Your answer records a verdict — no memory is written today. NeuroVault does not create the note yet; that step is separate, and it will be its own opt-in.",
+    executable: false,
+  },
+  curator_remember_preference: {
+    headline: "Your session recorded a preference",
+    meaning:
+      "A model running on this Mac read one turn of a Claude Code session and thinks you stated a standing preference. It was only allowed to point at sentences — NeuroVault read those sentences itself and checked every number, date and name against your transcript before showing you this.",
+    proposedChange: "Remember this preference, in the words your own transcript used.",
+    question: "Is this accurate?",
+    ifApproved:
+      "Your answer records a verdict — no memory is written today. NeuroVault does not create the note yet; that step is separate, and it will be its own opt-in.",
+    executable: false,
+  },
 };
+
+/** The three local-curator action ids. */
+export const CURATOR_ACTIONS = [
+  "curator_remember_decision",
+  "curator_remember_fact",
+  "curator_remember_preference",
+] as const;
+export const isCuratorAction = (action: string): boolean =>
+  (CURATOR_ACTIONS as readonly string[]).includes(action);
+
 export const actionCopy = (action: string): ActionCopy =>
   ACTIONS[action] ?? {
     headline: humanize(action),
@@ -259,3 +307,153 @@ export const TRACE_EXPLAINER =
 
 export const PROPOSALS_EXPLAINER =
   "NeuroVault watches what happens across your sessions and sometimes thinks it has learned something — but it never trusts itself without asking you first. Each card below is one suggestion with the evidence behind it. Your yes/no answers are how it earns (or loses) the right to act on its own later.";
+
+// ---------------------------------------------------------------------------
+// Local Memory Curator — the plain-language layer for receipts
+//
+// The gauntlet's vocabulary (gate ids, reject/defer/review codes, source
+// roles) is precise and completely opaque to a human. Same rule as the rest
+// of this file: lead with a sentence a stranger understands, keep the raw id
+// visible but secondary, and never crash on an id this build hasn't met.
+// ---------------------------------------------------------------------------
+
+/** The thirteen gates, in execution order (Rust: `gates::GateName`). */
+export const CURATOR_GATE_ORDER = [
+  "g00_validate_output_envelope",
+  "g01_resolve_allowed_object",
+  "g02_resolve_allowed_evidence",
+  "g03_enforce_action_field_contract",
+  "g04_enforce_scope_and_source_policy",
+  "g05_enforce_atomic_claim",
+  "g06_verify_lexical_integrity",
+  "g07_verify_attribution_binding",
+  "g08_verify_polarity_modality_and_time",
+  "g09_screen_sensitive_content",
+  "g10_score_entailment",
+  "g11_check_existing_state",
+  "g12_derive_disposition",
+] as const;
+
+const CURATOR_GATE_LABELS: Record<string, string> = {
+  g00_validate_output_envelope: "The answer had the shape we demanded",
+  g01_resolve_allowed_object: "It aimed at this vault and nothing else",
+  g02_resolve_allowed_evidence: "Every cited sentence really exists in your transcript",
+  g03_enforce_action_field_contract: "The fields stayed inside their limits",
+  g04_enforce_scope_and_source_policy: "The claimed speaker matches who actually spoke",
+  g05_enforce_atomic_claim: "One claim, not several bundled together",
+  g06_verify_lexical_integrity: "No number, date or name was altered",
+  g07_verify_attribution_binding: "Who did what was read the right way round",
+  g08_verify_polarity_modality_and_time: "Not / maybe / already-done survived intact",
+  g09_screen_sensitive_content: "Nothing secret-looking made it through",
+  g10_score_entailment: "Second-opinion entailment check",
+  g11_check_existing_state: "Not already saved, not something you rejected before",
+  g12_derive_disposition: "Final verdict",
+};
+export const curatorGateLabel = (gate: string): string =>
+  CURATOR_GATE_LABELS[gate] ?? humanize(gate);
+
+/** "g06_verify_lexical_integrity" → "G06" (the chip's compact tag). */
+export const curatorGateTag = (gate: string): string => {
+  const m = /^g(\d{2})_/.exec(gate);
+  return m ? `G${m[1]}` : gate.slice(0, 3).toUpperCase();
+};
+
+/** Gate outcomes (Rust: `receipts::GateOutcome`). */
+export const curatorOutcomeLabel = (effect: string): string =>
+  ({
+    pass: "passed",
+    not_run: "not run",
+    no_op: "nothing to do",
+    reject: "rejected",
+    defer: "deferred",
+    require_review: "flagged for you",
+  })[effect] ?? humanize(effect);
+
+/** Closed reject / defer / review / no-op codes → one human clause. */
+const CURATOR_CODES: Record<string, string> = {
+  // rejects
+  invalid_envelope: "the model's answer didn't parse",
+  object_out_of_scope: "it pointed at something outside this vault",
+  invalid_evidence: "a cited sentence didn't resolve",
+  invalid_field_contract: "a field broke its contract",
+  private_evidence: "the evidence was private",
+  provenance_violation: "that source isn't allowed to carry this kind of claim",
+  not_extractive: "the claim wasn't covered by the sentences it cited",
+  literal_mismatch: "a number, date or name didn't match the transcript",
+  attribution_mismatch: "who said or did what didn't line up",
+  semantic_state_mismatch: "a negation, a maybe, or the tense drifted",
+  sensitive_output: "the text looked like a credential or secret",
+  // defers
+  object_unavailable: "the target wasn't available",
+  evidence_unavailable: "the transcript couldn't be re-read",
+  incomplete_turn: "the turn wasn't finished",
+  provider_unavailable: "the local model wasn't reachable",
+  provider_timeout: "the local model took too long",
+  verifier_unavailable: "a verifier wasn't available",
+  // review flags
+  weak_provenance: "the source is weaker than the claim",
+  synthesis: "it combined more than one sentence",
+  oversized_evidence: "it leaned on a lot of text",
+  alias_or_paraphrase: "it used a synonym rather than your words",
+  ambiguous_attribution: "who it belongs to is ambiguous",
+  complex_semantics: "the sentence is semantically tricky",
+  nli_contradiction: "a second opinion read it as contradicted",
+  nli_uncertain: "a second opinion wasn't sure",
+  conflict: "it conflicts with something you already have",
+  destructive_action: "the action would destroy something",
+  policy_requires_review: "this class always comes to you",
+  // no-ops
+  exact_duplicate: "you already have this",
+  rejected_evidence_tombstone: "you rejected this evidence before",
+};
+export const curatorCodeLabel = (code: string): string =>
+  CURATOR_CODES[code] ?? humanize(code);
+
+/** Who a span came from (Rust: `receipts::SourceRole`). */
+export const curatorRoleLabel = (role: string): string =>
+  ({
+    user: "you",
+    assistant: "Claude",
+    tool_result: "a tool result",
+    file_content: "a file",
+    web_content: "a web page",
+    system_event: "a system event",
+  })[role] ?? humanize(role);
+
+/** The claim class the gauntlet assigned. */
+export const curatorClassLabel = (claimClass: string): string =>
+  ({ decision: "decision", fact: "fact", preference: "preference" })[claimClass] ??
+  humanize(claimClass);
+
+/** G10 is recorded as `not_run` in V1 — recorded, never silently skipped. */
+export const CURATOR_G10_NOT_RUN_NOTE =
+  "The entailment second opinion isn't part of this version. It is recorded as not run rather than quietly skipped.";
+
+/** The span panel's defer state. The transcript is re-opened and re-hashed
+ *  every time you look; if the file moved on, NeuroVault shows nothing
+ *  rather than newer bytes it never verified. */
+export const CURATOR_EVIDENCE_UNAVAILABLE =
+  "Transcript changed since capture — evidence can no longer be shown. NeuroVault re-reads the original file to quote it and refuses to show bytes it didn't verify, so there is nothing safe to display here. If you can't verify it from memory, reject it.";
+
+/** `SpanPreview.code` → why there is nothing to show. Every branch says what
+ *  is missing and what the user can do; none of them blames the user. */
+export const curatorPreviewUnavailable = (code?: string | null): string => {
+  switch (code) {
+    case "consent_revoked":
+      return "Transcript access is off, so NeuroVault can't re-open the file to quote it. Turn it back on in Settings if you want to see the evidence — the proposal itself is unaffected.";
+    case "platform_unsupported":
+      return "Re-reading transcripts isn't supported on this platform yet, so the exact words can't be shown here.";
+    case "not_a_curator_proposal":
+      return "This proposal has no transcript evidence attached.";
+    default:
+      return CURATOR_EVIDENCE_UNAVAILABLE;
+  }
+};
+
+/** A span whose bytes no longer hash to what was verified. Shown, never
+ *  hidden: the file drifted under a still-valid prefix. */
+export const CURATOR_SPAN_DIGEST_DRIFT =
+  "these bytes no longer match what was verified — read them with suspicion";
+
+/** Shown while the sentences are being re-read from disk. */
+export const CURATOR_EVIDENCE_LOADING = "Re-reading your transcript…";

@@ -10,6 +10,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import vaultMark from "../assets/vault-mark-transparent.png";
 import { ConnectionsCenter } from "./ConnectionsCenter";
 import { BrainSourcesPanel } from "./BrainSourcesPanel";
+import { CuratorSettings } from "./CuratorSettings";
 import { useBrainStore } from "../stores/brainStore";
 
 
@@ -432,7 +433,11 @@ export function SettingsView({ initialSection = "general" }: { initialSection?: 
         </Section>
         </>}
 
-        {settingsTab === "sources" && <SourcesSettings />}
+        {/* The local curator turns your own Claude Code sessions into memory
+            candidates, so its consent surface belongs with the other sources
+            of knowledge — not behind the developer switch, where a kill
+            switch nobody can find is no kill switch at all. */}
+        {settingsTab === "sources" && <><SourcesSettings /><CuratorSettings /></>}
         {settingsTab === "connections" && <ConnectionsCenter onOpenSources={() => setSettingsTab("sources")} />}
         {settingsTab === "vaults" && <VaultSettings />}
         {settingsTab === "advanced" && <><MCPTierSection /><RerankSection /><APIGatewaySection /><APIAccessSection /></>}
