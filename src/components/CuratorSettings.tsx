@@ -363,9 +363,9 @@ export function CuratorSettings() {
     if (running) return;
     setRunning(true);
     try {
-      // No client timeout: the endpoint answers when the run is over, and a
-      // run reads one turn at a time — minutes, not seconds. Aborting here
-      // would abandon a run that is still happening and report a lie.
+      // The endpoint is detached: it answers 202 with a run_id immediately
+      // and the run continues server-side. Completion is observed by polling
+      // /api/curator/runs until the in-flight marker clears.
       const r = await fetch(`${API_HOST}/api/curator/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -373,21 +373,42 @@ export function CuratorSettings() {
       });
       if (r.status === 409) {
         toast.warning("A curator run is already in flight — its results will land in Memory Review.");
+        setRunning(false);
         return;
       }
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string; hint?: string };
         toast.error(j.hint ?? j.error ?? `The run couldn't start (HTTP ${r.status}).`);
+        setRunning(false);
         return;
       }
-      const report = (await r.json().catch(() => ({}))) as CuratorRunReport;
-      const seen = report.units_processed ?? 0;
-      const made = report.proposals_created ?? 0;
+      const started = (await r.json().catch(() => ({}))) as { run_id?: string };
       toast.success(
-        `Run finished — ${seen} turn${seen === 1 ? "" : "s"} read, ${made} proposal${
-          made === 1 ? "" : "s"
-        } waiting in Memory Review.`,
+        "Curator run started — proposals will land in Memory Review as they pass the gates.",
       );
+      // Poll until the backend reports no run in flight (or this one's id is
+      // gone), then refresh the last-run summary. Bounded: give up polling
+      // after 60 ticks (~30 min) and just leave the summary stale — the run
+      // itself is unaffected.
+      for (let tick = 0; tick < 60; tick += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        try {
+          const s = await fetch(
+            `${API_HOST}/api/curator/runs?brain_id=${encodeURIComponent(activeBrainId ?? "")}`,
+          );
+          if (!s.ok) continue;
+          const j = (await s.json().catch(() => ({}))) as {
+            running?: boolean;
+            in_flight?: { run_id?: string } | null;
+          };
+          const stillThisRun =
+            j.running === true &&
+            (started.run_id === undefined || j.in_flight?.run_id === started.run_id);
+          if (!stillThisRun) break;
+        } catch {
+          // transient poll failure: keep waiting, the run is server-side
+        }
+      }
       await loadRuns();
     } catch {
       toast.error("Couldn't reach NeuroVault to start the run.");

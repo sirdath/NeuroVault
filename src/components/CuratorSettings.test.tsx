@@ -270,7 +270,7 @@ describe("curator settings", () => {
     expect(screen.getByText(/Runs at most once every 24 hours/)).toBeInTheDocument();
   });
 
-  it("reports the finished run's own numbers", async () => {
+  it("announces the detached start and leaves the run to the backend (202)", async () => {
     scenario = {
       config: {
         ...offConfig,
@@ -288,9 +288,11 @@ describe("curator settings", () => {
 
     await waitFor(() =>
       expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
-        "Run finished — 4 turns read, 2 proposals waiting in Memory Review.",
+        "Curator run started — proposals will land in Memory Review as they pass the gates.",
       ),
     );
+    // The button reflects the still-running state; polling owns the reset.
+    expect(screen.getByRole("button", { name: /Running…|Run now/ })).toBeInTheDocument();
   });
 
   it("says so plainly when a run is already in flight (409)", async () => {
