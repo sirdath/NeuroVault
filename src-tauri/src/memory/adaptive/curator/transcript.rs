@@ -559,27 +559,14 @@ impl ReadPolicy {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ReadConsentConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    transcript_access: bool,
-}
-
-/// Both switches, explicitly true, or nothing happens. This mirrors
-/// `evidence`'s capture-time contract at read time; Wave 0 promoted the
-/// traversal primitives but not the consent loader, so the two-line
-/// config shape is restated here and pinned by
+/// Both switches, explicitly true, or nothing happens — the same
+/// contract `evidence` enforces at capture time, decided by the same
+/// loader (Wave 3 promoted `evidence::consent` to `pub(crate)` and
+/// deleted this module's restatement of the config shape). Pinned by
 /// `consent_requires_both_switches`.
 fn production_read_policy() -> ReadPolicy {
-    let raw = std::fs::read_to_string(crate::memory::paths::nv_home().join("local_curator.json"));
-    let config: ReadConsentConfig = raw
-        .ok()
-        .and_then(|body| serde_json::from_str(&body).ok())
-        .unwrap_or_default();
     ReadPolicy::load(
-        config.enabled && config.transcript_access,
+        super::evidence::consent().both_switches(),
         crate::memory::paths::claude_projects_dir(),
     )
 }
@@ -906,20 +893,24 @@ mod tests {
         assert_eq!(sanitized, "Authorization: Bearer [REDACTED:bearer_token]");
     }
 
+    /// Same tolerance matrix as before the Wave-3 dedupe, now asserted
+    /// against the single shared loader the read path actually calls.
     #[test]
     fn consent_requires_both_switches() {
+        use super::super::evidence::decode_local_config;
         for raw in [
             "{}",
             r#"{"enabled":true}"#,
             r#"{"transcript_access":true}"#,
             "not json",
         ] {
-            let config: ReadConsentConfig = serde_json::from_str(raw).unwrap_or_default();
-            assert!(!(config.enabled && config.transcript_access), "{raw}");
+            assert!(!decode_local_config(Some(raw)).both_switches(), "{raw}");
         }
-        let config: ReadConsentConfig =
-            serde_json::from_str(r#"{"enabled":true,"transcript_access":true}"#).unwrap();
-        assert!(config.enabled && config.transcript_access);
+        assert!(!decode_local_config(None).both_switches());
+        assert!(
+            decode_local_config(Some(r#"{"enabled":true,"transcript_access":true}"#))
+                .both_switches()
+        );
     }
 
     // ── read-time rebind (fixture roots only; never ~/.neurovault) ────

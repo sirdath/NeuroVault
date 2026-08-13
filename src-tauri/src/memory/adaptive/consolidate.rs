@@ -570,6 +570,10 @@ pub fn run_proposal(scope: &Scope) -> Result<ConsolidationReport> {
             decided_by: None,
             decision_reason: None,
             predecessor,
+            // Deterministic-rule proposals carry no curator receipts;
+            // the field is skipped on write, so these lines are
+            // byte-identical to the pre-curator ones.
+            curator: None,
         };
         proposals::append(&scope.brain_id, &rec)?;
         kept.push(p);

@@ -1693,8 +1693,11 @@ pub async fn consolidate_shadow(
     _s: State<ServerState>,
     Json(body): Json<ConsolidateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Resolved out here so the error mapper can recognise this brain's
+    // own single-flight refusal.
+    let id = resolve_brain_id(body.brain_id.as_deref()).map_err(ApiError::from)?;
+    let brain = id.clone();
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
-        let id = resolve_brain_id(body.brain_id.as_deref())?;
         let scope = scope_for(&id, body.room.as_deref());
         let now = time::OffsetDateTime::now_utc();
         let hours = body.window_hours.unwrap_or(24).clamp(1, 24 * 90);
@@ -1711,8 +1714,30 @@ pub async fn consolidate_shadow(
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(ApiError::from)?;
+    .map_err(|e| single_flight_aware(&brain, e))?;
     Ok(Json(out))
+}
+
+/// Losing the per-brain single-flight lock is a 409, not a 500.
+///
+/// `run_proposal` flattens `BrainRunBusy` into `MemoryError::Other`
+/// before it reaches here, so the busy case surfaced as "internal server
+/// error" — wrong in general, and actively misleading now that the
+/// curator's manual-run button can legitimately collide with the
+/// nightly clock. The comparison is against the lock type's own
+/// `Display` for this exact brain, not a copied string literal, so the
+/// message and the mapping cannot drift apart.
+fn single_flight_aware(brain_id: &str, e: MemoryError) -> ApiError {
+    let text = e.to_string();
+    let busy = super::adaptive::lock::BrainRunBusy {
+        brain_id: brain_id.to_string(),
+    }
+    .to_string();
+    if text == busy {
+        ApiError(StatusCode::CONFLICT, text)
+    } else {
+        ApiError::from(e)
+    }
 }
 
 /// GET /api/consolidation_reports — the Inspector's consolidation feed.
@@ -6329,6 +6354,373 @@ pub async fn consolidation_auto_set(
 }
 
 // ---------------------------------------------------------------------------
+// Local memory curator — ~/.neurovault/local_curator.json plus the run,
+// audit and span-preview endpoints (guide §2.8/§3.5, spec §13–§18).
+//
+// Four routes, all loopback like everything else here:
+//
+//   GET/PUT /api/local_curator          consent + provider + clock state
+//   POST    /api/curator/run            manual run (409 while one is in flight)
+//   GET     /api/curator/runs           the per-unit audit ledger
+//   GET     /api/curator/span_preview   re-verified sentence text for a card
+//
+// The consent booleans are *read* through the curator's single consent
+// loader, never re-parsed here; this module only writes the file the
+// loader reads.
+// ---------------------------------------------------------------------------
+
+use super::adaptive::curator::{runner as curator_runner, schedule as curator_schedule};
+
+fn local_curator_path() -> std::path::PathBuf {
+    super::paths::nv_home().join("local_curator.json")
+}
+
+/// The file as JSON, so a PUT can patch the keys it knows and leave
+/// every other key exactly where it found it (a future `provider`
+/// sub-field must survive a consent toggle written by an older build).
+fn local_curator_raw() -> serde_json::Value {
+    std::fs::read_to_string(local_curator_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// The settings panel aborts its GET after 5 s, so the probe has to come
+/// back well inside that: a hung Ollama must render as "unreachable",
+/// not as "NeuroVault is offline".
+const PROBE_TIMEOUT_SECS: u64 = 3;
+
+/// Read-only `/api/tags` probe: which models this Ollama already has.
+///
+/// Listing is not pulling. Nothing in the curator downloads a model —
+/// Settings shows what is installed and the user installs the rest
+/// themselves. A probe failure is reported as a *status*, never as an
+/// error: the settings page has to render with Ollama switched off.
+async fn probe_provider(
+    cfg: &super::adaptive::curator::provider::ProviderConfig,
+) -> (Vec<serde_json::Value>, serde_json::Value) {
+    use super::adaptive::curator::provider::{self, ProviderError};
+
+    let status = |e: ProviderError| serde_json::json!({ "ok": false, "code": e.code(), "hint": e.user_hint() });
+    let base = match cfg.base_url() {
+        Ok(base) => base,
+        Err(e) => return (Vec::new(), status(e)),
+    };
+    let client = provider::client(cfg);
+    let response = client
+        .get(format!("{base}/api/tags"))
+        .timeout(std::time::Duration::from_secs(
+            cfg.timeout_control_secs.clamp(1, PROBE_TIMEOUT_SECS),
+        ))
+        .send()
+        .await;
+    let body = match response {
+        Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().await.ok(),
+        Ok(r) => {
+            return (
+                Vec::new(),
+                status(ProviderError::HttpStatus {
+                    status: r.status().as_u16(),
+                }),
+            )
+        }
+        Err(e) => {
+            return (
+                Vec::new(),
+                status(ProviderError::OllamaUnreachable {
+                    detail: if e.is_timeout() { "timeout" } else { "connect" }.into(),
+                }),
+            )
+        }
+    };
+    let Some(body) = body else {
+        return (
+            Vec::new(),
+            status(ProviderError::OllamaUnreachable {
+                detail: "tags".into(),
+            }),
+        );
+    };
+    let installed: Vec<serde_json::Value> = body["models"]
+        .as_array()
+        .map(|models| {
+            models
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "name": m["name"].as_str().or(m["model"].as_str()).unwrap_or_default(),
+                        "size_bytes": m["size"].as_u64().unwrap_or_default(),
+                        "digest": m["digest"].as_str().unwrap_or_default(),
+                        "parameter_size": m["details"]["parameter_size"]
+                            .as_str()
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_model = installed
+        .iter()
+        .any(|m| m["name"].as_str() == Some(cfg.model.as_str()));
+    let status = if has_model {
+        serde_json::json!({ "ok": true, "code": "ready", "hint": "" })
+    } else {
+        status(ProviderError::ModelNotInstalled {
+            model: cfg.model.clone(),
+        })
+    };
+    (installed, status)
+}
+
+async fn local_curator_state(brain_id: &str) -> serde_json::Value {
+    use super::adaptive::curator::provider::LocalCuratorFile;
+    let file = LocalCuratorFile::load();
+    let now = time::OffsetDateTime::now_utc();
+    let (installed_models, provider_status) = match file.provider() {
+        Ok(cfg) => probe_provider(cfg).await,
+        Err(e) => (
+            Vec::new(),
+            serde_json::json!({ "ok": false, "code": e.code(), "hint": e.user_hint() }),
+        ),
+    };
+    serde_json::json!({
+        "brain": brain_id,
+        // Both switches, as the curator itself reads them.
+        "enabled": file.enabled,
+        "transcript_access": file.transcript_access,
+        "consent_granted": curator_schedule::is_enabled(),
+        // Slice 1 fails closed off unix (no handle-relative traversal
+        // there yet), so the whole feature is macOS/Linux-only and the
+        // UI is told rather than left to guess.
+        "platform_supported": cfg!(unix),
+        "provider": file.provider,
+        "provider_configured": curator_schedule::provider_configured(),
+        "provider_status": provider_status,
+        "installed_models": installed_models,
+        "schedule": {
+            "interval_hours": curator_schedule::RUN_INTERVAL_HOURS,
+            "check_interval_secs": curator_schedule::CHECK_INTERVAL_SECS,
+            "startup_delay_secs": curator_schedule::STARTUP_DELAY_SECS,
+            "last_run": curator_schedule::read_last_run(brain_id)
+                .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok()),
+            "decision": curator_schedule::tick_decision(brain_id, now),
+        },
+        "in_flight": curator_runner::in_flight_run(brain_id),
+    })
+}
+
+/// GET /api/local_curator — consent, provider and clock state.
+pub async fn local_curator_get(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = resolve_brain_id(q.brain_id.as_deref()).unwrap_or_default();
+    Ok(Json(local_curator_state(&id).await))
+}
+
+#[derive(Deserialize)]
+pub struct LocalCuratorBody {
+    /// The kill switch. Absent leaves the stored value alone.
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    transcript_access: Option<bool>,
+    /// A full `provider` block. Validated before it is written, so a
+    /// malformed endpoint fails at the PUT rather than at 2 a.m.
+    #[serde(default)]
+    provider: Option<serde_json::Value>,
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+}
+
+/// PUT /api/local_curator — patch consent and/or the provider block.
+///
+/// Server-owned consent: this is the only writer, the file is the only
+/// source, and no request field ever reaches a capture or read decision
+/// except by being stored here first.
+pub async fn local_curator_set(
+    _s: State<ServerState>,
+    Json(body): Json<LocalCuratorBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use super::adaptive::curator::provider::ProviderConfig;
+
+    let mut file = local_curator_raw();
+    let obj = file.as_object_mut().ok_or_else(|| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config not an object".into(),
+        )
+    })?;
+    if let Some(enabled) = body.enabled {
+        obj.insert("enabled".into(), serde_json::Value::Bool(enabled));
+    }
+    if let Some(access) = body.transcript_access {
+        obj.insert("transcript_access".into(), serde_json::Value::Bool(access));
+    }
+    if let Some(provider) = body.provider {
+        let parsed: ProviderConfig = serde_json::from_value(provider.clone())
+            .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("provider block: {e}")))?;
+        // Loopback-only, model named: refuse at the door.
+        parsed
+            .base_url()
+            .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("provider block: {e}")))?;
+        obj.insert("provider".into(), provider);
+    }
+
+    let path = local_curator_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("config dir: {e}"),
+            )
+        })?;
+    }
+    let body_text = serde_json::to_string_pretty(&file)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body_text).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("config write: {e}"),
+        )
+    })?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("config rename: {e}"),
+        )
+    })?;
+
+    let id = resolve_brain_id(body.brain_id.as_deref()).unwrap_or_default();
+    Ok(Json(local_curator_state(&id).await))
+}
+
+#[derive(Deserialize)]
+pub struct CuratorRunBody {
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+}
+
+/// POST /api/curator/run — start one manual run and return immediately.
+///
+/// **202, not 200.** A batch is ~87 s per unit; holding the connection
+/// open for a half-hour run would time out in every client that matters
+/// and would make "did it start?" indistinguishable from "did it hang?".
+/// So the run is spawned, its id comes back at once, and progress is
+/// read from `GET /api/curator/runs`, which reports the in-flight row
+/// plus each unit's audit line as it lands.
+///
+/// **409 while another proposal run holds the brain.** Losing the
+/// single-flight lock is not an error, it is a queue of one that already
+/// has an occupant. The check here is advisory — the authoritative one
+/// is inside the run, under the lock — so a photo finish between two
+/// POSTs ends with the loser logging a `Busy`, never with two batches.
+pub async fn curator_run(
+    _s: State<ServerState>,
+    Json(body): Json<CuratorRunBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let id = resolve_brain_id(body.brain_id.as_deref()).map_err(ApiError::from)?;
+    if super::adaptive::lock::is_run_in_flight(&id) {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            super::adaptive::lock::BrainRunBusy {
+                brain_id: id.clone(),
+            }
+            .to_string(),
+        ));
+    }
+    let run_id = curator_schedule::new_run_id();
+    let (brain, spawned) = (id.clone(), run_id.clone());
+    tokio::spawn(async move {
+        match curator_schedule::run_now_detached(&brain, &spawned).await {
+            Ok(report) => eprintln!(
+                "[curator] manual run: brain={brain} run={spawned} status={:?} proposals={}",
+                report.status, report.proposals_created
+            ),
+            Err(e) => eprintln!("[curator] manual run failed for {brain}: {e}"),
+        }
+    });
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "brain": id,
+            "run_id": run_id,
+            "status": "running",
+            "poll": "/api/curator/runs",
+        })),
+    ))
+}
+
+/// GET /api/curator/runs — the audit ledger, newest first, plus the run
+/// executing right now if there is one.
+///
+/// Deliberately its own feed rather than `consolidation_reports.jsonl`:
+/// conflating a deterministic-rule report with a model-generation
+/// receipt would make the Inspector lie about which pipeline produced
+/// what.
+///
+/// `runs` holds one line per *unit* outcome, so a long batch fills in
+/// progressively; `in_flight` is the run-level row that exists from the
+/// moment the lock is taken until the batch ends, which is what a caller
+/// polls after a 202.
+pub async fn curator_runs(
+    Query(q): Query<AmbientLogQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let limit = q.limit.unwrap_or(50).min(500);
+        let mut records = super::adaptive::curator::state::read_audit(&id);
+        records.reverse();
+        records.truncate(limit);
+        let in_flight = curator_runner::in_flight_run(&id);
+        Ok(serde_json::json!({
+            "brain": id,
+            "count": records.len(),
+            "running": in_flight.is_some(),
+            "in_flight": in_flight,
+            "runs": records,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct SpanPreviewQuery {
+    proposal_id: String,
+    #[serde(default, alias = "brain")]
+    brain_id: Option<String>,
+}
+
+/// GET /api/curator/span_preview — the evidence panel's sentence text.
+///
+/// Read-only, and re-verified on every call: the transcript is re-opened
+/// through the hardened reader, the pinned prefix digest is re-checked,
+/// and the sentences are re-sliced server-side. Nothing about the
+/// transcript is stored in the proposal, so when the file has changed
+/// this returns `available: false` with a safe code instead of text
+/// nobody can vouch for.
+pub async fn curator_span_preview(
+    Query(q): Query<SpanPreviewQuery>,
+    _s: State<ServerState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, MemoryError> {
+        let id = resolve_brain_id(q.brain_id.as_deref())?;
+        let preview = curator_runner::preview_spans(&id, &q.proposal_id)?;
+        serde_json::to_value(&preview).map_err(|e| MemoryError::Other(e.to_string()))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(ApiError::from)?;
+    Ok(Json(out))
+}
+
+// ---------------------------------------------------------------------------
 // API key management — loopback-mounted ONLY. The gateway must
 // never expose these; an external client managing its own keys
 // is a footgun (and a privilege-escalation pathway).
@@ -8401,4 +8793,380 @@ pub async fn brain_sources_preview(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(ApiError::from)?;
     Ok(Json(plan))
+}
+
+// ---------------------------------------------------------------------------
+// Curator route smoke tests (Wave 3A).
+//
+// Handlers are called directly, the way the rest of this file's tests do
+// it — the router is a thin `.route()` table and axum's extractors are
+// not what these assertions are about.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod curator_route_tests {
+    use super::*;
+
+    struct Env {
+        home: std::path::PathBuf,
+        prev_home: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Env {
+        fn new(name: &str) -> Self {
+            let guard = crate::memory::journal::TEST_HOME_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let home = std::env::temp_dir().join(format!(
+                "nv-curator-routes-{name}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&home).unwrap();
+            let prev_home = std::env::var_os("NEUROVAULT_HOME");
+            std::env::set_var("NEUROVAULT_HOME", &home);
+            Env {
+                home,
+                prev_home,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            match &self.prev_home {
+                Some(v) => std::env::set_var("NEUROVAULT_HOME", v),
+                None => std::env::remove_var("NEUROVAULT_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    const BRAIN: &str = "route-brain";
+
+    fn query<T: serde::de::DeserializeOwned>(pairs: &[(&str, &str)]) -> T {
+        let map: std::collections::HashMap<&str, &str> = pairs.iter().copied().collect();
+        serde_json::from_value(serde_json::to_value(map).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_curator_put_patches_consent_and_keeps_unknown_keys() {
+        let env = Env::new("config");
+        // A file written by a future build, with a key this one has
+        // never heard of.
+        std::fs::write(
+            env.home.join("local_curator.json"),
+            r#"{"enabled":false,"transcript_access":false,"future_key":{"keep":"me"}}"#,
+        )
+        .unwrap();
+
+        // A closed loopback port: the state probe must never reach the
+        // developer's real Ollama.
+        let port = closed_port().await;
+        let body: LocalCuratorBody = serde_json::from_value(serde_json::json!({
+            "brain": BRAIN,
+            "enabled": true,
+            "transcript_access": true,
+            "provider": {
+                "endpoint": format!("http://127.0.0.1:{port}"),
+                "model": "qwen3:30b",
+                "timeout_control_secs": 1,
+            },
+        }))
+        .unwrap();
+        let Json(out) = local_curator_set(State(ServerState {}), Json(body))
+            .await
+            .expect("put");
+        assert_eq!(out["enabled"], true);
+        assert_eq!(out["consent_granted"], true);
+        assert_eq!(out["provider_configured"], true);
+        assert_eq!(out["schedule"]["interval_hours"], 24);
+        // Due immediately after opting in, and the gate says so.
+        assert_eq!(out["schedule"]["decision"], "run");
+
+        let raw: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(env.home.join("local_curator.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(raw["future_key"]["keep"], "me", "unknown keys survive");
+
+        let Json(got) = local_curator_get(Query(query(&[("brain", BRAIN)])), State(ServerState {}))
+            .await
+            .expect("get");
+        assert_eq!(got["provider"]["model"], "qwen3:30b");
+        assert_eq!(got["transcript_access"], true);
+        drop(env);
+    }
+
+    #[tokio::test]
+    async fn local_curator_put_refuses_a_non_loopback_provider() {
+        let env = Env::new("badprovider");
+        let body: LocalCuratorBody = serde_json::from_value(serde_json::json!({
+            "provider": { "endpoint": "http://evil.example.com", "model": "m" },
+        }))
+        .unwrap();
+        let err = local_curator_set(State(ServerState {}), Json(body))
+            .await
+            .expect_err("must refuse");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(!env.home.join("local_curator.json").exists());
+        drop(env);
+    }
+
+    /// A run is minutes long, so the endpoint must answer in
+    /// milliseconds: 202 + the id the caller polls for.
+    #[tokio::test]
+    async fn curator_run_returns_202_and_a_run_id_without_waiting() {
+        let env = Env::new("run-202");
+        // Consent off: the spawned run records its skip and exits at
+        // once, so the test never depends on a model.
+        std::fs::write(
+            env.home.join("local_curator.json"),
+            r#"{"enabled":false,"transcript_access":false}"#,
+        )
+        .unwrap();
+
+        let body: CuratorRunBody =
+            serde_json::from_value(serde_json::json!({ "brain": BRAIN })).unwrap();
+        let (status, Json(out)) = curator_run(State(ServerState {}), Json(body))
+            .await
+            .expect("accepted");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(out["status"], "running");
+        let run_id = out["run_id"].as_str().expect("run id").to_string();
+        assert!(run_id.starts_with("cr_"), "{run_id}");
+
+        // Let the detached run finish inside THIS temp home before the
+        // env vars are restored.
+        for _ in 0..200 {
+            if super::super::adaptive::curator::schedule::read_last_run(BRAIN).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            super::super::adaptive::curator::schedule::read_last_run(BRAIN).is_some(),
+            "the detached run never ran"
+        );
+        assert!(super::super::adaptive::curator::runner::in_flight_run(BRAIN).is_none());
+        drop(env);
+    }
+
+    #[tokio::test]
+    async fn the_runs_feed_reports_whether_one_is_in_flight() {
+        let env = Env::new("in-flight");
+        let Json(idle) = curator_runs(Query(query(&[("brain", BRAIN)])), State(ServerState {}))
+            .await
+            .expect("runs");
+        assert_eq!(idle["running"], false);
+        assert!(idle["in_flight"].is_null());
+        drop(env);
+    }
+
+    /// The UI sends `provider` only when it has one. An omitted field
+    /// must leave a hand-edited block exactly where it was.
+    /// A loopback port with nothing behind it. Tests must never probe
+    /// the developer's real Ollama — that machine has models installed
+    /// and CI does not.
+    async fn closed_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        port
+    }
+
+    #[tokio::test]
+    async fn a_consent_only_put_does_not_clobber_the_provider_block() {
+        let env = Env::new("no-clobber");
+        let port = closed_port().await;
+        std::fs::write(
+            env.home.join("local_curator.json"),
+            format!(
+                r#"{{"enabled":true,"transcript_access":true,
+                "provider":{{"endpoint":"http://127.0.0.1:{port}","model":"hand-edited",
+                "num_ctx":16384,"timeout_control_secs":1}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let body: LocalCuratorBody = serde_json::from_value(serde_json::json!({
+            "brain": BRAIN,
+            "enabled": false,
+            "transcript_access": true,
+        }))
+        .unwrap();
+        let Json(out) = local_curator_set(State(ServerState {}), Json(body))
+            .await
+            .expect("put");
+        assert_eq!(out["enabled"], false);
+        assert_eq!(out["provider"]["model"], "hand-edited");
+        assert_eq!(out["provider"]["num_ctx"], 16384);
+        // …and the platform + status fields the settings panel needs.
+        assert_eq!(out["platform_supported"], cfg!(unix));
+        assert_eq!(out["provider_status"]["ok"], false, "nothing is listening");
+        assert_eq!(out["provider_status"]["code"], "ollama_unreachable");
+        assert!(out["provider_status"]["code"].is_string());
+        assert!(out["provider_status"]["hint"].is_string());
+        assert_eq!(out["installed_models"].as_array().unwrap().len(), 0);
+        drop(env);
+    }
+
+    #[tokio::test]
+    async fn curator_run_is_409_while_the_brain_is_busy() {
+        let env = Env::new("busy");
+        let held = super::super::adaptive::lock::try_acquire_brain_run(BRAIN).unwrap();
+        let body: CuratorRunBody =
+            serde_json::from_value(serde_json::json!({ "brain": BRAIN })).unwrap();
+        let err = curator_run(State(ServerState {}), Json(body))
+            .await
+            .expect_err("busy");
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        drop(held);
+        drop(env);
+    }
+
+    /// The documented Wave-3 fix: deterministic consolidation losing the
+    /// same single-flight lock was surfacing as a 500.
+    #[tokio::test]
+    async fn consolidate_is_409_not_500_when_it_loses_the_lock() {
+        let env = Env::new("consolidate-busy");
+        let held = super::super::adaptive::lock::try_acquire_brain_run(BRAIN).unwrap();
+        let body: ConsolidateBody =
+            serde_json::from_value(serde_json::json!({ "brain": BRAIN, "mode": "proposal" }))
+                .unwrap();
+        let err = consolidate_shadow(State(ServerState {}), Json(body))
+            .await
+            .expect_err("busy");
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        drop(held);
+        drop(env);
+    }
+
+    #[tokio::test]
+    async fn curator_runs_returns_the_audit_feed_newest_first() {
+        use super::super::adaptive::curator::state;
+        let env = Env::new("runs");
+        let now = time::OffsetDateTime::now_utc();
+        for unit in ["u-one", "u-two"] {
+            let key = state::UnitKey::new(unit, "digest", "2026-08-vp1");
+            let audit = state::CuratorRunAudit::new("cr_test", BRAIN, &key, now)
+                .with_no_proposal_reason(state::NoProposalReason::NoCandidates)
+                .finished_at(now);
+            state::append_audit(BRAIN, &audit).unwrap();
+        }
+        let Json(out) = curator_runs(Query(query(&[("brain", BRAIN)])), State(ServerState {}))
+            .await
+            .expect("runs");
+        assert_eq!(out["count"], 2);
+        assert_eq!(out["runs"][0]["unit_id"], "u-two", "newest first");
+        drop(env);
+    }
+
+    #[tokio::test]
+    async fn span_preview_says_so_when_a_proposal_is_not_a_curator_one() {
+        use super::super::adaptive::proposals::{
+            append, ApplicationStatus, ReviewStatus, StoredProposal,
+        };
+        let env = Env::new("preview");
+        let rec = StoredProposal {
+            proposal_id: "deterministic-1".into(),
+            brain_id: BRAIN.into(),
+            action: "memory_strengthened".into(),
+            memory_type: "engram".into(),
+            object_id: "e-1".into(),
+            title: "t".into(),
+            reason: "r".into(),
+            band: "low".into(),
+            fields: Vec::new(),
+            evidence: vec!["ev-1".into()],
+            review_status: ReviewStatus::Unreviewed,
+            application_status: ApplicationStatus::Pending,
+            application_error: None,
+            proposed_at: "2026-08-12T00:00:00Z".into(),
+            decided_at: None,
+            decided_by: None,
+            decision_reason: None,
+            predecessor: None,
+            curator: None,
+        };
+        append(BRAIN, &rec).unwrap();
+
+        let Json(out) = curator_span_preview(
+            Query(query(&[
+                ("brain", BRAIN),
+                ("proposal_id", "deterministic-1"),
+            ])),
+            State(ServerState {}),
+        )
+        .await
+        .expect("preview");
+        assert_eq!(out["available"], false);
+        assert_eq!(out["code"], "not_a_curator_proposal");
+        drop(env);
+    }
+
+    /// The §1 honesty item, guarded: review-only is a property of which
+    /// action strings have an executor arm in `proposal_approve`. Every
+    /// curator action must fall through to `Ok(None)`, leaving the
+    /// proposal exactly as created — `NotApplicable`, nothing written.
+    #[tokio::test]
+    async fn no_curator_action_has_an_executor_arm() {
+        use super::super::adaptive::curator::policy::CURATOR_ACTIONS;
+        use super::super::adaptive::proposals::{
+            append, load_all, ApplicationStatus, ReviewStatus, StoredProposal,
+        };
+        let env = Env::new("review-only");
+
+        for (index, action) in CURATOR_ACTIONS.iter().enumerate() {
+            let pid = format!("curator-{index}");
+            let rec = StoredProposal {
+                proposal_id: pid.clone(),
+                brain_id: BRAIN.into(),
+                action: (*action).to_string(),
+                memory_type: "engram".into(),
+                object_id: format!("curator/claim-{index}"),
+                title: "Remember: something".into(),
+                reason: "r".into(),
+                band: "medium".into(),
+                fields: Vec::new(),
+                evidence: vec!["ev-1".into()],
+                review_status: ReviewStatus::Unreviewed,
+                // As the converter creates them.
+                application_status: ApplicationStatus::NotApplicable,
+                application_error: None,
+                proposed_at: "2026-08-12T00:00:00Z".into(),
+                decided_at: None,
+                decided_by: None,
+                decision_reason: None,
+                predecessor: None,
+                curator: None,
+            };
+            append(BRAIN, &rec).unwrap();
+
+            let body: ProposalDecisionBody =
+                serde_json::from_value(serde_json::json!({ "brain": BRAIN, "reviewer": "dath" }))
+                    .unwrap();
+            let Json(out) = proposal_approve(
+                axum::extract::Path(pid.clone()),
+                State(ServerState {}),
+                Json(body),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("approve {action}: {}", e.1));
+            assert_eq!(out["apply"], "NotApplicable", "{action} executed");
+
+            let stored = load_all(BRAIN);
+            let after = &stored[&pid];
+            assert_eq!(after.review_status, ReviewStatus::Approved);
+            assert_eq!(
+                after.application_status,
+                ApplicationStatus::NotApplicable,
+                "{action} must have no executor arm in V1"
+            );
+            assert!(after.application_error.is_none());
+        }
+        drop(env);
+    }
 }

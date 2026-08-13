@@ -214,6 +214,15 @@ fn router() -> Router {
         )
         .route("/api/proposals/:proposal_id/reject", post(proposal_reject))
         .route("/api/consolidation_metrics", get(consolidation_metrics))
+        .route(
+            "/api/local_curator",
+            get(local_curator_get)
+                .put(local_curator_set)
+                .post(local_curator_set),
+        )
+        .route("/api/curator/run", post(curator_run))
+        .route("/api/curator/runs", get(curator_runs))
+        .route("/api/curator/span_preview", get(curator_span_preview))
         .route("/api/journal_events", get(journal_events_by_id))
         .route("/api/home_brief", get(home_brief))
         .route(

@@ -138,20 +138,42 @@ impl CaptureResult {
     }
 }
 
+/// The consent half of `~/.neurovault/local_curator.json`.
+///
+/// The ONE reader of these two booleans in the crate (Wave-3 dedupe):
+/// capture (here), read-time rebind (`transcript::reopen_verified`) and
+/// the nightly runner all decide consent through [`consent`], so a
+/// third switch or a renamed key can never mean two different things in
+/// two modules. `provider::LocalCuratorFile` still parses the same file
+/// for its `provider` block and round-trips the booleans for the
+/// settings API, but it decides nothing — `consent_views_cannot_drift`
+/// in `runner.rs` pins the two readings together.
 #[derive(Debug, Default, Deserialize)]
-struct LocalCuratorConfig {
+pub(crate) struct LocalCuratorConfig {
     #[serde(default)]
-    enabled: bool,
+    pub(crate) enabled: bool,
     #[serde(default)]
-    transcript_access: bool,
+    pub(crate) transcript_access: bool,
 }
 
-/// Phase A is developer-only and defaults closed. Consent is read from
-/// a server-owned local config, never from request fields:
-/// `~/.neurovault/local_curator.json`.
-fn production_policy() -> CapturePolicy {
+impl LocalCuratorConfig {
+    /// Both switches, explicitly true, or nothing happens.
+    pub(crate) fn both_switches(&self) -> bool {
+        self.enabled && self.transcript_access
+    }
+}
+
+/// Server-owned consent, read from `~/.neurovault/local_curator.json`
+/// and never from request fields. A missing, unreadable or unparseable
+/// file is "off", so the curator fails closed and quiet.
+pub(crate) fn consent() -> LocalCuratorConfig {
     let raw = fs::read_to_string(crate::memory::paths::nv_home().join("local_curator.json"));
-    let config = decode_local_config(raw.as_deref().ok());
+    decode_local_config(raw.as_deref().ok())
+}
+
+/// Phase A is developer-only and defaults closed.
+fn production_policy() -> CapturePolicy {
+    let config = consent();
     CapturePolicy::load(
         config.enabled,
         config.transcript_access,
@@ -160,7 +182,7 @@ fn production_policy() -> CapturePolicy {
     )
 }
 
-fn decode_local_config(raw: Option<&str>) -> LocalCuratorConfig {
+pub(crate) fn decode_local_config(raw: Option<&str>) -> LocalCuratorConfig {
     raw.and_then(|body| serde_json::from_str::<LocalCuratorConfig>(body).ok())
         .unwrap_or_default()
 }

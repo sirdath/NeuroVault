@@ -104,6 +104,19 @@ pub struct StoredProposal {
     /// new proposal, clearly linked).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predecessor: Option<String>,
+    /// Local-curator receipts (spec §13, guide §3.4): the verified
+    /// spans, derived keys, generation receipt and full gate trail
+    /// behind a model-proposed memory.
+    ///
+    /// The ONE additive field the curator needs, additive in both
+    /// directions: `default` decodes every pre-curator line already on
+    /// disk, and `skip_serializing_if` keeps deterministic-rule
+    /// proposals byte-identical to what they were before this field
+    /// existed. Nothing in it is model-authored — the model contributes
+    /// `statement`/`subject` text only; every pointer, hash and key here
+    /// is the server's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curator: Option<super::curator::receipts::CuratorExtension>,
 }
 
 fn store_path(brain_id: &str) -> PathBuf {
@@ -425,6 +438,7 @@ mod tests {
             decided_by: None,
             decision_reason: None,
             predecessor: None,
+            curator: None,
         }
     }
 

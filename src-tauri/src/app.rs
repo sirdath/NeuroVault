@@ -1847,6 +1847,14 @@ pub fn run() {
                 // touches an engram until a human clicks Approve.
                 // Settings can turn it off via /api/consolidation_auto.
                 memory::consolidation_schedule::start();
+
+                // 4) Local memory curator clock. Same detached contract,
+                // opposite default: OFF until the user grants both
+                // switches in `local_curator.json`, because a run loads a
+                // 30B model on their machine. Starting the loop costs
+                // nothing — every tick re-reads consent first, so a user
+                // who never opts in never pays for more than a timer.
+                memory::adaptive::curator::schedule::start();
             });
 
             eprintln!(
