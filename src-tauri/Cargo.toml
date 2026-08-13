@@ -154,6 +154,16 @@ thiserror = "1"
 # cross-language output tests Phase 3 requires pass without adjustment.
 regex = "1"
 
+# UAX#29 text segmentation. The curator's SEG_V1 prose pass
+# (`memory/adaptive/curator/segment.rs`) uses
+# `split_sentence_bound_indices()` so sentence boundaries are a pure
+# function of a pinned crate + Unicode data version — no locale data, no
+# ML, byte offsets for free. The version is recorded in
+# `segment::UNICODE_SEGMENTATION_CRATE_VERSION` and asserted against
+# Cargo.lock by a test: bumping the crate without bumping
+# SEGMENTER_VERSION fails CI (spec §5.2 step 2).
+unicode-segmentation = "=1.13.2"
+
 # SHA-256 for the `content_hash` column used by ingest's "skip if
 # unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
 # — we match so a row written by either runtime is seen as unchanged

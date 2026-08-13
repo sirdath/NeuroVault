@@ -3232,6 +3232,7 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "unicode-segmentation",
  "uuid",
  "zip 2.4.2",
 ]

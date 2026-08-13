@@ -1,0 +1,8 @@
+[
+  {"sid":1,"record_index":0,"sentence_index":0,"start_byte":0,"end_byte":45,"role":"user","cite_ok":true,"opaque_block":false,"over_cap":false},
+  {"sid":2,"record_index":0,"sentence_index":1,"start_byte":46,"end_byte":109,"role":"user","cite_ok":true,"opaque_block":false,"over_cap":false},
+  {"sid":3,"record_index":0,"sentence_index":2,"start_byte":110,"end_byte":137,"role":"user","cite_ok":true,"opaque_block":false,"over_cap":false},
+  {"sid":4,"record_index":1,"sentence_index":0,"start_byte":0,"end_byte":20,"role":"assistant","cite_ok":true,"opaque_block":false,"over_cap":false},
+  {"sid":5,"record_index":1,"sentence_index":1,"start_byte":21,"end_byte":108,"role":"assistant","cite_ok":true,"opaque_block":false,"over_cap":false},
+  {"sid":6,"record_index":1,"sentence_index":2,"start_byte":109,"end_byte":198,"role":"assistant","cite_ok":true,"opaque_block":false,"over_cap":false}
+]
