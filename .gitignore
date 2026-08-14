@@ -87,3 +87,4 @@ bench/
 docs/benchmarks/chunks*/
 docs/benchmarks/*.partial.jsonl
 docs/benchmarks/longmemeval-production-A-partial.json
+.sentrux/
