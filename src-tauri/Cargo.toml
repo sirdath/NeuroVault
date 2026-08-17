@@ -162,13 +162,13 @@ regex = "1"
 # `segment::UNICODE_SEGMENTATION_CRATE_VERSION` and asserted against
 # Cargo.lock by a test: bumping the crate without bumping
 # SEGMENTER_VERSION fails CI (spec §5.2 step 2).
-unicode-segmentation = "=1.13.2"
+unicode-segmentation = "=1.13.3"
 
 # Identity canonicalization (spec §12.5): NFC before hashing, in
 # `identity::canonicalize_value`. Pinned exact for the same reason as
 # unicode-segmentation — a Unicode data update must be a deliberate,
 # versioned decision (IDENTITY_VERSION bump), never a silent digest change.
-unicode-normalization = "=0.1.24"
+unicode-normalization = "=0.1.25"
 
 # SHA-256 for the `content_hash` column used by ingest's "skip if
 # unchanged" check (Phase 5). Python stores `hashlib.sha256(content).hexdigest()`
@@ -243,7 +243,7 @@ tree-sitter-java = "0.23"
 # Pinned: c-sharp 0.23.2+ ships grammar ABI 15, but the tree-sitter 0.24 core
 # accepts max ABI 14 (0.23.1 is the last ABI-14 build). Bump only alongside the
 # tree-sitter core. Other grammars (go/java/ruby 0.23) are already ABI ≤14.
-tree-sitter-c-sharp = "=0.23.1"
+tree-sitter-c-sharp = "=0.23.5"
 tree-sitter-ruby = "0.23"
 ignore = "0.4"
 
