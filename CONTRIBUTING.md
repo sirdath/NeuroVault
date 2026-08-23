@@ -104,7 +104,7 @@ npx tauri dev          # or: make dev
 - Tauri recompiles + restarts the Rust layer on save (a few seconds).
 
 First run downloads the embedding model (BGE-small-en-v1.5, ~130 MB) to
-`~/.neurovault/.fastembed_cache/` — once, then cached.
+`~/.neurovault/.fastembed_cache/` - once, then cached. Reranking is **off by default** (`rerank_enabled()` is false when `~/.neurovault/rerank.txt` is missing). Enabling **Recall Reranking** in Settings (or writing a non-off value into that pref) triggers an additional ~1 GB cross-encoder download on the first reranked recall (~1.1 GB total). Leave reranking off to skip the 1 GB half.
 
 ### The sidecar, and why `tauri dev` runs a build script first
 
@@ -157,7 +157,7 @@ npm run build                                        # frontend build (catches m
 > parallel execution; `cargo test --no-default-features -- --test-threads=1`
 > is the deterministic run.
 
-The **first** `cargo test` downloads the embedding model (~130 MB) — the
+The **first** `cargo test` downloads the embedding model (~130 MB; the ~1 GB reranker is not part of the default test path) — the
 integration suites embed for real. They pin `FASTEMBED_CACHE_DIR` at
 `~/.neurovault/.fastembed_cache/`, the same cache the app uses, so it's
 downloaded once per machine and every later run is offline. (Each suite still
