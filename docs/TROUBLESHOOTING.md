@@ -57,7 +57,7 @@ stuck, check your network; the download is from Hugging Face.
 
 If you switch on **Recall Reranking** in Settings, the first reranked recall
 fetches a second, much larger model (a ~1 GB cross-encoder) into the same
-cache. That is precisely why reranking is off until you ask for it. Automatic
+cache. Together with the embedder that is about **1.1 GB** of model weights on a fresh machine that uses reranking. That is precisely why reranking is off until you ask for it. Automatic
 context reranks, so turning that on pulls the model too.
 
 **Recall keeps working while a model is missing.** If the embedder cannot be
