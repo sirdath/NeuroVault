@@ -80,20 +80,19 @@ The app will only make network calls in these exact situations:
 | When | To where | Why |
 |---|---|---|
 | First ingest or recall, if the embedding model is not cached | huggingface.co | Download `bge-small-en-v1.5` (~130 MB) for local embeddings. It is then cached under `~/.neurovault/.fastembed_cache/`. |
-| First reranked recall, if the reranker is not cached | huggingface.co | Download the BGE cross-encoder reranker (about 1 GB). Reranking is **on by default** — with no preference file present the app treats it as enabled — so expect this download unless you turn it off first. Turn it off in Settings, or write `off` into `~/.neurovault/rerank.txt`. Same local model cache. |
+| First reranked recall, if the reranker is not cached | huggingface.co | Download the BGE cross-encoder reranker (about 1 GB). Reranking is **off by default** — the app treats it as disabled until you enable it. Enable it in Settings (or write `on` into `~/.neurovault/rerank.txt`); you can also turn it off the same way. Same local model cache. |
 | An AI employee you hired and enabled reaches its scheduled wake-up | Anthropic's servers, via the `claude` CLI already installed on your machine | **Off by default** — no employee is enabled until you hire and enable one in the app. When one runs, NeuroVault spawns your own local Claude Code CLI as a subprocess; that CLI makes the network call under your existing Claude login, and NeuroVault itself makes none. The prompt it is given contains the brain content the employee's role needs. |
 | When you click "Check for updates," or when you explicitly enable launch checks in Settings | api.github.com | Read the latest public release tag and notes. Launch checks are off by default. GitHub receives ordinary connection metadata such as your IP address; NeuroVault sends no account, vault content, or stable install identifier. |
 | You approve an available update | github.com/sirdath/NeuroVault/releases | Download the signed updater manifest and platform artifact. Tauri verifies the updater signature before installation. |
 | You connect Claude Desktop (or any MCP client) and use recall/remember | Anthropic's servers (or whichever LLM host you connected) | **This is the LLM provider's network call, not NeuroVault's.** NeuroVault's MCP server runs entirely on localhost (127.0.0.1:8765). The LLM client reads the tool results locally and sends them to the LLM's API as part of your conversation. |
 
 **What a fresh install downloads, stated plainly:** on default settings
-NeuroVault fetches **about 1.1 GB of model weights from huggingface.co** —
-the ~130 MB embedding model on your first ingest or recall, and the ~1 GB
-cross-encoder reranker the first time a recall is reranked, which on
-default settings is that same first recall. Both are one-time, cached
-under `~/.neurovault/.fastembed_cache/`, and run entirely on your machine
-afterwards. Nothing about your vault is sent to fetch them. Turning the
-reranker off before your first recall avoids the 1 GB half.
+NeuroVault fetches only the **~130 MB embedding model** — the ~1 GB
+cross-encoder reranker is opt-in (off by default) and downloads only the
+first time you enable reranking and run a reranked recall. Both are
+one-time, cached under `~/.neurovault/.fastembed_cache/`, and run entirely
+on your machine afterwards. Nothing about your vault is sent to fetch
+them. Leaving the reranker off simply avoids the 1 GB half entirely.
 
 The packaged UI loads no remote fonts, analytics scripts, images, or style
 sheets. The server is bound to `127.0.0.1:8765` (loopback) — it
