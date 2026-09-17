@@ -226,7 +226,7 @@ notify = "6"
 # never binds 8765 itself. `reqwest` is the HTTP client for that forward
 # (it is NOT an MCP transport — the app speaks plain /api/* REST). Both
 # are lean (no default features) to keep the binary small.
-rmcp = { version = "1", default-features = false, features = ["server", "macros", "transport-io"] }
+rmcp = { version = "2", default-features = false, features = ["server", "macros", "transport-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # ── graphify: parse a codebase into the local knowledge graph (Phase 1).
